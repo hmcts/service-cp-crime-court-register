@@ -260,12 +260,23 @@ vocabulary and matching semantics.
 
 ## Phase 5: The outbound document (US3 — twelve mappers + validation)
 
-- [ ] T039a [US3] Shared compile-safe seams for the mapper phase: the `domain/CourtRegisterDocument`
+- [x] T039a [US3] Shared compile-safe seams for the mapper phase: the `domain/CourtRegisterDocument`
       record family (document, hearingVenue, defendant, parentGuardian, hearing, caseOrApplication,
       offence, result, recipient, alias, counsel, address) with signatures matching the vendored
       schemas, plus twelve mapper skeletons throwing `UnsupportedOperationException` — so T040–T051
       stay genuinely [P] (no two test tasks create the same seam file). Infrastructure task under
       the red-run convention's seam clause; no assertions of its own.
+      *(done — thirteen skeletons, not twelve: `AggregationMapper` is added alongside the twelve so
+      that T051 has a seam nobody else owns, which is what this task exists for; it is marked as
+      landing in T056 rather than T054, per the implementation split. Two deliberate model
+      decisions, both C26: `courtRegisterCaseOrApplication`'s five never-populated fields
+      (`prosecutorName`, `applicationDecision(+Date)`, `applicationResponse(+Date)`) are **not**
+      declared — the record declares what the mappers write, which is what C26's fixed behaviour
+      says — and every list component keeps `null` distinct from empty, because each carries
+      `minItems: 1` and the `Alias`/`Counsel` absent-vs-empty asymmetry is behaviour the comparator
+      guards. `DistributionPipelineTest`'s one construction of the document was widened to the new
+      signature; nothing it asserts changed. `TransformationAnomaly` already carried every code
+      T047/T048/T050 name, so the enum is untouched.)*
 
 ### Tests first ⚠️ (all [P] — one file each; seams provided by T039a)
 

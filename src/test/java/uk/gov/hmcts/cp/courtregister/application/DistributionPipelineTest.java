@@ -107,8 +107,14 @@ class DistributionPipelineTest {
             command.source(), command.requestId(), "runner-1", UUID.randomUUID(), "msg-1");
 
     private final CourtRegisterDocument document = new CourtRegisterDocument(
+            "2020-06-01T10:00:00Z",
+            "2020-01-20T00:00:00Z",
             command.hearingId().toString(),
-            "court-register_2020-06-01_B01LY00_" + command.hearingId() + ".pdf");
+            "853b1ff8-fc2a-44d1-a621-0cd16419f54a",
+            "court-register_2020-06-01_B01LY00_" + command.hearingId() + ".pdf",
+            null,
+            null,
+            null);
 
     private final JsonNode payload = mapper.readTree(
             "{\"hearing\":{\"id\":\"1828f356-f746-4f2d-932b-79ef2df95c80\"},"
