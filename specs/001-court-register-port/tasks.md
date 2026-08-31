@@ -196,7 +196,7 @@ in the same commit.**
       `major_creditor_flags_never_match_a_court_register` — all three major-creditor flags
       require a non-empty applicable list (fails vs legacy, where `anyMajorCreditor` is
       vacuously true on `[]`).
-- [ ] T029 [P] [US3] Write `pipeline/SubscriptionMatcherTest` (red; seam: `SubscriptionMatcher`) —
+- [x] T029 [P] [US3] Write `pipeline/SubscriptionMatcherTest` (red; seam: `SubscriptionMatcher`) —
       CS2/CS3 twins; CS4 with a real `ouCode` lock; CS1 split: empty answer ⇒ no matches
       (`no-subscriptions` downstream), unanswered ⇒ `ReferenceDataUnavailableException`;
       **C31 fix (N17–N19)**: adult-first/youth-second hearing matches a youth-vocabulary
