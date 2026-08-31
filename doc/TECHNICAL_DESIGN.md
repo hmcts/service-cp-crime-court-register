@@ -51,9 +51,11 @@ in [API_CONTRACTS.md](API_CONTRACTS.md).
 
 ## Idempotency
 
-`(source, requestId)` composite key on the processed log; SHA-256 request fingerprint; duplicate
-delivery re-publishes the terminal status; fingerprint mismatch dead-letters without overwriting
-(defect-fix C17). `processed_output` carries at most one row per command — the court register has
+`(source, requestId)` composite key on the processed log; SHA-256 request fingerprint; a duplicate
+delivery of a request already in a terminal state is settled from the recorded status without
+reprocessing — acknowledged if it completed, re-parked if it failed, and nothing published either
+way, because this service has no status channel; fingerprint mismatch dead-letters without
+overwriting (defect-fix C17). `processed_output` carries at most one row per command — the court register has
 no fan-out — keyed `UNIQUE (source, request_id)` with the court centre, register date and file
 name as descriptive columns.
 

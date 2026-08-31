@@ -77,8 +77,13 @@ the broker. The `requestId` in the body is the idempotency key and stays unchang
 ### Failure behaviour (contractual, tested)
 
 Contract-invalid body ⇒ dead-letter with a bounded reason, no processed-log row. Store unavailable
-⇒ abandon + intake suspension. Terminal duplicate ⇒ terminal status re-published, delivery
-completed. *TODO: full table lands with P3.*
+⇒ abandon + intake suspension. Redelivery of a request already in a terminal state ⇒ **settled from
+the recorded status, without reprocessing**: a `COMPLETED` request is acknowledged (delivery
+completed, no run, row untouched); a `FAILED` one is re-parked under the identity that exhausted it,
+and replayed under any other identity. Nothing is published anywhere in either case — this service
+has no status channel and no outbound contract other than `add-court-register` (§2), so "the
+terminal status is republished" would name a channel that does not exist. *TODO: full table lands
+with P3.*
 
 ## 2. Outbound contract — `progression.add-court-register`
 
