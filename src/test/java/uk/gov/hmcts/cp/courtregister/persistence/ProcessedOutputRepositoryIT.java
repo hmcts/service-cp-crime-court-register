@@ -71,28 +71,27 @@ class ProcessedOutputRepositoryIT {
         return new ProcessedOutputRepository(ProcessedLogTestSupport.jdbcClient());
     }
 
-    /** Seeds a request row so the output row has the parent its foreign key requires. */
-    private static DistributionCommand seededRequest() {
+    /**
+     * Seeds a request row, holding the claim, so the output row has the parent its foreign key
+     * requires and the run claim its writes are fenced on.
+     */
+    private static RunClaim seededRequest() {
         final DistributionCommand command = ProcessedLogTestSupport.command();
         final RunClaim claim = new RunClaim(
                 command.source(), command.requestId(), "runner-1", UUID.randomUUID(), "msg-1");
         ProcessedLogTestSupport.repository(LEASE)
                 .insertNew(command, RequestFingerprint.of(command), claim);
-        return command;
+        return claim;
+    }
+
+    private static ProcessedOutputClaim claimFor(final UUID outputId, final String digest) {
+        return claimFor(outputId, digest, null);
     }
 
     private static ProcessedOutputClaim claimFor(
-            final DistributionCommand command, final UUID outputId, final String digest) {
-        return claimFor(command, outputId, digest, null);
-    }
-
-    private static ProcessedOutputClaim claimFor(
-            final DistributionCommand command,
-            final UUID outputId,
-            final String digest,
-            final String anomalySummary) {
-        return new ProcessedOutputClaim(outputId, command.source(), command.requestId(),
-                COURT_CENTRE, OU_CODE, REGISTER_DATE, FILE_NAME, digest, anomalySummary);
+            final UUID outputId, final String digest, final String anomalySummary) {
+        return new ProcessedOutputClaim(
+                outputId, COURT_CENTRE, OU_CODE, REGISTER_DATE, FILE_NAME, digest, anomalySummary);
     }
 
     @Nested
@@ -101,13 +100,13 @@ class ProcessedOutputRepositoryIT {
 
         @Test
         void claiming_a_fresh_request_should_write_a_pending_row_carrying_the_digest() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
             final UUID outputId = UUID.randomUUID();
 
-            final boolean claimed = repository().claimPending(claimFor(command, outputId, DIGEST));
+            final boolean claimed = repository().claimPending(run, claimFor(outputId, DIGEST));
 
             assertThat(claimed).isTrue();
-            final Row row = requireRow(command);
+            final Row row = requireRow(run);
             assertThat(row.outputId()).isEqualTo(outputId);
             assertThat(row.status()).isEqualTo("PENDING");
             assertThat(row.requestDigest())
@@ -121,11 +120,11 @@ class ProcessedOutputRepositoryIT {
 
         @Test
         void claiming_should_record_what_the_register_was_assembled_for() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
 
-            repository().claimPending(claimFor(command, UUID.randomUUID(), DIGEST));
+            repository().claimPending(run, claimFor(UUID.randomUUID(), DIGEST));
 
-            final Row row = requireRow(command);
+            final Row row = requireRow(run);
             assertThat(row.courtCentreId()).isEqualTo(COURT_CENTRE);
             assertThat(row.courtCentreOuCode()).isEqualTo(OU_CODE);
             assertThat(row.registerDate()).isEqualTo(REGISTER_DATE);
@@ -139,14 +138,14 @@ class ProcessedOutputRepositoryIT {
          */
         @Test
         void claiming_should_accept_a_court_centre_with_no_ou_code() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
 
-            final boolean claimed = repository().claimPending(new ProcessedOutputClaim(
-                    UUID.randomUUID(), command.source(), command.requestId(), COURT_CENTRE, null,
-                    REGISTER_DATE, FILE_NAME, DIGEST, null));
+            final boolean claimed = repository().claimPending(run, new ProcessedOutputClaim(
+                    UUID.randomUUID(), COURT_CENTRE, null, REGISTER_DATE, FILE_NAME, DIGEST,
+                    null));
 
             assertThat(claimed).isTrue();
-            assertThat(requireRow(command).courtCentreOuCode()).isNull();
+            assertThat(requireRow(run).courtCentreOuCode()).isNull();
         }
 
         /**
@@ -159,16 +158,16 @@ class ProcessedOutputRepositoryIT {
          */
         @Test
         void claiming_should_be_refused_once_the_register_is_posted() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
             final ProcessedOutputRepository repository = repository();
-            repository.claimPending(claimFor(command, UUID.randomUUID(), DIGEST));
-            repository.recordPosted(command.source(), command.requestId(), ACCEPTED);
+            repository.claimPending(run, claimFor(UUID.randomUUID(), DIGEST));
+            repository.recordPosted(run, ACCEPTED);
 
             final boolean claimed =
-                    repository.claimPending(claimFor(command, UUID.randomUUID(), OTHER_DIGEST));
+                    repository.claimPending(run, claimFor(UUID.randomUUID(), OTHER_DIGEST));
 
             assertThat(claimed).isFalse();
-            final Row row = requireRow(command);
+            final Row row = requireRow(run);
             assertThat(row.status()).isEqualTo("POSTED");
             assertThat(row.requestDigest())
                     .as("a refused claim must not overwrite what was actually sent")
@@ -178,17 +177,17 @@ class ProcessedOutputRepositoryIT {
 
         @Test
         void claiming_should_be_admitted_again_after_a_failure_so_the_failed_work_repeats() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
             final ProcessedOutputRepository repository = repository();
             final UUID firstId = UUID.randomUUID();
-            repository.claimPending(claimFor(command, firstId, DIGEST));
-            repository.recordFailed(command.source(), command.requestId(), REFUSED);
+            repository.claimPending(run, claimFor(firstId, DIGEST));
+            repository.recordFailed(run, REFUSED);
 
             final boolean claimed =
-                    repository.claimPending(claimFor(command, UUID.randomUUID(), OTHER_DIGEST));
+                    repository.claimPending(run, claimFor(UUID.randomUUID(), OTHER_DIGEST));
 
             assertThat(claimed).isTrue();
-            final Row row = requireRow(command);
+            final Row row = requireRow(run);
             assertThat(row.status()).isEqualTo("PENDING");
             assertThat(row.outputId())
                     .as("the row keeps the identity it was first written under")
@@ -213,46 +212,46 @@ class ProcessedOutputRepositoryIT {
 
         @Test
         void a_bounded_reason_code_count_should_round_trip_unchanged() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
 
-            repository().claimPending(claimFor(command, UUID.randomUUID(), DIGEST, ANOMALIES));
+            repository().claimPending(run, claimFor(UUID.randomUUID(), DIGEST, ANOMALIES));
 
-            assertThat(requireRow(command).anomalySummary()).isEqualTo(ANOMALIES);
+            assertThat(requireRow(run).anomalySummary()).isEqualTo(ANOMALIES);
         }
 
         @Test
         void a_register_with_nothing_skipped_should_leave_the_summary_empty() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
 
-            repository().claimPending(claimFor(command, UUID.randomUUID(), DIGEST));
+            repository().claimPending(run, claimFor(UUID.randomUUID(), DIGEST));
 
-            assertThat(requireRow(command).anomalySummary())
+            assertThat(requireRow(run).anomalySummary())
                     .as("no anomalies is an absent summary, not the string 'none'")
                     .isNull();
         }
 
         @Test
         void a_re_claim_should_replace_the_summary_with_the_one_it_is_about_to_send() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
             final ProcessedOutputRepository repository = repository();
-            repository.claimPending(claimFor(command, UUID.randomUUID(), DIGEST, ANOMALIES));
-            repository.recordFailed(command.source(), command.requestId(), REFUSED);
+            repository.claimPending(run, claimFor(UUID.randomUUID(), DIGEST, ANOMALIES));
+            repository.recordFailed(run, REFUSED);
 
-            repository.claimPending(claimFor(command, UUID.randomUUID(), OTHER_DIGEST,
+            repository.claimPending(run, claimFor(UUID.randomUUID(), OTHER_DIGEST,
                     "recipient-missing-email:1"));
 
-            assertThat(requireRow(command).anomalySummary()).isEqualTo("recipient-missing-email:1");
+            assertThat(requireRow(run).anomalySummary()).isEqualTo("recipient-missing-email:1");
         }
 
         @Test
         void a_failed_post_should_keep_the_summary_of_what_it_tried_to_send() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
             final ProcessedOutputRepository repository = repository();
-            repository.claimPending(claimFor(command, UUID.randomUUID(), DIGEST, ANOMALIES));
+            repository.claimPending(run, claimFor(UUID.randomUUID(), DIGEST, ANOMALIES));
 
-            repository.recordFailed(command.source(), command.requestId(), REFUSED);
+            repository.recordFailed(run, REFUSED);
 
-            assertThat(requireRow(command).anomalySummary()).isEqualTo(ANOMALIES);
+            assertThat(requireRow(run).anomalySummary()).isEqualTo(ANOMALIES);
         }
     }
 
@@ -262,17 +261,17 @@ class ProcessedOutputRepositoryIT {
 
         @Test
         void recording_a_post_should_move_the_row_to_posted_with_the_status_progression_answered() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
             final ProcessedOutputRepository repository = repository();
-            repository.claimPending(claimFor(command, UUID.randomUUID(), DIGEST));
-            ageUpdatedAt(command);
-            final Instant aged = requireRow(command).updatedAt();
+            repository.claimPending(run, claimFor(UUID.randomUUID(), DIGEST));
+            ageUpdatedAt(run);
+            final Instant aged = requireRow(run).updatedAt();
 
             final boolean recorded =
-                    repository.recordPosted(command.source(), command.requestId(), ACCEPTED);
+                    repository.recordPosted(run, ACCEPTED);
 
             assertThat(recorded).isTrue();
-            final Row row = requireRow(command);
+            final Row row = requireRow(run);
             assertThat(row.status()).isEqualTo("POSTED");
             assertThat(row.responseCode())
                     .as("202 and nothing else is success, and the number is what support reads")
@@ -282,15 +281,15 @@ class ProcessedOutputRepositoryIT {
 
         @Test
         void recording_a_failure_should_move_the_row_to_failed_and_keep_the_digest() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
             final ProcessedOutputRepository repository = repository();
-            repository.claimPending(claimFor(command, UUID.randomUUID(), DIGEST));
+            repository.claimPending(run, claimFor(UUID.randomUUID(), DIGEST));
 
             final boolean recorded =
-                    repository.recordFailed(command.source(), command.requestId(), REFUSED);
+                    repository.recordFailed(run, REFUSED);
 
             assertThat(recorded).isTrue();
-            final Row row = requireRow(command);
+            final Row row = requireRow(run);
             assertThat(row.status()).isEqualTo("FAILED");
             assertThat(row.responseCode()).isEqualTo(REFUSED);
             assertThat(row.requestDigest())
@@ -307,15 +306,15 @@ class ProcessedOutputRepositoryIT {
          */
         @Test
         void recording_a_failure_with_no_answer_should_leave_the_response_code_empty() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
             final ProcessedOutputRepository repository = repository();
-            repository.claimPending(claimFor(command, UUID.randomUUID(), DIGEST));
+            repository.claimPending(run, claimFor(UUID.randomUUID(), DIGEST));
 
             final boolean recorded =
-                    repository.recordFailed(command.source(), command.requestId(), null);
+                    repository.recordFailed(run, null);
 
             assertThat(recorded).isTrue();
-            final Row row = requireRow(command);
+            final Row row = requireRow(run);
             assertThat(row.status()).isEqualTo("FAILED");
             assertThat(row.responseCode()).isNull();
             assertThat(row.requestDigest()).isEqualTo(DIGEST);
@@ -332,61 +331,61 @@ class ProcessedOutputRepositoryIT {
          */
         @Test
         void a_late_failure_should_never_move_a_register_out_of_posted() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
             final ProcessedOutputRepository repository = repository();
-            repository.claimPending(claimFor(command, UUID.randomUUID(), DIGEST));
-            repository.recordPosted(command.source(), command.requestId(), ACCEPTED);
+            repository.claimPending(run, claimFor(UUID.randomUUID(), DIGEST));
+            repository.recordPosted(run, ACCEPTED);
 
             final boolean recorded =
-                    repository.recordFailed(command.source(), command.requestId(), REFUSED);
+                    repository.recordFailed(run, REFUSED);
 
             assertThat(recorded)
                     .as("the loser of an overlap is told its write affected nothing")
                     .isFalse();
-            final Row row = requireRow(command);
+            final Row row = requireRow(run);
             assertThat(row.status()).isEqualTo("POSTED");
             assertThat(row.responseCode()).isEqualTo(ACCEPTED);
         }
 
         @Test
         void recording_a_post_twice_should_leave_the_row_posted_and_affect_nothing_the_second_time() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
             final ProcessedOutputRepository repository = repository();
-            repository.claimPending(claimFor(command, UUID.randomUUID(), DIGEST));
-            repository.recordPosted(command.source(), command.requestId(), ACCEPTED);
+            repository.claimPending(run, claimFor(UUID.randomUUID(), DIGEST));
+            repository.recordPosted(run, ACCEPTED);
 
             final boolean again =
-                    repository.recordPosted(command.source(), command.requestId(), ACCEPTED);
+                    repository.recordPosted(run, ACCEPTED);
 
             assertThat(again).isFalse();
-            assertThat(requireRow(command).status()).isEqualTo("POSTED");
+            assertThat(requireRow(run).status()).isEqualTo("POSTED");
         }
 
         @Test
         void recording_a_post_after_a_failure_should_be_admitted_so_the_success_is_the_last_word() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
             final ProcessedOutputRepository repository = repository();
-            repository.claimPending(claimFor(command, UUID.randomUUID(), DIGEST));
-            repository.recordFailed(command.source(), command.requestId(), REFUSED);
+            repository.claimPending(run, claimFor(UUID.randomUUID(), DIGEST));
+            repository.recordFailed(run, REFUSED);
 
             final boolean recorded =
-                    repository.recordPosted(command.source(), command.requestId(), ACCEPTED);
+                    repository.recordPosted(run, ACCEPTED);
 
             assertThat(recorded)
                     .as("a register that did go must end POSTED, or it would be sent again")
                     .isTrue();
-            assertThat(requireRow(command).status()).isEqualTo("POSTED");
+            assertThat(requireRow(run).status()).isEqualTo("POSTED");
         }
 
         @Test
         void recording_an_outcome_for_an_unclaimed_request_should_affect_nothing() {
-            final DistributionCommand command = seededRequest();
+            final RunClaim run = seededRequest();
 
             final boolean recorded =
-                    repository().recordPosted(command.source(), command.requestId(), ACCEPTED);
+                    repository().recordPosted(run, ACCEPTED);
 
             assertThat(recorded).isFalse();
-            assertThat(row(command)).isEmpty();
+            assertThat(row(run)).isEmpty();
         }
     }
 
@@ -403,15 +402,15 @@ class ProcessedOutputRepositoryIT {
 
         @Test
         void a_second_output_for_one_request_should_be_refused_by_the_database() {
-            final DistributionCommand command = seededRequest();
-            repository().claimPending(claimFor(command, UUID.randomUUID(), DIGEST));
+            final RunClaim run = seededRequest();
+            repository().claimPending(run, claimFor(UUID.randomUUID(), DIGEST));
 
-            assertThatThrownBy(() -> insertSecondOutput(command))
+            assertThatThrownBy(() -> insertSecondOutput(run))
                     .isInstanceOf(DataIntegrityViolationException.class)
                     .hasMessageContaining("processed_output_unique_request");
         }
 
-        private void insertSecondOutput(final DistributionCommand command) {
+        private void insertSecondOutput(final RunClaim run) {
             ProcessedLogTestSupport.jdbcClient()
                     .sql("""
                             INSERT INTO processed_output (
@@ -422,8 +421,8 @@ class ProcessedOutputRepositoryIT {
                                 :fileName, 'PENDING')
                             """)
                     .param("outputId", UUID.randomUUID())
-                    .param("source", command.source())
-                    .param("requestId", command.requestId())
+                    .param("source", run.source())
+                    .param("requestId", run.requestId())
                     .param("courtCentreId", COURT_CENTRE)
                     .param("registerDate", REGISTER_DATE)
                     .param("fileName", FILE_NAME)
@@ -445,7 +444,7 @@ class ProcessedOutputRepositoryIT {
             Instant updatedAt) {
     }
 
-    private static Optional<Row> row(final DistributionCommand command) {
+    private static Optional<Row> row(final RunClaim run) {
         return ProcessedLogTestSupport.jdbcClient()
                 .sql("""
                         SELECT output_id, court_centre_id, court_centre_ou_code, register_date,
@@ -454,8 +453,8 @@ class ProcessedOutputRepositoryIT {
                           FROM processed_output
                          WHERE source = :source AND request_id = :requestId
                         """)
-                .param("source", command.source())
-                .param("requestId", command.requestId())
+                .param("source", run.source())
+                .param("requestId", run.requestId())
                 .query((rs, rowNumber) -> new Row(
                         rs.getObject("output_id", UUID.class),
                         rs.getObject("court_centre_id", UUID.class),
@@ -471,24 +470,24 @@ class ProcessedOutputRepositoryIT {
                 .optional();
     }
 
-    private static Row requireRow(final DistributionCommand command) {
-        return row(command).orElseThrow(() -> new IllegalStateException(
-                "no processed_output row for " + command.source() + "/" + command.requestId()));
+    private static Row requireRow(final RunClaim run) {
+        return row(run).orElseThrow(() -> new IllegalStateException(
+                "no processed_output row for " + run.source() + "/" + run.requestId()));
     }
 
     /**
      * Seeds {@code updated_at} into the past by the database's own clock, so "the write moved the
      * timestamp on" can be asserted strictly rather than against a value written moments earlier.
      */
-    private static void ageUpdatedAt(final DistributionCommand command) {
+    private static void ageUpdatedAt(final RunClaim run) {
         final int aged = ProcessedLogTestSupport.jdbcClient()
                 .sql("""
                         UPDATE processed_output
                            SET updated_at = now() - interval '1 hour'
                          WHERE source = :source AND request_id = :requestId
                         """)
-                .param("source", command.source())
-                .param("requestId", command.requestId())
+                .param("source", run.source())
+                .param("requestId", run.requestId())
                 .update();
         if (aged != 1) {
             throw new IllegalStateException("expected one output row to age, aged " + aged);

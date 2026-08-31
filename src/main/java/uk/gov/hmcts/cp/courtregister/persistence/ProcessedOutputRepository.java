@@ -1,9 +1,9 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
 import java.sql.Types;
-import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import uk.gov.hmcts.cp.courtregister.domain.ProcessedOutputClaim;
+import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 
 /**
  * The submission half of the processed log: what was sent for a request, and how it went.
@@ -131,15 +131,16 @@ public class ProcessedOutputRepository {
     /**
      * Statement 1 — claim this request for submission, writing the row the POST will be judged by.
      *
-     * @param claim what is about to be sent, and what it was assembled from
+     * @param runClaim the claim the run was made under; its key is the row written
+     * @param claim    what is about to be sent, and what it was assembled from
      * @return whether this delivery may POST. False means the register is already POSTED and is
      *         skipped, which is how a replay of a request that succeeded avoids sending it twice.
      */
-    public boolean claimPending(final ProcessedOutputClaim claim) {
+    public boolean claimPending(final RunClaim runClaim, final ProcessedOutputClaim claim) {
         return affected(jdbcClient.sql(CLAIM_PENDING)
                 .param("outputId", claim.outputId())
-                .param(SOURCE, claim.source())
-                .param(REQUEST_ID, claim.requestId())
+                .param(SOURCE, runClaim.source())
+                .param(REQUEST_ID, runClaim.requestId())
                 .param("courtCentreId", claim.courtCentreId())
                 .param("courtCentreOuCode", claim.courtCentreOuCode(), Types.VARCHAR)
                 .param("registerDate", claim.registerDate())
@@ -152,41 +153,34 @@ public class ProcessedOutputRepository {
     /**
      * Statement 2 — record that progression accepted the register.
      *
-     * @param source       the request's key, part 1
-     * @param requestId    the request's key, part 2
+     * @param runClaim     the claim the run was made under; its key is the row settled
      * @param responseCode the status line progression answered with
      * @return whether a row was moved to POSTED; false means no row was ever claimed for this
      *         request, or it was already POSTED by an overlapping delivery
      */
-    public boolean recordPosted(
-            final String source, final UUID requestId, final int responseCode) {
-        return affected(outcome(RECORD_POSTED, source, requestId, responseCode));
+    public boolean recordPosted(final RunClaim runClaim, final int responseCode) {
+        return affected(outcome(RECORD_POSTED, runClaim, responseCode));
     }
 
     /**
      * Statement 3 — record that the register did not go.
      *
-     * @param source       the request's key, part 1
-     * @param requestId    the request's key, part 2
+     * @param runClaim     the claim the run was made under; its key is the row settled
      * @param responseCode the status line progression answered with, or {@code null} where there
      *                     was no answer to record
      * @return whether a row was moved to FAILED; false means no row was ever claimed for this
      *         request, or it is POSTED and must not be moved out of it
      */
-    public boolean recordFailed(
-            final String source, final UUID requestId, final Integer responseCode) {
-        return affected(outcome(RECORD_FAILED, source, requestId, responseCode));
+    public boolean recordFailed(final RunClaim runClaim, final Integer responseCode) {
+        return affected(outcome(RECORD_FAILED, runClaim, responseCode));
     }
 
     /** The two outcome writes differ only in the status they set; the key predicate is common. */
     private int outcome(
-            final String sql,
-            final String source,
-            final UUID requestId,
-            final Integer responseCode) {
+            final String sql, final RunClaim runClaim, final Integer responseCode) {
         return jdbcClient.sql(sql)
-                .param(SOURCE, source)
-                .param(REQUEST_ID, requestId)
+                .param(SOURCE, runClaim.source())
+                .param(REQUEST_ID, runClaim.requestId())
                 .param(RESPONSE_CODE, responseCode, Types.INTEGER)
                 .update();
     }

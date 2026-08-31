@@ -15,14 +15,18 @@ import java.util.UUID;
  * the whole key; the court centre, its OU code, the register day and the file name are descriptive
  * columns support reads, not part of what makes the row unique.
  *
+ * <p><strong>The key is deliberately not here.</strong> It comes from the
+ * {@link RunClaim} the output operation is fenced on, so the row a runner writes and the request
+ * claim that authorises it cannot name different requests. Carrying {@code source} and
+ * {@code requestId} in this record as well would make that mismatch representable, and a value that
+ * disagrees with the fence is a register written against somebody else's hearing.
+ *
  * <p>{@code requestDigest} and {@code anomalySummary} are the two things worth more after a failure
  * than after a success: what was attempted, and which parts of the register were skipped to produce
  * it. Both are written before the POST and neither is erased by its outcome.
  *
  * @param outputId          identity for a row written for the first time; a re-claim leaves the
  *                          existing row's identity alone
- * @param source            the request's key, part 1
- * @param requestId         the request's key, part 2
  * @param courtCentreId     the court centre the register was assembled for
  * @param courtCentreOuCode that court centre's OU code, or {@code null} where the hearing carried
  *                          none
@@ -34,8 +38,6 @@ import java.util.UUID;
  */
 public record ProcessedOutputClaim(
         UUID outputId,
-        String source,
-        UUID requestId,
         UUID courtCentreId,
         String courtCentreOuCode,
         LocalDate registerDate,
