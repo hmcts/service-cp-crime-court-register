@@ -91,7 +91,7 @@ in the same commit.**
       case per instrument incl. `courtregister_completions_total{reason}` for the five reasons,
       `courtregister_deadlettered_total{reason}`, and
       `courtregister_transformation_anomalies_total{reason}` (the C19/C20/C27 anomaly metric).
-- [ ] T011 [P] [US1] Write `persistence/SchemaMigrationIT` (red) — every data-model V1 fact,
+- [x] T011 [P] [US1] Write `persistence/SchemaMigrationIT` (red) — every data-model V1 fact,
       including the `processed_output` court-register columns, `UNIQUE (source, request_id)`,
       `response_code`, `anomaly_summary` (nullable text, the C19/C20/C27 bounded-count field),
       status CHECK PENDING/POSTED/FAILED, FK ON DELETE RESTRICT.
