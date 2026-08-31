@@ -767,6 +767,13 @@ class ConfigurationValidationTest {
                     });
         }
 
+        /**
+         * The submission is shortened alongside the deadline so this case tests one rule only. Its
+         * own worst case — four attempts of 35s with the back-off between them — does not fit inside
+         * a two-minute deadline either, and it has its own cases in {@link SubmissionPolicy}; left
+         * at its default it would refuse this configuration on the submission's message rather than
+         * let the payload budget be the subject.
+         */
         @Test
         void a_fetch_that_finishes_one_second_inside_the_deadline_should_start() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
@@ -775,7 +782,8 @@ class ConfigurationValidationTest {
                     "courtregister.payload.redis.command-timeout=5s",
                     "courtregister.payload.fallback.max-attempts=1",
                     "courtregister.payload.fallback.connect-timeout=5s",
-                    "courtregister.payload.fallback.read-timeout=94s")
+                    "courtregister.payload.fallback.read-timeout=94s",
+                    "courtregister.progression.max-attempts=1")
                     .run(context -> assertThat(context).hasNotFailed());
         }
 

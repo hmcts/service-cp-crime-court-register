@@ -102,7 +102,7 @@ in the same commit.**
       `inbound/DistributionCommandParser`, `config/JacksonConfig`,
       `src/main/resources/contracts/distribution-command.schema.json` (green for T007).
 - [x] T013 [US2] Implement `domain/RequestFingerprint` (green for T008).
-- [ ] T014 [US4] Implement `config/CourtRegisterProperties` + `config/PropertiesValidator` (green
+- [x] T014 [US4] Implement `config/CourtRegisterProperties` + `config/PropertiesValidator` (green
       for T009).
 - [ ] T015 [US4] Implement `config/ProcessingMetrics` (green for T010).
 - [ ] T016 [US1] Write `src/main/resources/db/migration/V1__create_processed_log.sql` per
