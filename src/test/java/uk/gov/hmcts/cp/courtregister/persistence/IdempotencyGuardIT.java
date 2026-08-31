@@ -292,6 +292,48 @@ class IdempotencyGuardIT {
             assertThat(row().status()).isEqualTo("RECEIVED");
         }
 
+        /**
+         * The RETRYING → FAILED edge, which the exhaustion cases cover and this one does not
+         * duplicate: a request that has already been handed back once, redelivered, and then met a
+         * failure no redelivery could fix.
+         *
+         * <p>It is the ordinary shape of the C29 case. A hearing whose payload was briefly
+         * unavailable is retried, the retry assembles the document, and the document turns out to be
+         * one the vendored progression schemas refuse — so the request is parked on the second
+         * delivery rather than the first. The record has to say all four things at once: the state,
+         * why, which delivery parked it, and that it has been through the pipeline twice. Parked
+         * under the first delivery's identity it would replay when that message came back; parked
+         * with the retry's reason cleared it would tell support the run was never attempted.
+         */
+        @Test
+        void should_park_a_retrying_request_at_once_and_carry_its_attempts_forward() {
+            driveToRetrying("msg-1");
+            final RunClaim second = admitted("msg-2");
+
+            final GuardDecision decision =
+                    guard.recordNonTransientFailure(second, ReasonCode.OUTBOUND_CONTRACT_VIOLATION);
+
+            assertThat(decision).isEqualTo(new GuardDecision.DeadLetter(
+                    DeadLetterReason.NON_TRANSIENT, ReasonCode.OUTBOUND_CONTRACT_VIOLATION));
+            final Row row = row();
+            assertThat(row.status()).isEqualTo("FAILED");
+            assertThat(row.failureReason())
+                    .as("the reason that parked it replaces the transient one it was retrying for: "
+                            + "failure_reason describes the current status, not the history")
+                    .isEqualTo("OUTBOUND_CONTRACT_VIOLATION");
+            assertThat(row.exhaustedMessageId())
+                    .as("the delivery that parked the request is the one that was running, so a "
+                            + "redelivery of it re-parks and a fresh identity replays")
+                    .isEqualTo(second.messageId())
+                    .isEqualTo("msg-2");
+            assertThat(row.attempts())
+                    .as("attempts is a lifetime tally of run starts, and this request has had two")
+                    .isEqualTo(2);
+            assertThat(row.claimOwner()).isNull();
+            assertThat(row.claimToken()).isNull();
+            assertThat(row.claimExpiresAt()).isNull();
+        }
+
         @Test
         void should_refuse_the_write_from_a_runner_whose_claim_was_reclaimed() {
             final RunClaim superseded = admitted("msg-4");

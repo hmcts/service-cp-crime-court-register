@@ -1,12 +1,15 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
 import java.util.List;
+import java.util.stream.Stream;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.prometheusmetrics.PrometheusConfig;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -505,6 +508,138 @@ class ProcessingMetricsTest {
                     .distinct()
                     .toList())
                     .containsExactlyInAnyOrder("no-subscriptions", "recipient-missing-email");
+        }
+
+        /**
+         * The surface as Prometheus actually reads it, rather than as Micrometer holds it.
+         *
+         * <p>Everything above asks the registry what it was given. A dashboard and an alert rule ask
+         * the scrape endpoint, and between the two sits a naming convention: a counter's name is
+         * rewritten, a tag becomes a label, and a series is a name and a label set together. Names
+         * that agree in the registry can still arrive at Prometheus renamed, and the first anyone
+         * would know is an alert that has quietly stopped firing.
+         *
+         * <p>So the scrape text itself is asserted, series by series. The two counters that carry a
+         * {@code reason} are the ones worth spelling out: the five completions, because on this flow
+         * "nothing was sent" is the ordinary answer and telling the five apart is defect C33's fix;
+         * and the anomalies, because they are the telemetry half of C19, C20 and C27.
+         */
+        @Nested
+        @DisplayName("the surface as Prometheus scrapes it")
+        class PrometheusSurface {
+
+            private final PrometheusMeterRegistry prometheus =
+                    new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+            private final ProcessingMetrics scraped = new ProcessingMetrics(prometheus);
+
+            /** Every sample line for one series name, in scrape order. */
+            private List<String> samplesOf(final String series) {
+                return prometheus.scrape().lines()
+                        .filter(line -> line.startsWith(series + "{") || line.startsWith(series + " "))
+                        .map(line -> line.substring(0, line.lastIndexOf(' ')))
+                        .toList();
+            }
+
+            /** Every label key that appears anywhere in the scrape. */
+            private List<String> scrapedLabelKeys() {
+                return prometheus.scrape().lines()
+                        .filter(line -> !line.startsWith("#"))
+                        .filter(line -> line.contains("{"))
+                        .map(line -> line.substring(line.indexOf('{') + 1, line.indexOf('}')))
+                        .flatMap(labels -> Stream.of(labels.split(",")))
+                        .map(label -> label.substring(0, label.indexOf('=')).trim())
+                        .distinct()
+                        .sorted()
+                        .toList();
+            }
+
+            @Test
+            @DisplayName("the five completion reasons are five series, named as documented")
+            void the_completions_counter_should_scrape_as_exactly_five_reason_series() {
+                for (final CompletionReason reason : CompletionReason.values()) {
+                    scraped.completed(reason);
+                }
+
+                assertThat(samplesOf(ProcessingMetrics.COMPLETIONS))
+                        .as("four of the five sent nothing, and two of those four are this flow's "
+                                + "commonest results — an undifferentiated success is defect C33")
+                        .containsExactlyInAnyOrder(
+                                "courtregister_completions_total{reason=\"submitted\"}",
+                                "courtregister_completions_total{reason=\"group-proceedings\"}",
+                                "courtregister_completions_total{reason=\"no-defendants\"}",
+                                "courtregister_completions_total{reason=\"no-subscriptions\"}",
+                                "courtregister_completions_total{reason=\"no-youth-defendants\"}");
+            }
+
+            @Test
+            @DisplayName("every guarded anomaly is its own series, named as documented")
+            void the_anomaly_counter_should_scrape_one_reason_series_per_anomaly() {
+                for (final TransformationAnomaly anomaly : TransformationAnomaly.values()) {
+                    scraped.transformationAnomaly(anomaly);
+                }
+
+                assertThat(samplesOf(ProcessingMetrics.TRANSFORMATION_ANOMALIES))
+                        .containsExactlyInAnyOrder(
+                                "courtregister_transformation_anomalies_total"
+                                        + "{reason=\"unresolvable-youth-defendant\"}",
+                                "courtregister_transformation_anomalies_total"
+                                        + "{reason=\"unresolvable-application\"}",
+                                "courtregister_transformation_anomalies_total"
+                                        + "{reason=\"letter-delivery-dropped\"}",
+                                "courtregister_transformation_anomalies_total"
+                                        + "{reason=\"recipient-missing-email\"}",
+                                "courtregister_transformation_anomalies_total"
+                                        + "{reason=\"recipient-not-for-distribution\"}");
+            }
+
+            @Test
+            @DisplayName("no scraped series carries a label beyond the four bounded dimensions")
+            void the_scrape_should_carry_no_identifying_label() {
+                // The registry-level assertion above proves the tags this code sets. This one proves
+                // what leaves the pod: a label added by a convention, a common tag or a registry
+                // filter would appear here and nowhere else, and a metric label is a log line that
+                // is kept for a year.
+                for (final CompletionReason reason : CompletionReason.values()) {
+                    scraped.completed(reason);
+                }
+                for (final TransformationAnomaly anomaly : TransformationAnomaly.values()) {
+                    scraped.transformationAnomaly(anomaly);
+                }
+                scraped.requestSettled(RequestOutcome.COMPLETED);
+                scraped.pipelineFailed(FailureClassification.TRANSIENT);
+                scraped.deadLettered(DeadLetterReason.COLLISION);
+                scraped.settlementFailed(SettlementOperation.COMPLETE);
+                scraped.lockLost();
+                scraped.staleRunnerRejected();
+                scraped.intakeSuspended();
+
+                assertThat(scrapedLabelKeys())
+                        .containsExactly("classification", "operation", "outcome", "reason");
+            }
+
+            @Test
+            @DisplayName("the unlabelled instruments scrape as single, unlabelled series")
+            void the_unlabelled_instruments_should_scrape_without_a_label_set() {
+                scraped.lockLost();
+                scraped.staleRunnerRejected();
+                scraped.intakeSuspended();
+
+                assertThat(samplesOf(ProcessingMetrics.LOCK_LOSS))
+                        .containsExactly(ProcessingMetrics.LOCK_LOSS);
+                assertThat(samplesOf(ProcessingMetrics.STALE_RUNNER_REJECTIONS))
+                        .containsExactly(ProcessingMetrics.STALE_RUNNER_REJECTIONS);
+                assertThat(samplesOf(ProcessingMetrics.INTAKE_SUSPENSIONS))
+                        .containsExactly(ProcessingMetrics.INTAKE_SUSPENSIONS);
+            }
+
+            @Test
+            @DisplayName("both gauges scrape from a pod that has seen nothing")
+            void the_gauges_should_scrape_before_any_message_has_arrived() {
+                assertThat(samplesOf(ProcessingMetrics.INTAKE_SUSPENDED))
+                        .containsExactly(ProcessingMetrics.INTAKE_SUSPENDED);
+                assertThat(samplesOf(ProcessingMetrics.SERVICEBUS_UP))
+                        .containsExactly(ProcessingMetrics.SERVICEBUS_UP);
+            }
         }
 
         @Test

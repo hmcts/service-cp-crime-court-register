@@ -7,8 +7,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -18,6 +22,7 @@ import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.ProcessedOutputClaim;
 import uk.gov.hmcts.cp.courtregister.domain.RequestFingerprint;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
+import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 
@@ -55,9 +60,14 @@ class ProcessedOutputRepositoryIT {
     private static final String OTHER_DIGEST =
             "60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752";
 
-    /** Bounded reason-code counts, exactly as C19/C20/C27 write them: codes and numbers, no text. */
-    private static final String ANOMALIES =
-            "unresolvable-youth-defendant:1,letter-delivery-dropped:2";
+    /** Bounded reason-code counts, exactly as C19/C20/C27 count them: an enumeration and numbers. */
+    private static final Map<TransformationAnomaly, Integer> ANOMALIES = Map.of(
+            TransformationAnomaly.UNRESOLVABLE_YOUTH_DEFENDANT, 1,
+            TransformationAnomaly.LETTER_DELIVERY_DROPPED, 2);
+
+    /** How the column holds them: sorted by code, so one set of counts has one representation. */
+    private static final String ANOMALY_SUMMARY =
+            "letter-delivery-dropped:2,unresolvable-youth-defendant:1";
 
     private static final int ACCEPTED = 202;
     private static final int REFUSED = 400;
@@ -85,13 +95,15 @@ class ProcessedOutputRepositoryIT {
     }
 
     private static ProcessedOutputClaim claimFor(final UUID outputId, final String digest) {
-        return claimFor(outputId, digest, null);
+        return claimFor(outputId, digest, Map.of());
     }
 
     private static ProcessedOutputClaim claimFor(
-            final UUID outputId, final String digest, final String anomalySummary) {
+            final UUID outputId,
+            final String digest,
+            final Map<TransformationAnomaly, Integer> anomalies) {
         return new ProcessedOutputClaim(
-                outputId, COURT_CENTRE, OU_CODE, REGISTER_DATE, FILE_NAME, digest, anomalySummary);
+                outputId, COURT_CENTRE, OU_CODE, REGISTER_DATE, FILE_NAME, digest, anomalies);
     }
 
     @Nested
@@ -205,18 +217,74 @@ class ProcessedOutputRepositoryIT {
      * recipient without a word (C27). The fixes keep the register and record the skip as a bounded
      * reason-code count — codes and numbers only, because every defendant on this document is a
      * child and free text is how a name reaches a support query.
+     *
+     * <p>The counts are a {@code Map<TransformationAnomaly, Integer>} by the time they reach the
+     * claim, so the column is the only place they are ever a string. Rendering them is therefore
+     * this adapter's job and is asserted here: the same counts must always produce the same
+     * characters, whatever order the transformation happened to meet them in, or two identical
+     * registers compare unequal in a reconciliation nobody can then trust.
      */
     @Nested
     @DisplayName("the anomaly summary")
     class Anomalies {
 
         @Test
-        void a_bounded_reason_code_count_should_round_trip_unchanged() {
+        void counted_anomalies_should_be_written_as_bounded_code_and_count_pairs() {
             final RunClaim run = seededRequest();
 
             repository().claimPending(run, claimFor(UUID.randomUUID(), DIGEST, ANOMALIES));
 
-            assertThat(requireRow(run).anomalySummary()).isEqualTo(ANOMALIES);
+            assertThat(requireRow(run).anomalySummary()).isEqualTo(ANOMALY_SUMMARY);
+        }
+
+        /**
+         * Read back into the counts it was written from. Nothing in production parses this column —
+         * it is written for a human and for reconciliation — so the inverse lives here, which is the
+         * only place that can show the rendering loses nothing.
+         */
+        @Test
+        void the_written_summary_should_read_back_as_the_counts_it_was_written_from() {
+            final RunClaim run = seededRequest();
+
+            repository().claimPending(run, claimFor(UUID.randomUUID(), DIGEST, ANOMALIES));
+
+            assertThat(parseSummary(requireRow(run).anomalySummary())).isEqualTo(ANOMALIES);
+        }
+
+        /**
+         * Determinism, stated against the thing that could break it: the iteration order of the map
+         * the transformation accumulated the counts in.
+         */
+        @Test
+        void the_same_counts_should_be_written_identically_whatever_order_they_were_counted_in() {
+            final RunClaim first = seededRequest();
+            final RunClaim second = seededRequest();
+            final Map<TransformationAnomaly, Integer> countedOneWay = new LinkedHashMap<>();
+            countedOneWay.put(TransformationAnomaly.UNRESOLVABLE_YOUTH_DEFENDANT, 1);
+            countedOneWay.put(TransformationAnomaly.LETTER_DELIVERY_DROPPED, 2);
+            final Map<TransformationAnomaly, Integer> countedTheOther = new LinkedHashMap<>();
+            countedTheOther.put(TransformationAnomaly.LETTER_DELIVERY_DROPPED, 2);
+            countedTheOther.put(TransformationAnomaly.UNRESOLVABLE_YOUTH_DEFENDANT, 1);
+
+            repository().claimPending(first, claimFor(UUID.randomUUID(), DIGEST, countedOneWay));
+            repository().claimPending(second, claimFor(UUID.randomUUID(), DIGEST, countedTheOther));
+
+            assertThat(requireRow(first).anomalySummary())
+                    .as("one set of counts has one representation, or two identical registers "
+                            + "compare unequal")
+                    .isEqualTo(requireRow(second).anomalySummary())
+                    .isEqualTo(ANOMALY_SUMMARY);
+        }
+
+        @Test
+        void every_anomaly_the_enumeration_declares_should_survive_the_column() {
+            final RunClaim run = seededRequest();
+            final Map<TransformationAnomaly, Integer> all = Stream.of(TransformationAnomaly.values())
+                    .collect(Collectors.toMap(anomaly -> anomaly, anomaly -> 1));
+
+            repository().claimPending(run, claimFor(UUID.randomUUID(), DIGEST, all));
+
+            assertThat(parseSummary(requireRow(run).anomalySummary())).isEqualTo(all);
         }
 
         @Test
@@ -238,7 +306,7 @@ class ProcessedOutputRepositoryIT {
             repository.recordFailed(run, REFUSED);
 
             repository.claimPending(run, claimFor(UUID.randomUUID(), OTHER_DIGEST,
-                    "recipient-missing-email:1"));
+                    Map.of(TransformationAnomaly.RECIPIENT_MISSING_EMAIL, 1)));
 
             assertThat(requireRow(run).anomalySummary()).isEqualTo("recipient-missing-email:1");
         }
@@ -251,8 +319,24 @@ class ProcessedOutputRepositoryIT {
 
             repository.recordFailed(run, REFUSED);
 
-            assertThat(requireRow(run).anomalySummary()).isEqualTo(ANOMALIES);
+            assertThat(requireRow(run).anomalySummary()).isEqualTo(ANOMALY_SUMMARY);
         }
+    }
+
+    /** The inverse of the adapter's rendering, so a round trip can be asserted rather than assumed. */
+    private static Map<TransformationAnomaly, Integer> parseSummary(final String summary) {
+        return Stream.of(summary.split(","))
+                .map(pair -> pair.split(":"))
+                .collect(Collectors.toMap(
+                        pair -> codeFor(pair[0]), pair -> Integer.valueOf(pair[1])));
+    }
+
+    private static TransformationAnomaly codeFor(final String code) {
+        return Stream.of(TransformationAnomaly.values())
+                .filter(anomaly -> anomaly.value().equals(code))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "the column holds a code the enumeration does not declare: " + code));
     }
 
     @Nested

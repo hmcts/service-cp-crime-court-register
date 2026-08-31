@@ -277,8 +277,16 @@ class ConfigurationValidationTest {
         void a_deadline_longer_than_the_lease_should_fail_startup() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
                     "courtregister.claim.lease=5m",
-                    "courtregister.claim.processing-deadline=6m").run(context ->
-                            assertThat(context).hasFailed());
+                    "courtregister.claim.processing-deadline=6m").run(context -> {
+                        assertThat(context).hasFailed();
+                        // "It failed" is not the assertion. Whoever set the deadline sees only the
+                        // startup failure, and one that does not name both settings and the relation
+                        // between them leaves them guessing which of a dozen durations to move.
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.claim.processing-deadline")
+                                .hasMessageContaining("courtregister.claim.lease")
+                                .hasMessageContaining("strictly shorter");
+                    });
         }
 
         @Test
@@ -868,8 +876,16 @@ class ConfigurationValidationTest {
         @Test
         void a_negative_attempt_count_should_fail_startup_the_same_way() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
-                    "courtregister.progression.max-attempts=-1").run(context ->
-                            assertThat(context).hasFailed());
+                    "courtregister.progression.max-attempts=-1").run(context -> {
+                        assertThat(context).hasFailed();
+                        // "The same way" is the point of the case, so it is asserted rather than
+                        // asserted-about: the refusal names the setting and the floor it is under,
+                        // exactly as the zero case's does.
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.progression.max-attempts")
+                                .hasMessageContaining("-1")
+                                .hasMessageContaining("must be at least 1");
+                    });
         }
 
         @Test

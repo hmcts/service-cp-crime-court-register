@@ -1,9 +1,12 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
 import java.sql.Types;
+import java.util.Map;
+import java.util.stream.Collectors;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import uk.gov.hmcts.cp.courtregister.domain.ProcessedOutputClaim;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
+import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 
 /**
  * The submission half of the processed log: what was sent for a request, and how it went.
@@ -202,7 +205,7 @@ public class ProcessedOutputRepository {
                 .param("registerDate", claim.registerDate())
                 .param("fileName", claim.fileName())
                 .param("digest", claim.requestDigest(), Types.VARCHAR)
-                .param("anomalySummary", claim.anomalySummary(), Types.VARCHAR)
+                .param("anomalySummary", anomalySummary(claim.anomalies()), Types.VARCHAR)
                 .update());
     }
 
@@ -243,6 +246,18 @@ public class ProcessedOutputRepository {
                 .param(TOKEN, runClaim.token())
                 .param(RESPONSE_CODE, responseCode, Types.INTEGER)
                 .update();
+    }
+
+    /**
+     * Renders the counted anomalies into the one column they are stored in.
+     *
+     * <p>Here and nowhere else. The domain counts anomalies as a bounded map, which is what makes
+     * free text impossible; how that map becomes a column is a fact about the column.
+     */
+    private static String anomalySummary(final Map<TransformationAnomaly, Integer> anomalies) {
+        return anomalies == null || anomalies.isEmpty() ? null : anomalies.entrySet().stream()
+                .map(counted -> counted.getKey().value() + ":" + counted.getValue())
+                .collect(Collectors.joining(","));
     }
 
     private static boolean affected(final int rows) {

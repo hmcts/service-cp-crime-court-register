@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
 import java.time.LocalDate;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -21,9 +22,9 @@ import java.util.UUID;
  * {@code requestId} in this record as well would make that mismatch representable, and a value that
  * disagrees with the fence is a register written against somebody else's hearing.
  *
- * <p>{@code requestDigest} and {@code anomalySummary} are the two things worth more after a failure
- * than after a success: what was attempted, and which parts of the register were skipped to produce
- * it. Both are written before the POST and neither is erased by its outcome.
+ * <p>{@code requestDigest} and {@code anomalies} are the two things worth more after a failure than
+ * after a success: what was attempted, and which parts of the register were skipped to produce it.
+ * Both are written before the POST and neither is erased by its outcome.
  *
  * @param outputId          identity for a row written for the first time; a re-claim leaves the
  *                          existing row's identity alone
@@ -33,8 +34,8 @@ import java.util.UUID;
  * @param registerDate      the register day derived from the command's shared time (fix C10)
  * @param fileName          the file name the document was built under (fix C11)
  * @param requestDigest     SHA-256 of exactly the bytes about to be sent
- * @param anomalySummary    bounded reason-code counts for the guarded transformation anomalies this
- *                          register survived, or {@code null} where there were none
+ * @param anomalies         how many of each guarded transformation anomaly this register survived;
+ *                          empty where there were none
  */
 public record ProcessedOutputClaim(
         UUID outputId,
@@ -43,5 +44,5 @@ public record ProcessedOutputClaim(
         LocalDate registerDate,
         String fileName,
         String requestDigest,
-        String anomalySummary) {
+        Map<TransformationAnomaly, Integer> anomalies) {
 }
