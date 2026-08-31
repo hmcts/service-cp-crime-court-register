@@ -87,7 +87,7 @@ in the same commit.**
       Configuration table binds; deadline < lease; renewal margin; exactly-one credential source;
       LIVE requires system-user-ids; stub-refused-when-namespace; worst-case fetch + submission
       arithmetic; `submission.validate-outbound` refused false when a namespace is set.
-- [ ] T010 [P] [US4] Write `config/ProcessingMetricsTest` (red; seam: `ProcessingMetrics`) — one
+- [x] T010 [P] [US4] Write `config/ProcessingMetricsTest` (red; seam: `ProcessingMetrics`) — one
       case per instrument incl. `courtregister_completions_total{reason}` for the five reasons,
       `courtregister_deadlettered_total{reason}`, and
       `courtregister_transformation_anomalies_total{reason}` (the C19/C20/C27 anomaly metric).

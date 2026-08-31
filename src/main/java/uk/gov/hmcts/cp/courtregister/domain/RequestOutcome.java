@@ -1,0 +1,29 @@
+package uk.gov.hmcts.cp.courtregister.domain;
+
+/**
+ * How a request finished, for the terminal-outcome counter.
+ */
+public enum RequestOutcome {
+
+    /** The pipeline ran and the outcome was recorded. */
+    COMPLETED("completed"),
+
+    /** The request was parked — its permitted deliveries exhausted, or a failure no retry can fix. */
+    FAILED("failed");
+
+    private final String metricLabel;
+
+    RequestOutcome(final String label) {
+        this.metricLabel = label;
+    }
+
+    /**
+     * The metric label value. Fixed here rather than derived from the constant name, so renaming a
+     * constant cannot silently rename a dashboard's series.
+     *
+     * @return the label this outcome is counted under
+     */
+    public String label() {
+        return metricLabel;
+    }
+}
