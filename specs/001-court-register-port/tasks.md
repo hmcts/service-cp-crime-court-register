@@ -226,7 +226,7 @@ in the same commit.**
       *(done — C30 stays PLANNED with its vocabulary half recorded in the register: the fix is only
       half implemented until T037 makes the three creditor predicates consistent, and a row marked
       FIXED on half a fix is the register lying.)*
-- [ ] T035 [US3] Implement `pipeline/CourtExtractFilter` (green T026).
+- [x] T035 [US3] Implement `pipeline/CourtExtractFilter` (green T026).
 - [ ] T036 [US3] Implement `pipeline/RegisterBuilder` + `domain/RegisterFragment` (green T027) —
       updates C6 (and the C26 spelling on the fragment).
 - [ ] T037 [US3] Implement `pipeline/SubscriptionRules` (green T028) — updates C4/C5/C30.
