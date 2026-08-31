@@ -56,6 +56,7 @@ public class PropertiesValidator implements InitializingBean {
     private static final String FALLBACK_MAX_ATTEMPTS = FALLBACK + ".max-attempts";
     private static final String RETRY_INTERVAL = FALLBACK + ".retry-interval";
     private static final String REDIS = "courtregister.payload.redis";
+    private static final String CONNECT_TIMEOUT_SUFFIX = ".connect-timeout";
     private static final String REFDATA = "courtregister.referencedata";
     private static final String SUBSCRIPTIONS_MODE = REFDATA + ".mode";
     private static final String REFDATA_BASE_URL = REFDATA + ".base-url";
@@ -210,7 +211,7 @@ public class PropertiesValidator implements InitializingBean {
                     REDIS + ".key-prefix must be the prefix the producer writes the payload under,"
                             + " INT_ for this flow — an empty prefix reads a key nobody writes");
         }
-        requirePositive(redis.connectTimeout(), REDIS + ".connect-timeout");
+        requirePositive(redis.connectTimeout(), REDIS + CONNECT_TIMEOUT_SUFFIX);
         requirePositive(redis.commandTimeout(), REDIS + ".command-timeout");
     }
 
@@ -227,7 +228,7 @@ public class PropertiesValidator implements InitializingBean {
             throw new IllegalStateException(
                     RETRY_INTERVAL + " (" + fallback.retryInterval() + ") must not be negative");
         }
-        requirePositive(fallback.connectTimeout(), FALLBACK + ".connect-timeout");
+        requirePositive(fallback.connectTimeout(), FALLBACK + CONNECT_TIMEOUT_SUFFIX);
         requirePositive(fallback.readTimeout(), FALLBACK + ".read-timeout");
     }
 
@@ -337,7 +338,7 @@ public class PropertiesValidator implements InitializingBean {
                     REFDATA_RETRY_INTERVAL + " (" + referencedata.retryInterval()
                             + ") must not be negative");
         }
-        requirePositive(referencedata.connectTimeout(), REFDATA + ".connect-timeout");
+        requirePositive(referencedata.connectTimeout(), REFDATA + CONNECT_TIMEOUT_SUFFIX);
         requirePositive(referencedata.readTimeout(), REFDATA + ".read-timeout");
     }
 
@@ -429,7 +430,7 @@ public class PropertiesValidator implements InitializingBean {
                             + INITIAL_BACKOFF + " (" + progression.initialBackoff() + "), or the"
                             + " ceiling shortens the very wait it exists to bound");
         }
-        requirePositive(progression.connectTimeout(), PROGRESSION + ".connect-timeout");
+        requirePositive(progression.connectTimeout(), PROGRESSION + CONNECT_TIMEOUT_SUFFIX);
         requirePositive(progression.readTimeout(), PROGRESSION + ".read-timeout");
     }
 
