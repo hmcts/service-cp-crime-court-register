@@ -227,8 +227,11 @@ in the same commit.**
       half implemented until T037 makes the three creditor predicates consistent, and a row marked
       FIXED on half a fix is the register lying.)*
 - [x] T035 [US3] Implement `pipeline/CourtExtractFilter` (green T026).
-- [ ] T036 [US3] Implement `pipeline/RegisterBuilder` + `domain/RegisterFragment` (green T027) —
+- [x] T036 [US3] Implement `pipeline/RegisterBuilder` + `domain/RegisterFragment` (green T027) —
       updates C6 (and the C26 spelling on the fragment).
+      *(done — C6 moves to FIXED; C26 stays PLANNED with its fragment half recorded. C26's fix is
+      the whole outbound model being honest, which is `OutboundContractValidationTest`'s claim in
+      the mapper phase; the fragment's spelling is one field of it.)*
 - [ ] T037 [US3] Implement `pipeline/SubscriptionRules` (green T028) — updates C4/C5/C30.
 - [ ] T038 [US3] Implement `pipeline/SubscriptionMatcher` (green T029) — updates C31.
 - [ ] T039 [US1] Implement the group-proceedings policy + wire `DistributionPipeline` stages
