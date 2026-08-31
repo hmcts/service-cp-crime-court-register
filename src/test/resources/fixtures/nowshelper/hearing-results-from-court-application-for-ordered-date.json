@@ -1,0 +1,760 @@
+{
+  "courtApplications": [
+    {
+      "applicant": {
+        "id": "746ecf4c-b1aa-49ac-9edf-464e2ec136cd",
+        "notificationRequired": true,
+        "masterDefendant": {
+          "isYouth": false,
+          "masterDefendantId": "d0fef2a9-c294-4b60-8bc6-50d7224699df",
+          "personDefendant": {
+            "arrestSummonsNumber": "TFL",
+            "bailStatus": {
+              "code": "A",
+              "description": "Not applicable",
+              "id": "86009c70-759d-3308-8de4-194886ff9a77"
+            },
+            "personDetails": {
+              "address": {
+                "address1": "1234",
+                "address2": "StreetDescription",
+                "address3": "Locality2O"
+              },
+              "dateOfBirth": "1990-01-01",
+              "documentationLanguageNeeds": "ENGLISH",
+              "firstName": "Jovan",
+              "gender": "MALE",
+              "lastName": "Jerde",
+              "title": "Mr"
+            }
+          }
+        },
+        "summonsRequired": false
+      },
+      "applicationReceivedDate": "2021-03-04",
+      "applicationReference": "11GD8100218",
+      "applicationStatus": "IN_PROGRESS",
+      "commissionerOfOath": false,
+      "courtOrder": {
+        "canBeSubjectOfBreachProceedings": true,
+        "canBeSubjectOfVariationProceedings": true,
+        "courtOrderOffences": [
+          {
+            "offence": {
+              "arrestDate": "2020-02-09",
+              "chargeDate": "2020-02-09",
+              "convictionDate": "2021-03-10",
+              "count": 0,
+              "id": "76d93fdd-0e42-42d2-82f5-b19f34cef5bd",
+              "isDisposed": true,
+              "judicialResults": [
+                {
+                  "alwaysPublished": false,
+                  "canBeSubjectOfBreach": false,
+                  "canBeSubjectOfVariation": false,
+                  "category": "FINAL",
+                  "cjsCode": "1030",
+                  "courtClerk": {
+                    "firstName": "Erica",
+                    "lastName": "Wilson",
+                    "userId": "a085e359-6069-4694-8820-7810e7dfe762"
+                  },
+                  "d20": false,
+                  "excludedFromResults": false,
+                  "isAdjournmentResult": false,
+                  "isAvailableForCourtExtract": true,
+                  "isConvictedResult": false,
+                  "isDeleted": false,
+                  "isFinancialResult": false,
+                  "isUnscheduled": false,
+                  "judicialResultId": "fe95f7b5-563e-46f6-93cf-f3bf49c638fc",
+                  "judicialResultPrompts": [
+                    {
+                      "courtExtract": "Y",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "0eba630e-a486-439f-8d76-b49b1363067c",
+                      "label": "Court that made the original order",
+                      "promptReference": "courtThatMadeTheOriginalOrder",
+                      "promptSequence": 100,
+                      "type": "FIXL",
+                      "usergroups": [],
+                      "value": "Banbridge Magistrates' Court",
+                      "welshLabel": "Y llys a wnaeth y gorchymyn gwreiddiol",
+                      "welshValue": "Banbridge Magistrates' Court"
+                    },
+                    {
+                      "courtExtract": "Y",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "39355876-d028-48fa-82d8-ccedbe4312f8",
+                      "label": "Date original order made",
+                      "promptReference": "dateOriginalOrderMade",
+                      "promptSequence": 200,
+                      "type": "DATE",
+                      "usergroups": [],
+                      "value": "11/11/2021",
+                      "welshLabel": "Dyddiad y gwnaethpwyd y gorchymyn gwreiddiol",
+                      "welshValue": "11/11/2021"
+                    },
+                    {
+                      "courtExtract": "Y",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "27bf0204-a185-4e82-8c34-7317287513c8",
+                      "label": "Responsible officer for the order",
+                      "promptReference": "responsibleOfficerForTheOrder",
+                      "promptSequence": 1000,
+                      "type": "FIXL",
+                      "usergroups": [],
+                      "value": "a probation officer",
+                      "welshValue": "swyddog prawf"
+                    },
+                    {
+                      "courtExtract": "Y",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "f4a4f159-779e-4f35-822a-b559a2415ecb",
+                      "label": "Supervising Court",
+                      "promptReference": "supervisingCourt",
+                      "promptSequence": 1020,
+                      "type": "FIXL",
+                      "usergroups": [],
+                      "value": "Aylesbury Crown Court",
+                      "welshLabel": "Llys sy’n Goruchwylio",
+                      "welshValue": "Aylesbury Crown Court"
+                    },
+                    {
+                      "courtExtract": "N",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "68c92035-27fd-4ee6-b03c-fe18ea6dbcb0",
+                      "label": "Probation team to be notified organisation name",
+                      "promptReference": "probationteamtobenotifiedOrganisationName",
+                      "promptSequence": 1200,
+                      "type": "NAMEADDRESS",
+                      "usergroups": [],
+                      "value": "London Division NPS",
+                      "welshValue": "London Division NPS"
+                    },
+                    {
+                      "courtExtract": "N",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "68c92035-27fd-4ee6-b03c-fe18ea6dbcb0",
+                      "label": "Probation team to be notified email address 1",
+                      "promptReference": "probationteamtobenotifiedEmailAddress1",
+                      "promptSequence": 1200,
+                      "type": "NAMEADDRESS",
+                      "usergroups": [],
+                      "value": "londonnps.court@justice.gov.uk",
+                      "welshValue": "londonnps.court@justice.gov.uk"
+                    }
+                  ],
+                  "judicialResultTypeId": "4a026ff3-e1aa-407e-aafa-015723c1dbd0",
+                  "label": "Community order amended",
+                  "lastSharedDateTime": "2021-03-10",
+                  "level": "O",
+                  "lifeDuration": false,
+                  "orderedDate": "2021-03-25",
+                  "orderedHearingId": "fa40d785-193e-421f-87f4-96107e0dc3aa",
+                  "postHearingCustodyStatus": "A",
+                  "publishedAsAPrompt": false,
+                  "publishedForNows": false,
+                  "rank": 77300,
+                  "resultText": "Community order amended\nCourt that made the original order Banbridge Magistrates' Court\nDate original order made 11/11/2021\nResponsible officer for the order a probation officer\nSupervising Court Aylesbury Crown Court\nProbation team to be notified organisation name London Division NPS\nProbation team to be notified email address 1 londonnps.court@justice.gov.uk",
+                  "rollUpPrompts": true,
+                  "rootJudicialResultId": "fe95f7b5-563e-46f6-93cf-f3bf49c638fc",
+                  "rootJudicialResultTypeId": "4a026ff3-e1aa-407e-aafa-015723c1dbd0",
+                  "terminatesOffenceProceedings": false,
+                  "urgent": false,
+                  "usergroups": []
+                },
+                {
+                  "alwaysPublished": true,
+                  "canBeSubjectOfBreach": false,
+                  "canBeSubjectOfVariation": false,
+                  "category": "ANCILLARY",
+                  "cjsCode": "3101",
+                  "courtClerk": {
+                    "firstName": "Erica",
+                    "lastName": "Wilson",
+                    "userId": "a085e359-6069-4694-8820-7810e7dfe762"
+                  },
+                  "d20": false,
+                  "excludedFromResults": false,
+                  "isAdjournmentResult": false,
+                  "isAvailableForCourtExtract": true,
+                  "isConvictedResult": false,
+                  "isDeleted": false,
+                  "isFinancialResult": false,
+                  "isUnscheduled": false,
+                  "judicialResultId": "5a242158-214a-4ae3-a634-f15841de9874",
+                  "judicialResultPrompts": [
+                    {
+                      "courtExtract": "Y",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "72413aef-ecb9-4e9b-a143-31d1e9c11584",
+                      "label": "Number of hours",
+                      "promptReference": "numberOfHours",
+                      "promptSequence": 100,
+                      "type": "INT",
+                      "usergroups": [],
+                      "value": "1 Hours",
+                      "welshLabel": "Nifer yr oriau",
+                      "welshValue": "1"
+                    }
+                  ],
+                  "judicialResultTypeId": "9bec5977-1796-4645-9b9e-687d4f23d37d",
+                  "label": "Unpaid work",
+                  "lastSharedDateTime": "2021-03-10",
+                  "level": "O",
+                  "lifeDuration": false,
+                  "orderedDate": "2021-03-25",
+                  "orderedHearingId": "fa40d785-193e-421f-87f4-96107e0dc3aa",
+                  "parentJudicialResultId": "adfee0c0-24bc-471c-ae35-312b6f4c7ce6",
+                  "parentJudicialResultTypeId": "b2dab2b7-3edd-4223-b1be-3819173ec54d",
+                  "postHearingCustodyStatus": "A",
+                  "publishedAsAPrompt": false,
+                  "publishedForNows": false,
+                  "rank": 21300,
+                  "resultDefinitionGroup": "Community Requirement",
+                  "resultText": "Unpaid work\nNumber of hours 1 Hours",
+                  "rollUpPrompts": false,
+                  "rootJudicialResultId": "fe95f7b5-563e-46f6-93cf-f3bf49c638fc",
+                  "rootJudicialResultTypeId": "4a026ff3-e1aa-407e-aafa-015723c1dbd0",
+                  "terminatesOffenceProceedings": false,
+                  "urgent": false,
+                  "usergroups": [],
+                  "welshLabel": "Gwaith di-dâl"
+                },
+                {
+                  "alwaysPublished": false,
+                  "canBeSubjectOfBreach": false,
+                  "canBeSubjectOfVariation": false,
+                  "category": "ANCILLARY",
+                  "courtClerk": {
+                    "firstName": "Erica",
+                    "lastName": "Wilson",
+                    "userId": "a085e359-6069-4694-8820-7810e7dfe762"
+                  },
+                  "d20": false,
+                  "excludedFromResults": false,
+                  "isAdjournmentResult": false,
+                  "isAvailableForCourtExtract": true,
+                  "isConvictedResult": false,
+                  "isDeleted": false,
+                  "isFinancialResult": false,
+                  "isUnscheduled": false,
+                  "judicialResultId": "ed1e0485-2e3c-4beb-9b11-aa740013d790",
+                  "judicialResultTypeId": "346edadd-5b2f-4e52-9d71-cd2296508cdf",
+                  "label": "The new and amended requirements are",
+                  "lastSharedDateTime": "2021-03-10",
+                  "level": "O",
+                  "lifeDuration": false,
+                  "orderedDate": "2021-03-25",
+                  "orderedHearingId": "fa40d785-193e-421f-87f4-96107e0dc3aa",
+                  "parentJudicialResultId": "fe95f7b5-563e-46f6-93cf-f3bf49c638fc",
+                  "parentJudicialResultTypeId": "4a026ff3-e1aa-407e-aafa-015723c1dbd0",
+                  "postHearingCustodyStatus": "A",
+                  "publishedAsAPrompt": false,
+                  "publishedForNows": false,
+                  "rank": 11900,
+                  "resultText": "The new and amended requirements are\n",
+                  "rollUpPrompts": true,
+                  "rootJudicialResultId": "fe95f7b5-563e-46f6-93cf-f3bf49c638fc",
+                  "rootJudicialResultTypeId": "4a026ff3-e1aa-407e-aafa-015723c1dbd0",
+                  "terminatesOffenceProceedings": false,
+                  "urgent": false,
+                  "usergroups": []
+                }
+              ],
+              "modeOfTrial": "Either Way",
+              "offenceCode": "CE79241",
+              "offenceDateCode": 1,
+              "offenceDefinitionId": "ae8bb3a8-33ce-474e-b44b-442c45ef1ee6",
+              "offenceLegislation": "Contrary to section 50(3), (4) and (5) of the Customs and Excise Management Act 1979.",
+              "offenceTitle": "Import a drug of a temporary class with intent to evade a prohibition",
+              "orderIndex": 1,
+              "plea": {
+                "offenceId": "76d93fdd-0e42-42d2-82f5-b19f34cef5bd",
+                "originatingHearingId": "fdcc2254-a2b9-43df-a0fe-50d618ad2839",
+                "pleaDate": "2021-03-10",
+                "pleaValue": "GUILTY"
+              },
+              "startDate": "2020-02-09",
+              "wording": "Has a violent past and fear that he will commit further offences and\n                interfere with witnesse"
+            },
+            "prosecutionCaseId": "0317eef8-19d2-4736-8581-951d4af5383d",
+            "prosecutionCaseIdentifier": {
+              "address": {
+                "address1": "6th Floor Windsor House",
+                "address2": "42-50 Victoria Street",
+                "address3": "London",
+                "postcode": "SW1H 0TL"
+              },
+              "contact": {
+                "primaryEmail": "email@address.com"
+              },
+              "majorCreditorCode": "PF45",
+              "prosecutionAuthorityCode": "CPS-SE",
+              "prosecutionAuthorityId": "125baa4d-ffeb-448b-852c-5ab695fdfcc7",
+              "prosecutionAuthorityName": "Surrey Police test",
+              "prosecutionAuthorityOUCode": "A450000",
+              "caseURN": "11GD8100218"
+            }
+          },
+          {
+            "offence": {
+              "allocationDecision": {
+                "allocationDecisionDate": "2021-03-10",
+                "motReasonCode": "01",
+                "motReasonDescription": "Summary-only offence",
+                "motReasonId": "b8c37e33-defd-351c-b91e-1e03e51657da",
+                "offenceId": "ff952746-7fb4-42cb-84b5-e3d13663f5c6",
+                "originatingHearingId": "fdcc2254-a2b9-43df-a0fe-50d618ad2839",
+                "sequenceNumber": 90
+              },
+              "arrestDate": "2020-02-09",
+              "chargeDate": "2020-02-09",
+              "convictionDate": "2021-03-10",
+              "count": 0,
+              "id": "ff952746-7fb4-42cb-84b5-e3d13663f5c6",
+              "isDisposed": true,
+              "judicialResults": [
+                {
+                  "alwaysPublished": false,
+                  "canBeSubjectOfBreach": false,
+                  "canBeSubjectOfVariation": false,
+                  "category": "FINAL",
+                  "cjsCode": "1030",
+                  "courtClerk": {
+                    "firstName": "Erica",
+                    "lastName": "Wilson",
+                    "userId": "a085e359-6069-4694-8820-7810e7dfe762"
+                  },
+                  "d20": false,
+                  "excludedFromResults": false,
+                  "isAdjournmentResult": false,
+                  "isAvailableForCourtExtract": true,
+                  "isConvictedResult": false,
+                  "isDeleted": false,
+                  "isFinancialResult": false,
+                  "isUnscheduled": false,
+                  "judicialResultId": "78c0e9a5-db9f-42bf-8a72-4e17c72df59c",
+                  "judicialResultPrompts": [
+                    {
+                      "courtExtract": "Y",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "0eba630e-a486-439f-8d76-b49b1363067c",
+                      "label": "Court that made the original order",
+                      "promptReference": "courtThatMadeTheOriginalOrder",
+                      "promptSequence": 100,
+                      "type": "FIXL",
+                      "usergroups": [],
+                      "value": "Banbridge Magistrates' Court",
+                      "welshLabel": "Y llys a wnaeth y gorchymyn gwreiddiol",
+                      "welshValue": "Banbridge Magistrates' Court"
+                    },
+                    {
+                      "courtExtract": "Y",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "39355876-d028-48fa-82d8-ccedbe4312f8",
+                      "label": "Date original order made",
+                      "promptReference": "dateOriginalOrderMade",
+                      "promptSequence": 200,
+                      "type": "DATE",
+                      "usergroups": [],
+                      "value": "11/11/2021",
+                      "welshLabel": "Dyddiad y gwnaethpwyd y gorchymyn gwreiddiol",
+                      "welshValue": "11/11/2021"
+                    },
+                    {
+                      "courtExtract": "Y",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "27bf0204-a185-4e82-8c34-7317287513c8",
+                      "label": "Responsible officer for the order",
+                      "promptReference": "responsibleOfficerForTheOrder",
+                      "promptSequence": 1000,
+                      "type": "FIXL",
+                      "usergroups": [],
+                      "value": "a probation officer",
+                      "welshValue": "swyddog prawf"
+                    },
+                    {
+                      "courtExtract": "Y",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "f4a4f159-779e-4f35-822a-b559a2415ecb",
+                      "label": "Supervising Court",
+                      "promptReference": "supervisingCourt",
+                      "promptSequence": 1020,
+                      "type": "FIXL",
+                      "usergroups": [],
+                      "value": "Aylesbury Crown Court",
+                      "welshLabel": "Llys sy’n Goruchwylio",
+                      "welshValue": "Aylesbury Crown Court"
+                    },
+                    {
+                      "courtExtract": "N",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "68c92035-27fd-4ee6-b03c-fe18ea6dbcb0",
+                      "label": "Probation team to be notified organisation name",
+                      "promptReference": "probationteamtobenotifiedOrganisationName",
+                      "promptSequence": 1200,
+                      "type": "NAMEADDRESS",
+                      "usergroups": [],
+                      "value": "London Division NPS",
+                      "welshValue": "London Division NPS"
+                    },
+                    {
+                      "courtExtract": "N",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "68c92035-27fd-4ee6-b03c-fe18ea6dbcb0",
+                      "label": "Probation team to be notified email address 1",
+                      "promptReference": "probationteamtobenotifiedEmailAddress1",
+                      "promptSequence": 1200,
+                      "type": "NAMEADDRESS",
+                      "usergroups": [],
+                      "value": "londonnps.court@justice.gov.uk",
+                      "welshValue": "londonnps.court@justice.gov.uk"
+                    }
+                  ],
+                  "judicialResultTypeId": "4a026ff3-e1aa-407e-aafa-015723c1dbd0",
+                  "label": "Community order amended",
+                  "lastSharedDateTime": "2021-03-10",
+                  "level": "O",
+                  "lifeDuration": false,
+                  "orderedDate": "2021-03-10",
+                  "orderedHearingId": "fa40d785-193e-421f-87f4-96107e0dc3aa",
+                  "postHearingCustodyStatus": "A",
+                  "publishedAsAPrompt": false,
+                  "publishedForNows": false,
+                  "rank": 77300,
+                  "resultText": "Community order amended\nCourt that made the original order Banbridge Magistrates' Court\nDate original order made 11/11/2021\nResponsible officer for the order a probation officer\nSupervising Court Aylesbury Crown Court\nProbation team to be notified organisation name London Division NPS\nProbation team to be notified email address 1 londonnps.court@justice.gov.uk",
+                  "rollUpPrompts": true,
+                  "rootJudicialResultId": "78c0e9a5-db9f-42bf-8a72-4e17c72df59c",
+                  "rootJudicialResultTypeId": "4a026ff3-e1aa-407e-aafa-015723c1dbd0",
+                  "terminatesOffenceProceedings": false,
+                  "urgent": false,
+                  "usergroups": []
+                },
+                {
+                  "alwaysPublished": true,
+                  "canBeSubjectOfBreach": false,
+                  "canBeSubjectOfVariation": false,
+                  "category": "ANCILLARY",
+                  "cjsCode": "3101",
+                  "courtClerk": {
+                    "firstName": "Erica",
+                    "lastName": "Wilson",
+                    "userId": "a085e359-6069-4694-8820-7810e7dfe762"
+                  },
+                  "d20": false,
+                  "excludedFromResults": false,
+                  "isAdjournmentResult": false,
+                  "isAvailableForCourtExtract": true,
+                  "isConvictedResult": false,
+                  "isDeleted": false,
+                  "isFinancialResult": false,
+                  "isUnscheduled": false,
+                  "judicialResultId": "f20d2613-ef33-4783-ac10-7b265136913c",
+                  "judicialResultPrompts": [
+                    {
+                      "courtExtract": "Y",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "72413aef-ecb9-4e9b-a143-31d1e9c11584",
+                      "label": "Number of hours",
+                      "promptReference": "numberOfHours",
+                      "promptSequence": 100,
+                      "type": "INT",
+                      "usergroups": [],
+                      "value": "1 Hours",
+                      "welshLabel": "Nifer yr oriau",
+                      "welshValue": "1"
+                    }
+                  ],
+                  "judicialResultTypeId": "9bec5977-1796-4645-9b9e-687d4f23d37d",
+                  "label": "Unpaid work",
+                  "lastSharedDateTime": "2021-03-10",
+                  "level": "O",
+                  "lifeDuration": false,
+                  "orderedDate": "2021-03-10",
+                  "orderedHearingId": "fa40d785-193e-421f-87f4-96107e0dc3aa",
+                  "parentJudicialResultId": "81f01c70-cdc3-484d-bf2c-448e93f808cc",
+                  "parentJudicialResultTypeId": "b2dab2b7-3edd-4223-b1be-3819173ec54d",
+                  "postHearingCustodyStatus": "A",
+                  "publishedAsAPrompt": false,
+                  "publishedForNows": false,
+                  "rank": 21300,
+                  "resultDefinitionGroup": "Community Requirement",
+                  "resultText": "Unpaid work\nNumber of hours 1 Hours",
+                  "rollUpPrompts": false,
+                  "rootJudicialResultId": "78c0e9a5-db9f-42bf-8a72-4e17c72df59c",
+                  "rootJudicialResultTypeId": "4a026ff3-e1aa-407e-aafa-015723c1dbd0",
+                  "terminatesOffenceProceedings": false,
+                  "urgent": false,
+                  "usergroups": [],
+                  "welshLabel": "Gwaith di-dâl"
+                },
+                {
+                  "alwaysPublished": false,
+                  "canBeSubjectOfBreach": false,
+                  "canBeSubjectOfVariation": false,
+                  "category": "ANCILLARY",
+                  "courtClerk": {
+                    "firstName": "Erica",
+                    "lastName": "Wilson",
+                    "userId": "a085e359-6069-4694-8820-7810e7dfe762"
+                  },
+                  "d20": false,
+                  "excludedFromResults": false,
+                  "isAdjournmentResult": false,
+                  "isAvailableForCourtExtract": true,
+                  "isConvictedResult": false,
+                  "isDeleted": false,
+                  "isFinancialResult": false,
+                  "isUnscheduled": false,
+                  "judicialResultId": "0762d657-aa22-4b85-bdf7-6f862e2164de",
+                  "judicialResultTypeId": "346edadd-5b2f-4e52-9d71-cd2296508cdf",
+                  "label": "The new and amended requirements are",
+                  "lastSharedDateTime": "2021-03-10",
+                  "level": "O",
+                  "lifeDuration": false,
+                  "orderedDate": "2021-03-25",
+                  "orderedHearingId": "fa40d785-193e-421f-87f4-96107e0dc3aa",
+                  "parentJudicialResultId": "78c0e9a5-db9f-42bf-8a72-4e17c72df59c",
+                  "parentJudicialResultTypeId": "4a026ff3-e1aa-407e-aafa-015723c1dbd0",
+                  "postHearingCustodyStatus": "A",
+                  "publishedAsAPrompt": false,
+                  "publishedForNows": false,
+                  "rank": 11900,
+                  "resultText": "The new and amended requirements are\n",
+                  "rollUpPrompts": true,
+                  "rootJudicialResultId": "78c0e9a5-db9f-42bf-8a72-4e17c72df59c",
+                  "rootJudicialResultTypeId": "4a026ff3-e1aa-407e-aafa-015723c1dbd0",
+                  "terminatesOffenceProceedings": false,
+                  "urgent": false,
+                  "usergroups": []
+                }
+              ],
+              "modeOfTrial": "Summary",
+              "offenceCode": "CA03010",
+              "offenceDateCode": 1,
+              "offenceDefinitionId": "4023c959-fad1-3e47-b678-ff7f0c0c1f48",
+              "offenceLegislation": "Contrary to section 363(2) and (4) of the    Communications Act 2003.",
+              "offenceTitle": "Use / install a television set without a licence",
+              "orderIndex": 1,
+              "plea": {
+                "offenceId": "ff952746-7fb4-42cb-84b5-e3d13663f5c6",
+                "originatingHearingId": "fdcc2254-a2b9-43df-a0fe-50d618ad2839",
+                "pleaDate": "2021-03-10",
+                "pleaValue": "GUILTY"
+              },
+              "startDate": "2020-02-09",
+              "wording": "Has a violent past and fear that he will commit further offences and\n                interfere with witnesse"
+            },
+            "prosecutionCaseId": "0317eef8-19d2-4736-8581-951d4af5383d",
+            "prosecutionCaseIdentifier": {
+              "address": {
+                "address1": "6th Floor Windsor House",
+                "address2": "42-50 Victoria Street",
+                "address3": "London",
+                "postcode": "SW1H 0TL"
+              },
+              "contact": {
+                "primaryEmail": "email@address.com"
+              },
+              "majorCreditorCode": "PF45",
+              "prosecutionAuthorityCode": "CPS-SE",
+              "prosecutionAuthorityId": "125baa4d-ffeb-448b-852c-5ab695fdfcc7",
+              "prosecutionAuthorityName": "Surrey Police test",
+              "prosecutionAuthorityOUCode": "A450000",
+              "caseURN": "11GD8100218"
+            }
+          }
+        ],
+        "defendantIds": [
+          "d0fef2a9-c294-4b60-8bc6-50d7224699df"
+        ],
+        "endDate": "2028-03-10",
+        "id": "e0af4c15-3e21-457a-9b14-797e10670e03",
+        "isSJPOrder": false,
+        "judicialResultTypeId": "418b3aa7-65ab-4a4a-bab9-2f96b698118c",
+        "label": "Community order England / Wales",
+        "masterDefendantId": "d0fef2a9-c294-4b60-8bc6-50d7224699df",
+        "orderDate": "2021-03-10",
+        "orderingCourt": {
+          "address": {
+            "address1": "176A Lavender Hill",
+            "address2": "London",
+            "address3": "",
+            "address4": "",
+            "address5": "",
+            "postcode": "SW11 1JU"
+          },
+          "code": "B01LY00",
+          "id": "f8254db1-1683-483e-afb3-b87fde5a0a26",
+          "lja": {
+            "ljaCode": "2577",
+            "ljaName": "South West London Magistrates' Court"
+          },
+          "name": "Lavender Hill Magistrates' Court",
+          "roomId": "9e4932f7-97b2-3010-b942-ddd2624e4dd8",
+          "roomName": "Courtroom 01"
+        },
+        "orderingHearingId": "fdcc2254-a2b9-43df-a0fe-50d618ad2839",
+        "startDate": "2021-03-10"
+      },
+      "id": "c30357ca-6ded-4171-9c1e-b88e454644e0",
+      "judicialResults": [
+        {
+          "alwaysPublished": false,
+          "canBeSubjectOfBreach": false,
+          "canBeSubjectOfVariation": false,
+          "category": "FINAL",
+          "courtClerk": {
+            "firstName": "Erica",
+            "lastName": "Wilson",
+            "userId": "a085e359-6069-4694-8820-7810e7dfe762"
+          },
+          "d20": false,
+          "excludedFromResults": false,
+          "isAdjournmentResult": false,
+          "isAvailableForCourtExtract": true,
+          "isConvictedResult": false,
+          "isDeleted": false,
+          "isFinancialResult": false,
+          "isUnscheduled": false,
+          "judicialResultId": "f2b7d836-560d-48ff-a6ca-8bd33692f998",
+          "judicialResultTypeId": "2b3f7c20-8fc1-4fad-9076-df196c24b27e",
+          "label": "Granted",
+          "lastSharedDateTime": "2021-03-10",
+          "level": "O",
+          "lifeDuration": false,
+          "orderedDate": "2021-03-25",
+          "orderedHearingId": "fa40d785-193e-421f-87f4-96107e0dc3aa",
+          "postHearingCustodyStatus": "A",
+          "publishedAsAPrompt": false,
+          "publishedForNows": false,
+          "rank": 84300,
+          "resultText": "Granted\n",
+          "rollUpPrompts": true,
+          "rootJudicialResultId": "f2b7d836-560d-48ff-a6ca-8bd33692f998",
+          "rootJudicialResultTypeId": "2b3f7c20-8fc1-4fad-9076-df196c24b27e",
+          "terminatesOffenceProceedings": false,
+          "urgent": false,
+          "usergroups": []
+        }
+      ],
+      "respondents": [
+        {
+          "id": "d0fef2a9-c294-4b60-8bc6-50d7224699df",
+          "masterDefendant": {
+            "isYouth": false,
+            "masterDefendantId": "d0fef2a9-c294-4b60-8bc6-50d7224699df",
+            "personDefendant": {
+              "arrestSummonsNumber": "TFL",
+              "bailStatus": {
+                "code": "A",
+                "description": "Not applicable",
+                "id": "86009c70-759d-3308-8de4-194886ff9a77"
+              },
+              "personDetails": {
+                "address": {
+                  "address1": "1234",
+                  "address2": "StreetDescription",
+                  "address3": "Locality2O"
+                },
+                "dateOfBirth": "1982-06-29",
+                "documentationLanguageNeeds": "ENGLISH",
+                "firstName": "Carleton",
+                "gender": "MALE",
+                "lastName": "Gottlieb",
+                "title": "Mr"
+              }
+            }
+          },
+          "notificationRequired": true,
+          "summonsRequired": false
+        }
+      ],
+      "subject": {
+        "id": "d0fef2a9-c294-4b60-8bc6-50d7224699df",
+        "masterDefendant": {
+          "isYouth": false,
+          "masterDefendantId": "d0fef2a9-c294-4b60-8bc6-50d7224699df",
+          "personDefendant": {
+            "arrestSummonsNumber": "TFL",
+            "bailConditions": "",
+            "bailStatus": {
+              "code": "A",
+              "description": "Not applicable",
+              "id": "86009c70-759d-3308-8de4-194886ff9a77"
+            },
+            "personDetails": {
+              "address": {
+                "address1": "1234",
+                "address2": "StreetDescription",
+                "address3": "Locality2O"
+              },
+              "dateOfBirth": "1982-06-29",
+              "documentationLanguageNeeds": "ENGLISH",
+              "firstName": "Carleton",
+              "gender": "MALE",
+              "lastName": "Gottlieb",
+              "title": "Mr"
+            }
+          }
+        },
+        "notificationRequired": true,
+        "summonsRequired": false
+      },
+      "type": {
+        "appealFlag": false,
+        "applicantAppellantFlag": false,
+        "boxworkNotifTemplate": "NOT_APPLICABLE",
+        "breachType": "NOT_APPLICABLE",
+        "categoryCode": "CO",
+        "code": "CJ03512",
+        "commrOfOathFlag": false,
+        "courtExtractAvlFlag": true,
+        "courtOfAppealFlag": false,
+        "hearingCode": "APN",
+        "id": "d8f2097a-b284-389d-ae84-71fad94a5f03",
+        "jurisdiction": "EITHER",
+        "legislation": "In accordance with paragraph 16 of Schedule 8 to the Criminal Justice Act 2003.",
+        "linkType": "LINKED",
+        "listingNotifTemplate": "POSTAL_NOTIFICATION",
+        "offenceActiveOrder": "COURT_ORDER",
+        "pleaApplicableFlag": false,
+        "prosecutorThirdPartyFlag": false,
+        "spiOutApplicableFlag": true,
+        "summonsTemplateType": "NOT_APPLICABLE",
+        "type": "Application to amend a community order on change of residence"
+      }
+    }
+  ],
+  "courtCentre": {
+    "address": {
+      "address1": "The Law Courts",
+      "address2": "Alexandra Road",
+      "address3": "Wimbledon",
+      "postcode": "SW19 7JP"
+    },
+    "code": "B01OK00",
+    "id": "d9bff7d8-6168-4163-ad77-3b98d61de174",
+    "lja": {
+      "ljaCode": "2577",
+      "ljaName": "South West London Magistrates' Court"
+    },
+    "name": "Wimbledon Magistrates' Court"
+  },
+  "hasSharedResults": true,
+  "hearingDays": [
+    {
+      "listedDurationMinutes": 10,
+      "sittingDay": "2021-03-25T00:00:00.000Z"
+    }
+  ],
+  "id": "fa40d785-193e-421f-87f4-96107e0dc3aa",
+  "isBoxHearing": true,
+  "jurisdictionType": "MAGISTRATES",
+  "type": {
+    "description": "Application",
+    "id": "3449743b-95d6-4836-8941-57f588b52068"
+  }
+}

@@ -170,7 +170,7 @@ in the same commit.**
       `Invalid date format` case; **C12** (`DatesTest.bst_evening_share_uses_the_share_day`):
       `sharedTime = 2020-06-01T23:30:00Z` (00:30 BST on 2 June) resolves the refdata `on=` day
       as `2020-06-01` — fails vs legacy, whose +1 h relabelling reads `2020-06-02`.
-- [ ] T024 [P] [US3] Write `pipeline/DefendantContextBuilderTest` (red; seams: `DefendantContext`,
+- [x] T024 [P] [US3] Write `pipeline/DefendantContextBuilderTest` (red; seams: `DefendantContext`,
       builder) — DC1–DC4, DC6–DC10 twins (register configuration `(hearing, isRegister=true)`,
       result-level tagging, `isDeleted` dropped, youth flag); **C22 fix**: a court application
       whose applicant is not a prosecuting authority is excluded (fails vs legacy); DC5 as the
