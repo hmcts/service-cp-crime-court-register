@@ -6,6 +6,14 @@ released, so everything sits under Unreleased.
 
 ## [Unreleased]
 
+### Added
+
+- 2026-08-31 — **New alerting instrument `courtregister_intake_suspension_failures_total`.**
+  Counted when a store outage asks intake to stop and the processor refuses the stop; the
+  lifecycle stays in `SUSPENDING`, retries on the next delivery, and this counter is the loud
+  signal that the outage response itself is failing. Part of the transport-review remediation
+  (review finding 2); the metric surface is pinned by `ProcessingMetricsTest`.
+
 ### Changed
 
 - 2026-08-31 — **Inbound schema narrowed: `sharedTime` and `hearingDay` state their RFC 3339
