@@ -82,7 +82,7 @@ in the same commit.**
 - [x] T008 [P] [US2] Write `domain/RequestFingerprintTest` (red; seam: `RequestFingerprint`) —
       canonicalisation (uppercase-hex UUID, offset-vs-Z instants, fractional seconds), changed
       immutable field changes the hash.
-- [ ] T009 [P] [US4] Write `config/ConfigurationValidationTest` (red; seams: `CourtRegisterProperties`
+- [x] T009 [P] [US4] Write `config/ConfigurationValidationTest` (red; seams: `CourtRegisterProperties`
       + `PropertiesValidator` signatures) — every `courtregister.*` property/default in the plan's
       Configuration table binds; deadline < lease; renewal margin; exactly-one credential source;
       LIVE requires system-user-ids; stub-refused-when-namespace; worst-case fetch + submission
