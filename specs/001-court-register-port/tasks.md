@@ -285,7 +285,7 @@ vocabulary and matching semantics.
 
 - [x] T040 [P] [US3] `pipeline/AddressMapperTest` — A1/A2 repaired: absent input ⇒ absent output
       (not `[]`); address1–5 pass-through; `postcode`→`postCode`.
-- [ ] T041 [P] [US3] `pipeline/AliasMapperTest` + `pipeline/CounselMapperTest` — twins plus the
+- [x] T041 [P] [US3] `pipeline/AliasMapperTest` + `pipeline/CounselMapperTest` — twins plus the
       pinned asymmetry: aliases `[]`⇒`[]`/absent⇒absent; counsels absent-or-empty⇒absent; name
       composition incl. middle-name-absent; unmapped `legalEntityName` asserted absent.
 - [ ] T042 [P] [US3] `pipeline/DefendantMapperTest` — D1–D4 twins + explicit case-first,
