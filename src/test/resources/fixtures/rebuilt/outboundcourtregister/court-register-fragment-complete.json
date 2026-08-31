@@ -1,0 +1,87 @@
+{
+  "courtCentreId": "853b1ff8-fc2a-44d1-a621-0cd16419f54a",
+  "courtCentreOUCode": "B01LY00",
+  "registerDate": "2020-06-01T10:00:00Z",
+  "hearingDate": "2020-01-20T00:00:00Z",
+  "hearingId": "1828f356-f746-4f2d-932b-79ef2df95c80",
+  "registerDefendants": [
+    {
+      "defendantIds": [
+        "6647df67-a065-4d07-90ba-a8daa064ecc4"
+      ],
+      "results": [
+        {
+          "prosecutionCaseId": "c10e3b71-6a6d-45ef-9b62-34df4d54971a",
+          "defendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+          "level": "D",
+          "masterDefendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+          "judicialResult": {
+            "judicialResultId": "b3303496-c090-4365-adc6-b2e6fe7a40fe",
+            "label": "Collection order",
+            "resultText": "collection order",
+            "cjsCode": "cjsCode - D level",
+            "orderedDate": "2020-01-20",
+            "isAvailableForCourtExtract": true
+          }
+        }
+      ],
+      "cases": [
+        "c10e3b71-6a6d-45ef-9b62-34df4d54971a"
+      ],
+      "applications": [],
+      "masterDefendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+      "isYouthDefendant": true,
+      "orderedDate": "2020-01-20",
+      "vocabulary": {
+        "custodyLocationIsPolice": false,
+        "custodyLocationIsPrison": false,
+        "atleastOneCustodialResult": false,
+        "allNonCustodialResults": true,
+        "atleastOneNonCustodialResult": true,
+        "appearedInPerson": false,
+        "appearedByVideoLink": false,
+        "isCpsProsecuted": false,
+        "anyAppearance": false,
+        "inCustody": false,
+        "youthDefendant": true,
+        "adultDefendant": false,
+        "adultOrYouthDefendant": true,
+        "welshCourtHearing": false,
+        "englishCourtHearing": true,
+        "anyCourtHearing": true,
+        "prosecutorMajorCreditor": [],
+        "nonProsecutorMajorCreditor": []
+      }
+    }
+  ],
+  "matchedSubscriptions": [
+    {
+      "id": "3f0c9a41-6b28-4d75-8e13-a2c47f0d5b96",
+      "isCourtRegisterSubscription": true,
+      "emailDelivery": true,
+      "forDistribution": true,
+      "emailTemplateName": "cr_youth",
+      "selectedCourtHouses": [
+        "B01LY00"
+      ],
+      "recipient": {
+        "organisationName": "Youth Offending Service - South West London",
+        "emailAddress1": "  yos.southwest@example.gov.uk  ",
+        "emailAddress2": "yos.duty@example.gov.uk"
+      }
+    },
+    {
+      "id": "8d5b2e07-14c9-4a63-b0f8-71e3d9c4a25f",
+      "isCourtRegisterSubscription": true,
+      "emailDelivery": true,
+      "forDistribution": true,
+      "selectedCourtHouses": [
+        "B01LY00"
+      ],
+      "recipient": {
+        "organisationName": "Lavender Hill Youth Panel",
+        "emailAddress1": "panel@example.gov.uk"
+      }
+    }
+  ]
+}

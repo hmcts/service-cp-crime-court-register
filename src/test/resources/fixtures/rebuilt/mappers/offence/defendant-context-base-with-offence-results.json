@@ -1,0 +1,92 @@
+{
+  "defendantIds": [
+    "6647df67-a065-4d07-90ba-a8daa064ecc4"
+  ],
+  "results": [
+    {
+      "prosecutionCaseId": "c10e3b71-6a6d-45ef-9b62-34df4d54971a",
+      "defendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+      "offenceId": "a154d828-1234-47f0-b8d5-e81227831d94",
+      "level": "O",
+      "masterDefendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+      "judicialResult": {
+        "judicialResultId": "8b13e723-07a5-47ad-b378-62478ad17001",
+        "label": "Pay by date",
+        "resultText": "Pay by date",
+        "cjsCode": "cjsCode - O level - first offence",
+        "orderedDate": "2020-01-20",
+        "isAvailableForCourtExtract": true
+      }
+    },
+    {
+      "prosecutionCaseId": "c10e3b71-6a6d-45ef-9b62-34df4d54971a",
+      "defendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+      "offenceId": "f4a88647-5b0c-4a37-9c1e-2ad6b8e3c705",
+      "level": "O",
+      "masterDefendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+      "judicialResult": {
+        "judicialResultId": "2d1a6c48-7f03-4a19-8b52-e0c47d9f1b36",
+        "label": "Compensation",
+        "resultText": "Compensation to be paid",
+        "cjsCode": "cjsCode - O level - second offence",
+        "orderedDate": "2020-01-20",
+        "isAvailableForCourtExtract": true
+      }
+    },
+    {
+      "prosecutionCaseId": "c10e3b71-6a6d-45ef-9b62-34df4d54971a",
+      "defendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+      "level": "C",
+      "masterDefendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+      "judicialResult": {
+        "judicialResultId": "7c8e0b95-4a12-4d63-9f0e-5b3a1c7d2e84",
+        "label": "Case",
+        "resultText": "Case",
+        "cjsCode": "cjsCode - C level",
+        "orderedDate": "2020-01-20",
+        "isAvailableForCourtExtract": true
+      }
+    },
+    {
+      "defendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+      "level": "D",
+      "masterDefendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+      "judicialResult": {
+        "judicialResultId": "b3303496-c090-4365-adc6-b2e6fe7a40fe",
+        "label": "Collection order",
+        "resultText": "collection order",
+        "cjsCode": "cjsCode - D level",
+        "orderedDate": "2020-01-20",
+        "isAvailableForCourtExtract": true
+      }
+    }
+  ],
+  "cases": [
+    "c10e3b71-6a6d-45ef-9b62-34df4d54971a"
+  ],
+  "applications": [
+    "6984d5b6-5c5d-472b-9ead-dff7a49c9600"
+  ],
+  "masterDefendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+  "isYouthDefendant": true,
+  "vocabulary": {
+    "custodyLocationIsPolice": false,
+    "custodyLocationIsPrison": false,
+    "atleastOneCustodialResult": false,
+    "allNonCustodialResults": true,
+    "atleastOneNonCustodialResult": true,
+    "appearedInPerson": false,
+    "appearedByVideoLink": false,
+    "isCpsProsecuted": false,
+    "anyAppearance": false,
+    "inCustody": false,
+    "youthDefendant": true,
+    "adultDefendant": false,
+    "adultOrYouthDefendant": true,
+    "welshCourtHearing": false,
+    "englishCourtHearing": true,
+    "anyCourtHearing": true,
+    "prosecutorMajorCreditor": [],
+    "nonProsecutorMajorCreditor": []
+  }
+}

@@ -325,12 +325,26 @@ vocabulary and matching semantics.
 - [ ] T052 [P] [US3] `adapter/progression/OutboundContractValidationTest` — N25–N27: address-less
       defendant/parent and empty address1 are named violations against the vendored schemas; a
       valid document passes; the violating path appears in the bounded reason (C29, C26).
-- [ ] T053 [P] [US3] Author the Java fixture set under `src/test/resources/fixtures/` — legacy
+- [x] T053 [P] [US3] Author the Java fixture set under `src/test/resources/fixtures/` — legacy
       fixtures copied byte-identical where sound; the seven bad-vocabulary fixtures rebuilt with
       the 18-key set; the six new base hearings (complete courtCentre with code; surviving youth;
       group proceedings; adult-first multi-defendant; non-prosecuting-authority application;
       address-less youth). [A] — fixture authoring, no red run; provenance notes in the fixture
       README.
+      *(done — twelve byte-identical copies verified with `diff`, the seven vocabulary rebuilds
+      already landed with the phases that needed them, four further repairs (real indicated
+      plea/allocation decision + a legislation-less second offence; offence-level results for two
+      offence ids; a fragment complete enough to assemble from; a contract-valid document request),
+      the six base hearings, and `support/ModelObjects` for the one fixture that is code. Observed
+      result recorded in `fixtures/README.md`: `RegisterBuilder` over all six base hearings gives
+      `courtCentreOUCode = B01LY00` and the unrelabelled `2020-06-01T10:00:00Z` throughout, the
+      adult ahead of the youth in the multi-defendant hearing (C31), and **zero** applications on
+      the defence-led one (C22). The repaired document request validates against the vendored
+      schemas with zero errors where the legacy fixture fails three ways, one of them being C26's
+      plural `arrestSummonsNumbers`. Three named departures from the legacy in the base hearings —
+      ISO ordered dates, the complete court centre, and one dropped defendant-level result naming a
+      master defendant the hearing does not carry — are recorded in the README with their reasons;
+      no C-fix lands here, so no DEFECT-FIXES row moves.)*
 
 ### Implementation (serialised: T054 → T055 → T056)
 

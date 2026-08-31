@@ -43,6 +43,8 @@ public final class LegacyFixtures {
 
     private static final String REBUILT_ROOT = "/fixtures/rebuilt/";
 
+    private static final String BASE_ROOT = "/fixtures/base/";
+
     private static final ObjectMapper MAPPER = JacksonConfig.contractObjectMapper();
 
     private LegacyFixtures() {
@@ -88,6 +90,27 @@ public final class LegacyFixtures {
      */
     public static JsonNode readRebuilt(final String path) {
         return at(REBUILT_ROOT + path);
+    }
+
+    /**
+     * Reads one of the six authored base hearings.
+     *
+     * <p>Not legacy at all, and not a repair of one either: these are hearings the legacy suite has
+     * no equivalent of, written because the shapes they carry — a complete court centre, a youth
+     * defendant who survives to the outbound document, group proceedings, an adult ahead of a youth,
+     * an application whose applicant prosecutes nothing, a child and a parent with no address — are
+     * the shapes the fixes are about, and not one of them appears in a court-register fixture today.
+     *
+     * <p>They are payloads rather than bare hearings: {@code {"hearing": …, "sharedTime": …}}, the
+     * shape the claim-check actually hands the pipeline. A mapper test that wants the hearing alone
+     * reads {@code .get("hearing")} off the answer. {@code fixtures/README.md} records how each was
+     * derived, change by named change.
+     *
+     * @param path the file's name below {@code fixtures/base/}
+     * @return the parsed payload
+     */
+    public static JsonNode readBase(final String path) {
+        return at(BASE_ROOT + path);
     }
 
     /**

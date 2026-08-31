@@ -1,0 +1,117 @@
+{
+  "registerDate": "2020-06-01T10:00:00Z",
+  "hearingDate": "2020-01-20T00:00:00Z",
+  "hearingId": "1828f356-f746-4f2d-932b-79ef2df95c80",
+  "courtCentreId": "853b1ff8-fc2a-44d1-a621-0cd16419f54a",
+  "fileName": "court-register_2020-06-01_B01LY00_1828f356-f746-4f2d-932b-79ef2df95c80.pdf",
+  "hearingVenue": {
+    "ljaName": "South West London Magistrates' Court",
+    "courtHouse": "Lavender Hill Magistrates' Court",
+    "address": {
+      "address1": "176A Lavender Hill",
+      "address2": "London",
+      "postCode": "SW11 1JU"
+    }
+  },
+  "recipients": [
+    {
+      "recipientName": "Youth Offending Service - South West London",
+      "emailAddress1": "yos.southwest@example.gov.uk",
+      "emailAddress2": "yos.duty@example.gov.uk",
+      "emailTemplateName": "cr_standard"
+    }
+  ],
+  "defendants": [
+    {
+      "masterDefendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+      "name": "Fred Duncan Smith",
+      "dateOfBirth": "2008-04-17",
+      "address": {
+        "address1": "Flat 1",
+        "address2": "1 Old Road",
+        "address3": "London",
+        "address4": "Merton",
+        "postCode": "SW99 1AA"
+      },
+      "nationality": "British",
+      "ethnicity": "White - British",
+      "gender": "MALE",
+      "postHearingCustodyStatus": "REMANDED_IN_CUSTODY",
+      "parentGuardian": {
+        "name": "Father - Fred Father - Smith",
+        "address": {
+          "address1": "Father - Flat 1",
+          "address2": "Father - 1 Old Road",
+          "address3": "Father - London",
+          "address4": "Father - Merton",
+          "postCode": "Father - SW99 1AA"
+        }
+      },
+      "hearing": {
+        "jurisdiction": "MAGISTRATES",
+        "hearingType": "Sentence",
+        "defendantPresent": true,
+        "defendantAppearanceDetails": "In person",
+        "attendingSolicitorName": "Harold Benjamin Solicitors"
+      },
+      "aliases": [
+        {
+          "title": "Mr",
+          "firstName": "John",
+          "middleName": "Duncan",
+          "lastName": "Smith"
+        }
+      ],
+      "prosecutionCasesOrApplications": [
+        {
+          "caseOrApplicationReference": "TFL4359536",
+          "arrestSummonsNumber": "arrest123",
+          "offences": [
+            {
+              "offenceCode": "PS90010",
+              "orderIndex": 1,
+              "offenceTitle": "Public service vehicle - passenger use altered / defaced   ticket",
+              "wording": "On 02/07/2018 at Bond street, being a passenger on a vehicle, namely Volvo B9TL 30x, used for the carriage of passengers at separate fares, used a ticket which had been altered or defaced.\nContrary to regulation 7(1)(a) of the Public Service Vehicles (Conduct of Drivers, Inspectors, Conductors and Passengers) Regulations 1990 and section 25 of the Public Passenger Vehicles Act 1981.",
+              "pleaValue": "NOT_GUILTY",
+              "indicatedPleaValue": "INDICATED_GUILTY",
+              "pleaDate": "2019-11-14",
+              "allocationDecision": "Allocation decision - summary trial",
+              "convictionDate": "2019-11-14",
+              "verdictCode": "1234",
+              "results": [
+                {
+                  "resultText": "Pay by date",
+                  "cjsResultCode": "cjsCode - O level - first offence"
+                }
+              ]
+            }
+          ],
+          "results": [
+            {
+              "resultText": "Case",
+              "cjsResultCode": "cjsCode - C level"
+            }
+          ],
+          "prosecutionCounsels": [
+            {
+              "name": "David Kieran Walsh",
+              "status": "Leading QC"
+            }
+          ]
+        }
+      ],
+      "defendantResults": [
+        {
+          "resultText": "collection order",
+          "cjsResultCode": "cjsCode - D level"
+        }
+      ],
+      "defenceCounsels": [
+        {
+          "name": "James Benjamin Simpson",
+          "status": "Junior QC"
+        }
+      ]
+    }
+  ]
+}
