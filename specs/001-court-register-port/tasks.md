@@ -288,7 +288,7 @@ vocabulary and matching semantics.
 - [x] T041 [P] [US3] `pipeline/AliasMapperTest` + `pipeline/CounselMapperTest` — twins plus the
       pinned asymmetry: aliases `[]`⇒`[]`/absent⇒absent; counsels absent-or-empty⇒absent; name
       composition incl. middle-name-absent; unmapped `legalEntityName` asserted absent.
-- [ ] T042 [P] [US3] `pipeline/DefendantMapperTest` — D1–D4 twins + explicit case-first,
+- [x] T042 [P] [US3] `pipeline/DefendantMapperTest` — D1–D4 twins + explicit case-first,
       applications-only-if-empty precedence.
 - [ ] T043 [P] [US3] `pipeline/HearingMapperTest` — **C8/C9 fixed**: multi-entry attendance selects
       the correct defendant without mutating input (fails vs legacy assignment); date-compatible
