@@ -1,0 +1,87 @@
+# Contracts — service-cp-crime-court-register
+
+## There is no REST API
+
+This service is a message-driven pipeline. It consumes from the Azure Service Bus queue
+`courtregister.requests` and submits `progression.add-court-register`. The only HTTP surface is
+Spring Boot Actuator, which is operational, not a consumer contract. The two real contracts are
+below; `doc/openapi.yaml` deliberately stays empty.
+
+## 1. Inbound contract — the queue message
+
+One JSON body per hearing-resulted distribution command:
+
+```json
+{ "source": "RESULTS", "requestId": "<uuid>", "hearingId": "<uuid>",
+  "hearingDay": "2026-08-27", "sharedTime": "2026-08-27T14:31:02.115Z",
+  "eventType": "Hearing_Resulted", "userId": "<uuid>" }
+```
+
+`additionalProperties: false`; required `source, requestId, hearingId, hearingDay, sharedTime,
+eventType`; `userId` optional (absent, never null). `source` enum `["RESULTS"]`, `eventType` enum
+`["Hearing_Resulted"]` — the court register has no SJP leg. The canonical schema is
+`src/main/resources/contracts/distribution-command.schema.json` (draft-07), jointly owned with the
+producer in `cpp-context-results`.
+
+### Field semantics
+
+- `hearingId` + `hearingDay` → the Redis claim-check key `INT_{hearingId}_{hearingDay}_result_`
+  (dated form first, then the legacy undated twin).
+- `sharedTime` → the register date and the `requestId` recipe; a business re-share carries a new
+  `sharedTime` and therefore a new `requestId`.
+- `userId` → the `CJSCPPUID` identity threaded to reference data and the progression POST.
+
+*TODO: finalise alongside P1 (parser + schema corpus tests).*
+
+### Message properties (broker-level, part of the contract)
+
+`messageId = "RESULTS:{requestId}"` (duplicate-detection key); `contentType = application/json`;
+`correlationId = hearingId`. `requestId =
+UUID.nameUUIDFromBytes(hearingId + "|" + hearingDay + "|" + sharedTime)`.
+
+### Delivery and settlement semantics
+
+Peek-lock with explicit `complete`/`abandon`/`deadLetter`; `maxDeliveryCount` 5 with dead-lettering
+on expiry; duplicate detection on (set at queue creation — immutable afterwards).
+
+### Replay rule
+
+A dead-lettered body is re-sent **verbatim**, changing only the broker `messageId` — a resubmit
+that clones the original `messageId` inside the duplicate-detection window is silently swallowed by
+the broker. The `requestId` in the body is the idempotency key and stays unchanged.
+
+### Failure behaviour (contractual, tested)
+
+Contract-invalid body ⇒ dead-letter with a bounded reason, no processed-log row. Store unavailable
+⇒ abandon + intake suspension. Terminal duplicate ⇒ terminal status re-published, delivery
+completed. *TODO: full table lands with P3.*
+
+## 2. Outbound contract — `progression.add-court-register`
+
+`POST {progression}/progression-command-api/command/api/rest/progression/court-register`,
+media type `application/vnd.progression.add-court-register+json`, success **202 and nothing else**,
+`CJSCPPUID` header carrying the system user.
+
+The document schema is progression-owned: top level in
+`cpp-context-progression/progression-command/progression-command-api/src/raml/json/schema/progression.add-court-register.json`,
+nested components compiled from `criminal-court-public-model` **17.103.13**. The exact compiled
+schemas are **vendored** at `src/test/resources/contracts/progression/` (`additionalProperties:
+false` throughout) and every outbound document is validated against them **before** sending —
+a schema-invalid document is an explicit failure, never a swallowed 400 (defect-fix C29).
+
+Content notes that differ deliberately from the legacy app are in
+[DEFECT-FIXES.md](DEFECT-FIXES.md) (C11 filename, C23 verdict code, C24 wording newline, and the
+other content-changing fixes gated on sign-off).
+
+## Other outbound calls (not contracts this service owns)
+
+- Redis claim-check read (`INT_` prefix) and the results-query fallback
+  `GET /results-query-api/query/api/rest/results/hearingDetails/internal/{hearingId}`
+  (`application/vnd.results.hearing-details-internal+json`).
+- Reference data: `GET /referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on={day}`.
+
+## Actuator (operational surface only)
+
+`/actuator/health/readiness` (groups `db`, `intakeStartup` — the Service Bus indicator is
+deliberately in neither readiness nor liveness), `/actuator/health/liveness`, `/actuator/metrics`,
+`/actuator/prometheus`.

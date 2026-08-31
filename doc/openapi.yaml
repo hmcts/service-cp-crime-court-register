@@ -1,0 +1,25 @@
+# There is deliberately no OpenAPI specification for this service.
+#
+# service-cp-crime-court-register is a message-driven pipeline: it consumes distribution
+# commands from the Azure Service Bus queue `courtregister.requests` and submits
+# `progression.add-court-register` to the progression context. The only HTTP surface is
+# Spring Boot Actuator, which is an operational endpoint set, not a consumer contract,
+# and is not specified here.
+#
+# The two real contracts are:
+#
+#   1. Inbound  — the queue message, owned by this service jointly with the producer
+#                 (cpp-context-results). Canonical schema:
+#                 src/main/resources/contracts/distribution-command.schema.json
+#                 Documented in doc/API_CONTRACTS.md §1.
+#
+#   2. Outbound — progression.add-court-register, owned by cpp-context-progression
+#                 (progression-command-api RAML + progression.add-court-register.json;
+#                 nested components from criminal-court-public-model 17.103.13,
+#                 additionalProperties: false). The compiled schemas are vendored at
+#                 src/test/resources/contracts/progression/ and every outbound document
+#                 is validated against them before sending. Documented in
+#                 doc/API_CONTRACTS.md §2.
+#
+# Do NOT populate this file. Adding a REST API to this service requires a constitution
+# amendment (.specify/memory/constitution.md, Principle III).
