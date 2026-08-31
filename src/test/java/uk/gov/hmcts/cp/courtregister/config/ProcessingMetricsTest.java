@@ -260,7 +260,7 @@ class ProcessingMetricsTest {
     }
 
     @Nested
-    @DisplayName("courtregister_intake_suspensions_total and courtregister_intake_suspended")
+    @DisplayName("the intake suspension counters and courtregister_intake_suspended")
     class Intake {
 
         @Test
@@ -300,6 +300,36 @@ class ProcessingMetricsTest {
 
             assertThat(tagKeysOf(ProcessingMetrics.INTAKE_SUSPENSIONS)).isEmpty();
             assertThat(tagKeysOf(ProcessingMetrics.INTAKE_SUSPENDED)).isEmpty();
+        }
+
+        /**
+         * A suspension that could not be carried out is the more urgent of the two readings, and
+         * the only instrument that can report it. The suspension counter cannot move — the outage
+         * was not contained — and the gauge reads exactly what a healthy pod reads, so without this
+         * series a pod spending the broker's delivery budget on an outage of ours is invisible.
+         */
+        @Test
+        void a_suspension_that_failed_should_count_on_its_own_series() {
+            metrics.intakeSuspensionFailed();
+
+            assertThat(counter(ProcessingMetrics.INTAKE_SUSPENSION_FAILURES)).isEqualTo(1);
+            assertThat(counter(ProcessingMetrics.INTAKE_SUSPENSIONS))
+                    .as("nothing was contained, so nothing may be counted as contained")
+                    .isEqualTo(ABSENT);
+            assertThat(gauge(ProcessingMetrics.INTAKE_SUSPENDED))
+                    .as("and the gauge must not claim a stop that did not happen")
+                    .isZero();
+        }
+
+        @Test
+        void a_failed_suspension_should_count_per_attempt_and_carry_no_label() {
+            metrics.intakeSuspensionFailed();
+            metrics.intakeSuspensionFailed();
+
+            assertThat(counter(ProcessingMetrics.INTAKE_SUSPENSION_FAILURES))
+                    .as("a rising series is what says the retries are not getting anywhere")
+                    .isEqualTo(2);
+            assertThat(tagKeysOf(ProcessingMetrics.INTAKE_SUSPENSION_FAILURES)).isEmpty();
         }
     }
 
@@ -454,6 +484,7 @@ class ProcessingMetricsTest {
             metrics.pipelineFailed(FailureClassification.TRANSIENT);
             metrics.transformationAnomaly(TransformationAnomaly.LETTER_DELIVERY_DROPPED);
             metrics.intakeSuspended();
+            metrics.intakeSuspensionFailed();
             metrics.deadLettered(DeadLetterReason.VALIDATION);
             metrics.settlementFailed(SettlementOperation.ABANDON);
             metrics.lockLost();
@@ -469,6 +500,7 @@ class ProcessingMetricsTest {
                             ProcessingMetrics.PROCESSING_FAILURES,
                             ProcessingMetrics.TRANSFORMATION_ANOMALIES,
                             ProcessingMetrics.INTAKE_SUSPENSIONS,
+                            ProcessingMetrics.INTAKE_SUSPENSION_FAILURES,
                             ProcessingMetrics.DEAD_LETTERED,
                             ProcessingMetrics.SETTLEMENT_FAILURES,
                             ProcessingMetrics.LOCK_LOSS,
@@ -617,6 +649,7 @@ class ProcessingMetricsTest {
                 scraped.lockLost();
                 scraped.staleRunnerRejected();
                 scraped.intakeSuspended();
+                scraped.intakeSuspensionFailed();
 
                 assertThat(scrapedLabelKeys())
                         .containsExactly("classification", "operation", "outcome", "reason");
@@ -628,6 +661,7 @@ class ProcessingMetricsTest {
                 scraped.lockLost();
                 scraped.staleRunnerRejected();
                 scraped.intakeSuspended();
+                scraped.intakeSuspensionFailed();
 
                 assertThat(samplesOf(ProcessingMetrics.LOCK_LOSS))
                         .containsExactly(ProcessingMetrics.LOCK_LOSS);
@@ -635,6 +669,8 @@ class ProcessingMetricsTest {
                         .containsExactly(ProcessingMetrics.STALE_RUNNER_REJECTIONS);
                 assertThat(samplesOf(ProcessingMetrics.INTAKE_SUSPENSIONS))
                         .containsExactly(ProcessingMetrics.INTAKE_SUSPENSIONS);
+                assertThat(samplesOf(ProcessingMetrics.INTAKE_SUSPENSION_FAILURES))
+                        .containsExactly(ProcessingMetrics.INTAKE_SUSPENSION_FAILURES);
             }
 
             @Test

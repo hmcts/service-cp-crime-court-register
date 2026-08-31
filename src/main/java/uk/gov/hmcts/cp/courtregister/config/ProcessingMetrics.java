@@ -43,6 +43,8 @@ public class ProcessingMetrics {
     public static final String TRANSFORMATION_ANOMALIES =
             "courtregister_transformation_anomalies_total";
     public static final String INTAKE_SUSPENSIONS = "courtregister_intake_suspensions_total";
+    public static final String INTAKE_SUSPENSION_FAILURES =
+            "courtregister_intake_suspension_failures_total";
     public static final String DEAD_LETTERED = "courtregister_deadlettered_total";
     public static final String SETTLEMENT_FAILURES = "courtregister_settlement_failures_total";
     public static final String LOCK_LOSS = "courtregister_lock_loss_total";
@@ -146,6 +148,21 @@ public class ProcessingMetrics {
     public void intakeSuspended() {
         intakeSuspendedState.set(UP);
         counter(INTAKE_SUSPENSIONS).increment();
+    }
+
+    /**
+     * Intake was asked to stop and the processor refused, so the pod is still consuming with no
+     * store to record what it does.
+     *
+     * <p>Counted separately from {@link #intakeSuspended()}, and it is the more urgent of the two.
+     * A suspension that happened is the design working; a suspension that could not be carried out
+     * is a pod spending the broker's delivery budget on an outage of ours, and it is invisible
+     * otherwise — the suspension counter cannot move, and the gauge reads the same as a healthy pod.
+     * Counted per attempt rather than per outage, because a rising series is what says the retries
+     * are not getting anywhere.
+     */
+    public void intakeSuspensionFailed() {
+        counter(INTAKE_SUSPENSION_FAILURES).increment();
     }
 
     /**

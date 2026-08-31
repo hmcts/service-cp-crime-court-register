@@ -202,6 +202,9 @@ class ConsumerLifecycleControllerTest {
                     .as("a gauge reading SUSPENDED over a processor that is still consuming is the "
                             + "one reading nobody would question")
                     .isZero();
+            assertThat(counter(ProcessingMetrics.INTAKE_SUSPENSION_FAILURES))
+                    .as("so the only instrument that can report it must")
+                    .isEqualTo(1);
         }
 
         /**

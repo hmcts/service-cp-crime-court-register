@@ -33,6 +33,9 @@ import uk.gov.hmcts.cp.courtregister.persistence.ProcessedLogProbe;
  *       actuator is up, so readiness can report DOWN honestly, but nothing is being consumed and
  *       the schema has not been migrated yet.</li>
  *   <li>{@code RUNNING} — the store answered, the migration ran, the processor is consuming.</li>
+ *   <li>{@code SUSPENDING} — the store went away and the processor has been asked to stop but has
+ *       not yet stopped. Ordinarily a moment long; it lasts only while a {@code stop()} is
+ *       refusing, and it is what keeps the next delivery's request from meeting a no-op.</li>
  *   <li>{@code SUSPENDED} — the store went away while we were running. Intake stopped; the probe
  *       keeps asking; the moment the store answers again we are back in {@code RUNNING}.</li>
  *   <li>{@code STOPPING} and {@code STOPPED} — the context is closing. Terminal: nothing starts
@@ -155,6 +158,15 @@ public class ConsumerLifecycleController implements SmartLifecycle, StoreGate {
 
         /** Consuming. */
         RUNNING,
+
+        /**
+         * The store went away and the processor has been asked to stop, but has not yet stopped.
+         *
+         * <p>Ordinarily a moment long. It lasts only while a {@code stop()} is refusing, and it is
+         * what keeps the next delivery's suspension request from being absorbed by a state that
+         * claims an outage is contained when the pod is still consuming.
+         */
+        SUSPENDING,
 
         /** Stopped consuming because the store went away. */
         SUSPENDED,
@@ -397,7 +409,9 @@ public class ConsumerLifecycleController implements SmartLifecycle, StoreGate {
         // From here on, silence from the broker means something. Before it, this pod had not asked
         // the broker for anything and had no business reporting on it.
         health.recordIntakeStarted();
-        if (from == State.SUSPENDED) {
+        // SUSPENDING counts as a resume too: a pod whose stop was refused never reached SUSPENDED,
+        // and reporting its recovery as a first start would say the outage never happened.
+        if (from == State.SUSPENDED || from == State.SUSPENDING) {
             LOG.info("The processed log answered; intake resumed. queue={}",
                     processor.getQueueName());
         } else {
@@ -414,11 +428,62 @@ public class ConsumerLifecycleController implements SmartLifecycle, StoreGate {
      * twice for one outage would make every dashboard read wrong.
      */
     private synchronized void suspend() {
-        if (state.compareAndSet(State.RUNNING, State.SUSPENDED)) {
+        final State from = state.get();
+        if (from == State.RUNNING) {
+            if (!state.compareAndSet(State.RUNNING, State.SUSPENDING)) {
+                // A shutdown took the state first, and it stops the processor itself.
+                return;
+            }
             LOG.warn("The processed log is unreachable; stopping intake so the delivery budget is "
                     + "not spent on an outage of ours. queue={}", processor.getQueueName());
+            stopForSuspension();
+        } else if (from == State.SUSPENDING) {
+            // A stop that did not take. The pod is still consuming, so the request that brought us
+            // here is the next delivery meeting the same dead store, and it is honoured rather than
+            // absorbed. Not logged again: the outage was announced once, and a WARN per delivery
+            // would bury it in its own repetitions.
+            stopForSuspension();
+        }
+    }
+
+    /**
+     * Stop the processor, and move the state only if it actually stopped.
+     *
+     * <p>The old order was the other way round, and it cost the whole mechanism. Because the state
+     * is what later suspension requests are tested against, announcing SUSPENDED before the stop had
+     * happened meant a {@code stop()} that threw left a processor still consuming under a state
+     * saying it was not: every later request became a no-op, nothing tried again, and the outage ran
+     * to the end of the broker's delivery budget — the exact failure suspension exists to prevent,
+     * reached through the one door nobody was watching. The exception, meanwhile, ended a task on
+     * the transition executor and was reported by nobody.
+     *
+     * <p>So the intermediate state carries the difference: SUSPENDING says the decision has been
+     * taken and the processor has not yet gone quiet. It is not RUNNING, so the probe will resume
+     * from it when the store returns and a pod is never stranded by a refusal; and it is not
+     * SUSPENDED, so the next delivery's request is honoured. The counter and the gauge move on the
+     * transition into SUSPENDED, which is what makes them a record of outages contained rather than
+     * of outages noticed — once per outage, however many deliveries met it and however many attempts
+     * it took.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    // Total, and it does not rethrow. This runs as a task on the transition executor, where a
+    // thrown exception is not reported by anybody — it simply ends the task. Catching it here is
+    // what turns a silently lost failure into an ERROR and a metric (constitution Principle VI);
+    // the retry is the next delivery's request, and the state is what keeps that request live.
+    private void stopForSuspension() {
+        try {
             processor.stop();
-            processorRunning = false;
+        } catch (RuntimeException refused) {
+            // Reported by type, never by text: a broker client's message quotes entity paths and
+            // connection details, and this line is shipped to the log index.
+            LOG.error("Intake could not be stopped, so the pod is still consuming with no store to "
+                            + "record what it does; the next delivery asks again. queue={} type={}",
+                    processor.getQueueName(), refused.getClass().getName());
+            metrics.intakeSuspensionFailed();
+            return;
+        }
+        processorRunning = false;
+        if (state.compareAndSet(State.SUSPENDING, State.SUSPENDED)) {
             metrics.intakeSuspended();
         }
     }

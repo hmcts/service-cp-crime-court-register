@@ -192,7 +192,8 @@ Layers: **U** unit · **W** WireMock · **PG** Postgres `*IT` · **SB** emulator
 | Metrics | `ProcessingMetricsTest` | U | instrument names/labels incl. completions{reason} |
 | Schema | `SchemaMigrationIT` | PG | V1 facts incl. `processed_output` court-register columns + `UNIQUE (source, request_id)` |
 | Guard | `IdempotencyGuardIT`, `ProcessedLogDurabilityIT`, `ClaimContentionIT`, `ClaimReclamationIT`, `StaleRunnerRejectionIT`, `CrashWindowIT`, `FailedReplayIT`, `IdempotencyCollisionIT`, `ProcessedOutputRepositoryIT` | PG | inherited FR-004…008/016/018 semantics; N15 |
-| Listener | `MessageListenerSettlementTest`, `SettlementFailureEdgeTest` | U | one settlement per delivery; edges |
+| Listener | `MessageListenerSettlementTest`, `SettlementFailureEdgeTest` | U | one settlement per delivery; edges, store-gate failures included |
+| Lifecycle | `ConsumerLifecycleControllerTest` | U | suspension ordering: SUSPENDED only after a stop that succeeded, refusals reported/counted/retried |
 | Transport | `QueueSettlementIT`, `ContractValidationDeadLetterIT`, `DeliveryExhaustionIT`, `DuplicateDetectionIT`, `StoreOutageIT`, `ProlongedStoreOutageIT`, `ReadinessPolicyIT`, `StartupWithQueueDownIT`, `QueueOutageRecoveryIT` | SB/PG | inherited transport semantics on `courtregister.requests` |
 | Health | `ServiceBusHealthIndicatorTest` | U | broker-silence model |
 | Pipeline | `DistributionPipelineTest` | U | N1–N7 orchestration; C2 always-a-terminal-status; C32 transient; four no-op reasons N29–N33; C6 |
