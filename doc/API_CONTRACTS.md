@@ -35,6 +35,26 @@ not yet in the repo), jointly owned with the producer in `cpp-context-results`.
   `sharedTime` and therefore a new `requestId`.
 - `userId` → the `CJSCPPUID` identity threaded to reference data and the progression POST.
 
+**The two date fields state their own grammar.** `sharedTime` and `hearingDay` each carry a
+`pattern` in the schema as well as a `format`, because draft-07's `date`/`date-time` formats are only
+as wide as whichever validator happens to read them, and this contract is narrower than the widest
+of them:
+
+| Form | Accepted | Why |
+| --- | --- | --- |
+| `2026-08-27T14:31:02.115Z`, `…+01:00`, `…+00:00` | yes | the contract's shape; lower-case `t` and `z` are permitted, RFC 3339 allows them |
+| `2026-08-27 14:31:02Z` (space separator) | no | RFC 3339's ABNF is `date-time = full-date "T" full-time`; the space form is only a readability note (§5.6) that *permits* an application to accept it |
+| `2016-12-31T23:59:60Z` (leap second) | no | grammatical in RFC 3339, but there is no `Instant` for a 61st second — accepting one means inventing a value to store, and deciding which `:60` instants were real needs a leap-second table on the hot path |
+| `2026-08-27T14:31:02-00:00` | no | RFC 3339 gives `-00:00` the distinct meaning "offset unknown"; this field is a true instant |
+| `+12026-08-27`, `-0001-08-27` (expanded/signed year) | no | `java.time` accepts them, RFC 3339 does not |
+| `2026-02-30`, `2025-02-29` | no | refused by `format`, not by the pattern — the pattern is lexical, the format is semantic |
+
+The schema and `DistributionCommandParser` are held to each other case for case by
+`DistributionCommandSchemaCorpusTest`, with **no exemption list**: a form one accepts and the other
+refuses fails the build. Where they once diverged, the schema was narrowed rather than the parser
+widened (2026-08-31 — see `doc/CHANGELOG.md`); the schema is the authority, and a contract document
+that does not describe what the service accepts is the defect.
+
 *TODO: finalise alongside P1 (parser + schema corpus tests).*
 
 ### Message properties (broker-level, part of the contract)

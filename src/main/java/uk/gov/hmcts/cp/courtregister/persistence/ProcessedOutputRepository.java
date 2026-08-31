@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
 import java.sql.Types;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.stream.Collectors;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -253,9 +254,18 @@ public class ProcessedOutputRepository {
      *
      * <p>Here and nowhere else. The domain counts anomalies as a bounded map, which is what makes
      * free text impossible; how that map becomes a column is a fact about the column.
+     *
+     * <p><strong>Sorted by code.</strong> The transformation meets these in whatever order the
+     * hearing presents them, and a rendering that inherited that order would give one set of counts
+     * several representations: two identical registers would compare unequal in the reconciliation
+     * the column exists for, and a re-claim would look like a change when nothing had changed.
+     *
+     * <p>No counts is an absent summary rather than an empty string, so "nothing was skipped" and
+     * "the summary was never written" are not the same value in the column.
      */
     private static String anomalySummary(final Map<TransformationAnomaly, Integer> anomalies) {
-        return anomalies == null || anomalies.isEmpty() ? null : anomalies.entrySet().stream()
+        return anomalies.isEmpty() ? null : anomalies.entrySet().stream()
+                .sorted(Comparator.comparing(counted -> counted.getKey().value()))
                 .map(counted -> counted.getKey().value() + ":" + counted.getValue())
                 .collect(Collectors.joining(","));
     }
