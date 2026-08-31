@@ -101,7 +101,7 @@ in the same commit.**
 - [x] T012 [US1] Implement `domain/DistributionCommand`, `domain/CallerIdentity`,
       `inbound/DistributionCommandParser`, `config/JacksonConfig`,
       `src/main/resources/contracts/distribution-command.schema.json` (green for T007).
-- [ ] T013 [US2] Implement `domain/RequestFingerprint` (green for T008).
+- [x] T013 [US2] Implement `domain/RequestFingerprint` (green for T008).
 - [ ] T014 [US4] Implement `config/CourtRegisterProperties` + `config/PropertiesValidator` (green
       for T009).
 - [ ] T015 [US4] Implement `config/ProcessingMetrics` (green for T010).
