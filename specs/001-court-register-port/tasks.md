@@ -205,7 +205,7 @@ in the same commit.**
 - [x] T030 [P] [US4] Write `application/GroupProceedingsPolicyTest` (red; seam: policy type) —
       N8–N12 under the strict-boolean rule: `true` skips with reason; `false`/`null`/absent
       proceed; `"false"`/`"true"`/`1` proceed with WARN + metric (fails vs legacy loose `==`).
-- [ ] T031 [P] [US1] Write `application/DistributionPipelineTest` (red) — N1–N7: stage sequence and
+- [x] T031 [P] [US1] Write `application/DistributionPipelineTest` (red) — N1–N7: stage sequence and
       argument shapes; C32 cache+fallback miss ⇒ transient; C2 a throwing stage always records a
       terminal status; the four no-op reasons N29–N33 distinguishable; C6 empty fragment ⇒
       `no-defendants`; submission invoked once per document, zero on no-op.

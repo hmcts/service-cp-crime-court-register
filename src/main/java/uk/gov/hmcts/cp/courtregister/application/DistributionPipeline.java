@@ -70,14 +70,25 @@ public class DistributionPipeline {
 
     private static final Logger LOG = LoggerFactory.getLogger(DistributionPipeline.class);
 
+    /** The marker the red run records while the stages after the fetch are unwired. */
+    private static final String STAGES_UNWIRED = "the pipeline stages are not wired yet";
+
     private final IdempotencyGuard guard;
     private final HearingPayloadSource payloadSource;
+    private final GroupProceedingsPolicy groupProceedings;
+    private final RegisterTransformer transformer;
+    private final RegisterSubmissionClient submissionClient;
     private final ProcessingMetrics metrics;
     private final Clock clock;
     private final Duration processingDeadline;
 
     /**
-     * Creates the pipeline over the ports it runs against.
+     * Creates the walking-skeleton pipeline: admit, fetch, record.
+     *
+     * <p>The transport suites run against this one. It has no transformation and no submission, so
+     * every run that reaches the end of the fetch completes as {@code no-defendants} — which is the
+     * outcome a payload with no register in it earns anyway, and is why the skeleton could be
+     * settled honestly before the stages existed.
      *
      * @param guard              the {@code (source, requestId)} processed-log guard
      * @param payloadSource      where the hearing payload comes from
@@ -92,8 +103,38 @@ public class DistributionPipeline {
             final ProcessingMetrics metrics,
             final Clock clock,
             final Duration processingDeadline) {
+        this(guard, payloadSource, null, null, null, metrics, clock, processingDeadline);
+    }
+
+    /**
+     * Creates the pipeline over all four ports and the group-proceedings policy.
+     *
+     * @param guard              the {@code (source, requestId)} processed-log guard
+     * @param payloadSource      where the hearing payload comes from
+     * @param groupProceedings   whether the hearing's flag suppresses its register
+     * @param transformer        how a hearing payload becomes a register
+     * @param submissionClient   where an assembled register is sent
+     * @param metrics            the instrument surface every outcome is counted on
+     * @param clock              elapsed-time source for the run's own deadline
+     * @param processingDeadline the enforced bound on a run, strictly shorter than the claim lease
+     */
+    // PMD.ExcessiveParameterList: five ports and two settings, every one of them owned by the core
+    // and injected. Grouping them behind a holder would hide which stage a change touches.
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public DistributionPipeline(
+            final IdempotencyGuard guard,
+            final HearingPayloadSource payloadSource,
+            final GroupProceedingsPolicy groupProceedings,
+            final RegisterTransformer transformer,
+            final RegisterSubmissionClient submissionClient,
+            final ProcessingMetrics metrics,
+            final Clock clock,
+            final Duration processingDeadline) {
         this.guard = guard;
         this.payloadSource = payloadSource;
+        this.groupProceedings = groupProceedings;
+        this.transformer = transformer;
+        this.submissionClient = submissionClient;
         this.metrics = metrics;
         this.clock = clock;
         this.processingDeadline = processingDeadline;
@@ -166,12 +207,32 @@ public class DistributionPipeline {
         // standing exactly on it has already used the time its claim guarantees and may not write a
         // completion. `isAfter` on the other side of this branch would let that one instant through.
         if (clock.instant().isBefore(deadline)) {
-            outcome = completed(claim, CompletionReason.NO_DEFENDANTS);
+            outcome = transformer == null
+                    ? completed(claim, CompletionReason.NO_DEFENDANTS)
+                    : distribute(command, payload, claim);
         } else {
             outcome = failed(claim, FailureClassification.TRANSIENT,
                     ReasonCode.PROCESSING_DEADLINE_EXCEEDED, lastChance);
         }
         return outcome;
+    }
+
+    /**
+     * The stages between the payload and the outcome: the group-proceedings decision, the
+     * transformation, and the submission of whatever it produced.
+     *
+     * <p>Unwritten. It arrives with the phase that wires the transformation chain and the
+     * progression gateway; until then a pipeline constructed over the four ports refuses rather than
+     * quietly completing as though the register had been considered.
+     *
+     * @param command the validated request
+     * @param payload the hearing payload the fetch returned
+     * @param claim   the claim this run holds
+     * @return the settlement the outcome calls for
+     */
+    private GuardDecision distribute(
+            final DistributionCommand command, final JsonNode payload, final RunClaim claim) {
+        throw new UnsupportedOperationException(STAGES_UNWIRED);
     }
 
     /**

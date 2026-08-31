@@ -1,0 +1,591 @@
+package uk.gov.hmcts.cp.courtregister.application;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
+import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
+import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
+import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
+import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
+import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
+import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
+import uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException;
+import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
+import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
+import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
+import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
+import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
+
+/**
+ * One request, from the payload fetch to the recorded outcome — the orchestration the legacy has no
+ * test for at all.
+ *
+ * <p>{@code CourtRegisterOrchestrator/index.js} has no test file. Seventy-seven lines, five
+ * activities, four silent guards and a catch-all that reports failure from a completed
+ * orchestration, and nothing in the repository executes any of it. Every case in this file is
+ * therefore written from the source rather than twinned, and four catalogued defects live in what it
+ * asserts:
+ *
+ * <ul>
+ *   <li><strong>C2</strong> — the catch-all at {@code :70-76} returns {@code {Success:false}} from an
+ *       orchestration that <em>completed</em>, and reads {@code context.df.getInput()} inside the
+ *       catch, which can itself throw. Nothing is recorded either way.</li>
+ *   <li><strong>C6</strong> — a hearing that gathers no defendants flows on as an empty register.</li>
+ *   <li><strong>C32</strong> — {@code if (hearingResultedObj)} at {@code :20} is false when the cache
+ *       missed and the query fallback returned nothing, and the run stops there, silently, reporting
+ *       success.</li>
+ *   <li><strong>C33</strong> — those four guards and the bare {@code null} from
+ *       {@code OutboundCourtRegister} all end in one undifferentiated {@code Success: true}, and two
+ *       of them are this flow's commonest legitimate outcomes.</li>
+ * </ul>
+ *
+ * <p>The suite drives the pipeline over test doubles for its four ports, because what is asserted
+ * here is the order the stages run in, what each is handed, and what is recorded when one of them
+ * refuses. The stages' own behaviour is asserted in their own suites.
+ *
+ * @see <a href="file:../../../../../../../../doc/DEFECT-FIXES.md">doc/DEFECT-FIXES.md</a> rows C2,
+ *     C6, C7, C32 and C33
+ */
+@DisplayName("DistributionPipeline")
+class DistributionPipelineTest {
+
+    /** Returned when a meter is absent, so a missing count fails as an assertion. */
+    private static final double ABSENT = -1;
+
+    /** Long enough that no case in this file reaches its processing deadline. */
+    private static final Duration RUN_DEADLINE = Duration.ofMinutes(5);
+
+    private final ObjectMapper mapper = JacksonConfig.contractObjectMapper();
+
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    private final ProcessingMetrics metrics = new ProcessingMetrics(registry);
+
+    private final IdempotencyGuard guard = mock(IdempotencyGuard.class);
+    private final HearingPayloadSource payloadSource = mock(HearingPayloadSource.class);
+    private final GroupProceedingsPolicy groupProceedings = mock(GroupProceedingsPolicy.class);
+    private final RegisterTransformer transformer = mock(RegisterTransformer.class);
+    private final RegisterSubmissionClient submissionClient = mock(RegisterSubmissionClient.class);
+
+    private final DistributionCommand command = new DistributionCommand(
+            "RESULTS",
+            UUID.fromString("9f1b8e2a-5c34-4a7d-9b1e-2f6a0d3c5e71"),
+            UUID.fromString("1828f356-f746-4f2d-932b-79ef2df95c80"),
+            LocalDate.parse("2020-06-01"),
+            Instant.parse("2020-06-01T10:00:00Z"),
+            "Hearing_Resulted",
+            java.util.Optional.of(UUID.fromString("6e2f0a1c-9d4b-4f38-8a52-1c7b3e5d9f04")));
+
+    private final RunClaim claim = new RunClaim(
+            command.source(), command.requestId(), "runner-1", UUID.randomUUID(), "msg-1");
+
+    private final CourtRegisterDocument document = new CourtRegisterDocument(
+            command.hearingId().toString(),
+            "court-register_2020-06-01_B01LY00_" + command.hearingId() + ".pdf");
+
+    private final JsonNode payload = mapper.readTree(
+            "{\"hearing\":{\"id\":\"1828f356-f746-4f2d-932b-79ef2df95c80\"},"
+                    + "\"sharedTime\":\"2020-06-01T10:00:00Z\"}");
+
+    @BeforeEach
+    void theOrdinaryRun() {
+        when(guard.admit(any(DistributionCommand.class), any(DeliveryIdentity.class)))
+                .thenReturn(new GuardDecision.Run(claim));
+        when(guard.recordCompletion(any(RunClaim.class), any(CompletionReason.class)))
+                .thenReturn(new GuardDecision.Complete(ReasonCode.RUN_COMPLETED));
+        when(guard.recordTransientFailure(any(RunClaim.class), any(ReasonCode.class)))
+                .thenAnswer(call -> new GuardDecision.Abandon(call.getArgument(1)));
+        when(guard.recordNonTransientFailure(any(RunClaim.class), any(ReasonCode.class)))
+                .thenAnswer(call -> new GuardDecision.DeadLetter(
+                        DeadLetterReason.NON_TRANSIENT, call.getArgument(1)));
+        when(guard.recordExhaustion(any(RunClaim.class), any(ReasonCode.class)))
+                .thenAnswer(call -> new GuardDecision.DeadLetter(
+                        DeadLetterReason.EXHAUSTED, call.getArgument(1)));
+
+        when(payloadSource.fetch(any(DistributionCommand.class))).thenReturn(payload);
+        when(groupProceedings.suppresses(any(DistributionCommand.class), any(JsonNode.class)))
+                .thenReturn(false);
+        when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+                .thenReturn(new TransformationResult.Register(document));
+        when(submissionClient.submit(any(CourtRegisterDocument.class), any(CallerIdentity.class)))
+                .thenReturn(new SubmissionReceipt(202));
+    }
+
+    /** N1 and N6: the order the stages run in, and what each of them is handed. */
+    @Nested
+    @DisplayName("the stage sequence")
+    class StageSequence {
+
+        @Test
+        @DisplayName("fetches, decides, transforms, submits, records — in that order")
+        void runs_the_stages_in_order() {
+            final GuardDecision decision = run();
+
+            final InOrder stages =
+                    inOrder(payloadSource, groupProceedings, transformer, submissionClient, guard);
+            stages.verify(payloadSource).fetch(command);
+            stages.verify(groupProceedings).suppresses(eqCommand(), any(JsonNode.class));
+            stages.verify(transformer).transform(eqCommand(), any(JsonNode.class));
+            stages.verify(submissionClient).submit(any(CourtRegisterDocument.class),
+                    any(CallerIdentity.class));
+            stages.verify(guard).recordCompletion(claim, CompletionReason.SUBMITTED);
+
+            assertThat(decision).isInstanceOf(GuardDecision.Complete.class);
+        }
+
+        @Test
+        @DisplayName("hands the transformation the payload the fetch returned, unaltered")
+        void hands_the_transformation_the_payload_the_fetch_returned() {
+            // The legacy hands the same mutable hearing object to `SetCourtRegister` and then to
+            // `OutboundCourtRegister`, and is saved from the consequences only by the Durable
+            // Functions serialisation boundary between activities. Java passes references, so the
+            // pipeline has to hand on what it fetched and the stages have to derive rather than edit.
+            final JsonNode pristine = payload.deepCopy();
+            final ArgumentCaptor<JsonNode> handedOn = ArgumentCaptor.forClass(JsonNode.class);
+
+            run();
+
+            verify(transformer).transform(eqCommand(), handedOn.capture());
+            assertThat(handedOn.getValue()).isEqualTo(pristine);
+            assertThat(payload)
+                    .as("the fetched tree belongs to the producer, not to this service")
+                    .isEqualTo(pristine);
+        }
+
+        @Test
+        @DisplayName("asks the group-proceedings policy about the hearing inside the envelope")
+        void asks_the_policy_about_the_hearing_inside_the_envelope() {
+            // The claim-check payload is `{hearing, sharedTime}`; the flag is on the hearing
+            // (`CourtRegisterOrchestrator/index.js:21`). Handing the envelope instead would read an
+            // absent field and never suppress anything.
+            final ArgumentCaptor<JsonNode> asked = ArgumentCaptor.forClass(JsonNode.class);
+
+            run();
+
+            verify(groupProceedings).suppresses(eqCommand(), asked.capture());
+            assertThat(asked.getValue()).isEqualTo(payload.get("hearing"));
+        }
+
+        @Test
+        @DisplayName("submits the document the transformation produced, as the request's own user")
+        void submits_the_document_the_transformation_produced() {
+            final ArgumentCaptor<CourtRegisterDocument> submitted =
+                    ArgumentCaptor.forClass(CourtRegisterDocument.class);
+            final ArgumentCaptor<CallerIdentity> caller =
+                    ArgumentCaptor.forClass(CallerIdentity.class);
+
+            run();
+
+            verify(submissionClient).submit(submitted.capture(), caller.capture());
+            assertThat(submitted.getValue()).isEqualTo(document);
+            assertThat(caller.getValue()).isEqualTo(CallerIdentity.of(command));
+        }
+
+        @Test
+        @DisplayName("submits exactly once per document")
+        void submits_exactly_once_per_document() {
+            // Progression's `add-court-register` appends an event and a row per POST, so a second
+            // submission inside one run is a second register for the hearing.
+            run();
+
+            verify(submissionClient, times(1)).submit(any(CourtRegisterDocument.class),
+                    any(CallerIdentity.class));
+        }
+
+        @Test
+        @DisplayName("records the run as submitted, and counts it under that reason")
+        void records_the_run_as_submitted() {
+            run();
+
+            verify(guard).recordCompletion(claim, CompletionReason.SUBMITTED);
+            assertThat(completions("submitted")).isEqualTo(1);
+        }
+    }
+
+    /**
+     * Defect C33. Four separate legacy guards, one undifferentiated success. Two of these four are
+     * the commonest results this service has, so telling them apart is what makes a pipeline that
+     * has quietly stopped working distinguishable from a quiet week.
+     */
+    @Nested
+    @DisplayName("the four no-op outcomes (C33)")
+    class NoOpOutcomes {
+
+        @ParameterizedTest
+        @EnumSource(value = CompletionReason.class,
+                names = {"NO_DEFENDANTS", "NO_SUBSCRIPTIONS", "NO_YOUTH_DEFENDANTS"})
+        @DisplayName("no op outcomes are distinguishable")
+        void no_op_outcomes_are_distinguishable(final CompletionReason reason) {
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+                    .thenReturn(new TransformationResult.NoRegister(reason));
+
+            final GuardDecision decision = run();
+
+            assertThat(decision).isInstanceOf(GuardDecision.Complete.class);
+            verify(guard).recordCompletion(claim, reason);
+            assertThat(completions(reason.value())).isEqualTo(1);
+            assertThat(completions("submitted")).isEqualTo(ABSENT);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = CompletionReason.class,
+                names = {"NO_DEFENDANTS", "NO_SUBSCRIPTIONS", "NO_YOUTH_DEFENDANTS"})
+        @DisplayName("sends nothing at all when there is nothing to send")
+        void sends_nothing_when_there_is_nothing_to_send(final CompletionReason reason) {
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+                    .thenReturn(new TransformationResult.NoRegister(reason));
+
+            run();
+
+            verify(submissionClient, never()).submit(any(CourtRegisterDocument.class),
+                    any(CallerIdentity.class));
+        }
+
+        @Test
+        @DisplayName("records a hearing that gathered nobody as no-defendants (C6)")
+        void records_a_hearing_that_gathered_nobody_as_no_defendants() {
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+                    .thenReturn(new TransformationResult.NoRegister(
+                            CompletionReason.NO_DEFENDANTS));
+
+            run();
+
+            verify(guard).recordCompletion(claim, CompletionReason.NO_DEFENDANTS);
+        }
+    }
+
+    /**
+     * Defect C7's second half. The suppression is a business rule and ports unchanged; that it is
+     * recorded does not — the legacy skips the register and reports {@code Success: true} with
+     * nothing to say which of the five things happened.
+     *
+     * <p>These two cases run over the <em>real</em> policy, because what they assert is the wiring:
+     * that the pipeline consults it, that a suppression becomes a named completion, and that a
+     * non-boolean flag does not suppress anything on the way through.
+     */
+    @Nested
+    @DisplayName("group proceedings (C7)")
+    class GroupProceedings {
+
+        @Test
+        @DisplayName("group proceedings skip is recorded")
+        void group_proceedings_skip_is_recorded() {
+            when(payloadSource.fetch(any(DistributionCommand.class)))
+                    .thenReturn(payloadFlagged("true"));
+
+            final GuardDecision decision = pipelineOverTheRealPolicy().process(command, delivery());
+
+            assertThat(decision).isInstanceOf(GuardDecision.Complete.class);
+            verify(guard).recordCompletion(claim, CompletionReason.GROUP_PROCEEDINGS);
+            assertThat(completions("group-proceedings")).isEqualTo(1);
+            verify(transformer, never()).transform(any(DistributionCommand.class),
+                    any(JsonNode.class));
+            verify(submissionClient, never()).submit(any(CourtRegisterDocument.class),
+                    any(CallerIdentity.class));
+        }
+
+        @Test
+        @DisplayName("only boolean true suppresses the register")
+        void only_boolean_true_suppresses_the_register() {
+            // The legacy's `isGroupProceedings == null || == false` suppresses the register for the
+            // string "true" and for every other truthy value; the run then reports success with
+            // nothing produced and nothing recorded. Here the register is built and submitted.
+            when(payloadSource.fetch(any(DistributionCommand.class)))
+                    .thenReturn(payloadFlagged("\"true\""));
+
+            pipelineOverTheRealPolicy().process(command, delivery());
+
+            verify(guard).recordCompletion(claim, CompletionReason.SUBMITTED);
+            verify(submissionClient).submit(document, CallerIdentity.of(command));
+        }
+    }
+
+    /**
+     * Defect C2, and the failure taxonomy the legacy has none of. Every path out of a run ends in a
+     * recorded terminal state, and which one it is depends on whether another delivery could change
+     * the answer.
+     */
+    @Nested
+    @DisplayName("failures (C2, C32)")
+    class Failures {
+
+        @Test
+        @DisplayName("every failure ends in a recorded terminal state")
+        void every_failure_ends_in_a_recorded_terminal_state() {
+            // The claim of the whole file, asserted across every way a run can fail at once. The
+            // legacy's catch-all reports failure from a *completed* orchestration and records
+            // nothing, and reads `context.df.getInput()` inside the catch, which can throw again and
+            // lose even the log line.
+            final ArgumentCaptor<ReasonCode> recorded = ArgumentCaptor.forClass(ReasonCode.class);
+
+            for (final RuntimeException failure : everyWayARunCanFail()) {
+                when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+                        .thenThrow(failure);
+
+                final GuardDecision decision = run();
+
+                assertThat(decision)
+                        .as("a %s left the delivery unsettled", failure.getClass().getSimpleName())
+                        .isNotInstanceOf(GuardDecision.Run.class)
+                        .isNotNull();
+            }
+
+            verify(guard, never()).recordCompletion(any(RunClaim.class),
+                    any(CompletionReason.class));
+            verify(guard, times(everyWayARunCanFail().length)).recordTransientFailure(
+                    any(RunClaim.class), recorded.capture());
+            assertThat(recorded.getAllValues())
+                    .as("each failure is recorded under its own bounded reason, not a catch-all")
+                    .containsExactly(
+                            ReasonCode.REFERENCE_DATA_UNAVAILABLE, ReasonCode.UNEXPECTED_FAILURE);
+        }
+
+        @Test
+        @DisplayName("retries a payload the cache and the fallback could not supply (C32)")
+        void retries_a_payload_the_cache_and_fallback_could_not_supply() {
+            // `getPrefixHearing` returns `undefined` on an empty query-API body and `null` on an
+            // error, and `if (hearingResultedObj)` is false for both — so the run stops there,
+            // records nothing and reports success. A register that was never buildable stops
+            // masquerading as a delivered one.
+            when(payloadSource.fetch(any(DistributionCommand.class)))
+                    .thenThrow(new PayloadUnavailableException(ReasonCode.PAYLOAD_UNAVAILABLE));
+
+            final GuardDecision decision = run();
+
+            assertThat(decision).isEqualTo(
+                    new GuardDecision.Abandon(ReasonCode.PAYLOAD_UNAVAILABLE));
+            verify(guard).recordTransientFailure(claim, ReasonCode.PAYLOAD_UNAVAILABLE);
+            verify(guard, never()).recordCompletion(any(RunClaim.class),
+                    any(CompletionReason.class));
+        }
+
+        @Test
+        @DisplayName("does not transform a hearing it could not read")
+        void does_not_transform_a_hearing_it_could_not_read() {
+            when(payloadSource.fetch(any(DistributionCommand.class)))
+                    .thenThrow(new PayloadUnavailableException(ReasonCode.PAYLOAD_UNAVAILABLE));
+
+            run();
+
+            verify(transformer, never()).transform(any(DistributionCommand.class),
+                    any(JsonNode.class));
+        }
+
+        @Test
+        @DisplayName("parks a transformation that cannot produce a register, never completes it")
+        void parks_a_transformation_that_cannot_produce_a_register() {
+            // The BS-02 chain, deliberately constructed: `RegisterFragmentService`'s catch throws a
+            // second time, `SetCourtRegister` swallows it, the orchestrator's `:33` guard skips the
+            // rest, and the orchestration returns `Success: true`. Here it is a dead-letter with a
+            // bounded reason.
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+                    .thenThrow(new TransformationFailedException("ordered-date-unreadable"));
+
+            final GuardDecision decision = run();
+
+            assertThat(decision).isEqualTo(new GuardDecision.DeadLetter(
+                    DeadLetterReason.NON_TRANSIENT, ReasonCode.TRANSFORMATION_FAILED));
+            verify(guard, never()).recordCompletion(any(RunClaim.class),
+                    any(CompletionReason.class));
+        }
+
+        @Test
+        @DisplayName("retries a register whose recipients could not be read")
+        void retries_a_register_whose_recipients_could_not_be_read() {
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+                    .thenThrow(new ReferenceDataUnavailableException("subscriptions-read-failed"));
+
+            assertThat(run()).isEqualTo(
+                    new GuardDecision.Abandon(ReasonCode.REFERENCE_DATA_UNAVAILABLE));
+        }
+
+        @Test
+        @DisplayName("retries a submission that may succeed next time")
+        void retries_a_submission_that_may_succeed_next_time() {
+            when(submissionClient.submit(any(CourtRegisterDocument.class),
+                    any(CallerIdentity.class)))
+                    .thenThrow(new SubmissionFailedException(
+                            FailureClassification.TRANSIENT, ReasonCode.SUBMISSION_TRANSIENT));
+
+            assertThat(run()).isEqualTo(
+                    new GuardDecision.Abandon(ReasonCode.SUBMISSION_TRANSIENT));
+        }
+
+        @Test
+        @DisplayName("parks a submission progression refused, without spending the deliveries")
+        void parks_a_submission_progression_refused() {
+            when(submissionClient.submit(any(CourtRegisterDocument.class),
+                    any(CallerIdentity.class)))
+                    .thenThrow(new SubmissionFailedException(
+                            FailureClassification.NON_TRANSIENT, ReasonCode.SUBMISSION_REJECTED));
+
+            assertThat(run()).isEqualTo(new GuardDecision.DeadLetter(
+                    DeadLetterReason.NON_TRANSIENT, ReasonCode.SUBMISSION_REJECTED));
+        }
+
+        @Test
+        @DisplayName("parks a transient submission failure on the last permitted delivery")
+        void parks_a_transient_submission_failure_on_the_last_delivery() {
+            when(submissionClient.submit(any(CourtRegisterDocument.class),
+                    any(CallerIdentity.class)))
+                    .thenThrow(new SubmissionFailedException(
+                            FailureClassification.TRANSIENT, ReasonCode.SUBMISSION_TRANSIENT));
+
+            final GuardDecision decision = pipeline().process(command, lastDelivery());
+
+            assertThat(decision).isEqualTo(new GuardDecision.DeadLetter(
+                    DeadLetterReason.EXHAUSTED, ReasonCode.SUBMISSION_TRANSIENT));
+        }
+
+        @Test
+        @DisplayName("never records a completion for a run that failed after the register was built")
+        void never_records_a_completion_after_a_failed_submission() {
+            // The exact shape of C1: the POST failed and the legacy reports the run as a success,
+            // so a lost register and a delivered one are the same row.
+            when(submissionClient.submit(any(CourtRegisterDocument.class),
+                    any(CallerIdentity.class)))
+                    .thenThrow(new SubmissionFailedException(
+                            FailureClassification.NON_TRANSIENT, ReasonCode.SUBMISSION_REJECTED));
+
+            final GuardDecision decision = run();
+
+            assertThat(decision).isEqualTo(new GuardDecision.DeadLetter(
+                    DeadLetterReason.NON_TRANSIENT, ReasonCode.SUBMISSION_REJECTED));
+            verify(guard, never()).recordCompletion(any(RunClaim.class),
+                    any(CompletionReason.class));
+            assertThat(completions("submitted")).isEqualTo(ABSENT);
+        }
+    }
+
+    /**
+     * Every way a run can fail that the pipeline must turn into a recorded outcome. Listed rather
+     * than parameterised so the one assertion can be made across all of them at once.
+     *
+     * @return one failure of each kind
+     */
+    private RuntimeException[] everyWayARunCanFail() {
+        return new RuntimeException[] {
+            new ReferenceDataUnavailableException("subscriptions-read-failed"),
+            new IllegalStateException("a failure nothing anticipated"),
+        };
+    }
+
+    /**
+     * The pipeline over its four ports and a policy that suppresses nothing.
+     *
+     * @return the pipeline
+     */
+    private DistributionPipeline pipeline() {
+        return new DistributionPipeline(guard, payloadSource, groupProceedings, transformer,
+                submissionClient, metrics, fixedClock(), RUN_DEADLINE);
+    }
+
+    /**
+     * The same pipeline over the real group-proceedings policy, for the two cases whose claim is
+     * about the wiring rather than about the pipeline's own branching.
+     *
+     * @return the pipeline
+     */
+    private DistributionPipeline pipelineOverTheRealPolicy() {
+        return new DistributionPipeline(guard, payloadSource, new GroupProceedingsPolicy(metrics),
+                transformer, submissionClient, metrics, fixedClock(), RUN_DEADLINE);
+    }
+
+    /**
+     * Runs one ordinary delivery.
+     *
+     * @return what the pipeline decided the delivery is worth settling as
+     */
+    private GuardDecision run() {
+        return pipeline().process(command, delivery());
+    }
+
+    /**
+     * A delivery with retries still to come.
+     *
+     * @return the delivery
+     */
+    private DeliveryIdentity delivery() {
+        return new DeliveryIdentity("msg-1", "runner-1", false);
+    }
+
+    /**
+     * The last delivery the queue permits.
+     *
+     * @return the delivery
+     */
+    private DeliveryIdentity lastDelivery() {
+        return new DeliveryIdentity("msg-1", "runner-1", true);
+    }
+
+    /**
+     * A claim-check payload whose hearing carries the given raw group-proceedings value.
+     *
+     * @param flag the raw JSON value
+     * @return the payload
+     */
+    private JsonNode payloadFlagged(final String flag) {
+        return mapper.readTree(("{\"hearing\":{\"id\":\"1828f356-f746-4f2d-932b-79ef2df95c80\","
+                + "\"isGroupProceedings\":%s},\"sharedTime\":\"2020-06-01T10:00:00Z\"}")
+                .formatted(flag));
+    }
+
+    /**
+     * A clock that does not move, so no case in this file reaches its processing deadline by
+     * accident.
+     *
+     * @return the clock
+     */
+    private Clock fixedClock() {
+        return Clock.fixed(Instant.parse("2020-06-01T10:00:05Z"), ZoneOffset.UTC);
+    }
+
+    /**
+     * The command matcher, spelled once so the stage-order assertions read as prose.
+     *
+     * @return a matcher for the command under test
+     */
+    private DistributionCommand eqCommand() {
+        return org.mockito.ArgumentMatchers.eq(command);
+    }
+
+    /**
+     * How many completions have been counted under a reason.
+     *
+     * @param reason the bounded reason code
+     * @return the count, or {@link #ABSENT} where the series does not exist
+     */
+    private double completions(final String reason) {
+        final Counter counter = registry.find(ProcessingMetrics.COMPLETIONS)
+                .tag(ProcessingMetrics.REASON_TAG, reason)
+                .counter();
+        return counter == null ? ABSENT : counter.count();
+    }
+}
