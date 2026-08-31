@@ -276,7 +276,10 @@ vocabulary and matching semantics.
       `minItems: 1` and the `Alias`/`Counsel` absent-vs-empty asymmetry is behaviour the comparator
       guards. `DistributionPipelineTest`'s one construction of the document was widened to the new
       signature; nothing it asserts changed. `TransformationAnomaly` already carried every code
-      T047/T048/T050 name, so the enum is untouched.)*
+      T047/T048/T050 name, so the enum is untouched. Follow-up in the same task: the ten inline
+      defensive-copy ternaries took the branch gate from 0.85 to 0.84, so the rule they all state is
+      written once in `domain/FrozenList` instead of ten times — `jacocoTestCoverageVerification`
+      green again, and the threshold untouched.)*
 
 ### Tests first ⚠️ (all [P] — one file each; seams provided by T039a)
 

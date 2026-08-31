@@ -66,10 +66,9 @@ public record CourtRegisterDefendant(
      * carry exactly. Collapsing null into empty here would erase it.
      */
     public CourtRegisterDefendant {
-        aliases = aliases == null ? null : List.copyOf(aliases);
-        prosecutionCasesOrApplications = prosecutionCasesOrApplications == null
-                ? null : List.copyOf(prosecutionCasesOrApplications);
-        defendantResults = defendantResults == null ? null : List.copyOf(defendantResults);
-        defenceCounsels = defenceCounsels == null ? null : List.copyOf(defenceCounsels);
+        aliases = FrozenList.frozen(aliases);
+        prosecutionCasesOrApplications = FrozenList.frozen(prosecutionCasesOrApplications);
+        defendantResults = FrozenList.frozen(defendantResults);
+        defenceCounsels = FrozenList.frozen(defenceCounsels);
     }
 }

@@ -49,9 +49,8 @@ public record CourtRegisterCaseOrApplication(
      * {@code null} here rather than being helpfully turned into a list progression would reject.
      */
     public CourtRegisterCaseOrApplication {
-        offences = offences == null ? null : List.copyOf(offences);
-        results = results == null ? null : List.copyOf(results);
-        prosecutionCounsels =
-                prosecutionCounsels == null ? null : List.copyOf(prosecutionCounsels);
+        offences = FrozenList.frozen(offences);
+        results = FrozenList.frozen(results);
+        prosecutionCounsels = FrozenList.frozen(prosecutionCounsels);
     }
 }

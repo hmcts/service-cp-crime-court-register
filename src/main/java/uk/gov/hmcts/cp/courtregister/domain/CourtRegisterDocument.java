@@ -56,7 +56,7 @@ public record CourtRegisterDocument(
      * flow, and one of its two most common — into a document progression rejects.
      */
     public CourtRegisterDocument {
-        recipients = recipients == null ? null : List.copyOf(recipients);
-        defendants = defendants == null ? null : List.copyOf(defendants);
+        recipients = FrozenList.frozen(recipients);
+        defendants = FrozenList.frozen(defendants);
     }
 }

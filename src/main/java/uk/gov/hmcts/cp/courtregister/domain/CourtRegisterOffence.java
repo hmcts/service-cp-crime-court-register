@@ -58,6 +58,6 @@ public record CourtRegisterOffence(
      * the comparator that guards this port treats them as three.
      */
     public CourtRegisterOffence {
-        results = results == null ? null : List.copyOf(results);
+        results = FrozenList.frozen(results);
     }
 }
