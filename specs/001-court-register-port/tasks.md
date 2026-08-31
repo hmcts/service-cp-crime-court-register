@@ -202,7 +202,7 @@ in the same commit.**
       **C31 fix (N17–N19)**: adult-first/youth-second hearing matches a youth-vocabulary
       subscription (fails vs legacy `[0]`-only); judicialResults still collected across all
       defendants (N18).
-- [ ] T030 [P] [US4] Write `application/GroupProceedingsPolicyTest` (red; seam: policy type) —
+- [x] T030 [P] [US4] Write `application/GroupProceedingsPolicyTest` (red; seam: policy type) —
       N8–N12 under the strict-boolean rule: `true` skips with reason; `false`/`null`/absent
       proceed; `"false"`/`"true"`/`1` proceed with WARN + metric (fails vs legacy loose `==`).
 - [ ] T031 [P] [US1] Write `application/DistributionPipelineTest` (red) — N1–N7: stage sequence and

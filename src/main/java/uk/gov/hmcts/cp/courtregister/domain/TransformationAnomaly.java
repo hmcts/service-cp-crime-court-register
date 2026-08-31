@@ -28,7 +28,19 @@ public enum TransformationAnomaly {
     RECIPIENT_MISSING_EMAIL("recipient-missing-email"),
 
     /** A recipient whose subscription is not marked for email delivery or distribution (C27). */
-    RECIPIENT_NOT_FOR_DISTRIBUTION("recipient-not-for-distribution");
+    RECIPIENT_NOT_FOR_DISTRIBUTION("recipient-not-for-distribution"),
+
+    /**
+     * A hearing whose {@code isGroupProceedings} is not a JSON boolean (C7).
+     *
+     * <p>The odd one out, and deliberately on this instrument rather than a new one. Nothing is
+     * skipped and the register is built in full; what is anomalous is the payload, and the legacy's
+     * loose {@code ==} reads any truthy value — the string {@code "false"} included — as a reason to
+     * suppress the register with no record at all. The fix evaluates the flag strictly, so a
+     * non-boolean value no longer decides anything, and counts it here so that a producer sending
+     * one is visible rather than merely harmless.
+     */
+    NON_BOOLEAN_GROUP_PROCEEDINGS("non-boolean-group-proceedings");
 
     private final String storedValue;
 

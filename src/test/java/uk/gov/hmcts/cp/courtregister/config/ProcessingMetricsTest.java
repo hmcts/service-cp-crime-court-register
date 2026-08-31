@@ -589,7 +589,12 @@ class ProcessingMetricsTest {
                                 "courtregister_transformation_anomalies_total"
                                         + "{reason=\"recipient-missing-email\"}",
                                 "courtregister_transformation_anomalies_total"
-                                        + "{reason=\"recipient-not-for-distribution\"}");
+                                        + "{reason=\"recipient-not-for-distribution\"}",
+                                // The one anomaly that skips nothing: a hearing whose
+                                // `isGroupProceedings` is not a boolean, which under the legacy's
+                                // loose comparison would have suppressed the whole register (C7).
+                                "courtregister_transformation_anomalies_total"
+                                        + "{reason=\"non-boolean-group-proceedings\"}");
             }
 
             @Test
