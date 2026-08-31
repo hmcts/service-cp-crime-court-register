@@ -297,7 +297,7 @@ vocabulary and matching semantics.
       guarded, not a TypeError (C19-family guard).
 - [x] T044 [P] [US3] `pipeline/HearingVenueMapperTest` — HV1 twin + address body (postCode case),
       lja-absent, courtCentre-absent guarded failure.
-- [ ] T045 [P] [US3] `pipeline/OffenceMapperTest` — OF1 twin repaired (real indicatedPlea,
+- [x] T045 [P] [US3] `pipeline/OffenceMapperTest` — OF1 twin repaired (real indicatedPlea,
       allocationDecision, convictionDate asserted); **C23 fix**: `verdictCode =
       verdictType.verdictCode ?? verdictType.categoryType` (`"1234"`, fails vs legacy
       `"desc1234"`; plus `verdict_code_falls_back_to_category_type_when_absent` for the
