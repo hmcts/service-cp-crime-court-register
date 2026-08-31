@@ -222,7 +222,10 @@ in the same commit.**
       **T048**'s `RecipientMapperTest`. Landing it now would mean production code with no test that
       could have failed first, which Principle II refuses. Recorded here so the deferral is visible
       rather than silent.)*
-- [ ] T034 [US3] Implement `pipeline/VocabularyBuilder` (green T025) — the vocabulary half of C30.
+- [x] T034 [US3] Implement `pipeline/VocabularyBuilder` (green T025) — the vocabulary half of C30.
+      *(done — C30 stays PLANNED with its vocabulary half recorded in the register: the fix is only
+      half implemented until T037 makes the three creditor predicates consistent, and a row marked
+      FIXED on half a fix is the register lying.)*
 - [ ] T035 [US3] Implement `pipeline/CourtExtractFilter` (green T026).
 - [ ] T036 [US3] Implement `pipeline/RegisterBuilder` + `domain/RegisterFragment` (green T027) —
       updates C6 (and the C26 spelling on the fragment).
