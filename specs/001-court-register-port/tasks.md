@@ -232,7 +232,12 @@ in the same commit.**
       *(done — C6 moves to FIXED; C26 stays PLANNED with its fragment half recorded. C26's fix is
       the whole outbound model being honest, which is `OutboundContractValidationTest`'s claim in
       the mapper phase; the fragment's spelling is one field of it.)*
-- [ ] T037 [US3] Implement `pipeline/SubscriptionRules` (green T028) — updates C4/C5/C30.
+- [x] T037 [US3] Implement `pipeline/SubscriptionRules` (green T028) — updates C4/C5/C30.
+      *(done — C4, C5 and C30 all move to FIXED. C30's matcher half completes the vocabulary half
+      T034 landed; the legacy's per-value `FCOMP`/`CREDITOR_NAME` creditor scan is deliberately not
+      ported, because both of its call sites are already guarded by the same non-empty-list test the
+      fix imposes on the third predicate, and a court register's creditor lists are empty by
+      construction.)*
 - [ ] T038 [US3] Implement `pipeline/SubscriptionMatcher` (green T029) — updates C31.
 - [ ] T039 [US1] Implement the group-proceedings policy + wire `DistributionPipeline` stages
       (green T030, T031) — updates C2/C7/C32/C33 (pipeline half).
