@@ -1,8 +1,12 @@
 # Contracts — service-cp-crime-court-register
 
+> **Status: target design.** These are the contracts the service is being built to (per
+> `specs/001-court-register-port/tasks.md`); at P0 bootstrap only the vendored outbound schemas
+> exist in the repo. Sections marked TODO finalise with the phase that lands them.
+
 ## There is no REST API
 
-This service is a message-driven pipeline. It consumes from the Azure Service Bus queue
+This service is a message-driven pipeline: it consumes from the Azure Service Bus queue
 `courtregister.requests` and submits `progression.add-court-register`. The only HTTP surface is
 Spring Boot Actuator, which is operational, not a consumer contract. The two real contracts are
 below; `doc/openapi.yaml` deliberately stays empty.
@@ -19,9 +23,9 @@ One JSON body per hearing-resulted distribution command:
 
 `additionalProperties: false`; required `source, requestId, hearingId, hearingDay, sharedTime,
 eventType`; `userId` optional (absent, never null). `source` enum `["RESULTS"]`, `eventType` enum
-`["Hearing_Resulted"]` — the court register has no SJP leg. The canonical schema is
-`src/main/resources/contracts/distribution-command.schema.json` (draft-07), jointly owned with the
-producer in `cpp-context-results`.
+`["Hearing_Resulted"]` — the court register has no SJP leg. The canonical schema will live at
+`src/main/resources/contracts/distribution-command.schema.json` (draft-07; authored by task T012,
+not yet in the repo), jointly owned with the producer in `cpp-context-results`.
 
 ### Field semantics
 
@@ -65,9 +69,10 @@ media type `application/vnd.progression.add-court-register+json`, success **202 
 The document schema is progression-owned: top level in
 `cpp-context-progression/progression-command/progression-command-api/src/raml/json/schema/progression.add-court-register.json`,
 nested components compiled from `criminal-court-public-model` **17.103.13**. The exact compiled
-schemas are **vendored** at `src/test/resources/contracts/progression/` (`additionalProperties:
-false` throughout) and every outbound document is validated against them **before** sending —
-a schema-invalid document is an explicit failure, never a swallowed 400 (defect-fix C29).
+schemas are **vendored** at `src/main/resources/contracts/progression/` (`additionalProperties:
+false` throughout); the design has every outbound document validated against them **before**
+sending — a schema-invalid document is an explicit failure, never a swallowed 400 (defect-fix
+C29; the validator lands with tasks T052/T055).
 
 Content notes that differ deliberately from the legacy app are in
 [DEFECT-FIXES.md](DEFECT-FIXES.md) (C11 filename, C23 verdict code, C24 wording newline, and the

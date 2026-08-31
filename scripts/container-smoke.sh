@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Container smoke: build the image, run it against the committed compose dependencies, and require
-# it to report readiness inside the 60-second budget (spec SC-004, first half). Tears the stack down
+# it to report readiness inside the 60-second budget (spec SC-101/SC-103, container half). Tears the stack down
 # on every exit path, success or failure.
 #
 # This is the local equivalent of the "Container smoke" step in

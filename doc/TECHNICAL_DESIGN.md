@@ -1,5 +1,9 @@
 # Technical Design — service-cp-crime-court-register
 
+> **Status: target design.** At P0 bootstrap the repo holds the Boot shell, governance and the
+> vendored contracts; the behaviours described here land phase by phase per
+> `specs/001-court-register-port/tasks.md`.
+
 ## Overview
 
 A message-driven Spring Boot service that replaces the court-register Azure Durable Functions
@@ -7,8 +11,10 @@ pipeline. One command per resulted hearing arrives on `courtregister.requests`; 
 the hearing payload (Redis claim-check, results-query fallback), builds the single youth-defendant
 register fragment, matches Youth Offending Team subscriptions via reference data, maps the
 aggregation document and POSTs `progression.add-court-register`. Progression's nightly generation,
-PDF rendering and e-mail leg is unchanged. All thirty-four catalogued legacy defects are fixed
-([DEFECT-FIXES.md](DEFECT-FIXES.md)); legacy behaviour is the oracle for everything not catalogued.
+PDF rendering and e-mail leg is unchanged. Of the thirty-four catalogued legacy defects, the
+thirty-one that live in this service are fixed ([DEFECT-FIXES.md](DEFECT-FIXES.md)); C18/C28/C34
+are externally-owned remediations tracked to conclusion before cutover; legacy behaviour is the
+oracle for everything not catalogued.
 
 ## The change in one picture
 

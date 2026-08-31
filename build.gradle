@@ -92,10 +92,13 @@ dependencies {
   // version is declared here for dependabot to track.
   testImplementation 'org.wiremock:wiremock-standalone:3.13.2'
 
-  // Draft-07 validator for the dual-validation contract corpus (research §9).
-  // testImplementation ONLY — it must never reach the runtime classpath. Not managed by any BOM on
-  // this build, so the version is declared here for dependabot to track.
-  testImplementation 'com.networknt:json-schema-validator:3.0.7'
+  // Draft-07 validator. RUNTIME dependency in this service, unlike the informant reference: the
+  // C29 fix validates every outbound document against the vendored progression schemas
+  // (classpath:contracts/progression/) BEFORE the POST, so a schema-invalid document is an explicit
+  // FAILED with a reason rather than a swallowed 400. The dual-validation contract corpus
+  // (research §9) uses the same dependency from the test classpath. Not managed by any BOM on this
+  // build, so the version is declared here for dependabot to track.
+  implementation 'com.networknt:json-schema-validator:3.0.7'
 
   // Security: pin transitive tomcat-embed-core to patched version (CVE-2026-41293, -43512, et al.)
   // Brought in transitively via spring-boot-starter-web; >=11.0.0-M1,<11.0.22 are vulnerable

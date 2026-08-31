@@ -17,7 +17,7 @@
 #                 (progression-command-api RAML + progression.add-court-register.json;
 #                 nested components from criminal-court-public-model 17.103.13,
 #                 additionalProperties: false). The compiled schemas are vendored at
-#                 src/test/resources/contracts/progression/ and every outbound document
+#                 src/main/resources/contracts/progression/ and every outbound document
 #                 is validated against them before sending. Documented in
 #                 doc/API_CONTRACTS.md §2.
 #

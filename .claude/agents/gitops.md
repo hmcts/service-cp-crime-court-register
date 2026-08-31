@@ -30,7 +30,7 @@ feat(inbound): consume courtregister.requests with peek-lock settlement
 fix(idempotency): treat (source,requestId) as composite key, not requestId alone
 test(pipeline): add golden-file twin for SetCourtRegister three-dates fixture
 chore(build): pin tomcat-embed-core to 11.0.24
-docs(spec): add CRA-220 walking-skeleton specification
+docs(spec): add the court-register-port feature specification
 ```
 
 Types in use: `feat`, `fix`, `test`, `refactor`, `chore`, `docs`, `build`, `ci`. Scope is the package or concern (`inbound`, `idempotency`, `delivery`, `pipeline`, `config`, `build`).

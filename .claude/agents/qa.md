@@ -43,16 +43,17 @@ For the ASB consumer, always cover:
 - **Redelivery of an already-processed `(source, requestId)`** — no second outbound submission, message completed
 - Malformed / missing required field — fails loudly, not silently defaulted
 - Out-of-scope `eventType` (anything other than `Hearing_Resulted`) — handled deliberately, recorded, settled
-- "Nothing to publish" — ends `COMPLETED` with the reason `no-authorities` recorded, not a silent return (the request statuses are exactly `RECEIVED`, `RETRYING`, `COMPLETED`, `FAILED`)
+- "Nothing to publish" — ends `COMPLETED` with the applicable reason recorded (`group-proceedings`, `no-defendants`, `no-subscriptions`, `no-youth-defendants`; delivery records `submitted`), not a silent return (the request statuses are exactly `RECEIVED`, `RETRYING`, `COMPLETED`, `FAILED`)
 - No path returns without settling the message
 
-### Parity / Golden-File Tests (the quality gate for this port)
-Once the transformation pipeline lands (later stories — not CRA-220):
-- Jest fixtures from the function app copied **byte-identical** into `src/test/resources/fixtures/…` — never reformat, re-indent or "tidy" a fixture
-- One JUnit twin per source Jest case; expected outputs in `expected-*.json`
+### Twin / Golden-File Tests (the quality gate for this port)
+As the transformation pipeline lands (phases 4–6 of `specs/001-court-register-port/tasks.md`):
+- Legacy Jest fixtures copied **byte-identical** into `src/test/resources/fixtures/…` — never reformat, re-indent or "tidy" a fixture — EXCEPT where a `doc/DEFECT-FIXES.md` row mandates a rebuild (the seven 7-key mis-capitalised vocabulary fixtures become the real 18-key set)
+- One JUnit twin per source Jest case per the test-twin map: TWIN-AS-IS twins assert legacy behaviour; TWIN-REPOINTED twins assert the **fixed** behaviour their C-row specifies (and would fail against legacy); REPAIR twins replace vacuous/stale assertions with real ones
 - Comparison: `NON_EXTENSIBLE`, field-order-insensitive, array-order-**sensitive**, BigDecimal-tolerant
-- Recorded-payload set must include: multi-authority hearings, court applications with and without a master defendant, group proceedings (this flow deliberately does **not** skip them), amend-and-reshare, legal-entity and person defendants, and hearings that are empty after filtering
-- Every deliberate difference from the JS has a named assertion on the deviations register; the harness fails on any **unregistered** divergence
+- Golden/expected outputs encode **fixed** behaviour and move only in a commit that also updates the matching DEFECT-FIXES row
+- Case set must include: group proceedings (skipped strictly, reason recorded), adult-first multi-defendant hearings, court applications with and without a prosecuting-authority applicant, amend-and-reshare, legal-entity and person defendants, address-less defendant/parent (C29), and hearings that are empty after filtering
+- Every fix has its pinning test named on the register row; the differential audit fails a reproduced catalogued defect AND any unregistered divergence
 
 ### Integration Tests (Testcontainers)
 - **Testcontainers `servicebus-emulator`** for the consumer — real peek-lock, settlement and DLQ semantics
@@ -71,7 +72,7 @@ Once the transformation pipeline lands (later stories — not CRA-220):
 - Duplicate `(source, requestId)` delivery
 - A resubmit that reuses the original `messageId` (must be recognised as the footgun it is)
 - Hearing payload absent from both Redis and the query-API fallback (retryable, not a silent skip)
-- Multi-authority fan-out where one authority's POST fails and the others succeed
+- The single per-hearing POST failing on each branch of the failure taxonomy (202-only success; transient vs terminal), with `processed_output` recording what was attempted
 
 ## Test Conventions
 

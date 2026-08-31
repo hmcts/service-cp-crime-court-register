@@ -1,4 +1,4 @@
-# Local development stack for CRA-220.
+# Local development stack for 001-court-register-port.
 #
 # Everything here is LOCAL ONLY. The credentials below are development defaults, deliberately
 # committed so the stack starts with no .env file; they are never used in any deployed environment,

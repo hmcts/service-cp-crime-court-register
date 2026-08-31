@@ -46,7 +46,7 @@ tasks.named('jacocoTestCoverageVerification') {
     files(sourceSets.main.output.collect {
       fileTree(dir: it, exclude: [
         'uk/gov/hmcts/cp/Application.class',
-        'uk/gov/hmcts/cp/informantregister/config/**'
+        'uk/gov/hmcts/cp/courtregister/config/**'
       ])
     })
   )

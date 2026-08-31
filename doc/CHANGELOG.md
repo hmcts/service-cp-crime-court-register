@@ -15,5 +15,7 @@ released, so everything sits under Unreleased.
   register (queue `courtregister.requests`, package `uk.gov.hmcts.cp.courtregister`).
 - 2026-08-31 — **Defect-fix register.** `doc/DEFECT-FIXES.md` catalogues the 34 legacy defects
   (design doc §7, C1–C34) this port fixes rather than reproduces, each with its legacy citation,
-  fix specification, pinning test and sign-off state. Content-changing fixes are implemented but
-  gated on sign-off before cutover; C18/C28/C34 are legacy-repo items tracked as pending.
+  fix specification, planned pinning test and sign-off state. All in-service rows start PLANNED
+  and move to FIXED only in the commit whose pinning test passes; content-changing fixes are
+  additionally gated on sign-off before cutover; C18/C28/C34 are legacy-repo items tracked as
+  pending with owner and trigger.

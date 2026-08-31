@@ -13,7 +13,7 @@ This service is a message-in / command-out, fix-first port of the court register
 | # | Contract | Source of truth | Owned by |
 |---|----------|-----------------|----------|
 | 1 | **Inbound ASB message** on queue `courtregister.requests` | `doc/API_CONTRACTS.md` + `src/main/resources/contracts/distribution-command.schema.json` + the active `specs/*/spec.md` | Results (publisher) + this service (consumer) — agreed shape, changes are bilateral |
-| 2 | **Outbound `add-court-register` command** POSTed to `cpp-context-progression` | The vendored frozen contract under `src/test/resources/contracts/progression/` (`progression.add-court-register.json` + `courtRegisterDocument/*.json` at `criminal-court-public-model` **17.103.13**) | **Progression — FROZEN. This service adapts; the schema never moves for us.** |
+| 2 | **Outbound `add-court-register` command** POSTed to `cpp-context-progression` | The vendored frozen contract under `src/main/resources/contracts/progression/` (`progression.add-court-register.json` + `courtRegisterDocument/*.json` at `criminal-court-public-model` **17.103.13**) | **Progression — FROZEN. This service adapts; the schema never moves for us.** |
 | 3 | **Fixed-or-legacy behaviour** relative to the Node function app | `/home/sachin/moj/cpp-context-azure-legalaidagency/azure-functions/durable-functions/` (the oracle for uncatalogued behaviour) + `doc/DEFECT-FIXES.md` (the 34 catalogued fixes) + the golden harness in `src/test/resources/` | Legacy behaviour except where a C-numbered fix says otherwise |
 | 4 | **The absence of a REST API** | `doc/API_CONTRACTS.md` ("None — actuator health/metrics only") | This service |
 

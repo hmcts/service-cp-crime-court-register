@@ -40,7 +40,7 @@
 - **No REST API.** Do not add controllers, `springdoc`, or an OpenAPI spec. The inbound contract is
   the queue message; the outbound contract is the progression-owned `add-court-register` command,
   frozen at `criminal-court-public-model` 17.103.13 and vendored under
-  `src/test/resources/contracts/progression/`
+  `src/main/resources/contracts/progression/`
 - **ASB health must never gate readiness** — a broker blip must not restart the pod
 - Ports-and-adapters: the application layer depends on interfaces only; Azure/Redis/HTTP types live
   in adapters

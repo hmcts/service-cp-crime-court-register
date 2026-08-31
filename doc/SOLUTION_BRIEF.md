@@ -19,8 +19,9 @@ Functions hosting is also being retired estate-wide (Modern by Default).
 
 A queue-consuming Boot service (`courtregister.requests`) with a processed-request log,
 `(source, requestId)` idempotency, explicit settlement, bounded retries, five named terminal
-outcomes, and pre-send schema validation — plus **fixes for all 34 catalogued legacy defects**,
-each pinned by a test and tracked in [DEFECT-FIXES.md](DEFECT-FIXES.md) with its sign-off state.
+outcomes, and pre-send schema validation — plus **fixes for the 31 in-service catalogued legacy
+defects** (C18/C28/C34 are externally-owned remediations tracked before cutover), each pinned by a
+test and tracked in [DEFECT-FIXES.md](DEFECT-FIXES.md) with its sign-off state.
 
 ## Scope
 

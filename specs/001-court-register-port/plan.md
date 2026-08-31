@@ -31,8 +31,8 @@ micrometer-prometheus, actuator/OTEL/web; test: testcontainers postgresql/junit-
 mssql-jdbc, wiremock-standalone 3.13.2, networknt json-schema-validator 3.0.7 test-only) plus
 nothing new. The one dependency-shaped difference is data, not code: the vendored
 `courtRegisterDocument/*` schemas at `criminal-court-public-model` **v17.103.13** under
-`src/test/resources/contracts/progression/` (and the same schemas used by the production pre-send
-validator from `src/main/resources/contracts/progression/` — see research §10).
+`src/main/resources/contracts/progression/` — main resources deliberately: the same vendored
+files serve the production pre-send validator (C29) and the test harness (see research §10).
 
 **Storage**: PostgreSQL 16; Flyway V1 creates `processed_request` (identical to informant) and
 `processed_output` (court-register columns; `UNIQUE (source, request_id)` — no fan-out).
@@ -203,15 +203,15 @@ Layers: **U** unit · **W** WireMock · **PG** Postgres `*IT` · **SB** emulator
 | Court extract | `CourtExtractFilterTest` | U | RF1 twin; result+prompt level filtering |
 | Dates | `DatesTest` | U | DT twins; C10 fix; C13 fix (ISO parse, catch that cannot throw); BST-boundary refdata day (C12) |
 | Matching | `SubscriptionMatcherTest` | U | CS1–CS4 twins (CS1 split empty-vs-unanswered; CS4 real `ouCode` lock); N17–N19 C31 per-defendant matching |
-| Matching | `SubscriptionRulesTest` | U | SS-CR1 twin, SS-CR2 repaired, included/excluded NOWS + prompt/result branches, C4 fix (court-house rule only), C5 explicit court-register branch |
+| Matching | `SubscriptionRulesTest` | U | SS-CR1 twin, SS-CR2 repaired, included/excluded NOWS + prompt/result branches, C4 fix (court-house rule only), C5 explicit court-register branch, **C30 fix (`major_creditor_flags_never_match_a_court_register` — all three flags require a non-empty list)** |
 | Mappers | `AggregationMapperTest` | U | O1–O3 (repointed C33 / repaired courtCentreId + C11 fixed unique fileName), venue/recipients/defendants assembly |
 | Mappers | `HearingVenueMapperTest`, `RecipientMapperTest`, `YouthDefendantMapperTest`, `ParentGuardianMapperTest`, `HearingMapperTest`, `ProsecutionCaseOrApplicationMapperTest`, `OffenceMapperTest`, `ResultMapperTest`, `DefendantMapperTest`, `AddressMapperTest`, `AliasMapperTest`, `CounselMapperTest` | U | every twin/repair in the map; C8/C9 (HearingMapper), C19/C25 + custody statuses + name composition (YouthDefendant), C29 shapes + guardian fallback (ParentGuardian), C20/C21/C22 exhibits + PC1–PC7 (ProsecutionCaseOrApplication), C23/C24 + offence-level scoping pin (Offence), A1/A2 repaired + `postcode`→`postCode` (Address), absent≠empty asymmetries (Alias/Counsel), `cr_standard` + logged drops C27 (Recipient) |
 | Outbound contract | `OutboundContractValidationTest` | U | C26/C29: mapped documents validate against the vendored schemas; address-less defendant/parent → named violation (N25–N27) |
 | Payload adapter | `HearingPayloadCacheKeyTest`, `CachedHearingPayloadAdapterTest` | U | key forms (dated first), cache-then-query order, RedisException-scoped absorb |
 | Payload adapter | `LettuceHearingPayloadCacheIT` | R | live cache reads |
-| Payload adapter | `ResultsQueryHearingPayloadClientTest` | W | K twins repaired (real base URI, real 202/500 answers), C32, C3 retry classes |
+| Payload adapter | `ResultsQueryHearingPayloadClientTest` | W | K twins repaired (real base URI, real 202/500 answers), C32, C3 retry taxonomy incl. 408/429 (`retry_taxonomy_matches_the_submission_client`) |
 | Payload security | `LivePayloadConfigTest` | U | C15: TLS verification on (`TransportSecurity` case, informant precedent) |
-| Refdata adapter | `ReferenceDataNowSubscriptionsClientTest` | W | subscriptions fetch, `on=` day from the fixed `registerDate` (C12), unanswered → transient |
+| Refdata adapter | `ReferenceDataNowSubscriptionsClientTest` | W | subscriptions fetch, `on=` day from the fixed `registerDate` (C12), unanswered → transient, C3 retry taxonomy incl. 408/429 (`retry_taxonomy_matches_the_submission_client`) |
 | Submission | `ProgressionCommandGatewayTest` | W | N34–N45: 202-only, C1 taxonomy, C3 backoff + delta-seconds `Retry-After` bounded, exhaustion |
 | Submission | `ProgressionRegisterSubmissionClientTest` | U | P1 twin (URL/media type/CJSCPPUID), digest-before-send, response-code recording |
 | Submission | `SubmissionRedeliveryIT` | PG+W | replay skips already-POSTED output |

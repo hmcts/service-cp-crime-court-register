@@ -17,7 +17,7 @@ The queue-message contract is owned by this service, jointly agreed with the pro
 `progression.add-court-register` is owned by the Progression context and is frozen
 (`additionalProperties: false`). This repo vendors the exact compiled version for validation:
 
-- `src/test/resources/contracts/progression/progression.add-court-register.json` +
+- `src/main/resources/contracts/progression/progression.add-court-register.json` +
   `courtRegisterDocument/*.json` — extracted at `criminal-court-public-model` **v17.103.13**
   (see `PROVENANCE.md` beside them; the version is progression `pom.xml` `coredomain.version`,
   re-checked at cutover).

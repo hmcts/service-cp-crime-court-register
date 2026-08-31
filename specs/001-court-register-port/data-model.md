@@ -42,6 +42,7 @@ one POST per hearing.
 | `status` | text | NOT NULL | CHECK `IN ('PENDING','POSTED','FAILED')` |
 | `response_code` | integer | null | recorded on the settlement of the POST (C1) |
 | `request_digest` | text | null | SHA-256 of exactly the bytes sent; written **before** the POST, kept after failure |
+| `anomaly_summary` | text | null | bounded reason-code counts for guarded, non-fatal transformation anomalies (`unresolvable-youth-defendant:1`, `unresolvable-application:1`, `letter-delivery-dropped:2`, `recipient-missing-email:1`, `recipient-not-for-distribution:1`) — the persistence half of C19/C20/C27; codes only, never free text |
 | `created_at` / `updated_at` | timestamptz | NOT NULL | DEFAULT now(); updates set `updated_at = now()` in SQL |
 
 Constraints: PK `(output_id)`; **`UNIQUE (source, request_id)`** (`processed_output_unique_request`
@@ -67,7 +68,11 @@ this flow's:
 
 `failure_reason` stays a bounded code + sanitised summary; new non-transient codes this flow adds:
 `OUTBOUND_CONTRACT_VIOLATION` (C29 pre-send validation), `SUBMISSION_NOT_ACCEPTED` (non-202 2xx),
-`SUBMISSION_REJECTED` (parking 4xx), `TRANSFORMATION_FAILED` (guarded mapper failures C19–C21).
+`SUBMISSION_REJECTED` (parking 4xx), `TRANSFORMATION_FAILED` (**fatal** transformation errors only
+— e.g. an unparseable ordered date, C13). Guarded C19/C20 skips and C27 drops are deliberately
+**not** failures: the run completes, and the anomaly is recorded as a bounded reason-code count in
+`processed_output.anomaly_summary` plus the metric
+`courtregister_transformation_anomalies_total{reason}`.
 Transient: `PAYLOAD_UNAVAILABLE` (cache+fallback miss, C32), `REFERENCE_DATA_UNAVAILABLE`,
 `SUBMISSION_TRANSIENT`.
 

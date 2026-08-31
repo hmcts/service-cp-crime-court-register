@@ -1,7 +1,22 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 1.0.2 → 2.0.0
+Version change: 2.0.0 → 2.0.1
+Bump rationale: PATCH — delivery-scope precision after the P0 review
+                (2026-08-31): the register carries 34 rows, but three of them
+                (C18, C28, C34) are remediations owned outside this repository
+                (the legacy function-app repo and the producer). The
+                constitution now states the scope consistently everywhere:
+                31 defects are fixed in this service; C18/C28/C34 are
+                externally-owned remediations registered as PENDING with an
+                owner and a trigger, tracked to conclusion before cutover.
+                No principle's requirements change.
+
+Modified sections (this amendment): the preamble delivery claim, Principle I
+first bullet, and the Current-increment section — "all 34 fixed" reworded to
+the 31-plus-3 form above.
+
+Previous amendment (1.0.2 → 2.0.0):
 Bump rationale: MAJOR — Principle I is rewritten from parity-first to
                 fix-first, a redefinition that invalidates the previous
                 practice of porting catalogued defects bug-for-bug. This
@@ -88,7 +103,10 @@ court centre, and POSTs the result to the Progression context's existing
 and emails it — that half is untouched. The legacy app fails silently and
 carries 34 catalogued defects; this port exists to end both. Unlike its
 informant-register predecessor, **this is deliberately not a bug-for-bug
-port**: every catalogued defect is fixed, and every fix is registered.
+port**: thirty-one of the thirty-four catalogued defects are fixed in this
+service, the remaining three (C18, C28, C34) are externally-owned
+remediations tracked to conclusion before cutover, and every fix is
+registered.
 
 ## Core Principles
 
@@ -103,7 +121,11 @@ not catalogued as a defect**. For the 34 behaviours that are catalogued
 requirement, and reproducing the defect is itself a defect.
 
 - All 34 catalogued defects are **pre-approved fixes**: no further
-  authorisation is needed to implement them. Fixes whose output is
+  authorisation is needed to implement them. **Thirty-one are implemented in
+  this service; C18, C28 and C34 are externally-owned remediations** (the
+  legacy function-app repo and the producer), registered as PENDING with an
+  owner and a trigger and tracked to conclusion before cutover. Fixes whose
+  output is
   business-visible (content, recipients, dates, the PDF) carry a
   **sign-off-before-cutover** marker in the register — sign-off gates
   deployment, never implementation.
@@ -446,7 +468,8 @@ them read it the same way they read everything else.
 
 ### Current increment — 001 "court-register-port"
 
-The full pipeline port with all 34 catalogued defects fixed: ASB consumer,
+The full pipeline port with the 31 in-service defect fixes landed
+(C18/C28/C34 tracked externally to conclusion before cutover): ASB consumer,
 idempotency guard, the ported transformation (fragment build, subscription
 matching, the 12-mapper aggregation), the Redis + results-query payload
 adapter, the reference-data adapter, and the progression submission adapter —
@@ -531,4 +554,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 2.0.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-08-31
+**Version**: 2.0.1 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-08-31

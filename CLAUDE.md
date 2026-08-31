@@ -29,7 +29,7 @@ This service exposes NO REST API (actuator only). Its inbound contract is the
 `courtregister.requests` queue message; its outbound contract is the
 Progression-owned `add-court-register` command (frozen, `additionalProperties: false`,
 `criminal-court-public-model` 17.103.13, vendored under
-`src/test/resources/contracts/progression/`). See `doc/API_CONTRACTS.md`. Contract
+`src/main/resources/contracts/progression/`). See `doc/API_CONTRACTS.md`. Contract
 changes are cross-team events, agreed jointly with `cpp-context-results` (inbound)
 or `cpp-context-progression` (outbound). The spec-validator agent checks contract
 compliance, the defect-fix register, and the absence of REST after implementation.

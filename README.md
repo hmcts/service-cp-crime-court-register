@@ -8,16 +8,18 @@ the first half of that flow is a Node.js Azure Durable Functions app that fails 
 the final POST swallows every error, four separate guards report success when nothing happened, and
 a schema-invalid document loses the whole hearing's register without a trace.
 
-This service replaces that function app with a Spring Boot pipeline on AKS: it consumes hearing
-commands from the Azure Service Bus queue `courtregister.requests`, builds the register from the
-Redis claim-check payload (with the results-query fallback), matches subscriptions, and POSTs
-`progression.add-court-register` — with idempotency, explicit settlement, bounded retries, and a
-recorded terminal state for every command.
+This service replaces that function app with a Spring Boot pipeline on AKS. The target design:
+consume hearing commands from the Azure Service Bus queue `courtregister.requests`, build the
+register from the Redis claim-check payload (with the results-query fallback), match
+subscriptions, and POST `progression.add-court-register` — with idempotency, explicit settlement,
+bounded retries, and a recorded terminal state for every command. It lands phase by phase per
+`specs/001-court-register-port/tasks.md`; the Status section below says what exists today.
 
-It is deliberately **not** a bug-for-bug port. The thirty-four defects catalogued in the migration
-design are **fixed**, each with a pinning test and a sign-off state, in the
-[defect-fix register](doc/DEFECT-FIXES.md). Legacy behaviour remains the oracle for everything not
-catalogued there.
+It is deliberately **not** a bug-for-bug port. Of the thirty-four defects catalogued in the
+migration design, the thirty-one that live in this service are **fixed**, each with a pinning test
+and a sign-off state, in the [defect-fix register](doc/DEFECT-FIXES.md); the other three
+(C18/C28/C34) are externally-owned remediations the register tracks to conclusion before cutover.
+Legacy behaviour remains the oracle for everything not catalogued there.
 
 | Field     | Value                                                 |
 |-----------|-------------------------------------------------------|
@@ -27,12 +29,14 @@ catalogued there.
 | Package   | `uk.gov.hmcts.cp.courtregister`                       |
 | Ports     | 8082 local / 4550 Kubernetes                          |
 
-## Status — court-register-port
+## Status — court-register-port (P0 bootstrap)
 
-The port is being built test-first against the feature specification in
-`specs/` — inbound transport and idempotency, then the register pipeline, then the outbound
-progression gateway. This service exposes **no REST API**. The only HTTP surface is Spring Boot
-Actuator.
+What exists today: the Boot shell (an empty application that builds green under the full quality
+gates), the governance layer (constitution, Spec Kit feature docs, the defect-fix register), and
+the vendored outbound contract. Everything else on this page is the **target design**, being built
+test-first against the feature specification in `specs/001-court-register-port/` — inbound
+transport and idempotency, then the register pipeline, then the outbound progression gateway.
+This service exposes **no REST API**. The only HTTP surface is Spring Boot Actuator.
 
 ## Prerequisites
 
@@ -57,9 +61,10 @@ Local dependencies:
 docker compose up -d postgres servicebus-emulator
 ```
 
-The emulator's queue definition lives in `docker/servicebus-emulator/config.json` and is the same
-file the `*IT` fixtures mount, so local, CI and deployed queue properties cannot drift. Compose is
-local-only; `bootRun` does not inherit compose environment variables.
+The emulator's queue definition lives in `docker/servicebus-emulator/config.json`; the `*IT` test
+fixtures (from phase 1 of the tasks) mount the same file, so local, CI and deployed queue
+properties cannot drift. Compose is local-only; `bootRun` does not inherit compose environment
+variables.
 
 ## Documentation
 

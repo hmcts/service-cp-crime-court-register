@@ -21,10 +21,12 @@ This service replaces that app with a Spring Boot queue consumer, cloning the de
 proven by `service-cp-crime-informant-register` (explicit settlement, durable idempotency guard,
 suspend-on-store-outage, health honesty) and porting the register-building pipeline.
 
-Unlike the informant port, this increment is **fix-first, not parity-first**: all 34 defects
-catalogued in the design defect register (C1–C34) are fixed outright and documented in
-`doc/DEFECT-FIXES.md`, each with its legacy behaviour, its fixed behaviour and the test that pins
-the fix. Legacy behaviour remains the oracle for everything *not* catalogued; a behaviour change
+Unlike the informant port, this increment is **fix-first, not parity-first**: of the 34 defects
+catalogued in the design defect register (C1–C34), the 31 that live in this service are fixed
+outright and documented in `doc/DEFECT-FIXES.md`, each with its legacy behaviour, its fixed
+behaviour and the test that pins the fix; the remaining three (C18/C28/C34) are externally-owned
+remediations registered as PENDING with an owner and a trigger, tracked to conclusion before
+cutover. Legacy behaviour remains the oracle for everything *not* catalogued; a behaviour change
 without a DEFECT-FIXES entry is itself a defect. Fixes that change register content or recipient
 sets are implemented now and flagged for business/progression sign-off **before cutover** — the
 sign-off gates deployment, not implementation.
@@ -129,8 +131,10 @@ fixed behaviour; the differential audit (US5) proves no *uncatalogued* behaviour
 1. **Given** the DEFECT-FIXES register, **When** its rows are checked against the codebase, **Then**
    all 34 are present, every FIXED row names at least one passing test, and `README.md` links the
    register from its Documentation table.
-2. **Given** a fix that changes register content or recipients (C4, C5, C7, C9, C10–C12, C22, C23,
-   C25, C27, C31), **Then** its row carries `Sign-off pending — before cutover` naming who decides.
+2. **Given** a fix that changes register content, recipients or the wire (C4, C5, C7, C8, C9,
+   C10–C12, C19–C21, C22, C23, C24, C25, C29, C30, C31 — the register's sign-off-pending rows,
+   which are authoritative), **Then** its row carries `sign-off pending` with the cutover gate,
+   naming who decides.
 3. **Given** the attendance mapper (C8/C9), **When** a multi-defendant hearing is mapped, **Then**
    the correct defendant's attendance record is selected without mutating the input, and
    `defendantPresent` reflects a date-compatible comparison — no longer constantly false.
@@ -255,7 +259,8 @@ The requirements below are this increment's own.
 - **FR-104**: The outbound document MUST carry youth defendants only, with per-case/application
   offence scoping preserved (the legacy's one correctness advantage), fixed attendance semantics
   (C8/C9), guarded person/legal-entity handling (C19–C21), verdict code from
-  `verdictType.verdictCode` (C23), offence wording joined with a newline and omitting absent
+  `verdictType.verdictCode` falling back to `verdictType.categoryType`, never the prose
+  description (C23), offence wording joined with a newline and omitting absent
   legislation (C24), ethnicity from observed-else-self-defined (C25), recipients defaulting to the
   `cr_standard` template with letter-delivery and missing-email drops logged and counted (C27).
 - **FR-105**: The document fileName MUST be unique per hearing and filesystem-safe:

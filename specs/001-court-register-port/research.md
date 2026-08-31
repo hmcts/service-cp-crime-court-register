@@ -17,9 +17,11 @@ sibling services is cost with no benefit.
 
 ## 2. Fix-first, not parity-first (the commissioning decision)
 
-**Decision**: all 34 catalogued defects (design register C1–C34) are fixed outright in this
-increment; `doc/DEFECT-FIXES.md` is the audit ledger; content-changing fixes are flagged
-`Sign-off pending — before cutover`. User instruction, 2026-08-31: *"fix all 34 defects and
+**Decision**: of the 34 catalogued defects (design register C1–C34), the 31 that live in this
+service are fixed outright in this increment; C18/C28/C34 are externally-owned remediations
+registered as PENDING with an owner and a trigger, tracked to conclusion before cutover.
+`doc/DEFECT-FIXES.md` is the audit ledger; content-changing fixes are flagged
+`sign-off pending` gating cutover. User instruction, 2026-08-31: *"fix all 34 defects and
 document them in a separate file in git repo. reference them from readme.md."*
 
 **Rationale**: the informant port chose bug-for-bug parity to make cutover a pure infrastructure
@@ -88,9 +90,12 @@ sanitise colons only (still collides); a UUID-only name (loses at-a-glance centr
 
 ## 8. C23 — what verdictCode carries
 
-**Decision**: `offence.verdictCode = verdict.verdictType.verdictCode` — the actual code field the
-payload already carries (fixtures show `verdictType: {verdictCode: "1234", description:
-"desc1234", category: "Guilty", …}`).
+**Decision**: `offence.verdictCode = verdict.verdictType.verdictCode ?? verdict.verdictType.categoryType`
+— the actual code field the payload already carries (fixtures show `verdictType: {verdictCode:
+"1234", description: "desc1234", category: "Guilty", …}`), falling back to `categoryType` because
+live hearing payloads have been observed carrying only `category`/`categoryType`/`id`; **never the
+prose description**. The missing-`verdictCode` fallback has its own pinning case
+(`OffenceMapperTest.verdict_code_falls_back_to_category_type_when_absent`).
 
 **Rationale**: the legacy ships the *description* in a field named `verdictCode`; the source object
 carries a real code alongside it, so the fix is a field-selection correction, not an invention.
