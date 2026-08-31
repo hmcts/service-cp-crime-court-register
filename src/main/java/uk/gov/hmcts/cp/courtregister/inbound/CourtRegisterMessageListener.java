@@ -118,14 +118,70 @@ public class CourtRegisterMessageListener {
      * @param context the delivery, and the settlement calls it permits
      */
     public void onMessage(final ServiceBusReceivedMessageContext context) {
-        final ServiceBusReceivedMessage message = context.getMessage();
         try {
-            settle(context, storeGate.storeAvailable()
-                    ? decide(message)
-                    : storeUnavailable());
+            settle(context, decisionFor(context));
         } finally {
             clearCorrelation();
         }
+    }
+
+    /**
+     * Everything that happens before the settlement, under one boundary that cannot be escaped.
+     *
+     * <p>{@link #decide} already turns every failure of the <em>run</em> into a decision, and this
+     * is the same guarantee widened to cover the three calls that sit outside it: fetching the
+     * message from the delivery, asking whether the store can be reached, and asking for intake to
+     * stop. All three are calls into somebody else's code, all three can fail, and a failure in any
+     * of them used to leave {@code onMessage} with no settlement attempt made — a message locked
+     * until its lease ran out, redelivered into the same failure four more times, and finally parked
+     * by the broker's own rule with nothing recorded about why (spec FR-001, constitution
+     * Principle VI).
+     *
+     * <p>Nested rather than merged with the inner boundary, because the two have different answers.
+     * Inside a run, a store that went away is told apart from a poison body and from a contended
+     * row, and each gets the settlement it deserves. Out here nothing has been examined at all, so
+     * there is exactly one honest answer — hand it back — and the only question left is whether it
+     * is reported.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    // Total on purpose, and it is the outermost of the two. What it protects against is precisely
+    // the failure nothing anticipated: a narrower catch here would be a list of the ways the gate
+    // has failed so far, and the delivery would be lost to the first way it had not.
+    private GuardDecision decisionFor(final ServiceBusReceivedMessageContext context) {
+        GuardDecision decision;
+        try {
+            final ServiceBusReceivedMessage message = context.getMessage();
+            decision = storeGate.storeAvailable()
+                    ? decide(message)
+                    : storeUnavailable();
+        } catch (RuntimeException gateFailed) {
+            decision = intakeGateFailed(gateFailed);
+        }
+        return decision;
+    }
+
+    /**
+     * The precondition itself failed, so the delivery is handed back unexamined.
+     *
+     * <p>Deliberately <strong>not</strong> followed by a suspension request. A gate that failed is
+     * not evidence that the store is down — it is evidence that the gate is broken — and asking a
+     * broken gate to stop the queue is the call that put this delivery at risk in the first place.
+     * The controller's own probe runs on its own thread and reaches the same store by the same
+     * question, so the route back to a correct intake state does not depend on anything decided
+     * here. What is owed here is the delivery, and the delivery is returned.
+     *
+     * <p>Reported by type and bounded code, never by text: what reaches this line is routinely a
+     * driver or a pool quoting a connection string.
+     */
+    private GuardDecision intakeGateFailed(final RuntimeException failure) {
+        LOG.error("The intake gate failed, so the delivery was neither examined nor left unsettled; "
+                        + "returning it for redelivery. type={} reason={}",
+                failure.getClass().getName(), ReasonCode.UNEXPECTED_FAILURE.code());
+        // Counted under the same instrument as any other transient failure: the delivery is handed
+        // back, which is the whole of what this service is claiming about it, and a gate that has
+        // started failing must be visible on a dashboard rather than only in a log search.
+        metrics.pipelineFailed(FailureClassification.TRANSIENT);
+        return new GuardDecision.Abandon(ReasonCode.UNEXPECTED_FAILURE);
     }
 
     /**
