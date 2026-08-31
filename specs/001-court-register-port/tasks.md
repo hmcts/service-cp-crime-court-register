@@ -312,12 +312,23 @@ vocabulary and matching semantics.
       `ParentGuardianMapper.js:15` is deliberately **not** asserted here — it is C19's construct and
       C19's fix, in the mapper that calls this one, makes it unreachable; asserting a guarded answer
       for it here would be an uncatalogued behaviour change.)*
-- [ ] T047 [P] [US3] `pipeline/ProsecutionCaseOrApplicationMapperTest` — PC1–PC7 twins (correct
+- [x] T047 [P] [US3] `pipeline/ProsecutionCaseOrApplicationMapperTest` — PC1–PC7 twins (correct
       3-arg construction), SNI-9005 case-skip parity, **C20/C21 fixes**: absent/unmatched
       application and personDefendant-less own-record are guarded skips with WARN + an
       `anomaly_summary` bounded count (`unresolvable-application:1`) — not TRANSFORMATION_FAILED
       (fail vs legacy TypeError), C22 exhibit re-asserted at mapper level, dead methods not reproduced
       (C26).
+      *(done — 35 cases, 34 red on the seam. PC4–PC7 are driven through `map` rather than through
+      `getCourtApplicationOffences`: the legacy's two-arg construction of a three-arg mapper is not
+      expressible against this seam, and reproducing the reach-past would leave the four cases about
+      an application's offences still not touching the object that gathers them. Two deliberate
+      decisions recorded in the file: the SNI-9005 **case** skip keeps its shape exactly — warn and
+      skip, **uncounted** — because C20 names only the application path, and the asymmetry is
+      asserted so that changing it later has to be a decision; and C22's applicant gate is asserted
+      at the mapper as well as at the context builder, which is what the C22 row specifies ("in both
+      the context-builder gate and the mapper"). The one green case is the C26 reflection guard that
+      the two dead methods are not declared — a guard against reintroduction, with nothing to fail
+      against yet.)*
 - [ ] T048 [P] [US3] `pipeline/RecipientMapperTest` — R1–R4 twins + `cr_standard` default pinned;
       **C27 fix**: letter-delivery and missing-email drops WARN-logged and counted in
       `anomaly_summary` (`letter-delivery-dropped:n`, `recipient-missing-email:n`,
