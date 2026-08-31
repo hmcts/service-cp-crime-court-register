@@ -2,26 +2,73 @@ package uk.gov.hmcts.cp.courtregister.application;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
+import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
+import uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException;
+import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
+import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
+import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 
 /**
- * The use case: one validated request, run to a recorded outcome and a settlement decision.
+ * One request, from the guard admitting it to the guard recording what happened.
  *
- * <p><strong>A compile-safe seam, not the pipeline.</strong> T022 implements the orchestration this
- * class exists to hold — admit through the guard, fetch the payload, transform, submit, record —
- * and widens the constructor to the remaining ports (the transformer and the submission client) as
- * it does so. What is fixed here is the shape the transport adapter depends on: a request and the
- * delivery it arrived on go in, and exactly one {@link GuardDecision} comes out, so the listener has
- * something to settle on every path (constitution Principle VI).
+ * <p>The application core: it names no broker, no database and no HTTP client, and it is the only
+ * place that knows the order the ports are called in. The transport adapter above it decides how a
+ * delivery is settled; this decides what the delivery is worth settling as.
  *
- * <p>The collaborators it already holds are the ones the settlement suites drive it through: the
- * guard, whose durable write must return before a delivery may be acknowledged, and the payload
- * port, which is where a held run is held.
+ * <p><strong>The transformation and the submission are not here yet.</strong> This increment carries
+ * the walking skeleton — admit, fetch, record — and the stages that turn a hearing payload into an
+ * {@code add-court-register} command arrive with the pipeline phase, which widens this class to the
+ * remaining ports. What is already fixed, and is what the transport suites drive it through, is the
+ * shape: a request and the delivery it arrived on go in, and exactly one {@link GuardDecision} comes
+ * out, so the listener has something to settle on every path (constitution Principle VI).
+ *
+ * <p>A run over a payload with no register in it therefore ends {@code COMPLETED} with
+ * {@code no-defendants} — the reason a hearing that produces an empty register-defendant list gets,
+ * which is a business outcome recorded as such rather than an error or an undifferentiated success
+ * (defect fixes C6 and C33). Four of the five completion reasons send nothing and two of those four
+ * are this flow's ordinary results, so the reason is written and counted rather than folded away: a
+ * court centre nobody subscribes to and a pipeline that has quietly stopped working look identical
+ * from the outside otherwise.
+ *
+ * <p><strong>The run bounds itself.</strong> Before the ports are touched the deadline is fixed at
+ * {@code courtregister.claim.processing-deadline} from now, and the run checks it before writing an
+ * outcome. The deadline is strictly shorter than the claim lease, so a slow run stops itself while
+ * its claim is still unambiguously its own; the alternative is a runner that discovers it has been
+ * superseded only when its outcome write affects no rows — which is safe, but leaves the request
+ * waiting for a redelivery it could have asked for a minute earlier. The check is against elapsed
+ * local time only: nothing here compares a JVM reading with a stored timestamp, which is the
+ * multi-node skew the data model's single-time-authority rule exists to rule out.
+ *
+ * <p><strong>A failure is read twice: is it worth retrying, and is there a retry left?</strong> The
+ * first question is the ports' to answer, and they answer it in the exception. A non-transient
+ * failure is recorded FAILED and parked immediately, whatever the delivery count says — handing one
+ * back would spend the whole delivery budget re-reading a payload that reads the same every time and
+ * park it at the end under {@code DELIVERY_LIMIT_EXHAUSTED}, a reason that tells support the service
+ * ran out of tries rather than that the hearing was unusable.
+ *
+ * <p>Only a transient failure asks the second question. With deliveries remaining it is recorded
+ * RETRYING and the delivery is handed back; on the final permitted delivery the same failure is
+ * recorded FAILED, with the identity of the delivery that exhausted the budget, and the message is
+ * parked. The transport adapter reads that fact from the delivery and carries it in, because the
+ * processed log cannot know it — the budget belongs to the message, not to the request.
+ *
+ * <p>Payload unavailability is transient by construction — a cache miss <em>and</em> a fallback miss
+ * is a reason to come back rather than a silent stop, which is defect fix C32 — and a deadline is not
+ * a fault at all, so neither is ever parked for being unretryable. A failure nothing anticipated is
+ * treated as transient, because "unknown" is not the same as "hopeless".
  */
 public class DistributionPipeline {
+
+    private static final Logger LOG = LoggerFactory.getLogger(DistributionPipeline.class);
 
     private final IdempotencyGuard guard;
     private final HearingPayloadSource payloadSource;
@@ -57,11 +104,143 @@ public class DistributionPipeline {
      *
      * @param command  the validated request
      * @param delivery who is running it, and whether the queue will deliver it again
-     * @return the settlement the outcome calls for
+     * @return the settlement the outcome calls for — a settlement, never a run
      */
     public GuardDecision process(
             final DistributionCommand command, final DeliveryIdentity delivery) {
-        throw new UnsupportedOperationException(
-                "every request runs to a recorded outcome and one settlement decision");
+        final GuardDecision admission = guard.admit(command, delivery);
+        final GuardDecision decision;
+        if (admission instanceof GuardDecision.Run admitted) {
+            decision = runUnder(command, admitted.claim(), delivery.finalPermittedDelivery());
+        } else {
+            // Already completed, contested, or a collision: the guard has decided, and a run would
+            // either duplicate work or overwrite a record that belongs to a different request.
+            decision = admission;
+        }
+        return decision;
+    }
+
+    /**
+     * The run itself, with every failure it can meet turned into an outcome.
+     *
+     * <p>The second catch is total on purpose: this frame holds the claim, and it is the only frame
+     * that does. A failure that escaped it would leave {@code claim_owner} live for the rest of the
+     * lease, so every redelivery would bounce off {@code CLAIM_NOT_ACQUIRED} until the broker parked
+     * the message under its own reason with no FAILED record behind it — the silent parking the
+     * state machine exists to prevent. It is a catch-and-record, not a catch-and-ignore: the failure
+     * is reported at ERROR, classified, and written to the processed log before the delivery is
+     * settled. A store that dies inside the recording write throws out of the catch block itself,
+     * which is correct — nothing is recordable during a store outage, and the transport adapter's
+     * own handling takes over.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private GuardDecision runUnder(
+            final DistributionCommand command, final RunClaim claim, final boolean lastChance) {
+        GuardDecision outcome;
+        try {
+            outcome = runToOutcome(command, claim, lastChance);
+        } catch (PayloadUnavailableException unavailable) {
+            outcome = failed(claim, unavailable.classification(), unavailable.reason(), lastChance);
+        } catch (RuntimeException unexpected) {
+            LOG.error("Run failed unexpectedly; recording it so the claim is released. "
+                            + "source={} requestId={} type={}",
+                    claim.source(), claim.requestId(), unexpected.getClass().getName());
+            outcome = failed(claim, FailureClassification.TRANSIENT,
+                    ReasonCode.UNEXPECTED_FAILURE, lastChance);
+        }
+        return outcome;
+    }
+
+    private GuardDecision runToOutcome(
+            final DistributionCommand command, final RunClaim claim, final boolean lastChance) {
+        final Instant deadline = clock.instant().plus(processingDeadline);
+
+        final JsonNode payload = payloadSource.fetch(command);
+        // The payload's size and nothing from inside it: every defendant on a court register is a
+        // youth, and a count is the most a deployed log may be told about one (Principle VII).
+        LOG.info("Hearing payload obtained. source={} requestId={} hearingId={} topLevelFields={}",
+                command.source(), command.requestId(), command.hearingId(), payload.size());
+
+        final GuardDecision outcome;
+        // Strictly before, so the deadline is a bound that is *reached* rather than passed: a run
+        // standing exactly on it has already used the time its claim guarantees and may not write a
+        // completion. `isAfter` on the other side of this branch would let that one instant through.
+        if (clock.instant().isBefore(deadline)) {
+            outcome = completed(claim, CompletionReason.NO_DEFENDANTS);
+        } else {
+            outcome = failed(claim, FailureClassification.TRANSIENT,
+                    ReasonCode.PROCESSING_DEADLINE_EXCEEDED, lastChance);
+        }
+        return outcome;
+    }
+
+    /**
+     * Records the run's success, and counts it only if the guard accepted the write.
+     *
+     * <p>A superseded runner's completion affects no rows and comes back as an abandon; counting it
+     * as a completed request would report work that was never recorded.
+     *
+     * <p>Two counters, answering two questions. {@code requestSettled} says the request finished;
+     * {@code completed} says <em>how</em> — which of the five ways a court-register run ends well.
+     * Four of them send nothing, and a single undifferentiated success is the legacy defect C33.
+     */
+    private GuardDecision completed(final RunClaim claim, final CompletionReason reason) {
+        final GuardDecision outcome = guard.recordCompletion(claim, reason);
+        if (outcome instanceof GuardDecision.Complete) {
+            LOG.info("Run finished. source={} requestId={} reason={}",
+                    claim.source(), claim.requestId(), reason.value());
+            metrics.requestSettled(RequestOutcome.COMPLETED);
+            metrics.completed(reason);
+        }
+        return outcome;
+    }
+
+    /**
+     * Records a failed run — loudly, and with a bounded reason rather than whatever the layer
+     * beneath had to say about it.
+     *
+     * <p><strong>A failure the throw site classified {@code NON_TRANSIENT} is parked here and
+     * now</strong>, whatever the delivery budget says: no redelivery can change it — the same
+     * payload reads the same way, the same bytes meet the same refusal — so the delivery count is
+     * not consulted at all, the remaining deliveries would buy nothing and would delay by four
+     * back-offs the dead-letter support acts on, and the row carries the reason the port named
+     * rather than an exhaustion the service never reached.
+     *
+     * <p>A transient failure means two different things depending on whether the queue will deliver
+     * the message again. With deliveries remaining it is recorded RETRYING and the delivery is handed
+     * back. On the final permitted delivery it is recorded FAILED, in the statement that stamps the
+     * identity of the delivery that exhausted the budget onto the row, and the message is parked
+     * where support can see it. Retry exhaustion is judged by that delivery count alone and never by
+     * the cumulative attempt count, which is a lifetime tally and would park a replayed request on
+     * its first failure.
+     *
+     * <p>The terminal outcome is counted only once the guard has accepted the write: a superseded
+     * runner's parking affects no rows and comes back as a hand-back, and counting it would report a
+     * request parked that is still being worked on by somebody else.
+     */
+    private GuardDecision failed(
+            final RunClaim claim,
+            final FailureClassification classification,
+            final ReasonCode reason,
+            final boolean lastChance) {
+        LOG.error("Pipeline run failed. source={} requestId={} classification={} reason={} "
+                        + "finalPermittedDelivery={}",
+                claim.source(), claim.requestId(), classification.label(), reason.code(), lastChance);
+        metrics.pipelineFailed(classification);
+
+        return switch (classification) {
+            case NON_TRANSIENT -> parked(guard.recordNonTransientFailure(claim, reason));
+            case TRANSIENT -> lastChance
+                    ? parked(guard.recordExhaustion(claim, reason))
+                    : guard.recordTransientFailure(claim, reason);
+        };
+    }
+
+    /** Counts a parking the guard accepted, and only one it accepted. */
+    private GuardDecision parked(final GuardDecision outcome) {
+        if (outcome instanceof GuardDecision.DeadLetter) {
+            metrics.requestSettled(RequestOutcome.FAILED);
+        }
+        return outcome;
     }
 }
