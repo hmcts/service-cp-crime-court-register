@@ -186,7 +186,7 @@ in the same commit.**
       `2020-01-20T00:00:00Z`; hearingId; 1 register defendant, 4 results, none publishedForNows);
       `courtCentreId` (correct spelling) + `courtCentreOUCode` populated; 18-key vocabulary
       attached per defendant; empty context list yields an empty fragment (C6 path).
-- [ ] T028 [P] [US3] Write `pipeline/SubscriptionRulesTest` (red; seam: `SubscriptionRules`) —
+- [x] T028 [P] [US3] Write `pipeline/SubscriptionRulesTest` (red; seam: `SubscriptionRules`) —
       SS-CR1 twin; SS-CR2 repaired (the local vocabulary actually drives the assertion);
       included/excluded NOWS + prompt/result inc-exc branches; **C4 fix**: the court-centre OU
       code feeds the court-house rule only (an `informantCode` equal to the OU code no longer
