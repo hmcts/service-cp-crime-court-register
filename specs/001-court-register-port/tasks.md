@@ -238,7 +238,10 @@ in the same commit.**
       ported, because both of its call sites are already guarded by the same non-empty-list test the
       fix imposes on the third predicate, and a court register's creditor lists are empty by
       construction.)*
-- [ ] T038 [US3] Implement `pipeline/SubscriptionMatcher` (green T029) — updates C31.
+- [x] T038 [US3] Implement `pipeline/SubscriptionMatcher` (green T029) — updates C31.
+      *(done — C31 moves to FIXED. The legacy's "no subscriptions" and "no defendants" early
+      returns are not written as branches: an empty set in force filters to nothing and a register
+      with no defendants satisfies nothing, so both end exactly where the legacy's returns end.)*
 - [ ] T039 [US1] Implement the group-proceedings policy + wire `DistributionPipeline` stages
       (green T030, T031) — updates C2/C7/C32/C33 (pipeline half).
 
