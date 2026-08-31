@@ -212,7 +212,7 @@ in the same commit.**
 
 ### Implementation (serialised where files are shared)
 
-- [ ] T032 [US3] Implement `pipeline/Dates`, `pipeline/OrderedDates`, `pipeline/HearingDates`
+- [x] T032 [US3] Implement `pipeline/Dates`, `pipeline/OrderedDates`, `pipeline/HearingDates`
       (green T023) — updates DEFECT-FIXES C10/C12/C13.
 - [ ] T033 [US3] Implement `pipeline/DefendantContext(+Builder)`, `pipeline/Json`,
       `pipeline/JsStrings` (green T024) — updates C22.
