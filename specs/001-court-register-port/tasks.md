@@ -128,7 +128,7 @@ in the same commit.**
 
 ### Tests first ⚠️
 
-- [ ] T019 [P] [US1] Write `inbound/MessageListenerSettlementTest` +
+- [x] T019 [P] [US1] Write `inbound/MessageListenerSettlementTest` +
       `inbound/SettlementFailureEdgeTest` (red; seams: listener + `StoreGate`) — exactly one
       settlement per delivery; COMPLETED redelivery acked without run; FAILED same-identity
       re-dead-letter; lock-loss counted.
