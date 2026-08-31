@@ -364,9 +364,21 @@ vocabulary and matching semantics.
       last is what distinguishes the fix from always emitting something. The C19 WARN is asserted to
       carry the bounded reason and **not** the child's name or date of birth, where C20's warning
       names its application id: that row authorises an id and this one does not.)*
-- [ ] T051 [P] [US3] `pipeline/AggregationMapperTest` — O1/O2 repointed (reasons), O3 repaired
+- [x] T051 [P] [US3] `pipeline/AggregationMapperTest` — O1/O2 repointed (reasons), O3 repaired
       (concrete `courtCentreId`; **C11 fixed fileName** exact string incl. hearingId; venue,
       recipients, youth-only defendants asserted concretely); C33 wiring.
+      *(done — 22 cases, all red on the seam. C33 at this level is asserted through the **log**:
+      the seam returns `CourtRegisterDocument`, so a `null` is all two different outcomes can say
+      structurally, and the assertion that they are distinguishable has to be that each names its
+      own `CompletionReason` code. The chain that turns those into terminal states is T056's.
+      Two decisions inherited from T039a's seam javadoc and pinned here rather than left implicit:
+      **all recipients dropped answers `null`** ("or no recipient", which the legacy does not do —
+      it posts a document with `recipients: undefined`) and is named as the same outcome as no
+      subscription at all; and the file name's court-centre code is the **hearing's**
+      `courtCentre.code`, not the fragment's `courtCentreOUCode`, which is what the legacy reads and
+      which no fixture could ever have distinguished because the two always agree. The
+      recipients-dropped answer is worth a C-number check before T056 — it is a behaviour change
+      C27's row does not itself authorise, though C33 arguably covers it.)*
 - [ ] T052 [P] [US3] `adapter/progression/OutboundContractValidationTest` — N25–N27: address-less
       defendant/parent and empty address1 are named violations against the vendored schemas; a
       valid document passes; the violating path appears in the bounded reason (C29, C26).
