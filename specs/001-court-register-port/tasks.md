@@ -164,7 +164,7 @@ in the same commit.**
 
 ### Tests first ⚠️
 
-- [ ] T023 [P] [US3] Write `pipeline/DatesTest` (red; seam: `Dates`) — DT1–DT8 twins minus DT5;
+- [x] T023 [P] [US3] Write `pipeline/DatesTest` (red; seam: `Dates`) — DT1–DT8 twins minus DT5;
       **C10 fix**: `registerDate('2020-06-01T10:00:00Z')` is the same instant (fails vs legacy
       `11:00:00Z`); **C13 fix**: ISO parse of `YYYY-MM-DD`, a catch that cannot itself throw;
       `Invalid date format` case; **C12** (`DatesTest.bst_evening_share_uses_the_share_day`):
