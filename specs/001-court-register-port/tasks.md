@@ -348,11 +348,22 @@ vocabulary and matching semantics.
       mapper is called at three scopes where an empty filtered list is the normal case, and every
       result list on the frozen contract carries `minItems: 1`, so answering `[]` instead of nothing
       is a document progression refuses. Neither guard is exercised by the legacy suite.)*
-- [ ] T050 [P] [US3] `pipeline/YouthDefendantMapperTest` — YD1 twin repaired (real nationality,
+- [x] T050 [P] [US3] `pipeline/YouthDefendantMapperTest` — YD1 twin repaired (real nationality,
       three-part name, address5); **C19 fix**: legal-entity/unmatched defendant ⇒ guarded skip
       recorded as `anomaly_summary` `unresolvable-youth-defendant:1` + the anomaly metric, not
       TRANSFORMATION_FAILED (fails vs legacy TypeError); **C25 fix**: ethnicity observed-else-self-defined
       (three branches); real + mixed `postHearingCustodyStatus`; defence-counsel filtering.
+      *(done — 42 cases, all red on the seam. The YD1 twin is written **twice**: once against the
+      legacy fixture, saying plainly what it does and does not carry — no `nationalityDescription`,
+      no `address5`, no middle name, an empty `defendantCaseJudicialResults` — and once against
+      `base/hearing-with-surviving-youth-defendant.json`, whose child has the first three of those.
+      Repairing the legacy fixture in place would have destroyed the record of what the legacy suite
+      actually observes. **No fixture in the repo carries a person-level `address5`**, so that one
+      repair is deferred to `AddressMapperTest`'s pass-through, which already pins it. C25 is four
+      branches rather than three — both, observed-only, self-defined-only and neither — because the
+      last is what distinguishes the fix from always emitting something. The C19 WARN is asserted to
+      carry the bounded reason and **not** the child's name or date of birth, where C20's warning
+      names its application id: that row authorises an id and this one does not.)*
 - [ ] T051 [P] [US3] `pipeline/AggregationMapperTest` — O1/O2 repointed (reasons), O3 repaired
       (concrete `courtCentreId`; **C11 fixed fileName** exact string incl. hearingId; venue,
       recipients, youth-only defendants asserted concretely); C33 wiring.
