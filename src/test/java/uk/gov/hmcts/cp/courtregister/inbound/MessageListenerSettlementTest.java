@@ -138,6 +138,15 @@ class MessageListenerSettlementTest {
     }
 
     /**
+     * The same listener over a different store gate — for the cases whose subject is the gate.
+     */
+    private CourtRegisterMessageListener listenerOver(final StoreGate gate) {
+        return new CourtRegisterMessageListener(
+                parser, pipeline, metrics, QueueHealthTestSupport.unwatched(), gate,
+                MAX_DELIVERY_COUNT);
+    }
+
+    /**
      * Every settlement made on this delivery so far, whichever methods they were.
      */
     private static List<String> settlementsOn(final ServiceBusReceivedMessageContext context) {
@@ -373,6 +382,89 @@ class MessageListenerSettlementTest {
 
             verify(context).abandon();
             verify(context, never()).complete();
+            assertSettledExactlyOnce(context);
+        }
+    }
+
+    // --- the paths that fail before anything is examined ---------------------------------------------
+
+    /**
+     * The precondition itself failing — the one route out of {@code onMessage} with no decision.
+     *
+     * <p>Store availability is asked and intake is asked to stop <em>outside</em> the boundary that
+     * turns every failure into a decision, so until the boundary is widened both calls escape with
+     * the delivery unsettled. That is the single worst outcome this handler has: the message stays
+     * locked until its lease runs out and is then delivered again, four more times, into the same
+     * failure — and is finally parked by the broker's own rule with nothing recorded about why.
+     *
+     * <p>The two calls fail for genuinely different reasons and both are ordinary. The availability
+     * question is answered by a probe that turns a data-access failure into {@code false}; anything
+     * outside that hierarchy — a pool closed underneath a callback thread, a driver raising its own
+     * type — arrives as a failure instead. The suspension request is a submission to an executor,
+     * and the moment it is most likely to be refused is the moment it is most needed: a store outage
+     * during a shutdown.
+     *
+     * <p>What is asserted is only what the handler owes: exactly one settlement, and a hand-back
+     * rather than an acknowledgement, because nothing was examined and nothing was recorded.
+     */
+    @Nested
+    @DisplayName("a store gate that fails instead of answering")
+    class GateFails {
+
+        @Test
+        void should_hand_the_delivery_back_exactly_once_when_the_availability_question_throws() {
+            final ServiceBusReceivedMessageContext context = validDelivery();
+
+            listenerOver(StoreGateTestSupport.unanswerable()).onMessage(context);
+
+            verify(context).abandon();
+            verifyNoInteractions(pipeline);
+            assertSettledExactlyOnce(context);
+        }
+
+        @Test
+        void should_hand_the_delivery_back_exactly_once_when_the_suspension_request_throws() {
+            final ServiceBusReceivedMessageContext context = validDelivery();
+
+            listenerOver(StoreGateTestSupport.closedAndUnstoppable()).onMessage(context);
+
+            verify(context).abandon();
+            assertSettledExactlyOnce(context);
+        }
+
+        @Test
+        void should_never_acknowledge_a_delivery_whose_gate_it_could_not_consult() {
+            final ServiceBusReceivedMessageContext context = validDelivery();
+
+            listenerOver(StoreGateTestSupport.unanswerable()).onMessage(context);
+
+            verify(context, never()).complete();
+            verify(context, never()).deadLetter(any(DeadLetterOptions.class));
+        }
+    }
+
+    /**
+     * The delivery the transport cannot even hand over.
+     *
+     * <p>{@code getMessage()} is a call into the SDK like any other, and it is made before the
+     * boundary. A delivery whose message cannot be produced is still a delivery this handler was
+     * given and still holds a lock, so it is owed the same single settlement as one that merely
+     * failed to parse.
+     */
+    @Nested
+    @DisplayName("a delivery whose message the transport cannot produce")
+    class MessageUnavailable {
+
+        @Test
+        void should_hand_the_delivery_back_exactly_once() {
+            final ServiceBusReceivedMessageContext context =
+                    mock(ServiceBusReceivedMessageContext.class);
+            when(context.getMessage())
+                    .thenThrow(new IllegalStateException("the delivery has already been disposed"));
+
+            listener.onMessage(context);
+
+            verify(context).abandon();
             assertSettledExactlyOnce(context);
         }
     }

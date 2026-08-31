@@ -30,6 +30,7 @@ import uk.gov.hmcts.cp.courtregister.config.ServiceBusHealthIndicator;
 import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
@@ -159,6 +160,15 @@ class SettlementFailureEdgeTest {
     private void pipelineDecides(final GuardDecision decision) {
         when(pipeline.process(any(DistributionCommand.class), any(DeliveryIdentity.class)))
                 .thenReturn(decision);
+    }
+
+    /**
+     * The same listener over a different store gate — for the cases whose subject is the gate.
+     */
+    private CourtRegisterMessageListener listenerOver(final StoreGate gate) {
+        return new CourtRegisterMessageListener(
+                parser, pipeline, metrics, QueueHealthTestSupport.unwatched(), gate,
+                MAX_DELIVERY_COUNT);
     }
 
     /**
@@ -433,6 +443,82 @@ class SettlementFailureEdgeTest {
             assertThat(settlementsOn(context))
                     .as("and the delivery really was acknowledged, exactly once")
                     .containsExactly("complete");
+        }
+    }
+
+    // --- the precondition that failed before anything was examined -----------------------------------
+
+    /**
+     * The store gate failing is not a settlement failure, and it is not a run failure either — but
+     * it is still owed everything a failure is owed.
+     *
+     * <p>It is the one route out of {@code onMessage} that could leave a delivery with no settlement
+     * at all, because both of the gate's calls are made outside the boundary that turns a failure
+     * into a decision. A lost delivery is worse than any of the refusals above: those at least
+     * happened, were reported and were counted, and the broker's redelivery meets a record that
+     * knows what to do. A delivery whose handler threw before deciding anything is a message locked
+     * until its lease runs out, delivered again four more times into the same failure, and finally
+     * parked under the broker's own rule with nothing recorded about why.
+     *
+     * <p>So the requirement is the ordinary one, applied to the least ordinary moment: one ERROR
+     * carrying a bounded reason, one increment on the failure counter, and exactly one hand-back.
+     * The hand-back is the right settlement because nothing was examined — the body was not read, no
+     * attempt was recorded, and the delivery goes back exactly as it arrived (spec FR-015).
+     */
+    @Nested
+    @DisplayName("a store gate that fails rather than answers")
+    class GateFails {
+
+        private double transientFailures() {
+            return counter(ProcessingMetrics.PROCESSING_FAILURES,
+                    ProcessingMetrics.CLASSIFICATION_TAG, FailureClassification.TRANSIENT.label());
+        }
+
+        @Test
+        void should_report_and_count_an_unanswerable_gate_and_still_hand_the_delivery_back_once() {
+            final ServiceBusReceivedMessageContext context = deliveryWithALiveLock();
+
+            listenerOver(StoreGateTestSupport.unanswerable()).onMessage(context);
+
+            assertThat(errorsReported())
+                    .as("reported once, and reported at all — nothing is swallowed here")
+                    .hasSize(1);
+            assertThat(transientFailures())
+                    .as("counted, so a gate that has started failing is visible without reading logs")
+                    .isEqualTo(1);
+            assertThat(settlementsOn(context))
+                    .as("handed back, because nothing was examined and nothing was recorded")
+                    .containsExactly("abandon");
+        }
+
+        /**
+         * The outage was discovered correctly and the request to stop intake is what failed. Both
+         * facts are reported — the store is away, and the queue could not be stopped — and the
+         * delivery is still handed back exactly once, because a delivery is never the price of a
+         * failed suspension.
+         */
+        @Test
+        void should_report_both_facts_and_still_hand_the_delivery_back_once() {
+            final ServiceBusReceivedMessageContext context = deliveryWithALiveLock();
+
+            listenerOver(StoreGateTestSupport.closedAndUnstoppable()).onMessage(context);
+
+            assertThat(errorsReported())
+                    .as("the store was away, and the request to stop intake failed: two facts")
+                    .hasSize(2);
+            assertThat(transientFailures()).isEqualTo(1);
+            assertThat(settlementsOn(context)).containsExactly("abandon");
+        }
+
+        @Test
+        void should_never_quote_the_failure_text_the_gate_arrived_with() {
+            final ServiceBusReceivedMessageContext context = deliveryWithALiveLock();
+
+            listenerOver(StoreGateTestSupport.unanswerable()).onMessage(context);
+
+            assertThat(errorsReported())
+                    .as("a driver quotes connection strings; the type and the bounded code do not")
+                    .noneMatch(line -> line.contains("the connection pool has been closed"));
         }
     }
 

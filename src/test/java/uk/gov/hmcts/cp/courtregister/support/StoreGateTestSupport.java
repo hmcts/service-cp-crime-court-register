@@ -43,6 +43,33 @@ public final class StoreGateTestSupport {
         return new Recording(false);
     }
 
+    /**
+     * A gate that cannot say whether the store is there.
+     *
+     * <p>The probe behind the real gate turns a data-access failure into an answer, which is what it
+     * is for — but it is not the only thing that can go wrong on the way to one. A pool closed
+     * underneath a callback, a driver that raises outside Spring's hierarchy, or simply a defect
+     * three lines further in all reach the listener as a failure rather than as {@code false}, and
+     * the listener holds a delivery nobody else can settle.
+     *
+     * @return the gate
+     */
+    public static StoreGate unanswerable() {
+        return new Unanswerable();
+    }
+
+    /**
+     * A gate onto a store that is away, and that cannot be asked to stop intake either.
+     *
+     * <p>The worst moment for a second failure: the outage has already been discovered, the delivery
+     * is owed a hand-back, and the call that was supposed to stop the queue is the one that throws.
+     *
+     * @return the gate
+     */
+    public static StoreGate closedAndUnstoppable() {
+        return new Unstoppable();
+    }
+
     /** A gate that remembers what was asked of it. */
     public static final class Recording implements StoreGate {
 
@@ -70,6 +97,34 @@ public final class StoreGateTestSupport {
          */
         public int suspensionsRequested() {
             return suspensionsRequested;
+        }
+    }
+
+    /** A gate whose availability question fails rather than answers. */
+    private static final class Unanswerable implements StoreGate {
+
+        @Override
+        public boolean storeAvailable() {
+            throw new IllegalStateException("the connection pool has been closed");
+        }
+
+        @Override
+        public void suspendIntake() {
+            throw new IllegalStateException("nothing should have got this far");
+        }
+    }
+
+    /** A gate onto a store that is away, and whose suspension request fails. */
+    private static final class Unstoppable implements StoreGate {
+
+        @Override
+        public boolean storeAvailable() {
+            return false;
+        }
+
+        @Override
+        public void suspendIntake() {
+            throw new IllegalStateException("the transition thread rejected the stop");
         }
     }
 }
