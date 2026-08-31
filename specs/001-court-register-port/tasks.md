@@ -304,8 +304,14 @@ vocabulary and matching semantics.
       code-less live-payload shape — never the description); **C24 fix**: wording
       joined with `\n`, absent legislation ⇒ wording alone (no `####`, no `undefined`); offence-level
       result scoping pinned with two offence ids (the legacy-correct behaviour kept).
-- [ ] T046 [P] [US3] `pipeline/ParentGuardianMapperTest` — PG1 twin (real address5), guardian
+- [x] T046 [P] [US3] `pipeline/ParentGuardianMapperTest` — PG1 twin (real address5), guardian
       fallback, no-parent ⇒ absent, non-string role guarded.
+      *(done — fifteen cases. The legacy fixture has no fifth address line, so the twin says so
+      plainly and a constructed person carries one: a repair that needed no new fixture, because the
+      shape under test is one address rather than a hearing. The empty-defendant-list dereference at
+      `ParentGuardianMapper.js:15` is deliberately **not** asserted here — it is C19's construct and
+      C19's fix, in the mapper that calls this one, makes it unreachable; asserting a guarded answer
+      for it here would be an uncatalogued behaviour change.)*
 - [ ] T047 [P] [US3] `pipeline/ProsecutionCaseOrApplicationMapperTest` — PC1–PC7 twins (correct
       3-arg construction), SNI-9005 case-skip parity, **C20/C21 fixes**: absent/unmatched
       application and personDefendant-less own-record are guarded skips with WARN + an
