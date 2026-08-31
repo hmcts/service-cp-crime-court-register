@@ -379,9 +379,21 @@ vocabulary and matching semantics.
       which no fixture could ever have distinguished because the two always agree. The
       recipients-dropped answer is worth a C-number check before T056 — it is a behaviour change
       C27's row does not itself authorise, though C33 arguably covers it.)*
-- [ ] T052 [P] [US3] `adapter/progression/OutboundContractValidationTest` — N25–N27: address-less
+- [x] T052 [P] [US3] `adapter/progression/OutboundContractValidationTest` — N25–N27: address-less
       defendant/parent and empty address1 are named violations against the vendored schemas; a
       valid document passes; the violating path appears in the bounded reason (C29, C26).
+      *(done — 16 cases, all red on the seam, which this task creates:
+      `adapter/progression/OutboundContractValidator`, taking the service's own contract mapper so
+      that what is validated is what is serialised. The two method names the DEFECT-FIXES rows
+      already name are used verbatim — `records_match_the_vendored_schemas` (C26) and
+      `a_missing_required_address_is_an_explicit_failure` (C29). C26's assertion is a **fully
+      populated** document rather than a structural check: with `additionalProperties: false` on
+      every schema, a document carrying every field the records declare passing validation *is* the
+      claim that the records and the wire agree. `field()` carries a JSON pointer
+      (`/defendants/0/parentGuardian/address`) — the existing `ContractValidationException` shape
+      needed no change, and the pointer is a path, never a value. One classification decision for
+      T055: `minItems` violations are `INVALID_FORMAT`, because `MISSING_FIELD` is defined as absent,
+      null or empty **string** and an empty array is none of those.)*
 - [x] T053 [P] [US3] Author the Java fixture set under `src/test/resources/fixtures/` — legacy
       fixtures copied byte-identical where sound; the seven bad-vocabulary fixtures rebuilt with
       the 18-key set; the six new base hearings (complete courtCentre with code; surviving youth;
