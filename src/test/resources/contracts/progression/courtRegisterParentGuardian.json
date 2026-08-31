@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "id": "http://justice.gov.uk/core/courts/courtRegisterDocument/courtRegisterParentGuardian.json",
+  "description": "The details of aparent guardian rendered in a court register document",
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "The parent guardian name",
+      "type": "string"
+    },
+    "address": {
+      "description": "The defendant address",
+      "$ref": "http://justice.gov.uk/core/courts/courtRegisterDocument/courtRegisterAddress.json"
+    }
+  },
+  "required": [
+    "address", "name"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "id": "http://justice.gov.uk/core/courts/courtRegisterDocument/courtRegisterCounsel.json",
+  "description": "The details of a counsel (defence and prosecution) rendered in a court register document",
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "The counsel name",
+      "type": "string"
+    },
+    "status": {
+      "description": "The counsel status",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

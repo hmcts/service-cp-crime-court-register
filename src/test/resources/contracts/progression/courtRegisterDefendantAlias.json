@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "id": "http://justice.gov.uk/core/courts/courtRegisterDocument/courtRegisterDefendantAlias.json",
+  "description": "The details of a defendants alias rendered in a court register document",
+  "type": "object",
+  "properties": {
+    "title": {
+      "description": "The defendant title",
+      "type": "string"
+    },
+    "firstName": {
+      "description": "The defendant fore name",
+      "type": "string"
+    },
+    "middleName": {
+      "description": "The defendant middle name",
+      "type": "string"
+    },
+    "lastName": {
+      "description": "The defendant last name",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

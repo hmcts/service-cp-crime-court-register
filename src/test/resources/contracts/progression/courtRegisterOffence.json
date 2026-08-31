@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "id": "http://justice.gov.uk/core/courts/courtRegisterDocument/courtRegisterOffence.json",
+  "description": "The details of a defendant offence for a prosecution case rendered in a court register document",
+  "type": "object",
+  "properties": {
+    "offenceCode": {
+      "description": "The cjs code for the offence",
+      "type": "string"
+    },
+    "orderIndex": {
+      "description": "The offence index",
+      "$ref": "http://justice.gov.uk/core/courts/courtsDefinitions.json#/definitions/positiveInteger"
+    },
+    "offenceTitle": {
+      "description": "The title taken from ref data",
+      "type": "string"
+    },
+    "wording": {
+      "description": "The specific details and surrounding circumstances of the charge",
+      "type": "string"
+    },
+    "pleaValue": {
+      "description": "The defendants plea against the offence",
+      "type": "string"
+    },
+    "indicatedPleaValue": {
+      "description": "The defendants indicated plea against the offence",
+      "type": "string"
+    },
+    "pleaDate": {
+      "description": "The date of the plea or indicated plea",
+      "type": "string",
+      "format": "date"
+    },
+    "allocationDecision": {
+      "description": "The courts allocation decision against the offence",
+      "type": "string"
+    },
+    "convictionDate": {
+      "description": "The conviction date when the defendant is convicted for the offence",
+      "type": "string",
+      "format": "date"
+    },
+    "verdictCode": {
+      "description": "The code for the verdict against the offence",
+      "type": "string"
+    },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "http://justice.gov.uk/core/courts/courtRegisterDocument/courtRegisterResult.json"
+      }
+    }
+  },
+  "required": [
+    "offenceCode",
+    "offenceTitle"
+  ],
+  "additionalProperties": false
+}

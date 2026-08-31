@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "id": "http://justice.gov.uk/core/courts/courtRegisterDocument/courtRegisterHearingVenue.json",
+  "description": "The details of a hearing venue rendered in a informant register",
+  "type": "object",
+  "properties": {
+    "ljaName": {
+      "description": "The court venue local justice area Name",
+      "type": "string"
+    },
+    "courtHouse": {
+      "description": "The court venue Name",
+      "type": "string"
+    },
+    "address": {
+      "description": "The court house address",
+      "$ref": "http://justice.gov.uk/core/courts/courtRegisterDocument/courtRegisterAddress.json"
+    }
+  },
+  "required": [
+    "courtHouse"
+  ],
+  "additionalProperties": false
+}

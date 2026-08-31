@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "id": "http://justice.gov.uk/core/courts/courtRegisterDocument/courtRegisterHearing.json",
+  "description": "The hearing details for the court register entry",
+  "type": "object",
+  "properties": {
+    "jurisdiction": {
+      "description": "The jurisdiction of the hearing",
+      "type": "string"
+    },
+    "hearingType": {
+      "description": "The description of the type of hearing",
+      "type": "string"
+    },
+    "defendantPresent": {
+      "description": "Indicates the defendant presence",
+      "type": "boolean"
+    },
+    "defendantAppearanceDetails": {
+      "description": "Indicates that when the defendant is present whether it is in person, by video link, etc",
+      "type": "string"
+    },
+    "attendingSolicitorName": {
+      "description": "The name of the defence solicitor",
+      "type": "string"
+    }
+  },
+  "required": [
+    "hearingType",
+    "defendantPresent",
+    "jurisdiction"
+  ],
+  "additionalProperties": false
+}

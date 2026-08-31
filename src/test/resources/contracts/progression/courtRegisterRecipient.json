@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "id": "http://justice.gov.uk/core/courts/courtRegisterDocument/courtRegisterRecipient.json",
+  "description": "The recipient details for the Court Register document",
+  "type": "object",
+  "properties": {
+    "recipientName": {
+      "type": "string"
+    },
+    "emailAddress1": {
+      "type": "string",
+      "format": "email"
+    },
+    "emailAddress2": {
+      "type": "string",
+      "format": "email"
+    },
+    "emailTemplateName": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "emailAddress1",
+    "emailTemplateName"
+  ],
+  "additionalProperties": false
+}
