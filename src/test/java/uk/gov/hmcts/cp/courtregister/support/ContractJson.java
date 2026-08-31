@@ -3,7 +3,7 @@ package uk.gov.hmcts.cp.courtregister.support;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.json.JsonMapper;
+import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 
 /**
  * The mapper the comparator's own suites read JSON with.
@@ -14,14 +14,10 @@ import tools.jackson.databind.json.JsonMapper;
  * {@code double}, every numeric-scale vector passes trivially, and the suites stop testing the thing
  * they exist to test.
  *
- * <p><strong>This is a stand-in with a date on it.</strong> The service's own contract mapper is
- * {@code config/JacksonConfig}, which lands with the inbound contract (T012) and is where the
- * feature belongs: it configures the mapper the running service uses as well as the standalone one,
- * and {@code SharedObjectMapperTest} pins the two together. Until it exists there is nothing to
- * delegate to, and the comparator is deliberately domain-independent — it is vendored before the
- * domain it will compare. When {@code JacksonConfig} arrives, this factory delegates to
- * {@code JacksonConfig.contractObjectMapper()} and the duplication ends; the two must not be allowed
- * to drift in the meantime.
+ * <p>The stand-in this used to be is gone: {@code config/JacksonConfig} landed with the inbound
+ * contract (T012) and is where the feature belongs, because it configures the mapper the running
+ * service uses as well as the standalone one. This factory now delegates to it, so the comparator
+ * and the service cannot drift apart.
  */
 public final class ContractJson {
 
@@ -31,11 +27,11 @@ public final class ContractJson {
 
     /**
      * A mapper carrying this service's JSON contract.
+     *
+     * @return the shared contract mapper
      */
     public static ObjectMapper mapper() {
-        return JsonMapper.builder()
-                .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
-                .build();
+        return JacksonConfig.contractObjectMapper();
     }
 
     /**

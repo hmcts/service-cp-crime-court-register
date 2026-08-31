@@ -98,7 +98,7 @@ in the same commit.**
 
 ### Implementation
 
-- [ ] T012 [US1] Implement `domain/DistributionCommand`, `domain/CallerIdentity`,
+- [x] T012 [US1] Implement `domain/DistributionCommand`, `domain/CallerIdentity`,
       `inbound/DistributionCommandParser`, `config/JacksonConfig`,
       `src/main/resources/contracts/distribution-command.schema.json` (green for T007).
 - [ ] T013 [US2] Implement `domain/RequestFingerprint` (green for T008).
