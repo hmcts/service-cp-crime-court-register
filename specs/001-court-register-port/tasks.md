@@ -283,7 +283,7 @@ vocabulary and matching semantics.
 
 ### Tests first ⚠️ (all [P] — one file each; seams provided by T039a)
 
-- [ ] T040 [P] [US3] `pipeline/AddressMapperTest` — A1/A2 repaired: absent input ⇒ absent output
+- [x] T040 [P] [US3] `pipeline/AddressMapperTest` — A1/A2 repaired: absent input ⇒ absent output
       (not `[]`); address1–5 pass-through; `postcode`→`postCode`.
 - [ ] T041 [P] [US3] `pipeline/AliasMapperTest` + `pipeline/CounselMapperTest` — twins plus the
       pinned asymmetry: aliases `[]`⇒`[]`/absent⇒absent; counsels absent-or-empty⇒absent; name
