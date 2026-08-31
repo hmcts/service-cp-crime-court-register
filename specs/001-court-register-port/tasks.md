@@ -79,7 +79,7 @@ in the same commit.**
       values (`Hearing_Resulted` only), optional `userId`, the Q1a rename triple
       (`hearingDay`→ command field, `userId`→ caller identity), BigDecimal number pin; dual
       validation parser-vs-schema with the court-register `$id`.
-- [ ] T008 [P] [US2] Write `domain/RequestFingerprintTest` (red; seam: `RequestFingerprint`) —
+- [x] T008 [P] [US2] Write `domain/RequestFingerprintTest` (red; seam: `RequestFingerprint`) —
       canonicalisation (uppercase-hex UUID, offset-vs-Z instants, fractional seconds), changed
       immutable field changes the hash.
 - [ ] T009 [P] [US4] Write `config/ConfigurationValidationTest` (red; seams: `CourtRegisterProperties`
