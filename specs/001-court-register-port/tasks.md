@@ -295,7 +295,7 @@ vocabulary and matching semantics.
       `defendantPresent` semantics per the kernel's orderedDate rule; all three
       `defendantAppearanceDetails` renderings; absent attendance ⇒ present=false; empty array ⇒
       guarded, not a TypeError (C19-family guard).
-- [ ] T044 [P] [US3] `pipeline/HearingVenueMapperTest` — HV1 twin + address body (postCode case),
+- [x] T044 [P] [US3] `pipeline/HearingVenueMapperTest` — HV1 twin + address body (postCode case),
       lja-absent, courtCentre-absent guarded failure.
 - [ ] T045 [P] [US3] `pipeline/OffenceMapperTest` — OF1 twin repaired (real indicatedPlea,
       allocationDecision, convictionDate asserted); **C23 fix**: `verdictCode =
