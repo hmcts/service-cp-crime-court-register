@@ -138,7 +138,7 @@ in the same commit.**
       `ContractValidationDeadLetterIT`, `DeliveryExhaustionIT`, `DuplicateDetectionIT`,
       `StoreOutageIT`, `ProlongedStoreOutageIT`, `ReadinessPolicyIT`, `StartupWithQueueDownIT`,
       `QueueOutageRecoveryIT` — against queue `courtregister.requests` with a stub pipeline.
-- [ ] T022 [US1] Implement `inbound/ServiceBusConsumerConfig`, `inbound/CourtRegisterMessageListener`,
+- [x] T022 [US1] Implement `inbound/ServiceBusConsumerConfig`, `inbound/CourtRegisterMessageListener`,
       `inbound/ConsumerLifecycleController`, `inbound/StoreGate` impl,
       `application/DistributionPipeline` skeleton wired to stub ports,
       `config/{DeferredFlywayMigration,IntakeStartupHealth(+Indicator),ServiceBusHealthIndicator}`,
@@ -148,6 +148,13 @@ in the same commit.**
       `SubmissionFailedException`) and result records (`TransformationResult`,
       `SubmissionReceipt`) per the plan's port contracts,
       `adapter/stub/*` (green for T019–T021, serialised — all touch the listener/lifecycle).
+      *(done — the payload port and its stub land here, which is what the skeleton calls. The other
+      three ports are deferred to the phases whose tests demand them: `RegisterTransformer` and
+      `RegisterSubmissionClient` are typed in `CourtRegisterDocument`, and tasks.md gives that record
+      family to **T039a**, so declaring them here would mean inventing the outbound shape ahead of
+      the vendored schemas; `NowSubscriptionsSource` and its refusing stub have no caller until the
+      chain is wired in **T039**, and landing behaviour with no test that could fail first is
+      refused by Principle II. Recorded here so the deferral is visible rather than silent.)*
 
 **Checkpoint**: the walking-skeleton behaviours the informant proved, re-proven here.
 
