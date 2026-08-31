@@ -175,7 +175,7 @@ in the same commit.**
       result-level tagging, `isDeleted` dropped, youth flag); **C22 fix**: a court application
       whose applicant is not a prosecuting authority is excluded (fails vs legacy); DC5 as the
       informant-contrast case.
-- [ ] T025 [P] [US3] Write `pipeline/VocabularyBuilderTest` (red; seam: `VocabularyBuilder`) —
+- [x] T025 [P] [US3] Write `pipeline/VocabularyBuilderTest` (red; seam: `VocabularyBuilder`) —
       `containsOnlyKeys` the 18 real keys; custody (police/prison, application+case), appearance,
       cps, youth/adult flags; **C30 fix**: all three major-creditor predicates consistently
       unmatchable for this flow.

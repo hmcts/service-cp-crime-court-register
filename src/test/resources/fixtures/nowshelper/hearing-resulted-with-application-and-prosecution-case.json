@@ -1,0 +1,457 @@
+{
+  "courtApplications": [
+    {
+      "applicant": {
+        "id": "571c9bc6-cff0-4d3e-95ef-042314b11876",
+        "masterDefendant": {
+          "defendantCase": [
+            {
+              "caseId": "4fe94a19-ac9d-4f5a-8f51-4fecc88dedcd",
+              "caseReference": "IFJPF3PBDDS",
+              "defendantId": "216cb569-92a8-4c4b-8742-ad3552f62bcb"
+            }
+          ],
+          "isYouth": false,
+          "masterDefendantId": "216cb569-92a8-4c4b-8742-ad3552f62bcb",
+          "personDefendant": {
+            "arrestSummonsNumber": "R9Z3WJQH",
+            "bailReasons": "Broken bail conditions",
+            "bailStatus": {
+              "code": "C",
+              "description": "Custody",
+              "id": "12e69486-4d01-3403-a50a-7419ca040635"
+            },
+            "custodialEstablishment": {
+              "custody": "Prison",
+              "id": "f7f1d7dc-1ad1-3dc6-b68c-0496899ed561",
+              "name": "HMP/YOI Preston"
+            },
+            "personDetails": {
+              "address": {
+                "address1": "799",
+                "address2": "StreetDescription",
+                "address3": "Locality2O",
+                "postcode": "CR0 1XB"
+              },
+              "dateOfBirth": "1959-04-04",
+              "documentationLanguageNeeds": "ENGLISH",
+              "firstName": "Jonathan",
+              "gender": "MALE",
+              "hearingLanguageNeeds": "ENGLISH",
+              "lastName": "Kuvalis",
+              "title": "Mr"
+            },
+            "policeBailStatus": {
+              "code": "C",
+              "description": "Custody",
+              "id": "12e69486-4d01-3403-a50a-7419ca040635"
+            }
+          }
+        },
+        "notificationRequired": true,
+        "summonsRequired": false
+      },
+      "applicationReceivedDate": "2025-07-31",
+      "applicationReference": "IFJPF3PBDDS",
+      "applicationStatus": "LISTED",
+      "commissionerOfOath": false,
+      "courtApplicationCases": [
+        {
+          "caseStatus": "ACTIVE",
+          "isSJP": false,
+          "prosecutionCaseId": "4fe94a19-ac9d-4f5a-8f51-4fecc88dedcd",
+          "prosecutionCaseIdentifier": {
+            "address": {
+              "address1": "Warwickshire Police",
+              "address2": "PO Box 4",
+              "address3": "Leek Wootton",
+              "address4": "Warwick",
+              "address5": "Warwickshire",
+              "postcode": "CV35 7QB"
+            },
+            "contact": {
+              "primaryEmail": "CasecoordinationResulting@warwickshire.police.uk"
+            },
+            "majorCreditorCode": "PO23",
+            "prosecutionAuthorityCode": "WARPF",
+            "prosecutionAuthorityId": "f2bccb8f-47d8-3a3b-8f35-266eea32b2ac",
+            "prosecutionAuthorityName": "Warwickshire Police",
+            "prosecutionAuthorityOUCode": "0230000",
+            "caseURN": "IFJPF3PBDDS"
+          }
+        }
+      ],
+      "id": "c2753f49-4c44-4699-8883-1cb166f9419c",
+      "judicialResults": [
+        {
+          "alwaysPublished": false,
+          "canBeSubjectOfBreach": false,
+          "canBeSubjectOfVariation": false,
+          "canExtendActiveOrder": false,
+          "category": "FINAL",
+          "courtClerk": {
+            "firstName": "Erica",
+            "lastName": "Wilson",
+            "userId": "31ec3a16-8721-498c-8da5-f099390ee254"
+          },
+          "d20": false,
+          "excludedFromResults": false,
+          "isAdjournmentResult": false,
+          "isAvailableForCourtExtract": true,
+          "isConvictedResult": false,
+          "isDeleted": false,
+          "isFinancialResult": false,
+          "isNewAmendment": true,
+          "isUnscheduled": false,
+          "judicialResultId": "db75ae6b-fe26-4c60-953c-7b3fdd969b4d",
+          "judicialResultTypeId": "2b3f7c20-8fc1-4fad-9076-df196c24b27e",
+          "label": "Granted",
+          "lastSharedDateTime": "2025-07-31",
+          "level": "O",
+          "lifeDuration": false,
+          "orderedDate": "2025-08-04",
+          "orderedHearingId": "8a938ab4-0f39-48ce-a1be-08a967dc07ab",
+          "postHearingCustodyStatus": "A",
+          "preserveActiveOrder": false,
+          "publishedAsAPrompt": false,
+          "publishedForNows": false,
+          "rank": 98500,
+          "resultText": "G - Granted",
+          "rollUpPrompts": true,
+          "rootJudicialResultId": "db75ae6b-fe26-4c60-953c-7b3fdd969b4d",
+          "rootJudicialResultTypeId": "2b3f7c20-8fc1-4fad-9076-df196c24b27e",
+          "terminatesOffenceProceedings": false,
+          "urgent": false,
+          "usergroups": [
+
+          ]
+        }
+      ],
+      "subject": {
+        "id": "571c9bc6-cff0-4d3e-95ef-042314b11876",
+        "masterDefendant": {
+          "defendantCase": [
+            {
+              "caseId": "4fe94a19-ac9d-4f5a-8f51-4fecc88dedcd",
+              "caseReference": "IFJPF3PBDDS",
+              "defendantId": "216cb569-92a8-4c4b-8742-ad3552f62bcb"
+            }
+          ],
+          "isYouth": false,
+          "masterDefendantId": "216cb569-92a8-4c4b-8742-ad3552f62bcb",
+          "personDefendant": {
+            "arrestSummonsNumber": "R9Z3WJQH",
+            "bailConditions": "",
+            "bailReasons": "Broken bail conditions",
+            "bailStatus": {
+              "code": "C",
+              "description": "Custody",
+              "id": "12e69486-4d01-3403-a50a-7419ca040635"
+            },
+            "custodialEstablishment": {
+              "custody": "Prison",
+              "id": "f7f1d7dc-1ad1-3dc6-b68c-0496899ed561",
+              "name": "HMP/YOI Preston"
+            },
+            "personDetails": {
+              "address": {
+                "address1": "799",
+                "address2": "StreetDescription",
+                "address3": "Locality2O",
+                "postcode": "CR0 1XB"
+              },
+              "dateOfBirth": "1959-04-04",
+              "documentationLanguageNeeds": "ENGLISH",
+              "firstName": "Jonathan",
+              "gender": "MALE",
+              "hearingLanguageNeeds": "ENGLISH",
+              "lastName": "Kuvalis",
+              "title": "Mr"
+            },
+            "policeBailStatus": {
+              "code": "C",
+              "description": "Custody",
+              "id": "12e69486-4d01-3403-a50a-7419ca040635"
+            }
+          }
+        },
+        "notificationRequired": true,
+        "summonsRequired": false
+      },
+      "type": {
+        "appealFlag": false,
+        "applicantAppellantFlag": false,
+        "applicationWording": "Failed to comply with a pre-sentence drug testing order made on {1} at {2} by {3}",
+        "boxworkNotifTemplate": "NOT_APPLICABLE",
+        "breachType": "NOT_APPLICABLE",
+        "categoryCode": "CB",
+        "changeDate": "2025-03-17T11:21:34",
+        "code": "PC00665",
+        "commrOfOathFlag": false,
+        "contestedFeeApplicable": false,
+        "courtExtractAvlFlag": true,
+        "courtOfAppealFlag": false,
+        "exParte": false,
+        "hearingCode": "BOO",
+        "id": "6fe70a22-1d98-4fa3-959a-27fa5f67ff00",
+        "initialFeeApplicable": false,
+        "jurisdiction": "EITHER",
+        "lastModified": "2025-03-17T14:00:38.015Z",
+        "legislation": "In accordance with section 36A of the Powers of Criminal Courts (Sentencing) Act 2000.",
+        "legislationWelsh": "Yn unol ag adran 36A Deddf Pwerau’r Llysoedd Troseddol (Dedfrydu) 2000.",
+        "linkType": "LINKED",
+        "listingNotifTemplate": "POSTAL_NOTIFICATION",
+        "offenceActiveOrder": "NOT_APPLICABLE",
+        "pleaApplicableFlag": true,
+        "prosecutorThirdPartyFlag": false,
+        "pssId": 628933,
+        "sowRef": "APPS",
+        "spiOutApplicableFlag": true,
+        "summonsTemplateType": "NOT_APPLICABLE",
+        "type": "Fail to comply with pre-sentence drug testing order",
+        "typeWelsh": "Methu â chydymffurfio â gorchymyn prawf cyffuriau cyn dedfrydu",
+        "validFrom": "2007-01-29"
+      }
+    }
+  ],
+  "courtCentre": {
+    "address": {
+      "address1": "176A Lavender Hill",
+      "address2": "London",
+      "address3": "",
+      "address4": "",
+      "address5": "",
+      "postcode": "SW11 1JU"
+    },
+    "code": "B01LY00",
+    "courtHearingLocation": "B01LY01",
+    "id": "f8254db1-1683-483e-afb3-b87fde5a0a26",
+    "lja": {
+      "ljaCode": "2577",
+      "ljaName": "South West London Magistrates' Court"
+    },
+    "name": "Lavender Hill Magistrates' Court",
+    "roomId": "9e4932f7-97b2-3010-b942-ddd2624e4dd8",
+    "roomName": "Courtroom 01"
+  },
+  "defendantAttendance": [
+    {
+      "attendanceDays": [
+        {
+          "attendanceType": "IN_PERSON",
+          "day": "2025-08-04"
+        }
+      ],
+      "defendantId": "ddba1595-31f1-41f5-95d5-622323930344"
+    },
+    {
+      "attendanceDays": [
+        {
+          "attendanceType": "IN_PERSON",
+          "day": "2025-08-04"
+        }
+      ],
+      "defendantId": "216cb569-92a8-4c4b-8742-ad3552f62bcb"
+    }
+  ],
+  "estimatedDuration": "20 MINUTES",
+  "hasSharedResults": true,
+  "hearingDays": [
+    {
+      "courtCentreId": "f8254db1-1683-483e-afb3-b87fde5a0a26",
+      "courtRoomId": "9e4932f7-97b2-3010-b942-ddd2624e4dd8",
+      "hasSharedResults": true,
+      "isCancelled": false,
+      "listedDurationMinutes": 20,
+      "listingSequence": 0,
+      "sittingDay": "2025-08-04T09:00:00.000Z"
+    }
+  ],
+  "hearingLanguage": "ENGLISH",
+  "id": "8a938ab4-0f39-48ce-a1be-08a967dc07ab",
+  "jurisdictionType": "MAGISTRATES",
+  "prosecutionCases": [
+    {
+      "caseMarkers": [
+        {
+          "id": "a06f2ce9-ec49-451c-ae3c-f18cadcc639a",
+          "markerTypeCode": "HT",
+          "markerTypeDescription": "Human Trafficking",
+          "markerTypeid": "e7eff972-189c-4957-8b1e-cb45213aa64e"
+        }
+      ],
+      "caseStatus": "ACTIVE",
+      "cpsOrganisation": "A30AB00",
+      "defendants": [
+        {
+          "courtProceedingsInitiated": "2025-07-31T09:04:33.139Z",
+          "id": "ddba1595-31f1-41f5-95d5-622323930344",
+          "isYouth": false,
+          "masterDefendantId": "ddba1595-31f1-41f5-95d5-622323930344",
+          "offences": [
+            {
+              "arrestDate": "2022-10-02",
+              "chargeDate": "2022-10-02",
+              "count": 0,
+              "endorsableFlag": false,
+              "id": "e4e62f4c-ab7a-463d-bf4b-ee1d8a3e9a4b",
+              "isDisposed": true,
+              "judicialResults": [
+                {
+                  "alwaysPublished": false,
+                  "canBeSubjectOfBreach": false,
+                  "canBeSubjectOfVariation": false,
+                  "canExtendActiveOrder": false,
+                  "category": "FINAL",
+                  "courtClerk": {
+                    "firstName": "Erica",
+                    "lastName": "Wilson",
+                    "userId": "31ec3a16-8721-498c-8da5-f099390ee254"
+                  },
+                  "d20": false,
+                  "excludedFromResults": false,
+                  "isAdjournmentResult": false,
+                  "isAvailableForCourtExtract": true,
+                  "isConvictedResult": false,
+                  "isDeleted": false,
+                  "isFinancialResult": false,
+                  "isNewAmendment": true,
+                  "isUnscheduled": false,
+                  "judicialResultId": "9a6da365-a379-40d0-8ba7-91232a4783da",
+                  "judicialResultPrompts": [
+                    {
+                      "courtExtract": "Y",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "8ed840aa-471d-4cbb-8cab-de567dece3df",
+                      "label": "Type",
+                      "promptReference": "type",
+                      "promptSequence": 100,
+                      "type": "FIXL",
+                      "usergroups": [
+
+                      ],
+                      "value": "Alternative offence",
+                      "welshValue": "Alternative offence"
+                    },
+                    {
+                      "courtExtract": "Y",
+                      "isFinancialImposition": false,
+                      "judicialResultPromptTypeId": "c3dfecde-e458-4e66-a45b-b092a8c3b8de",
+                      "label": "Offence number",
+                      "promptReference": "offenceNumber",
+                      "promptSequence": 200,
+                      "type": "INT",
+                      "usergroups": [
+
+                      ],
+                      "value": "12",
+                      "welshValue": "12"
+                    }
+                  ],
+                  "judicialResultTypeId": "2b37e8c1-3829-4165-b424-b785ff5358ec",
+                  "label": "Sentence of the court for the offence recorded under offence number",
+                  "lastSharedDateTime": "2025-07-31",
+                  "level": "O",
+                  "lifeDuration": false,
+                  "orderedDate": "2025-08-04",
+                  "orderedHearingId": "8a938ab4-0f39-48ce-a1be-08a967dc07ab",
+                  "postHearingCustodyStatus": "A",
+                  "preserveActiveOrder": false,
+                  "publishedAsAPrompt": false,
+                  "publishedForNows": false,
+                  "rank": 72400,
+                  "resultText": "SOCOR - Sentence of the court for the offence recorded under offence number\nSentence of the court for the Alternative offence recorded under offence number 12",
+                  "rollUpPrompts": true,
+                  "rootJudicialResultId": "9a6da365-a379-40d0-8ba7-91232a4783da",
+                  "rootJudicialResultTypeId": "2b37e8c1-3829-4165-b424-b785ff5358ec",
+                  "terminatesOffenceProceedings": false,
+                  "urgent": false,
+                  "usergroups": [
+
+                  ]
+                }
+              ],
+              "lastAdjournDate": "2025-07-31",
+              "lastAdjournedHearingType": "",
+              "listingNumber": 2,
+              "maxPenalty": "EW:Ultd Fine",
+              "modeOfTrial": "Either Way",
+              "offenceCode": "CC74002",
+              "offenceDateCode": 1,
+              "offenceDefinitionId": "65961c47-b268-34bb-91f9-cad618238967",
+              "offenceFacts": {
+                "alcoholReadingAmount": 503,
+                "alcoholReadingMethodCode": "A",
+                "alcoholReadingMethodDescription": "Blood"
+              },
+              "offenceLegislation": "Contrary to Section 39(1) of, and Schedule 1 to, the Consumer Credit Act 1974.",
+              "offenceLegislationWelsh": "Yn groes i Adran 39(1) ac Atodlen 1 Deddf Credyd Defnyddwyr 1974.",
+              "offenceTitle": "Engage in activity requiring a licence when not a licensee",
+              "offenceTitleWelsh": "Cymryd rhan mewn gweithgaredd y mae angen trwydded ar ei gyfer a chithau ddim yn drwyddedai",
+              "orderIndex": 1,
+              "proceedingsConcluded": false,
+              "startDate": "2022-10-01",
+              "wording": "Robbery"
+            }
+          ],
+          "personDefendant": {
+            "arrestSummonsNumber": "HXBVPTST",
+            "bailConditions": "",
+            "bailReasons": "To prevent offending",
+            "bailStatus": {
+              "code": "A",
+              "description": "Not applicable",
+              "id": "86009c70-759d-3308-8de4-194886ff9a77"
+            },
+            "personDetails": {
+              "address": {
+                "address1": "799",
+                "address2": "StreetDescription",
+                "address3": "Locality2O",
+                "postcode": "CR0 1XB"
+              },
+              "dateOfBirth": "1961-03-26",
+              "documentationLanguageNeeds": "ENGLISH",
+              "firstName": "Muhammad",
+              "gender": "MALE",
+              "hearingLanguageNeeds": "ENGLISH",
+              "lastName": "Quitzon",
+              "title": "Mr"
+            }
+          },
+          "prosecutionAuthorityReference": "HXBVPTST",
+          "prosecutionCaseId": "4fe94a19-ac9d-4f5a-8f51-4fecc88dedcd"
+        }
+      ],
+      "id": "4fe94a19-ac9d-4f5a-8f51-4fecc88dedcd",
+      "initiationCode": "C",
+      "originatingOrganisation": "0230000",
+      "prosecutionCaseIdentifier": {
+        "address": {
+          "address1": "Warwickshire Police",
+          "address2": "PO Box 4",
+          "address3": "Leek Wootton",
+          "address4": "Warwick",
+          "address5": "Warwickshire",
+          "postcode": "CV35 7QB"
+        },
+        "contact": {
+          "primaryEmail": "CasecoordinationResulting@warwickshire.police.uk"
+        },
+        "majorCreditorCode": "PO23",
+        "prosecutionAuthorityCode": "WARPF",
+        "prosecutionAuthorityId": "f2bccb8f-47d8-3a3b-8f35-266eea32b2ac",
+        "prosecutionAuthorityName": "Warwickshire Police",
+        "prosecutionAuthorityOUCode": "0230000",
+        "caseURN": "IFJPF3PBDDS"
+      }
+    }
+  ],
+  "shadowListedOffences": [
+
+  ],
+  "type": {
+    "description": "Committal for Sentence",
+    "id": "1466e2a6-3760-41de-9d23-17deac22d0a2"
+  }
+}

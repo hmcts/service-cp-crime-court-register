@@ -39,6 +39,8 @@ public final class LegacyFixtures {
 
     private static final String ROOT = "/fixtures/nowshelper/";
 
+    private static final String REBUILT_ROOT = "/fixtures/rebuilt/";
+
     private static final ObjectMapper MAPPER = JacksonConfig.contractObjectMapper();
 
     private LegacyFixtures() {
@@ -51,7 +53,30 @@ public final class LegacyFixtures {
      * @return the parsed tree
      */
     public static JsonNode read(final String name) {
-        final String resource = ROOT + name;
+        return at(ROOT + name);
+    }
+
+    /**
+     * Reads one of the seven fixtures rebuilt to the real eighteen-key vocabulary.
+     *
+     * <p>These are deliberately <em>not</em> the oracle: they are repairs, they live under
+     * {@code fixtures/rebuilt/} rather than beside the byte-identical copies, and
+     * {@code fixtures/rebuilt/PROVENANCE.md} records what was changed in each and by what rule.
+     *
+     * @param path the file's path below {@code fixtures/rebuilt/}
+     * @return the parsed tree
+     */
+    public static JsonNode readRebuilt(final String path) {
+        return at(REBUILT_ROOT + path);
+    }
+
+    /**
+     * Reads a fixture from the test classpath.
+     *
+     * @param resource the absolute resource path
+     * @return the parsed tree
+     */
+    private static JsonNode at(final String resource) {
         try (InputStream stream = LegacyFixtures.class.getResourceAsStream(resource)) {
             if (stream == null) {
                 throw new IllegalStateException("missing test resource " + resource);
