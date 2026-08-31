@@ -329,10 +329,20 @@ vocabulary and matching semantics.
       the context-builder gate and the mapper"). The one green case is the C26 reflection guard that
       the two dead methods are not declared — a guard against reintroduction, with nothing to fail
       against yet.)*
-- [ ] T048 [P] [US3] `pipeline/RecipientMapperTest` — R1–R4 twins + `cr_standard` default pinned;
+- [x] T048 [P] [US3] `pipeline/RecipientMapperTest` — R1–R4 twins + `cr_standard` default pinned;
       **C27 fix**: letter-delivery and missing-email drops WARN-logged and counted in
       `anomaly_summary` (`letter-delivery-dropped:n`, `recipient-missing-email:n`,
       `recipient-not-for-distribution:n`) — drop itself preserved; emailAddress2 carried.
+      *(done — 26 cases, all red on the seam. The three codes divide the mapper's single `if` by the
+      reason a subscription failed it: letter delivery first, then not-for-email/not-for-distribution,
+      then no address to send to. **One shape is deliberately left unasserted** and is carried to
+      T054 as an open decision: the legacy's `recipient.emailAddress1 !== undefined` keeps a
+      recipient whose address is an explicit JSON `null`, which the frozen contract then refuses —
+      so parity loses the whole register (C29) and dropping it is a behaviour change C27's row does
+      not authorise. Absent and whitespace-only addresses are asserted; explicit `null` is not, and
+      needs a C-number or a legacy check before T054 chooses. The trimming R3/R4 pin is asserted at
+      recipient level rather than against a helper, so `JsStrings` — deferred here by T033 — is
+      whatever T054 needs it to be.)*
 - [ ] T049 [P] [US3] `pipeline/ResultMapperTest` — RS1 twin + null/empty ⇒ absent.
 - [ ] T050 [P] [US3] `pipeline/YouthDefendantMapperTest` — YD1 twin repaired (real nationality,
       three-part name, address5); **C19 fix**: legal-entity/unmatched defendant ⇒ guarded skip
