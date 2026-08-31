@@ -143,11 +143,13 @@ class AggregationMapperTest {
 
         @Test
         @DisplayName("the register day, the court centre code and the hearing id")
-        void the_day_the_code_and_the_hearing_id() {
+        void file_name_is_dated_coded_and_unique() {
             // Fails against the legacy, which writes
-            // `court-register_2020-06-01T11:00:00Z_B01LY00.pdf`.
+            // `court-register_2020-06-01T11:00:00Z_B01LY00.pdf` — the full instant, colons and all,
+            // and nothing that tells two hearings at one court centre apart.
             assertThat(document().fileName())
-                    .isEqualTo("court-register_2020-06-01_B01LY00_" + HEARING_ID + ".pdf");
+                    .isEqualTo("court-register_2020-06-01_B01LY00_" + HEARING_ID + ".pdf")
+                    .doesNotContain(":");
         }
 
         @Test

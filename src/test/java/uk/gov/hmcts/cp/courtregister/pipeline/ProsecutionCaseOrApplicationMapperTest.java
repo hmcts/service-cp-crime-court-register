@@ -347,9 +347,11 @@ class ProsecutionCaseOrApplicationMapperTest {
 
         @Test
         @DisplayName("is counted once, under the bounded reason the anomaly summary carries")
-        void the_skip_is_counted() {
-            map(defendantNaming(List.of(), List.of(APPLICATION_ID)), hearing());
+        void an_unresolvable_application_is_skipped_and_reported() {
+            final List<CourtRegisterCaseOrApplication> mapped =
+                    map(defendantNaming(List.of(), List.of(APPLICATION_ID)), hearing());
 
+            assertThat(mapped).isEmpty();
             assertThat(anomalies)
                     .containsExactly(TransformationAnomaly.UNRESOLVABLE_APPLICATION);
             assertThat(TransformationAnomaly.UNRESOLVABLE_APPLICATION.value())
@@ -398,7 +400,7 @@ class ProsecutionCaseOrApplicationMapperTest {
 
         @Test
         @DisplayName("contributes no arrest summons number, and does not end the register")
-        void contributes_no_summons_number() {
+        void asn_ignores_records_without_person_defendant() {
             // Fails against the legacy, where `d.personDefendant.arrestSummonsNumber` on a record
             // with no person throws. Only reachable with a record carrying *this* defendant's own
             // master id — the `:48` filter excludes genuine co-defendants first — so it is built

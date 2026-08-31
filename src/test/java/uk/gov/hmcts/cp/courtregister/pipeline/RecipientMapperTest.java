@@ -287,12 +287,15 @@ class RecipientMapperTest {
     class WhatTheDropsSay {
 
         @Test
-        @DisplayName("each drop writes one warning")
-        void each_drop_writes_one_warning() {
+        @DisplayName("each drop writes one warning, and is counted under its own reason")
+        void every_dropped_recipient_is_logged_and_counted() {
             try (CapturedLog log = CapturedLog.of(RecipientMapper.class)) {
                 map(letterSubscription("firstClassLetterDelivery"), notForDistribution());
 
                 assertThat(warnings(log)).hasSize(2);
+                assertThat(anomalies).containsExactly(
+                        TransformationAnomaly.LETTER_DELIVERY_DROPPED,
+                        TransformationAnomaly.RECIPIENT_NOT_FOR_DISTRIBUTION);
             }
         }
 

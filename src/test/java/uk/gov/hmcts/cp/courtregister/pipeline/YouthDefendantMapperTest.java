@@ -240,6 +240,16 @@ class YouthDefendantMapperTest {
         }
 
         @Test
+        @DisplayName("the observed one where there is one, and the self-defined one otherwise")
+        void ethnicity_prefers_observed_and_falls_back_to_self_defined() {
+            // The fix in a sentence, and the two halves the legacy gets wrong in one place: it
+            // needs both descriptions before it emits anything, and then always emits the observed.
+            assertThat(survivingYouth().ethnicity()).isEqualTo("White - British");
+            assertThat(youthWithEthnicity("selfDefinedEthnicityDescription", "Asian - Indian")
+                    .ethnicity()).isEqualTo("Asian - Indian");
+        }
+
+        @Test
         @DisplayName("none, where the payload carries neither")
         void none_where_the_payload_carries_neither() {
             final ObjectNode hearing = survivingYouthHearing();
@@ -358,9 +368,11 @@ class YouthDefendantMapperTest {
 
         @Test
         @DisplayName("is counted under the bounded reason the anomaly summary carries")
-        void is_counted_under_its_bounded_reason() {
-            map(survivingYouthHearing(), youth("no-such-master-defendant"));
+        void an_unresolvable_youth_defendant_is_skipped_and_reported() {
+            final List<CourtRegisterDefendant> mapped =
+                    map(survivingYouthHearing(), youth("no-such-master-defendant"));
 
+            assertThat(mapped).isEmpty();
             assertThat(anomalies)
                     .containsExactly(TransformationAnomaly.UNRESOLVABLE_YOUTH_DEFENDANT);
             assertThat(TransformationAnomaly.UNRESOLVABLE_YOUTH_DEFENDANT.value())
