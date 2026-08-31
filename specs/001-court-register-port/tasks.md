@@ -110,7 +110,7 @@ in the same commit.**
 
 ### Guard — tests first ⚠️
 
-- [ ] T017 [P] [US2] Write the guard PG suite (red; seams: `IdempotencyGuard`, repositories,
+- [x] T017 [P] [US2] Write the guard PG suite (red; seams: `IdempotencyGuard`, repositories,
       domain records): `IdempotencyGuardIT` (one case per state-machine row incl. the five
       completion reasons), `ProcessedLogDurabilityIT`, `ClaimContentionIT`, `ClaimReclamationIT`,
       `StaleRunnerRejectionIT`, `CrashWindowIT`, `FailedReplayIT`, `IdempotencyCollisionIT`,
