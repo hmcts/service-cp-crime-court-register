@@ -56,7 +56,7 @@ in the same commit.**
       PENDING for C18/C28/C34 with owner + trigger); `README.md` Documentation table references
       it; doc skeletons (TECHNICAL_DESIGN, API_CONTRACTS, SOLUTION_BRIEF, CHANGELOG, openapi.yaml
       comment-only).
-- [ ] T005 [P] Shared test fixtures cloned from IR-REPO `support/`: `PostgresTestSupport`,
+- [x] T005 [P] Shared test fixtures cloned from IR-REPO `support/`: `PostgresTestSupport`,
       `ServiceBusEmulatorTestSupport` (mounting `docker/servicebus-emulator/config.json`),
       `RedisTestSupport`, `ServiceTestSupport` (court-register properties), `AdjustableClock`,
       `CapturedLog`, plus `application-test.yaml` (`courtregister.consumer.enabled=false`,
