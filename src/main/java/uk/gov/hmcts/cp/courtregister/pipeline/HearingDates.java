@@ -53,8 +53,7 @@ final class HearingDates {
     /* default */ static String resolve(
             final String orderedDate, final JsonNode hearing, final Dates dates) {
 
-        final JsonNode hearingDays = hearing == null ? null : hearing.get(HEARING_DAYS);
-        if (hearingDays == null || hearingDays.isNull()) {
+        if (!Json.truthy(hearing, HEARING_DAYS)) {
             return null;
         }
         if (orderedDate == null) {
@@ -62,7 +61,8 @@ final class HearingDates {
             // nothing to fall back to. The legacy formats `undefined` here, which is the clock.
             return null;
         }
-        final String sittingDay = sittingDayFalling(hearingDays, orderedDate, dates);
+        final String sittingDay =
+                sittingDayFalling(Json.at(hearing, HEARING_DAYS), orderedDate, dates);
         return dates.dateTime(sittingDay == null ? orderedDate : sittingDay);
     }
 
@@ -78,11 +78,9 @@ final class HearingDates {
             final JsonNode hearingDays, final String orderedDate, final Dates dates) {
 
         for (final JsonNode hearingDay : hearingDays) {
-            final JsonNode sittingDay = hearingDay.get(SITTING_DAY);
-            if (sittingDay != null
-                    && !sittingDay.isNull()
-                    && orderedDate.equals(dates.localDate(sittingDay.stringValue()))) {
-                return sittingDay.stringValue();
+            final String sittingDay = Json.text(hearingDay, SITTING_DAY);
+            if (sittingDay != null && orderedDate.equals(dates.localDate(sittingDay))) {
+                return sittingDay;
             }
         }
         return null;

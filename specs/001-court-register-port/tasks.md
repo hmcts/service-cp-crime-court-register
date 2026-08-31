@@ -214,8 +214,14 @@ in the same commit.**
 
 - [x] T032 [US3] Implement `pipeline/Dates`, `pipeline/OrderedDates`, `pipeline/HearingDates`
       (green T023) — updates DEFECT-FIXES C10/C12/C13.
-- [ ] T033 [US3] Implement `pipeline/DefendantContext(+Builder)`, `pipeline/Json`,
+- [x] T033 [US3] Implement `pipeline/DefendantContext(+Builder)`, `pipeline/Json`,
       `pipeline/JsStrings` (green T024) — updates C22.
+      *(done — the gather, `DefendantContext` and `Json` land here, which is what T024 drives.
+      `JsStrings` is deferred to the phase whose test demands it: its only legacy call site is
+      `RecipientMapper.js:41`'s `.trim()` of a subscription email, so the trim belongs with
+      **T048**'s `RecipientMapperTest`. Landing it now would mean production code with no test that
+      could have failed first, which Principle II refuses. Recorded here so the deferral is visible
+      rather than silent.)*
 - [ ] T034 [US3] Implement `pipeline/VocabularyBuilder` (green T025) — the vocabulary half of C30.
 - [ ] T035 [US3] Implement `pipeline/CourtExtractFilter` (green T026).
 - [ ] T036 [US3] Implement `pipeline/RegisterBuilder` + `domain/RegisterFragment` (green T027) —
