@@ -26,6 +26,22 @@ import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
  * that came back {@code PENDING} would already be stale by the time the caller acted on it; a
  * conditional upsert cannot be, because the database decides.
  *
+ * <p><strong>Every statement here is fenced on the request's claim.</strong> The
+ * {@code status <> 'POSTED'} predicate answers "has this register gone"; it does not answer "may
+ * <em>this runner</em> speak for this request", and without that second question a runner whose
+ * claim was reclaimed while it worked can still claim the output row, replace the digest of the body
+ * the winner is about to send, and settle it POSTED or FAILED underneath the runner that holds the
+ * request. So each statement joins back to {@code processed_request} and requires the claim owner
+ * <em>and</em> the claim token this run acquired — the same predicate
+ * {@link ProcessedRequestRepository}'s outcome writes carry, applied to the row that actually
+ * decides whether a register is sent again.
+ *
+ * <p>Owner and token, and deliberately <strong>not</strong> the expiry. Claim liveness is decided by
+ * the database in the reclaim statement, and only there: a run whose lease lapsed while nobody
+ * reclaimed it still holds the only claim there is, and refusing its {@code recordPosted} would
+ * strand an accepted register at PENDING for the next delivery to POST a second time. A lapsed claim
+ * is not a superseded one; being superseded is what moves the token.
+ *
  * <p>Every timestamp comes from the database, so no row's age depends on how well two pods' clocks
  * agree.
  */
@@ -33,6 +49,8 @@ public class ProcessedOutputRepository {
 
     private static final String SOURCE = "source";
     private static final String REQUEST_ID = "requestId";
+    private static final String OWNER = "owner";
+    private static final String TOKEN = "token";
     private static final String RESPONSE_CODE = "responseCode";
 
     /**
@@ -53,16 +71,28 @@ public class ProcessedOutputRepository {
      * <p>{@code output_id} is supplied by the caller and survives a re-claim untouched: the conflict
      * branch leaves it alone, so the identity of an output row is fixed the first time it is
      * written.
+     *
+     * <p>The values are selected <em>from</em> {@code processed_request} rather than supplied
+     * outright, which is what fences the statement: the row the claim describes exists only where
+     * that request still carries this run's owner and token, so a superseded runner's insert selects
+     * nothing, reaches no conflict branch, and affects no rows. The key columns are taken from the
+     * claim row itself, so the output can only ever be written against the request the runner
+     * actually holds.
      */
     private static final String CLAIM_PENDING = """
             INSERT INTO processed_output (
                 output_id, source, request_id, court_centre_id, court_centre_ou_code,
                 register_date, file_name, status, request_digest, anomaly_summary,
                 created_at, updated_at)
-            VALUES (
-                :outputId, :source, :requestId, :courtCentreId, :courtCentreOuCode,
+            SELECT
+                :outputId, claimed.source, claimed.request_id, :courtCentreId, :courtCentreOuCode,
                 :registerDate, :fileName, 'PENDING', :digest, :anomalySummary,
-                now(), now())
+                now(), now()
+              FROM processed_request claimed
+             WHERE claimed.source = :source
+               AND claimed.request_id = :requestId
+               AND claimed.claim_owner = :owner
+               AND claimed.claim_token = :token
             ON CONFLICT (source, request_id) DO UPDATE
                SET status = 'PENDING',
                    court_centre_id = EXCLUDED.court_centre_id,
@@ -83,12 +113,23 @@ public class ProcessedOutputRepository {
      * outcome: <strong>POSTED is terminal</strong>. It costs nothing on the ordinary path and it
      * says, in the statement rather than in a comment, that no later write may move a row out of the
      * state that stops it being sent again.
+     *
+     * <p>The {@code EXISTS} is the other half, and the one the state predicate cannot stand in for:
+     * a superseded runner writing POSTED before the winner's POST has happened would leave the log
+     * saying a register went that nobody sent, and terminally, because POSTED is what stops it being
+     * sent again.
      */
     private static final String RECORD_POSTED = """
             UPDATE processed_output
                SET status = 'POSTED', response_code = :responseCode, updated_at = now()
              WHERE source = :source AND request_id = :requestId
                AND status <> 'POSTED'
+               AND EXISTS (SELECT 1
+                             FROM processed_request claimed
+                            WHERE claimed.source = processed_output.source
+                              AND claimed.request_id = processed_output.request_id
+                              AND claimed.claim_owner = :owner
+                              AND claimed.claim_token = :token)
             """;
 
     /**
@@ -109,12 +150,23 @@ public class ProcessedOutputRepository {
      * already POSTED back to FAILED. The next delivery would then re-claim it and POST a second,
      * non-idempotent {@code add-court-register}: a duplicate register created by the very log that
      * exists to prevent one.
+     *
+     * <p>It is not sufficient on its own, which is what the {@code EXISTS} adds. The overlapping
+     * runner's POST can also finish <em>before</em> the winner's, and a FAILED written then moves a
+     * row the winner is still working on out of PENDING — the same duplicate, arrived at from the
+     * other direction.
      */
     private static final String RECORD_FAILED = """
             UPDATE processed_output
                SET status = 'FAILED', response_code = :responseCode, updated_at = now()
              WHERE source = :source AND request_id = :requestId
                AND status <> 'POSTED'
+               AND EXISTS (SELECT 1
+                             FROM processed_request claimed
+                            WHERE claimed.source = processed_output.source
+                              AND claimed.request_id = processed_output.request_id
+                              AND claimed.claim_owner = :owner
+                              AND claimed.claim_token = :token)
             """;
 
     private final JdbcClient jdbcClient;
@@ -133,14 +185,18 @@ public class ProcessedOutputRepository {
      *
      * @param runClaim the claim the run was made under; its key is the row written
      * @param claim    what is about to be sent, and what it was assembled from
-     * @return whether this delivery may POST. False means the register is already POSTED and is
-     *         skipped, which is how a replay of a request that succeeded avoids sending it twice.
+     * @return whether this delivery may POST. False means either that the register is already
+     *         POSTED and is skipped — how a replay of a request that succeeded avoids sending it
+     *         twice — or that this runner's claim was reclaimed while it worked, in which case it
+     *         has no request to speak for and must discard its result.
      */
     public boolean claimPending(final RunClaim runClaim, final ProcessedOutputClaim claim) {
         return affected(jdbcClient.sql(CLAIM_PENDING)
                 .param("outputId", claim.outputId())
                 .param(SOURCE, runClaim.source())
                 .param(REQUEST_ID, runClaim.requestId())
+                .param(OWNER, runClaim.owner())
+                .param(TOKEN, runClaim.token())
                 .param("courtCentreId", claim.courtCentreId())
                 .param("courtCentreOuCode", claim.courtCentreOuCode(), Types.VARCHAR)
                 .param("registerDate", claim.registerDate())
@@ -156,7 +212,8 @@ public class ProcessedOutputRepository {
      * @param runClaim     the claim the run was made under; its key is the row settled
      * @param responseCode the status line progression answered with
      * @return whether a row was moved to POSTED; false means no row was ever claimed for this
-     *         request, or it was already POSTED by an overlapping delivery
+     *         request, it was already POSTED by an overlapping delivery, or this runner's claim is
+     *         no longer the one the request carries
      */
     public boolean recordPosted(final RunClaim runClaim, final int responseCode) {
         return affected(outcome(RECORD_POSTED, runClaim, responseCode));
@@ -169,7 +226,8 @@ public class ProcessedOutputRepository {
      * @param responseCode the status line progression answered with, or {@code null} where there
      *                     was no answer to record
      * @return whether a row was moved to FAILED; false means no row was ever claimed for this
-     *         request, or it is POSTED and must not be moved out of it
+     *         request, it is POSTED and must not be moved out of it, or this runner's claim is no
+     *         longer the one the request carries
      */
     public boolean recordFailed(final RunClaim runClaim, final Integer responseCode) {
         return affected(outcome(RECORD_FAILED, runClaim, responseCode));
@@ -181,6 +239,8 @@ public class ProcessedOutputRepository {
         return jdbcClient.sql(sql)
                 .param(SOURCE, runClaim.source())
                 .param(REQUEST_ID, runClaim.requestId())
+                .param(OWNER, runClaim.owner())
+                .param(TOKEN, runClaim.token())
                 .param(RESPONSE_CODE, responseCode, Types.INTEGER)
                 .update();
     }
