@@ -39,6 +39,8 @@ public final class LegacyFixtures {
 
     private static final String ROOT = "/fixtures/nowshelper/";
 
+    private static final String COURT_REGISTER_ROOT = "/fixtures/courtregister/";
+
     private static final String REBUILT_ROOT = "/fixtures/rebuilt/";
 
     private static final ObjectMapper MAPPER = JacksonConfig.contractObjectMapper();
@@ -54,6 +56,24 @@ public final class LegacyFixtures {
      */
     public static JsonNode read(final String name) {
         return at(ROOT + name);
+    }
+
+    /**
+     * Reads one of the court register's own function-app fixtures.
+     *
+     * <p>Byte-identical copies, on the same terms as {@link #read(String)} and verified the same
+     * way; they live under {@code fixtures/courtregister/} rather than beside the shared-kernel
+     * files only because they come from the court-register functions' own {@code test/} directories
+     * ({@code SetCourtRegister}, {@code CourtRegisterSubscriptions}, {@code OutboundCourtRegister})
+     * rather than from {@code NowsHelper/service/test/}. A fixture the design proves stale or
+     * vacuous is repaired under {@code fixtures/rebuilt/}, never here.
+     *
+     * @param path the file's path below {@code fixtures/courtregister/}, keyed by the function that
+     *             owns it
+     * @return the parsed tree
+     */
+    public static JsonNode readCourtRegister(final String path) {
+        return at(COURT_REGISTER_ROOT + path);
     }
 
     /**

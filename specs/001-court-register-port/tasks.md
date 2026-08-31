@@ -181,7 +181,7 @@ in the same commit.**
       unmatchable for this flow.
 - [x] T026 [P] [US3] Write `pipeline/CourtExtractFilterTest` (red) — RF1 twin (result+prompt
       levels, `courtExtract` `'Y'`/`'y'` fallback).
-- [ ] T027 [P] [US3] Write `pipeline/RegisterBuilderTest` (red; seam: `RegisterBuilder`,
+- [x] T027 [P] [US3] Write `pipeline/RegisterBuilderTest` (red; seam: `RegisterBuilder`,
       `RegisterFragment`) — S1 twin repointed (registerDate = true instant; hearingDate
       `2020-01-20T00:00:00Z`; hearingId; 1 register defendant, 4 results, none publishedForNows);
       `courtCentreId` (correct spelling) + `courtCentreOUCode` populated; 18-key vocabulary
