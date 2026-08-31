@@ -1,0 +1,86 @@
+# Local development stack for CRA-220.
+#
+# Everything here is LOCAL ONLY. The credentials below are development defaults, deliberately
+# committed so the stack starts with no .env file; they are never used in any deployed environment,
+# where Postgres credentials and the Service Bus identity come from Key Vault via the Secrets Store
+# CSI driver.
+#
+#   docker compose up -d postgres servicebus-emulator   # dependencies only, for ./gradlew bootRun
+#   docker compose up app                               # the service in its container
+#
+# `app` deliberately declares no depends_on, so it can be started on its own.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      SERVER_PORT: 8082
+      # Maps to courtregister.servicebus.* @ConfigurationProperties.
+      COURTREGISTER_SERVICEBUS_CONNECTIONSTRING: "Endpoint=sb://servicebus-emulator;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;"
+      COURTREGISTER_SERVICEBUS_QUEUENAME: courtregister.requests
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/courtregister
+      SPRING_DATASOURCE_USERNAME: courtregister
+      SPRING_DATASOURCE_PASSWORD: courtregister
+      # A local run is the walking-skeleton shape: the stub adapters, which is what STUB mode
+      # exists for. LIVE — the default an environment that says nothing gets — refuses to start
+      # without upstream endpoints and a CJSCPPUID identity, deliberately, so a deployed pod
+      # cannot boot half-configured. Local compose has neither results nor reference data to call.
+      COURTREGISTER_PAYLOAD_MODE: STUB
+      COURTREGISTER_REFERENCEDATA_MODE: STUB
+      # Local-only dummy: the submission gateway refuses to construct without an identity, and a
+      # local run POSTs nothing. Never a real user id.
+      COURT_REGISTER_SYSTEM_USER_ID: 00000000-0000-0000-0000-000000000000
+
+  postgres:
+    image: postgres:16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: courtregister
+      POSTGRES_USER: courtregister
+      POSTGRES_PASSWORD: courtregister
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U courtregister -d courtregister"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Azure Service Bus emulator, per Microsoft's reference compose file. It needs a SQL Server
+  # container beside it for its own state; from the host the broker is on localhost:5672, and the
+  # connection string is
+  #   Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
+  #
+  # The tag is PINNED deliberately, not tracked with `latest`: a moved tag on a broker emulator can
+  # change settlement or delivery-count behaviour under a green build. Bump it as its own reviewed
+  # change, re-running the *IT suites. The same config.json is mounted by the Testcontainers
+  # harness, so the queue definition cannot drift between this stack and CI.
+  servicebus-emulator:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:1.1.2
+    ports:
+      - "5672:5672"
+      - "5300:5300"
+    environment:
+      ACCEPT_EULA: "Y"
+      SQL_SERVER: servicebus-emulator-mssql
+      MSSQL_SA_PASSWORD: "LocalOnly_Passw0rd!"
+    volumes:
+      - ./docker/servicebus-emulator/config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+    depends_on:
+      - servicebus-emulator-mssql
+
+  # State store for the emulator. `mcr.microsoft.com/azure-sql-edge` is retired and must not be
+  # reintroduced; Microsoft's current emulator topology uses SQL Server. MSSQL_SA_PASSWORD matches
+  # the value the emulator is configured with above.
+  servicebus-emulator-mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "LocalOnly_Passw0rd!"
+
+volumes:
+  postgres-data:

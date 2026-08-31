@@ -1,0 +1,103 @@
+plugins {
+  id 'application'
+  id 'java'
+  id 'org.springframework.boot' version '4.1.0'
+  id 'io.spring.dependency-management' version '1.1.7'
+  id 'jacoco'
+  id 'maven-publish'
+  id 'com.github.ben-manes.versions' version '0.61.0'
+  id 'org.cyclonedx.bom' version '3.4.1'
+  id 'com.gorylenko.gradle-git-properties' version '4.0.1'
+}
+
+group = 'uk.gov.hmcts.cp'
+version = System.getProperty('ARTEFACT_VERSION') ?: '0.0.999'
+
+apply {
+  from("$rootDir/gradle/repositories.gradle")
+  from("$rootDir/gradle/java.gradle")
+  from("$rootDir/gradle/dependency.gradle")
+  from("$rootDir/gradle/pmd.gradle")
+  from("$rootDir/gradle/checkstyle.gradle")
+  from("$rootDir/gradle/test.gradle")
+  from("$rootDir/gradle/jar.gradle")
+}
+
+// We MUST keep all dependencies in the build.gradle to allow dependabot to provide version updates
+// Sadly, dependabot does not track dependencies in the apply-from files
+dependencies {
+  // Java core
+  implementation 'net.logstash.logback:logstash-logback-encoder:9.0'
+
+  compileOnly 'org.projectlombok:lombok:1.18.46'
+  annotationProcessor 'org.projectlombok:lombok:1.18.46'
+  testCompileOnly 'org.projectlombok:lombok:1.18.46'
+  testAnnotationProcessor 'org.projectlombok:lombok:1.18.46'
+
+  // Spring boot core
+  implementation 'org.springframework.boot:spring-boot-starter-web'
+  testImplementation "org.springframework.boot:spring-boot-starter-webmvc-test"
+  testImplementation('org.springframework.boot:spring-boot-starter-test') {
+    exclude group: 'junit', module: 'junit'
+    exclude group: 'org.junit.vintage', module: 'junit-vintage-engine'
+  }
+
+
+  // --- Persistence: processed-log store (JdbcClient + Flyway) ---
+  implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+  implementation 'org.springframework.boot:spring-boot-starter-flyway'
+  implementation 'org.flywaydb:flyway-database-postgresql'
+  runtimeOnly 'org.postgresql:postgresql'
+
+  // --- Messaging: Azure Service Bus consumer with explicit settlement ---
+  // Spring Boot's BOM does not manage com.azure:*, so the vendor BOM supplies those versions and no
+  // com.azure artefact is ever pinned individually.
+  implementation platform('com.azure:azure-sdk-bom:1.3.8')
+  implementation 'com.azure:azure-messaging-servicebus'
+  implementation 'com.azure:azure-identity'
+
+  // --- Payload source: Redis cache (Lettuce) + results-query-api fallback ---
+  // Lettuce directly rather than spring-boot-starter-data-redis: this service reads one string key
+  // and needs no template, repository or converter, and the starter's auto-configuration would add
+  // a health contributor and a connection factory nothing else here uses. Version from the Boot BOM.
+  implementation 'io.lettuce:lettuce-core'
+
+  // --- Observability / Actuator / OTEL / Prometheus ---
+  implementation 'org.springframework.boot:spring-boot-starter-actuator'
+  implementation 'org.springframework.boot:spring-boot-starter-opentelemetry'
+  implementation 'io.micrometer:micrometer-registry-prometheus'
+
+  // --- Test: Testcontainers harness (Postgres + Service Bus emulator) ---
+  // Versions come from testcontainers-bom, imported by the Spring Boot BOM. Testcontainers 2.x
+  // renamed every module to a `testcontainers-` prefix, so these are the 2.x coordinates for the
+  // modules the plan names (postgresql, junit-jupiter, azure).
+  testImplementation 'org.testcontainers:testcontainers-postgresql'
+  testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+  testImplementation 'org.testcontainers:testcontainers-azure'
+  // Deterministic transport fault injection for the broker-outage suites. The plan's test matrix
+  // names Toxiproxy as the recorded fallback for exactly this: stopping or freezing a container
+  // makes an outage whose *timing* the suite cannot control, and both mistakes it produces are
+  // silent. Version from testcontainers-bom.
+  testImplementation 'org.testcontainers:testcontainers-toxiproxy'
+  // The Service Bus emulator's SQL Server companion is an MSSQLServerContainer, and its readiness
+  // check opens a JDBC connection — without the driver the companion never reports started. Version
+  // from the Spring Boot BOM.
+  testRuntimeOnly 'com.microsoft.sqlserver:mssql-jdbc'
+
+  // HTTP stub for the results-query-api fallback suite and for the outbound
+  // `add-court-register` adapter's suites. The standalone, shaded artefact deliberately: the
+  // plain one drags its own Jetty and Jackson 2 onto the test classpath beside the Jackson 3 stack
+  // this service runs on, and the resulting version fight is the kind that surfaces as a mystery at
+  // runtime rather than as a failed resolution. Not managed by any BOM on this build, so the
+  // version is declared here for dependabot to track.
+  testImplementation 'org.wiremock:wiremock-standalone:3.13.2'
+
+  // Draft-07 validator for the dual-validation contract corpus (research §9).
+  // testImplementation ONLY — it must never reach the runtime classpath. Not managed by any BOM on
+  // this build, so the version is declared here for dependabot to track.
+  testImplementation 'com.networknt:json-schema-validator:3.0.7'
+
+  // Security: pin transitive tomcat-embed-core to patched version (CVE-2026-41293, -43512, et al.)
+  // Brought in transitively via spring-boot-starter-web; >=11.0.0-M1,<11.0.22 are vulnerable
+  implementation 'org.apache.tomcat.embed:tomcat-embed-core:11.0.24'
+}

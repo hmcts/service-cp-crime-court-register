@@ -1,0 +1,50 @@
+gradle
+!gradle/
+!gradle/libs.versions.toml
+bin/*
+!bin/run-in-docker.sh
+.gradle
+/build/
+/gradlew.bat
+*.class
+bin/main/application.yaml
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+
+### IntelliJ IDEA ###
+.idea
+/out
+*.iws
+*.iml
+*.ipr
+
+.DS_Store
+
+applicationinsights-agent-*.jar
+*.log
+
+.env
+
+.DS_Store
+*/.DS_Store
+
+# Claude Code — local-only files (team-shared agents/rules/skills ARE tracked)
+.claude/settings.local.json
+.claude/projects/
+.claude/todos/
+.claude/shell-snapshots/
+.claude/worktrees/
+
+.codex
+.codex/
+.gemini/
+
+/graphify-out/
+
+# Claude local-only (never commit)
