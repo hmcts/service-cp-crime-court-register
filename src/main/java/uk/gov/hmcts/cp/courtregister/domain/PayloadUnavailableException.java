@@ -13,7 +13,7 @@ package uk.gov.hmcts.cp.courtregister.domain;
  * never a raw message from the layer beneath it — the code travels into {@code failure_reason}, a
  * dead-letter description and the log index.
  */
-public class PayloadUnavailableException extends RuntimeException {
+public class PayloadUnavailableException extends RuntimeException implements ClassifiedFailure {
 
     private static final long serialVersionUID = 1L;
 
@@ -34,6 +34,7 @@ public class PayloadUnavailableException extends RuntimeException {
      *
      * @return the fixed transient classification
      */
+    @Override
     public FailureClassification classification() {
         return FailureClassification.TRANSIENT;
     }
@@ -43,6 +44,7 @@ public class PayloadUnavailableException extends RuntimeException {
      *
      * @return the bounded reason code
      */
+    @Override
     public ReasonCode reason() {
         return reasonCode;
     }

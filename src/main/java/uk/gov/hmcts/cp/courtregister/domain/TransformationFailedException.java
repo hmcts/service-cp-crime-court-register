@@ -22,7 +22,7 @@ package uk.gov.hmcts.cp.courtregister.domain;
  * a fragment of the payload: the message names the shape that was wrong, never the value that was in
  * it (constitution Principle VII).
  */
-public class TransformationFailedException extends RuntimeException {
+public class TransformationFailedException extends RuntimeException implements ClassifiedFailure {
 
     private static final long serialVersionUID = 1L;
 
@@ -43,6 +43,7 @@ public class TransformationFailedException extends RuntimeException {
      *
      * @return the classification
      */
+    @Override
     public FailureClassification classification() {
         return FailureClassification.NON_TRANSIENT;
     }
@@ -52,6 +53,7 @@ public class TransformationFailedException extends RuntimeException {
      *
      * @return the reason code
      */
+    @Override
     public ReasonCode reason() {
         return reasonCode;
     }

@@ -1,8 +1,12 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
+import java.util.Locale;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
+import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 
 /**
  * Whether a hearing's group-proceedings flag suppresses its register.
@@ -29,8 +33,10 @@ import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
  */
 public class GroupProceedingsPolicy {
 
-    /** The marker the red run records while the policy is unwritten. */
-    private static final String UNIMPLEMENTED = "the group-proceedings policy is not written yet";
+    private static final Logger LOG = LoggerFactory.getLogger(GroupProceedingsPolicy.class);
+
+    /** The one field of the hearing payload this policy reads. */
+    private static final String FLAG = "isGroupProceedings";
 
     private final ProcessingMetrics metrics;
 
@@ -51,6 +57,50 @@ public class GroupProceedingsPolicy {
      * @return whether the register is suppressed
      */
     public boolean suppresses(final DistributionCommand command, final JsonNode hearing) {
-        throw new UnsupportedOperationException(UNIMPLEMENTED);
+        final JsonNode flag = hearing.get(FLAG);
+        final boolean suppressed;
+        if (flag == null || flag.isNull()) {
+            // `== null` in JavaScript is true for both an absent field and an explicit null, and
+            // both proceed there too. This is the shape of every court-register payload in the
+            // legacy repo and of the overwhelming majority of live hearings.
+            suppressed = false;
+        } else if (flag.isBoolean()) {
+            suppressed = flag.booleanValue();
+        } else {
+            report(command, flag);
+            suppressed = false;
+        }
+        return suppressed;
+    }
+
+    /**
+     * Reports a flag that is not a boolean: once, naming the field and the JSON type it arrived as,
+     * and never the value.
+     *
+     * @param command the request being run, for the correlation identifiers
+     * @param flag    the value the hearing carried
+     */
+    private void report(final DistributionCommand command, final JsonNode flag) {
+        LOG.warn("Hearing payload carries a non-boolean {}, so it decides nothing. "
+                        + "source={} requestId={} hearingId={} type={}",
+                FLAG, command.source(), command.requestId(), command.hearingId(), typeOf(flag));
+        metrics.transformationAnomaly(TransformationAnomaly.NON_BOOLEAN_GROUP_PROCEEDINGS);
+    }
+
+    /**
+     * The JSON type a value arrived as, named the way a reader would name it — {@code String},
+     * {@code Number}, {@code Array}, {@code Object}.
+     *
+     * <p>The type and not the value: a flag arriving as text is a producer defect, and the next one
+     * may carry something that is not a flag at all. A type says everything an operator needs; the
+     * value would be an unbounded field of the payload in the estate's shared log index, on a flow
+     * whose every defendant is a child (constitution Principle VII).
+     *
+     * @param flag the value the hearing carried
+     * @return the name of its JSON type
+     */
+    private static String typeOf(final JsonNode flag) {
+        final String type = flag.getNodeType().name();
+        return type.charAt(0) + type.substring(1).toLowerCase(Locale.ROOT);
     }
 }

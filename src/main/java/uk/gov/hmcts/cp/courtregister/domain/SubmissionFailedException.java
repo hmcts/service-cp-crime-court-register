@@ -17,7 +17,7 @@ package uk.gov.hmcts.cp.courtregister.domain;
  * <p>A bounded {@link ReasonCode} and never progression's own words: the code reaches
  * {@code failure_reason}, a dead-letter description and the log index.
  */
-public class SubmissionFailedException extends RuntimeException {
+public class SubmissionFailedException extends RuntimeException implements ClassifiedFailure {
 
     private static final long serialVersionUID = 1L;
 
@@ -42,6 +42,7 @@ public class SubmissionFailedException extends RuntimeException {
      *
      * @return the classification the throw site gave
      */
+    @Override
     public FailureClassification classification() {
         return failureClassification;
     }
@@ -51,6 +52,7 @@ public class SubmissionFailedException extends RuntimeException {
      *
      * @return the bounded reason code
      */
+    @Override
     public ReasonCode reason() {
         return reasonCode;
     }

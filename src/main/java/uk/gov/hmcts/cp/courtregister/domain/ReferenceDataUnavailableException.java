@@ -18,7 +18,7 @@ package uk.gov.hmcts.cp.courtregister.domain;
  * <p>A bounded {@link ReasonCode} and nothing from the layer beneath: the code travels into
  * {@code failure_reason}, a dead-letter description and the log index.
  */
-public class ReferenceDataUnavailableException extends RuntimeException {
+public class ReferenceDataUnavailableException extends RuntimeException implements ClassifiedFailure {
 
     private static final long serialVersionUID = 1L;
 
@@ -36,6 +36,7 @@ public class ReferenceDataUnavailableException extends RuntimeException {
      *
      * @return the fixed transient classification
      */
+    @Override
     public FailureClassification classification() {
         return FailureClassification.TRANSIENT;
     }
@@ -45,6 +46,7 @@ public class ReferenceDataUnavailableException extends RuntimeException {
      *
      * @return the bounded reason code
      */
+    @Override
     public ReasonCode reason() {
         return ReasonCode.REFERENCE_DATA_UNAVAILABLE;
     }

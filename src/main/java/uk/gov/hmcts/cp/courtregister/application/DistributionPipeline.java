@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
+import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
@@ -14,8 +15,11 @@ import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
+import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
+import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
+import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
 
 /**
  * One request, from the guard admitting it to the guard recording what happened.
@@ -24,20 +28,27 @@ import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
  * place that knows the order the ports are called in. The transport adapter above it decides how a
  * delivery is settled; this decides what the delivery is worth settling as.
  *
- * <p><strong>The transformation and the submission are not here yet.</strong> This increment carries
- * the walking skeleton — admit, fetch, record — and the stages that turn a hearing payload into an
- * {@code add-court-register} command arrive with the pipeline phase, which widens this class to the
- * remaining ports. What is already fixed, and is what the transport suites drive it through, is the
- * shape: a request and the delivery it arrived on go in, and exactly one {@link GuardDecision} comes
- * out, so the listener has something to settle on every path (constitution Principle VI).
+ * <p><strong>The five stages, in order</strong>: admit, fetch the hearing payload, ask whether the
+ * group-proceedings flag suppresses the register, transform, submit — then record. The shape the
+ * transport suites drive it through is unchanged: a request and the delivery it arrived on go in,
+ * and exactly one {@link GuardDecision} comes out, so the listener has something to settle on every
+ * path (constitution Principle VI). What the legacy orchestrator has instead is four silent guards
+ * and a catch-all that reports failure from a completed orchestration, and no test file at all.
  *
- * <p>A run over a payload with no register in it therefore ends {@code COMPLETED} with
- * {@code no-defendants} — the reason a hearing that produces an empty register-defendant list gets,
- * which is a business outcome recorded as such rather than an error or an undifferentiated success
- * (defect fixes C6 and C33). Four of the five completion reasons send nothing and two of those four
- * are this flow's ordinary results, so the reason is written and counted rather than folded away: a
- * court centre nobody subscribes to and a pipeline that has quietly stopped working look identical
- * from the outside otherwise.
+ * <p>Every way a run can end well is written down and counted. A suppressed hearing ends
+ * {@code COMPLETED, group-proceedings} where the legacy records nothing (the recorded half of defect
+ * fix C7); a transformation that declines to produce a register says which of the three remaining
+ * reasons it was, and the run ends {@code COMPLETED} under that reason; a register that was built
+ * ends {@code submitted} and only after progression has accepted it. Four of the five completion
+ * reasons send nothing and two of those four are this flow's ordinary results, so the reason is
+ * written and counted rather than folded away (defect fixes C6 and C33): a court centre nobody
+ * subscribes to and a pipeline that has quietly stopped working look identical from the outside
+ * otherwise.
+ *
+ * <p><strong>The transformation port is not implemented yet</strong>, and a pipeline constructed
+ * without one — the walking skeleton the transport suites use — ends every run it admits as
+ * {@code no-defendants}, which is the outcome a payload with no register in it earns anyway. The
+ * chain behind that port arrives with the mapper phase; nothing above it changes when it does.
  *
  * <p><strong>The run bounds itself.</strong> Before the ports are touched the deadline is fixed at
  * {@code courtregister.claim.processing-deadline} from now, and the run checks it before writing an
@@ -70,8 +81,8 @@ public class DistributionPipeline {
 
     private static final Logger LOG = LoggerFactory.getLogger(DistributionPipeline.class);
 
-    /** The marker the red run records while the stages after the fetch are unwired. */
-    private static final String STAGES_UNWIRED = "the pipeline stages are not wired yet";
+    /** The field of the claim-check payload the hearing itself sits under. */
+    private static final String HEARING = "hearing";
 
     private final IdempotencyGuard guard;
     private final HearingPayloadSource payloadSource;
@@ -118,9 +129,8 @@ public class DistributionPipeline {
      * @param clock              elapsed-time source for the run's own deadline
      * @param processingDeadline the enforced bound on a run, strictly shorter than the claim lease
      */
-    // PMD.ExcessiveParameterList: five ports and two settings, every one of them owned by the core
-    // and injected. Grouping them behind a holder would hide which stage a change touches.
-    @SuppressWarnings("PMD.ExcessiveParameterList")
+    // Five ports and two settings, every one of them owned by the core and injected. Grouping them
+    // behind a holder would hide which stage a change touches.
     public DistributionPipeline(
             final IdempotencyGuard guard,
             final HearingPayloadSource payloadSource,
@@ -164,15 +174,17 @@ public class DistributionPipeline {
     /**
      * The run itself, with every failure it can meet turned into an outcome.
      *
-     * <p>The second catch is total on purpose: this frame holds the claim, and it is the only frame
-     * that does. A failure that escaped it would leave {@code claim_owner} live for the rest of the
-     * lease, so every redelivery would bounce off {@code CLAIM_NOT_ACQUIRED} until the broker parked
-     * the message under its own reason with no FAILED record behind it — the silent parking the
-     * state machine exists to prevent. It is a catch-and-record, not a catch-and-ignore: the failure
-     * is reported at ERROR, classified, and written to the processed log before the delivery is
-     * settled. A store that dies inside the recording write throws out of the catch block itself,
-     * which is correct — nothing is recordable during a store outage, and the transport adapter's
-     * own handling takes over.
+     * <p>The first catch takes every failure whose throw site already classified it — the four ports
+     * answer "is this worth retrying" in the exception, and the pipeline never second-guesses them
+     * by reading the Java type. The second is total on purpose: this frame holds the claim, and it
+     * is the only frame that does. A failure that escaped it would leave {@code claim_owner} live
+     * for the rest of the lease, so every redelivery would bounce off {@code CLAIM_NOT_ACQUIRED}
+     * until the broker parked the message under its own reason with no FAILED record behind it —
+     * the silent parking the state machine exists to prevent. It is a catch-and-record, not a
+     * catch-and-ignore: the failure is reported at ERROR, classified, and written to the processed
+     * log before the delivery is settled. A store that dies inside the recording write throws out
+     * of the catch block itself, which is correct — nothing is recordable during a store outage,
+     * and the transport adapter's own handling takes over.
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private GuardDecision runUnder(
@@ -180,8 +192,9 @@ public class DistributionPipeline {
         GuardDecision outcome;
         try {
             outcome = runToOutcome(command, claim, lastChance);
-        } catch (PayloadUnavailableException unavailable) {
-            outcome = failed(claim, unavailable.classification(), unavailable.reason(), lastChance);
+        } catch (PayloadUnavailableException | ReferenceDataUnavailableException
+                | TransformationFailedException | SubmissionFailedException classified) {
+            outcome = failed(claim, classified.classification(), classified.reason(), lastChance);
         } catch (RuntimeException unexpected) {
             LOG.error("Run failed unexpectedly; recording it so the claim is released. "
                             + "source={} requestId={} type={}",
@@ -221,9 +234,17 @@ public class DistributionPipeline {
      * The stages between the payload and the outcome: the group-proceedings decision, the
      * transformation, and the submission of whatever it produced.
      *
-     * <p>Unwritten. It arrives with the phase that wires the transformation chain and the
-     * progression gateway; until then a pipeline constructed over the four ports refuses rather than
-     * quietly completing as though the register had been considered.
+     * <p>The policy is asked about the <em>hearing</em> and the transformation is handed the whole
+     * claim-check envelope, which is the split the legacy has: {@code index.js:21} reads the flag
+     * from {@code hearingResultedObj.hearing} while {@code SetCourtRegister} is called with the
+     * hearing and the shared time together. Handing the envelope to the policy would read an absent
+     * field and never suppress anything.
+     *
+     * <p>Nothing here edits what it was handed. The legacy passes one mutable hearing object to
+     * {@code SetCourtRegister} and then to {@code OutboundCourtRegister}, and is saved from the
+     * consequences only by the Durable Functions serialisation boundary between activities; a Java
+     * pipeline passes references, so the payload is handed on exactly as it was fetched and the
+     * stages derive rather than edit (constitution Principle IV).
      *
      * @param command the validated request
      * @param payload the hearing payload the fetch returned
@@ -232,7 +253,64 @@ public class DistributionPipeline {
      */
     private GuardDecision distribute(
             final DistributionCommand command, final JsonNode payload, final RunClaim claim) {
-        throw new UnsupportedOperationException(STAGES_UNWIRED);
+
+        final GuardDecision outcome;
+        if (groupProceedings.suppresses(command, hearingOf(payload))) {
+            outcome = completed(claim, CompletionReason.GROUP_PROCEEDINGS);
+        } else {
+            outcome = switch (transformer.transform(command, payload)) {
+                case TransformationResult.NoRegister nothing -> completed(claim, nothing.reason());
+                case TransformationResult.Register register -> submit(command, register, claim);
+            };
+        }
+        return outcome;
+    }
+
+    /**
+     * The hearing inside the claim-check envelope.
+     *
+     * <p>The legacy reads {@code hearingResultedObj.hearing.isGroupProceedings} without a guard, so
+     * an envelope carrying no hearing kills the orchestration. It is refused here for the same
+     * reason and classified non-transient: the payload the cache holds reads the same on every
+     * redelivery, so spending the delivery budget on it would only delay the dead-letter support
+     * acts on.
+     *
+     * @param payload the claim-check payload
+     * @return the hearing it carries
+     * @throws TransformationFailedException if the envelope carries no hearing
+     */
+    private static JsonNode hearingOf(final JsonNode payload) {
+        final JsonNode hearing = payload.get(HEARING);
+        if (hearing == null || hearing.isNull()) {
+            throw new TransformationFailedException("claim-check payload carries no hearing");
+        }
+        return hearing;
+    }
+
+    /**
+     * Sends one register to progression and records the run only once it has been accepted.
+     *
+     * <p>Exactly one POST per run: progression's {@code add-court-register} appends an event and a
+     * row for every call, so a second submission inside one run is a second register for the
+     * hearing. A submission that failed is never a completion — that is the exact shape of defect
+     * C1, where the POST's errors are swallowed and a lost register and a delivered one become the
+     * same row.
+     *
+     * @param command  the validated request
+     * @param register the register the transformation produced
+     * @param claim    the claim this run holds
+     * @return the settlement the outcome calls for
+     */
+    private GuardDecision submit(
+            final DistributionCommand command,
+            final TransformationResult.Register register,
+            final RunClaim claim) {
+
+        final SubmissionReceipt receipt =
+                submissionClient.submit(register.document(), CallerIdentity.of(command));
+        LOG.info("Register submitted. source={} requestId={} hearingId={} status={}",
+                command.source(), command.requestId(), command.hearingId(), receipt.responseCode());
+        return completed(claim, CompletionReason.SUBMITTED);
     }
 
     /**

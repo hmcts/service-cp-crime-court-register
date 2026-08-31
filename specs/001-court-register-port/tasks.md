@@ -242,8 +242,16 @@ in the same commit.**
       *(done — C31 moves to FIXED. The legacy's "no subscriptions" and "no defendants" early
       returns are not written as branches: an empty set in force filters to nothing and a register
       with no defendants satisfies nothing, so both end exactly where the legacy's returns end.)*
-- [ ] T039 [US1] Implement the group-proceedings policy + wire `DistributionPipeline` stages
+- [x] T039 [US1] Implement the group-proceedings policy + wire `DistributionPipeline` stages
       (green T030, T031) — updates C2/C7/C32/C33 (pipeline half).
+      *(done — C2 and C7 move to FIXED. C32 and C33 stay PLANNED with their pipeline halves
+      recorded: C32's remaining half is the Redis/query-fallback adapter (adapter phase) and C33's
+      is the transformation that chooses three of the four no-op reasons (T054). The four classified
+      failure types gained a shared `domain/ClassifiedFailure` interface so the core branches on the
+      classification a throw site chose rather than on a Java type — a mechanical refactor, no
+      behaviour change. `PipelineConfig` still builds the walking-skeleton pipeline: the
+      `RegisterTransformer` bean has nothing to be yet, and a policy bean nothing consumes would be
+      dead wiring. It is widened in the same commit as T056.)*
 
 **Checkpoint**: a hearing payload becomes a matched fragment with fixed dates, eligibility,
 vocabulary and matching semantics.
