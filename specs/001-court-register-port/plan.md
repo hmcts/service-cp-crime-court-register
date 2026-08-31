@@ -195,6 +195,7 @@ Layers: **U** unit · **W** WireMock · **PG** Postgres `*IT` · **SB** emulator
 | Listener | `MessageListenerSettlementTest`, `SettlementFailureEdgeTest` | U | one settlement per delivery; edges, store-gate failures included |
 | Lifecycle | `ConsumerLifecycleControllerTest` | U | suspension ordering: SUSPENDED only after a stop that succeeded, refusals reported/counted/retried |
 | Transport | `QueueSettlementIT`, `ContractValidationDeadLetterIT`, `DeliveryExhaustionIT`, `DuplicateDetectionIT`, `StoreOutageIT`, `ProlongedStoreOutageIT`, `ReadinessPolicyIT`, `StartupWithQueueDownIT`, `QueueOutageRecoveryIT` | SB/PG | inherited transport semantics on `courtregister.requests` |
+| Transport | `RequestDedupeIT` | SB/PG | C17 end to end through the real listener + guard, distinct broker `messageId`s: identical redelivery ⇒ one run, row untouched, completed; changed immutable field ⇒ collision dead-letter, record untouched |
 | Health | `ServiceBusHealthIndicatorTest` | U | broker-silence model |
 | Pipeline | `DistributionPipelineTest` | U | N1–N7 orchestration; C2 always-a-terminal-status; C32 transient; four no-op reasons N29–N33; C6 |
 | Pipeline | `GroupProceedingsPolicyTest` | U | N8–N12; C7 strict boolean + WARN + reason |
