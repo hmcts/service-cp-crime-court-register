@@ -73,7 +73,7 @@ in the same commit.**
 
 ### Tests first ⚠️
 
-- [ ] T007 [P] [US1] Write `domain/DistributionCommandParserTest` +
+- [x] T007 [P] [US1] Write `domain/DistributionCommandParserTest` +
       `domain/DistributionCommandSchemaCorpusTest` (red; seams: `DistributionCommand` record,
       parser skeleton, `config/JacksonConfig` skeleton) — six-field contract, closedness, enum
       values (`Hearing_Resulted` only), optional `userId`, the Q1a rename triple
