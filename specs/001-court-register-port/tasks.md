@@ -290,7 +290,7 @@ vocabulary and matching semantics.
       composition incl. middle-name-absent; unmapped `legalEntityName` asserted absent.
 - [x] T042 [P] [US3] `pipeline/DefendantMapperTest` — D1–D4 twins + explicit case-first,
       applications-only-if-empty precedence.
-- [ ] T043 [P] [US3] `pipeline/HearingMapperTest` — **C8/C9 fixed**: multi-entry attendance selects
+- [x] T043 [P] [US3] `pipeline/HearingMapperTest` — **C8/C9 fixed**: multi-entry attendance selects
       the correct defendant without mutating input (fails vs legacy assignment); date-compatible
       `defendantPresent` semantics per the kernel's orderedDate rule; all three
       `defendantAppearanceDetails` renderings; absent attendance ⇒ present=false; empty array ⇒
