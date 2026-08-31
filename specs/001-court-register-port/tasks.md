@@ -179,7 +179,7 @@ in the same commit.**
       `containsOnlyKeys` the 18 real keys; custody (police/prison, application+case), appearance,
       cps, youth/adult flags; **C30 fix**: all three major-creditor predicates consistently
       unmatchable for this flow.
-- [ ] T026 [P] [US3] Write `pipeline/CourtExtractFilterTest` (red) — RF1 twin (result+prompt
+- [x] T026 [P] [US3] Write `pipeline/CourtExtractFilterTest` (red) — RF1 twin (result+prompt
       levels, `courtExtract` `'Y'`/`'y'` fallback).
 - [ ] T027 [P] [US3] Write `pipeline/RegisterBuilderTest` (red; seam: `RegisterBuilder`,
       `RegisterFragment`) — S1 twin repointed (registerDate = true instant; hearingDate
