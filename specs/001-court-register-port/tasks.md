@@ -61,7 +61,7 @@ in the same commit.**
       `RedisTestSupport`, `ServiceTestSupport` (court-register properties), `AdjustableClock`,
       `CapturedLog`, plus `application-test.yaml` (`courtregister.consumer.enabled=false`,
       datasource excluded, readiness `ping`). Verify with a trivial context test.
-- [ ] T006 [P] Comparator vendored: `comparator-vectors/vectors.json`, `support/JsonParity`,
+- [x] T006 [P] Comparator vendored: `comparator-vectors/vectors.json`, `support/JsonParity`,
       `support/ComparatorContractTest`, `support/JsonParityTest` from IR-REPO (domain-independent;
       116 assertions). [A] — records the initial pass.
 
