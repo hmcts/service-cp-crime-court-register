@@ -343,7 +343,11 @@ vocabulary and matching semantics.
       needs a C-number or a legacy check before T054 chooses. The trimming R3/R4 pin is asserted at
       recipient level rather than against a helper, so `JsStrings` — deferred here by T033 — is
       whatever T054 needs it to be.)*
-- [ ] T049 [P] [US3] `pipeline/ResultMapperTest` — RS1 twin + null/empty ⇒ absent.
+- [x] T049 [P] [US3] `pipeline/ResultMapperTest` — RS1 twin + null/empty ⇒ absent.
+      *(done — ten cases, all red on the seam. The empty-list guard is the one that matters: this
+      mapper is called at three scopes where an empty filtered list is the normal case, and every
+      result list on the frozen contract carries `minItems: 1`, so answering `[]` instead of nothing
+      is a document progression refuses. Neither guard is exercised by the legacy suite.)*
 - [ ] T050 [P] [US3] `pipeline/YouthDefendantMapperTest` — YD1 twin repaired (real nationality,
       three-part name, address5); **C19 fix**: legal-entity/unmatched defendant ⇒ guarded skip
       recorded as `anomaly_summary` `unresolvable-youth-defendant:1` + the anomaly metric, not
