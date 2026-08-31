@@ -5,7 +5,9 @@ import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.azure.messaging.servicebus.ServiceBusClientBuilder;
@@ -96,6 +98,10 @@ public final class ServiceBusEmulatorTestSupport {
 
     private static Proxy brokerProxy;
 
+    /** One peeking client per sub-queue, reused across peeks — see {@link #peeker(SubQueue)}. */
+    private static final Map<SubQueue, ServiceBusReceiverClient> PEEKERS =
+            new EnumMap<>(SubQueue.class);
+
     private ServiceBusEmulatorTestSupport() {
         // Static fixture holder.
     }
@@ -167,6 +173,7 @@ public final class ServiceBusEmulatorTestSupport {
         } catch (IOException unreachable) {
             throw new UncheckedIOException("could not cut the broker connection", unreachable);
         }
+        discardPeekers();
     }
 
     /**
@@ -183,6 +190,7 @@ public final class ServiceBusEmulatorTestSupport {
         } catch (IOException unreachable) {
             throw new UncheckedIOException("could not restore the broker connection", unreachable);
         }
+        discardPeekers();
         await().atMost(BROKER_RETURNS_WITHIN)
                 .pollInterval(Duration.ofSeconds(1))
                 .untilAsserted(ServiceBusEmulatorTestSupport::assertBrokerAnswers);
@@ -242,16 +250,43 @@ public final class ServiceBusEmulatorTestSupport {
      *                  for its dead-letter queue
      * @return the message, if the queue holds one under that identity
      */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    // A peek that failed says nothing about why; what matters is that this client is no longer
+    // trusted, and the failure is rethrown rather than absorbed.
     public static Optional<ServiceBusReceivedMessage> peekFor(
             final String messageId, final SubQueue subQueue) {
-        try (ServiceBusReceiverClient receiver = new ServiceBusClientBuilder()
+        try {
+            return pageFor(peeker(subQueue), messageId);
+        } catch (RuntimeException unanswered) {
+            discardPeekers();
+            throw unanswered;
+        }
+    }
+
+    /**
+     * The peeking client for one sub-queue, opened once and kept.
+     *
+     * <p>A client per call is the obvious shape and it does not survive a <em>red</em> run: a
+     * condition that never comes true is re-asked for the whole of its timeout, and a fresh client
+     * each time means a fresh AMQP connection and a reactor thread each time. A suite waiting out
+     * several minutes of timeouts opened them by the thousand and exhausted the test JVM's heap
+     * before any assertion was reached. Peeking neither locks nor consumes, so one client can serve
+     * every peek; it is discarded whenever the transport is cut or restored, and whenever a peek
+     * fails, so no suite is ever answered over a connection that has been through an outage.
+     */
+    private static synchronized ServiceBusReceiverClient peeker(final SubQueue subQueue) {
+        return PEEKERS.computeIfAbsent(subQueue, sub -> new ServiceBusClientBuilder()
                 .connectionString(connectionString())
                 .receiver()
                 .queueName(QUEUE_NAME)
-                .subQueue(subQueue)
-                .buildClient()) {
-            return pageFor(receiver, messageId);
-        }
+                .subQueue(sub)
+                .buildClient());
+    }
+
+    /** Closes and forgets every peeking client, so the next peek opens a fresh one. */
+    private static synchronized void discardPeekers() {
+        PEEKERS.values().forEach(ServiceBusReceiverClient::close);
+        PEEKERS.clear();
     }
 
     private static Optional<ServiceBusReceivedMessage> pageFor(

@@ -34,6 +34,14 @@ import org.springframework.boot.health.contributor.HealthIndicator;
  * <p>Registered <strong>outside</strong> the readiness group on purpose (spec FR-011): a pod cannot
  * heal a broker by restarting, so a broker in readiness turns a blip into a rolling restart of every
  * consumer at once, while the queue stays exactly as wrong as it was.
+ *
+ * <p><strong>Why the recorders are silent rather than refusing.</strong> Every one of them is called
+ * from inside an SDK callback — the message pump and the {@code processError} handler — and a seam
+ * that threw from there did not produce a red test, it produced a transport that never stabilised:
+ * the processor tore its connection down and rebuilt it on every error, thousands of reactor threads
+ * deep, until the test JVM ran out of heap. So the recorders accept what they are told and remember
+ * none of it, and the component answers {@code UNKNOWN} — which is exactly what every suite asserting
+ * UP or DOWN fails on, and is the truthful answer from a component that has not been written.
  */
 public class ServiceBusHealthIndicator implements HealthIndicator {
 
@@ -65,8 +73,8 @@ public class ServiceBusHealthIndicator implements HealthIndicator {
      */
     public void recordProcessorError(
             final String errorSource, final String entityPath, final Throwable failure) {
-        throw new UnsupportedOperationException(
-                "only a connection-class failure means the queue is unreachable");
+        // Accepted and forgotten: only a connection-class failure means the queue is unreachable,
+        // and telling one from another is what T022 writes here.
     }
 
     /**
@@ -75,22 +83,21 @@ public class ServiceBusHealthIndicator implements HealthIndicator {
      * @param refusal what the broker answered the settlement call with
      */
     public void recordSettlementRefusal(final Throwable refusal) {
-        throw new UnsupportedOperationException(
-                "a refusal about one message is not an outage of the queue");
+        // Accepted and forgotten: a refusal about one message is not an outage of the queue.
     }
 
     /**
      * Records that the broker answered: a delivery arrived.
      */
     public void recordTraffic() {
-        throw new UnsupportedOperationException("traffic answers the failure that preceded it");
+        // Accepted and forgotten: traffic answers the failure that preceded it.
     }
 
     /**
      * Records that the broker accepted a settlement, which is a round trip like any other.
      */
     public void recordSettlementAccepted() {
-        throw new UnsupportedOperationException("a settlement the broker took is traffic");
+        // Accepted and forgotten: a settlement the broker took is traffic like any other.
     }
 
     /**
@@ -98,8 +105,7 @@ public class ServiceBusHealthIndicator implements HealthIndicator {
      * broker nobody has yet spoken to.
      */
     public void recordIntakeStarted() {
-        throw new UnsupportedOperationException(
-                "a pod gated on its store has not asked the broker anything yet");
+        // Accepted and forgotten: until intake starts there is no broker to have an opinion about.
     }
 
     /**
@@ -108,13 +114,14 @@ public class ServiceBusHealthIndicator implements HealthIndicator {
      * @return whether the broker is reachable
      */
     public boolean reachableNow() {
-        throw new UnsupportedOperationException(
-                "the gauge and the health component answer from one live state");
+        return false;
     }
 
     @Override
     public Health health() {
-        throw new UnsupportedOperationException(
-                "the broker's reachability is read from what the SDK already reports");
+        return Health.unknown()
+                .withDetail("condition", "not-yet-evaluated")
+                .withDetail("stalenessWindow", staleness.toString())
+                .build();
     }
 }

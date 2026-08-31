@@ -134,7 +134,7 @@ in the same commit.**
       re-dead-letter; lock-loss counted.
 - [x] T020 [P] [US4] Write `config/ServiceBusHealthIndicatorTest` (red; seam: indicator) — the
       broker-silence staleness model, refused settlements as fault inputs.
-- [ ] T021 [P] [US1] Write the emulator suite (red): `QueueSettlementIT`,
+- [x] T021 [P] [US1] Write the emulator suite (red): `QueueSettlementIT`,
       `ContractValidationDeadLetterIT`, `DeliveryExhaustionIT`, `DuplicateDetectionIT`,
       `StoreOutageIT`, `ProlongedStoreOutageIT`, `ReadinessPolicyIT`, `StartupWithQueueDownIT`,
       `QueueOutageRecoveryIT` — against queue `courtregister.requests` with a stub pipeline.

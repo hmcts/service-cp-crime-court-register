@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.support;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -13,6 +14,9 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import uk.gov.hmcts.cp.Application;
+import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
+
+import static org.awaitility.Awaitility.await;
 
 /**
  * The whole service, started by a test that needs to control <em>when</em> it starts.
@@ -23,24 +27,19 @@ import uk.gov.hmcts.cp.Application;
  * scenario from a store that goes down later — and it must be certain no other consumer is alive on
  * the shared queue while it counts what its own message did. A context built here is built when the
  * test says so, is never cached, and is closed by the test's own try-with-resources.
- *
- * <p><strong>What is not here yet.</strong> The informant reference also carries a
- * {@code startConsuming(...)} that publishes a warm-up request and waits for its processed-log row
- * to reach {@code COMPLETED}. That proof needs the processed log, the request status enum and the
- * pipeline, none of which exist at this point in the port; it lands with the transport suites
- * (T021), alongside {@code ProcessedLogTestSupport}. Adding a weaker stand-in now — "the context
- * refreshed" — would be the opposite of what the method is for, because starting a context is
- * precisely not the same thing as consuming.
  */
 public final class ServiceTestSupport {
 
     /**
      * The single value {@code source} is permitted to take.
      *
-     * <p>Lives here until {@code ProcessedLogTestSupport} arrives with the processed log (T017),
-     * which is where the informant reference keeps it; the guard suites read it from there.
+     * <p>The same value {@code ProcessedLogTestSupport} keeps, which is where the guard suites read
+     * it from.
      */
     public static final String SOURCE = "RESULTS";
+
+    /** How long a freshly started service is given to process its first request. */
+    private static final Duration CONSUMING_WITHIN = Duration.ofSeconds(60);
 
     /**
      * The {@code CJSCPPUID} every context needs before it will start.
@@ -67,6 +66,33 @@ public final class ServiceTestSupport {
         return new SpringApplicationBuilder(Application.class)
                 .web(WebApplicationType.NONE)
                 .run(asArguments(properties));
+    }
+
+    /**
+     * Starts the service and waits until it is demonstrably consuming.
+     *
+     * <p>For every suite whose scenario is "a service that was working met an outage". Starting the
+     * context is not the same as consuming: intake is gated on a store probe, so a suite that broke
+     * the store immediately after {@link #start(Map)} could win the race and be testing a pod that
+     * never began — which passes some assertions for entirely the wrong reason and fails the ones
+     * about suspension, because nothing was ever suspended.
+     *
+     * <p>The proof is a request processed end to end. Nothing else proves it: readiness says the
+     * store answers, and the queue's own state says nothing about who is listening to it.
+     *
+     * @param overrides settings this suite needs to differ
+     * @return the running, consuming context, to be closed by the caller
+     */
+    public static ConfigurableApplicationContext startConsuming(final Map<String, String> overrides) {
+        final ConfigurableApplicationContext context = start(overrides);
+        final UUID warmUp = UUID.randomUUID();
+        publish(validBody(warmUp, UUID.randomUUID()));
+        await().atMost(CONSUMING_WITHIN)
+                .pollInterval(Duration.ofMillis(500))
+                .until(() -> ProcessedLogTestSupport.row(SOURCE, warmUp)
+                        .filter(row -> RequestStatus.COMPLETED.name().equals(row.status()))
+                        .isPresent());
+        return context;
     }
 
     /**
