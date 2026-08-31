@@ -132,7 +132,7 @@ in the same commit.**
       `inbound/SettlementFailureEdgeTest` (red; seams: listener + `StoreGate`) — exactly one
       settlement per delivery; COMPLETED redelivery acked without run; FAILED same-identity
       re-dead-letter; lock-loss counted.
-- [ ] T020 [P] [US4] Write `config/ServiceBusHealthIndicatorTest` (red; seam: indicator) — the
+- [x] T020 [P] [US4] Write `config/ServiceBusHealthIndicatorTest` (red; seam: indicator) — the
       broker-silence staleness model, refused settlements as fault inputs.
 - [ ] T021 [P] [US1] Write the emulator suite (red): `QueueSettlementIT`,
       `ContractValidationDeadLetterIT`, `DeliveryExhaustionIT`, `DuplicateDetectionIT`,
