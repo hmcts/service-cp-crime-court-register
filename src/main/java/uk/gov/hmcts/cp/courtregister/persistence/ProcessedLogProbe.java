@@ -1,5 +1,8 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
@@ -19,6 +22,16 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  */
 public class ProcessedLogProbe {
 
+    private static final Logger LOG = LoggerFactory.getLogger(ProcessedLogProbe.class);
+
+    /**
+     * The cheapest round trip there is. It is asked of the pool rather than of a table on purpose:
+     * the question is "is the store reachable", and a query naming {@code processed_request} would
+     * also fail on an unmigrated schema — which is a different problem with a different answer, and
+     * one this probe is deliberately asked <em>before</em>.
+     */
+    private static final String PROBE = "SELECT 1";
+
     private final JdbcClient jdbcClient;
 
     /**
@@ -36,6 +49,14 @@ public class ProcessedLogProbe {
      * @return whether the processed log answered
      */
     public boolean available() {
-        throw new UnsupportedOperationException("T018 implements the store probe");
+        boolean reachable;
+        try {
+            jdbcClient.sql(PROBE).query(Integer.class).single();
+            reachable = true;
+        } catch (DataAccessException unreachable) {
+            LOG.debug("The processed log did not answer the probe.", unreachable);
+            reachable = false;
+        }
+        return reachable;
     }
 }

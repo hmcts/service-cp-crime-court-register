@@ -115,7 +115,7 @@ in the same commit.**
       completion reasons), `ProcessedLogDurabilityIT`, `ClaimContentionIT`, `ClaimReclamationIT`,
       `StaleRunnerRejectionIT`, `CrashWindowIT`, `FailedReplayIT`, `IdempotencyCollisionIT`,
       `ProcessedOutputRepositoryIT` (digest-before-send kept after failure; POSTED replay skip).
-- [ ] T018 [US2] Implement `persistence/ProcessedRequestRepository`,
+- [x] T018 [US2] Implement `persistence/ProcessedRequestRepository`,
       `persistence/ProcessedOutputRepository`, `persistence/ProcessedLogProbe`,
       `application/IdempotencyGuard` + domain state records (green for T017; ports the informant
       SQL with the `processed_output` delta).
