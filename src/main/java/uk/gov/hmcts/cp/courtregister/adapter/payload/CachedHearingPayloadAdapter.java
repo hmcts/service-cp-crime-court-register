@@ -1,9 +1,13 @@
 package uk.gov.hmcts.cp.courtregister.adapter.payload;
 
+import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.application.HearingPayloadSource;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException;
+import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 
 /**
  * The payload source as the function app arranges it: the cache first, the query side after it.
@@ -31,10 +35,9 @@ import uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException;
  * the payload may simply not be written yet, so the request is redelivered, and an exhausted one is
  * dead-lettered where somebody can see it.
  */
-// PMD.UnusedPrivateField: the three collaborators are the seam T057's suite constructs the adapter
-// with, and they are read by the body T065 writes. The suppression comes off with that body.
-@SuppressWarnings("PMD.UnusedPrivateField")
 public class CachedHearingPayloadAdapter implements HearingPayloadSource {
+
+    private static final Logger LOG = LoggerFactory.getLogger(CachedHearingPayloadAdapter.class);
 
     private final HearingPayloadCache cache;
     private final HearingPayloadQuery query;
@@ -56,6 +59,34 @@ public class CachedHearingPayloadAdapter implements HearingPayloadSource {
 
     @Override
     public JsonNode fetch(final DistributionCommand command) {
-        throw new UnsupportedOperationException("T065 composes the cache and the query side");
+        Optional<JsonNode> payload = cache.read(HearingPayloadCacheKey.cacheKey(
+                keyPrefix, command.hearingId(), command.hearingDay()));
+        if (payload.isEmpty()) {
+            payload = cache.read(
+                    HearingPayloadCacheKey.cacheKey(keyPrefix, command.hearingId(), null));
+        }
+        if (payload.isEmpty()) {
+            LOG.info("The hearing payload is not cached under either key form; asking the results "
+                            + "query API. requestId={} hearingId={} hearingDay={}",
+                    command.requestId(), command.hearingId(), command.hearingDay());
+            payload = query.fetch(command);
+        }
+        return payload.orElseThrow(() -> unavailable(command));
+    }
+
+    /**
+     * The end of the chain, and the whole of defect fix C32.
+     *
+     * <p>Recorded at ERROR because a payload neither source holds is worth looking at: it is
+     * ordinarily a hearing whose claim check has not been written yet, and a sustained rise in it is
+     * a producer or a cache that has stopped. The message is the bounded code alone — it reaches
+     * {@code processed_request.failure_reason}, a dead-letter description and the log index.
+     */
+    private static PayloadUnavailableException unavailable(final DistributionCommand command) {
+        LOG.error("The hearing payload is available from neither the cache nor the query API. "
+                        + "requestId={} hearingId={} hearingDay={} reason={}",
+                command.requestId(), command.hearingId(), command.hearingDay(),
+                ReasonCode.PAYLOAD_UNAVAILABLE.code());
+        return new PayloadUnavailableException(ReasonCode.PAYLOAD_UNAVAILABLE);
     }
 }

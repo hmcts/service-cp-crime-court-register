@@ -672,9 +672,22 @@ vocabulary and matching semantics.
 
 ### Implementation
 
-- [ ] T065 [US1] Implement `adapter/payload/*` (Lettuce cache, query client, cached adapter) +
+- [x] T065 [US1] Implement `adapter/payload/*` (Lettuce cache, query client, cached adapter) +
       `config/LivePayloadConfig`/`StubPayloadConfig` (green T057–T059, T063) — updates
       C14/C15/C32.
+      *(done — 79 cases green across the four suites, and C14, C15 and C32 all move to FIXED. Three
+      things the implementation decides. **(1)** The client raises for every failure and answers
+      empty for every answer, and a `404` is the one status that crosses that line: the resource is
+      per-hearing, so its absence is the query side saying it does not hold this hearing, exactly as
+      the empty-bodied `200` the results context also serves — while a body that will not parse is a
+      failure, because a gateway error page served with a `200` is not an answer about a hearing.
+      **(2)** The retry taxonomy is written as the positive list (408, 429, 5xx, connect and read
+      failures) rather than as the legacy's `status <= 429` cut-off, so the two statuses that most
+      plainly mean "ask again" stop being the least-retried failures in the estate — and it is the
+      same list the progression gateway applies. **(3)** `StubPayloadConfig` needed no change: it
+      already serves the port and startup already refuses it where the deployed credential source is
+      in use, so the live beans landing beside it changes nothing about how one of the pair is
+      chosen.)*
 - [ ] T066 [US1] Implement `adapter/refdata/ReferenceDataNowSubscriptionsClient` + configs (green
       T060).
 - [ ] T067 [US1] Implement `adapter/progression/{ProgressionCommandGateway,

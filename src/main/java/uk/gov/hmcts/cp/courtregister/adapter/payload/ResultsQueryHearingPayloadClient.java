@@ -2,10 +2,21 @@ package uk.gov.hmcts.cp.courtregister.adapter.payload;
 
 import java.time.Duration;
 import java.util.Optional;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
+import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
+import uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException;
+import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 
 /**
  * The results query API, read when the cache has nothing.
@@ -36,9 +47,6 @@ import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
  * and a read that could not be made at all raises
  * {@link uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException} here.
  */
-// PMD.UnusedPrivateField: the five collaborators are the seam T058's suite constructs the client
-// with, and they are read by the body T065 writes. The suppression comes off with that body.
-@SuppressWarnings("PMD.UnusedPrivateField")
 public class ResultsQueryHearingPayloadClient implements HearingPayloadQuery {
 
     /** The resource's path under the results context; {@code {hearingId}} is the only variable. */
@@ -57,6 +65,12 @@ public class ResultsQueryHearingPayloadClient implements HearingPayloadQuery {
      * this service does not have.
      */
     public static final String IDENTITY_HEADER = "CJSCPPUID";
+
+    private static final Logger LOG =
+            LoggerFactory.getLogger(ResultsQueryHearingPayloadClient.class);
+
+    /** The attempt budget remaining when the attempt being taken is the last permitted one. */
+    private static final int LAST_ATTEMPT = 1;
 
     private final RestClient restClient;
     private final String systemUserId;
@@ -85,6 +99,160 @@ public class ResultsQueryHearingPayloadClient implements HearingPayloadQuery {
 
     @Override
     public Optional<JsonNode> fetch(final DistributionCommand command) {
-        throw new UnsupportedOperationException("T065 reads the results query API");
+        // The user who shared the results where the message named one, and the configured system
+        // identity otherwise — one identity per run, resolved once (CallerIdentity).
+        final String caller = CallerIdentity.of(command).orSystem(systemUserId);
+        if (caller == null || caller.isBlank()) {
+            // K3's repair. Neither the message nor the configuration named anybody, and the query
+            // side authorises on this header — so an anonymous read is a 403 dressed as a cache
+            // miss. The legacy drops the run here without a word (index.js:176-178); this records
+            // it, and sends nothing.
+            LOG.warn("No user identity is available, so the payload fallback cannot be used. "
+                    + "requestId={} hearingId={}", command.requestId(), command.hearingId());
+            throw unavailable();
+        }
+        return attempt(command, caller);
+    }
+
+    /**
+     * The read, retried under the corrected taxonomy.
+     *
+     * <p>One exit: the loop ends when the query side answered, and every other outcome leaves it by
+     * raising. An answer that held nothing is an answer — {@link CachedHearingPayloadAdapter} is the
+     * participant that knows the cache missed too, so it is the one that classifies the pair.
+     */
+    private Optional<JsonNode> attempt(final DistributionCommand command, final String caller) {
+        Optional<JsonNode> payload = Optional.empty();
+        boolean answered = false;
+        for (int attemptsLeft = maxAttempts; !answered; attemptsLeft--) {
+            final boolean lastAttempt = attemptsLeft <= LAST_ATTEMPT;
+            try {
+                payload = content(get(command.hearingId(), caller));
+                answered = true;
+            } catch (RestClientResponseException refused) {
+                answered = heldNothing(command, refused.getStatusCode().value(), lastAttempt);
+            } catch (RestClientException unanswered) {
+                neverAnswered(command, lastAttempt);
+            }
+            if (!answered) {
+                pause(command);
+            }
+        }
+        return payload;
+    }
+
+    private String get(final UUID hearingId, final String caller) {
+        return restClient.get()
+                .uri(PATH, hearingId)
+                .header(HttpHeaders.ACCEPT, ACCEPT)
+                .header(IDENTITY_HEADER, caller)
+                .retrieve()
+                .body(String.class);
+    }
+
+    /**
+     * What a status the query side answered with means.
+     *
+     * <p>A {@code 404} is the only one that ends the read without a payload and without a failure:
+     * the resource is per-hearing, so its absence is the query side saying it does not hold this
+     * hearing — the same answer as the empty-bodied {@code 200} the results context also serves.
+     * Everything else is a failure, and the fixed C3 taxonomy decides only whether asking again can
+     * change it: connect and read failures, 5xx, 429 and 408 can, and no other 4xx ever will.
+     *
+     * @return {@code true} when the query side answered and held nothing
+     */
+    private boolean heldNothing(final DistributionCommand command, final int status,
+            final boolean lastAttempt) {
+        final boolean notHeld = status == HttpStatus.NOT_FOUND.value();
+        if (!notHeld && (lastAttempt || !retryable(status))) {
+            LOG.warn("The results query API refused the payload read. requestId={} hearingId={} "
+                    + "status={}", command.requestId(), command.hearingId(), status);
+            throw unavailable();
+        }
+        return notHeld;
+    }
+
+    /**
+     * The statuses another attempt may answer differently.
+     *
+     * <p>The legacy's rule is the inverse for the two that matter: {@code AxiosRetryWrapper.js:34}
+     * abandons on any status at or below 429, so a service answering "slow down" or "you timed out"
+     * is the one thing it never asks again (defect fix C3).
+     */
+    private static boolean retryable(final int status) {
+        return status == HttpStatus.REQUEST_TIMEOUT.value()
+                || status == HttpStatus.TOO_MANY_REQUESTS.value()
+                || status >= HttpStatus.INTERNAL_SERVER_ERROR.value();
+    }
+
+    /** A read that never reached an answer: retried while attempts remain, then reported. */
+    private void neverAnswered(final DistributionCommand command, final boolean lastAttempt) {
+        if (lastAttempt) {
+            LOG.warn("The results query API did not answer. requestId={} hearingId={}",
+                    command.requestId(), command.hearingId());
+            throw unavailable();
+        }
+    }
+
+    /**
+     * The body, as a payload or as an empty answer.
+     *
+     * <p>The legacy's own content test is the right one and is kept ({@code index.js:50-52} returns
+     * the body only when it has content); what is not kept is that an empty one and a failed read
+     * are the same {@code undefined}.
+     */
+    private Optional<JsonNode> content(final String body) {
+        Optional<JsonNode> payload = Optional.empty();
+        if (body != null && !body.isBlank()) {
+            payload = parsed(body);
+        }
+        return payload;
+    }
+
+    /**
+     * A body that is not JSON is a failure rather than an empty answer.
+     *
+     * <p>A gateway error page served with a {@code 200} is the everyday case: nothing was obtained,
+     * and reading that as "the hearing is not held" would spend the register on a proxy's bad day.
+     */
+    private Optional<JsonNode> parsed(final String body) {
+        Optional<JsonNode> payload = Optional.empty();
+        try {
+            final JsonNode tree = objectMapper.readTree(body);
+            if (tree != null && !tree.isNull() && !tree.isMissingNode() && !tree.isEmpty()) {
+                payload = Optional.of(tree);
+            }
+        } catch (JacksonException notJson) {
+            // By type, never by message. A parser quotes the token it choked on, and in a truncated
+            // hearing that token is a name, an address or a URN (constitution Principle VII).
+            LOG.warn("The results query API answered with something that is not JSON. type={}",
+                    notJson.getClass().getName());
+            throw unavailable();
+        }
+        return payload;
+    }
+
+    private void pause(final DistributionCommand command) {
+        if (!retryInterval.isZero() && !retryInterval.isNegative()) {
+            try {
+                Thread.sleep(retryInterval);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                LOG.warn("Interrupted while waiting to retry the payload read. requestId={} "
+                        + "hearingId={}", command.requestId(), command.hearingId());
+                throw unavailable();
+            }
+        }
+    }
+
+    /**
+     * The one failure this client raises, carrying the bounded code and nothing else.
+     *
+     * <p>The message travels into {@code processed_request.failure_reason}, a dead-letter
+     * description and the log index, so it is the code — never a URL, a status, or the words the
+     * layer beneath used.
+     */
+    private static PayloadUnavailableException unavailable() {
+        return new PayloadUnavailableException(ReasonCode.PAYLOAD_UNAVAILABLE);
     }
 }

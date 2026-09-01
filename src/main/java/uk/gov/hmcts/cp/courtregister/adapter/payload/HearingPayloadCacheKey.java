@@ -19,6 +19,9 @@ import java.util.UUID;
  */
 public final class HearingPayloadCacheKey {
 
+    /** The literal the producer terminates every payload key with. */
+    private static final String SUFFIX = "_result_";
+
     private HearingPayloadCacheKey() {
         // Key construction only.
     }
@@ -33,6 +36,11 @@ public final class HearingPayloadCacheKey {
      */
     public static String cacheKey(final String prefix, final UUID hearingId,
             final LocalDate hearingDay) {
-        throw new UnsupportedOperationException("T065 builds the cache key");
+        // UUID.toString and LocalDate.toString are both the canonical forms the producer writes:
+        // lower-case hexadecimal and a zero-padded ISO date. Redis keys are bytes, so a key that
+        // differs only in case or in a missing leading zero is simply a different key, and reading
+        // it finds nothing at all.
+        final String day = hearingDay == null ? "" : "_" + hearingDay;
+        return prefix + hearingId + day + SUFFIX;
     }
 }
