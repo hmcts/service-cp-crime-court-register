@@ -1,7 +1,25 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 2.0.0 → 2.0.1
+Version change: 2.0.1 → 2.0.2
+Bump rationale: PATCH — the register grew its first appended row (C35,
+                2026-09-01: the hearing-date wall-clock legs, found in the
+                pipeline-core review). Principle I already provided the
+                append mechanism in its final bullet; this amendment makes
+                the catalogue language match it: "the 34" now reads as the
+                design document's original catalogue (C1–C34) PLUS any row
+                appended later under review, with appended rows carrying
+                exactly the same obligations (fix specification, pinning
+                test, sign-off state). No principle's requirements change.
+
+Modified sections (this amendment): Principle I opening paragraph and first
+bullet — "the 34 behaviours that are catalogued" widened to "the catalogued
+behaviours (C1–C34 from the design document §7, plus rows appended under
+review — C35 onward)"; the pre-approval sentence now names the original
+catalogue explicitly, since an appended row is approved by the review that
+appends it, not in advance.
+
+Previous amendment (2.0.0 → 2.0.1):
 Bump rationale: PATCH — delivery-scope precision after the P0 review
                 (2026-08-31): the register carries 34 rows, but three of them
                 (C18, C28, C34) are remediations owned outside this repository
@@ -55,6 +73,8 @@ Modified principles (this amendment):
     DEFECT-FIXES.md with polarity flipped.
 
 History:
+  - 2.0.1 (2026-08-31) Delivery scope stated as 31-in-service plus three
+    externally-owned remediations (C18/C28/C34), after the P0 review.
   - 2.0.0 (2026-08-31) Re-ratified for service-cp-crime-court-register.
     Principle I inverted to fix-first with the 34-entry defect-fix register;
     all sections re-targeted at the court-register flow. Lineage: adopted
@@ -115,13 +135,16 @@ registered.
 The legacy JavaScript function app under
 `cpp-context-azure-legalaidagency/azure-functions/durable-functions/` —
 together with its Jest fixtures — is the **oracle for every behaviour that is
-not catalogued as a defect**. For the 34 behaviours that are catalogued
-(C1–C34, per the court-register design document §7 and this repo's
-`doc/DEFECT-FIXES.md`), the fixed behaviour specified in the register is the
-requirement, and reproducing the defect is itself a defect.
+not catalogued as a defect**. For the catalogued behaviours — C1–C34 from
+the court-register design document §7, plus any row appended to this repo's
+`doc/DEFECT-FIXES.md` under review (C35 onward) — the fixed behaviour
+specified in the register is the requirement, and reproducing the defect is
+itself a defect. An appended row carries exactly the same obligations as an
+original one: a fix specification, a pinning test, and a sign-off state.
 
-- All 34 catalogued defects are **pre-approved fixes**: no further
-  authorisation is needed to implement them. **Thirty-one are implemented in
+- The 34 original catalogued defects (C1–C34) are **pre-approved fixes**: no
+  further authorisation is needed to implement them; a row appended later is
+  approved by the review that appends it. **Thirty-one are implemented in
   this service; C18, C28 and C34 are externally-owned remediations** (the
   legacy function-app repo and the producer), registered as PENDING with an
   owner and a trigger and tracked to conclusion before cutover. Fixes whose
@@ -554,4 +577,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 2.0.1 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-08-31
+**Version**: 2.0.2 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-01
