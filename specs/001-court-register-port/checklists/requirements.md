@@ -46,6 +46,13 @@ rounds are recorded in the phase-final commit narratives rather than re-listed h
 holds against the tree as built. The "34/34 rows" measure reads as "all 34 catalogued rows
 present": the register has since grown two appended rows (C35, C36) under the constitution's
 append mechanism (v2.0.2), which extends the catalogue rather than contradicting the criterion —
-every FIXED row's pinning test was verified present in `src/test` by grep. The three unticked
-boxes remain deliberately open: business sign-off gates cutover, and the last two close with
-Phase 8 (T073–T075, the differential audit).
+every FIXED row's pinning test was verified present in `src/test` by grep.
+
+**Re-verified again at Phase 8 close (T073–T075, 2026-09-01):** the differential audit ran the whole
+recorded corpus — 381 recordings of the real Node function app — against this port with zero
+unattributed differences, and its report is committed at `checklists/differential-audit.md`. That
+closes the last two boxes that were open on process grounds. **One box remains open, and it is the
+only one:** business sign-off for the content-changing fixes. It is deliberately open, tracked per
+row in `doc/DEFECT-FIXES.md`, and gates cutover rather than implementation — so it stays unticked
+until the sign-off actually happens, and ticking it would be the one thing this checklist must not
+do on the increment's own authority.

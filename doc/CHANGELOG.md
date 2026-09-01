@@ -8,6 +8,15 @@ released, so everything sits under Unreleased.
 
 ### Added
 
+- 2026-09-01 — **The differential audit, and the register read adversarially.**
+  `DifferentialAuditTest` puts 381 recordings of the real Node function app through this port's
+  own chain and requires every difference to name the `doc/DEFECT-FIXES.md` row that allows it; an
+  unattributed one is a port defect. Two rows (C35, C36) were appended for shapes the catalogue had
+  not, and the report is at `specs/001-court-register-port/checklists/differential-audit.md`. The
+  attribution machinery is itself pinned in both directions:
+  `RegisteredDefectFixesRejectionTest` reads every registered entry as a control and a near miss,
+  so a claim that had quietly become an exclusion fails rather than passes.
+
 - 2026-08-31 — **New alerting instrument `courtregister_intake_suspension_failures_total`.**
   Counted when a store outage asks intake to stop and the processor refuses the stop; the
   lifecycle stays in `SUSPENDING`, retries on the next delivery, and this counter is the loud
@@ -28,6 +37,16 @@ released, so everything sits under Unreleased.
   `courtregister.requests`, package `uk.gov.hmcts.cp.courtregister`).
 
 ### Changed
+
+- 2026-09-01 — **Two port defects the audit caught, in code the pinning suites had agreed with.**
+  `JsStrings.jsTrim` trimmed with Java's `String.trim()` where the legacy trims with
+  `String.prototype.trim()`; the two disagree in both directions, so a child's name reached the
+  register still padded with the U+00A0 it arrived in. It is now ECMA-262's own whitespace set, and
+  the email trim behind C27 gets it too. And C11's file name took its day from London's calendar
+  rather than the share instant, so a 23:00Z share was filed under the following day — and under a
+  different day from the subscription set it was addressed by. `Dates.registerDay` answers the UTC
+  day and is asserted equal to `subscriptionDay` on the same value. C10 and C11 were amended to
+  record what the audit found.
 
 - 2026-09-01 — **Documentation finalised to as-built.** `TECHNICAL_DESIGN.md`, `API_CONTRACTS.md`
   and `SOLUTION_BRIEF.md` lose their "target design" banners and TODO markers: the state machine

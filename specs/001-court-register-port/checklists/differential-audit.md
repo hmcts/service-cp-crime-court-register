@@ -1,7 +1,7 @@
 # Differential audit — the legacy as oracle, the register as the only licence to differ
 
-**Task**: T075 (US5, Phase 8) · **Run**: 2026-09-01 · **Result**: 381/381 cases audited, **zero
-unexplained differences**, full `./gradlew build` green.
+**Task**: T075 (US5, Phase 8) · **Run**: 2026-09-01 (re-run after the audit hardening below) ·
+**Result**: 381/381 cases audited, **zero unexplained differences**, full `./gradlew build` green.
 
 The rule this report is the evidence for is constitution Principle I, restated at the head of
 `doc/DEFECT-FIXES.md`:
@@ -69,6 +69,18 @@ document **the legacy produced**, and it decides how a case may be asserted:
 A run the legacy ended by swallowing an exception is **never** agreement, whatever the port did:
 reporting success on a failure is C2.
 
+**The SCHEMA_INVALID obligation is asserted on the axis, not inferred.** Asking only "did the two
+runs end in the same place" gets this case exactly backwards: a port that reproduced the refused
+document verbatim would meet that question as `document` against `REGISTER`, which is agreement,
+which is no divergence, which is nothing to attribute — a green build for the one behaviour the port
+exists to stop. `classifiedOrRepaired` therefore branches on `contractStatus` and requires one of
+three endings: **refuse** the document at a field the recorder's own validator named, **repair** such
+a field (in a document this port's validator passed on the way out of the chain), or **not produce
+it at all** — an ending that is itself a divergence and has already had to name its row. An unchanged
+invalid output is none of the three and fails. Across the 70 refused cases the port classifies **59**
+(C29), repairs **4** at exactly the pointer the contract named (C26's `null-field` cases), ends
+elsewhere for **6**, and never runs for **1**.
+
 ---
 
 ## 2. Differences observed, by defect-fix row
@@ -77,30 +89,42 @@ Twenty-one rows explain differences across the corpus; **nothing is unattributed
 claimed by two rows** — the audit asserts mutual exclusivity, so a divergence two rows could explain
 fails as loudly as one no row explains.
 
-| Row | Differences | An example |
-|---|---:|---|
-| C2 (orchestration reports success on failure) | 18 | `mut__address-less-youth-and-parent__refdata-unavailable__connection-refused` — the run's outcome |
-| C4 (court-centre code compared against informant codes) | 2 | `mut__address-less-youth-and-parent__subscription-routing__informant-code-only` — the run's outcome |
-| C5 (no court-register branch in the matcher) | 4 | `mut__address-less-youth-and-parent__subscription-routing__now-subscription-route` — the run's outcome |
-| C7 (group-proceedings skip loosely typed) | 4 | `mut__address-less-youth-and-parent__group-proceedings__string-false` — the run's outcome |
-| C8 (attendance lookup assigns instead of comparing) | 1 | `mut__surviving-youth-defendant__empty-array__defendantattendance` — the run's outcome |
-| C9 (attendance date can never match) | 252 | `base__non-prosecuting-authority-application` — `/defendants/0/hearing/defendantPresent` |
-| C10 (BST local time labelled as UTC) | 131 | `base__non-prosecuting-authority-application` — the derived component `registerDate` |
-| C11 (filename carries colons and is not unique) | 131 | `base__non-prosecuting-authority-application` — `/fileName` |
-| C12 (evening shares read the next day's subscriptions) | 3 | `mut__address-less-youth-and-parent__shared-time__bst-2300-utc` — the day the subscription set was read for |
-| C19 (youth mapper dies on non-person defendants) | 4 | `mut__address-less-youth-and-parent__legal-entity__all` — the run's outcome |
-| C21 (ASN derivation dies on legal-entity records) | 2 | `mut__surviving-youth-defendant__asn-record-without-person__legal-entity-record` — the run's outcome |
-| C22 (non-prosecuting-authority applications reach the register) | 8 | `base__non-prosecuting-authority-application` — `/defendants/0/prosecutionCasesOrApplications` |
-| C23 (`verdictCode` carries a prose description) | 147 | `base__non-prosecuting-authority-application` — `…/offences/0/verdictCode` |
-| C24 (`####` sentinel and `undefined` residue) | 276 | `base__non-prosecuting-authority-application` — the derived component `wording` |
-| C25 (ethnicity only when both descriptions present) | 2 | `mut__surviving-youth-defendant__ethnicity-partial__observed-only` — `/defendants/0/ethnicity` |
-| C26 (mapper/model drift) | 4 | `mut__surviving-youth-defendant__null-field__…-orderindex` — `…/offences/0/orderIndex` |
-| C29 (missing required address silently loses the register) | 59 | `base__address-less-youth-and-parent` — the run's outcome |
-| C30 (major-creditor flags match inconsistently on empty data) | 2 | `mut__address-less-youth-and-parent__subscription-routing__any-major-creditor` — the run's outcome |
-| C31 (only the first defendant's vocabulary is matched) | 74 | `base__adult-first-youth-second` — the run's outcome |
-| C35 (hearing date stamped from the wall clock) | 4 | `mut__surviving-youth-defendant__hearing-date__hearing-days-not-an-array` — the run's outcome |
-| C36 (recipient-less registers submitted to nobody) | 4 | `mut__address-less-youth-and-parent__subscriptions-shape__court-register-but-no-recipient` — the run's outcome |
-| **Unattributed** | **0** | — |
+**Two columns, because they answer two questions.** A *claim* is only ever consulted about something
+that already differs, so for those rows the two numbers are the same one and only the difference
+count is meaningful. A *derivation* is asked about every component it covers, and for C10 it is the
+identity for half the year — a GMT share leaves `registerDate` exactly where the legacy wrote it. So
+"evaluated" says whether the fix was reached, and "differences" says where it actually changed
+something; reporting only the first would credit C10 with 131 changes the corpus does not make.
+
+| Row | Components evaluated | Actual differences | An example |
+|---|---:|---:|---|
+| C2 (orchestration reports success on failure) | — | 18 | `mut__address-less-youth-and-parent__refdata-unavailable__connection-refused` — the run's outcome |
+| C4 (court-centre code compared against informant codes) | — | 2 | `mut__address-less-youth-and-parent__subscription-routing__informant-code-only` — the run's outcome |
+| C5 (no court-register branch in the matcher) | — | 4 | `mut__address-less-youth-and-parent__subscription-routing__now-subscription-route` — the run's outcome |
+| C7 (group-proceedings skip loosely typed) | — | 4 | `mut__address-less-youth-and-parent__group-proceedings__string-false` — the run's outcome |
+| C8 (attendance lookup assigns instead of comparing) | — | 1 | `mut__surviving-youth-defendant__empty-array__defendantattendance` — the run's outcome |
+| C9 (attendance date can never match) | — | 252 | `base__non-prosecuting-authority-application` — `/defendants/0/hearing/defendantPresent` |
+| C10 (BST local time labelled as UTC) | **131** | **126** | `base__non-prosecuting-authority-application` — the derived component `registerDate` |
+| C11 (filename carries colons and is not unique) | — | 131 | `base__non-prosecuting-authority-application` — `/fileName` |
+| C12 (evening shares read the next day's subscriptions) | — | 3 | `mut__address-less-youth-and-parent__shared-time__bst-2300-utc` — the day the subscription set was read for |
+| C19 (youth mapper dies on non-person defendants) | — | 4 | `mut__address-less-youth-and-parent__legal-entity__all` — the run's outcome |
+| C21 (ASN derivation dies on legal-entity records) | — | 2 | `mut__surviving-youth-defendant__asn-record-without-person__legal-entity-record` — the run's outcome |
+| C22 (non-prosecuting-authority applications reach the register) | — | 8 | `base__non-prosecuting-authority-application` — `/defendants/0/prosecutionCasesOrApplications` |
+| C23 (`verdictCode` carries a prose description) | — | 147 | `base__non-prosecuting-authority-application` — `…/offences/0/verdictCode` |
+| C24 (`####` sentinel and `undefined` residue) | **276** | **276** | `base__non-prosecuting-authority-application` — the derived component `wording` |
+| C25 (ethnicity only when both descriptions present) | — | 2 | `mut__surviving-youth-defendant__ethnicity-partial__observed-only` — `/defendants/0/ethnicity` |
+| C26 (mapper/model drift) | — | 4 | `mut__surviving-youth-defendant__null-field__…-orderindex` — `…/offences/0/orderIndex` |
+| C29 (missing required address silently loses the register) | — | 59 | `base__address-less-youth-and-parent` — the run's outcome |
+| C30 (major-creditor flags match inconsistently on empty data) | — | 2 | `mut__address-less-youth-and-parent__subscription-routing__any-major-creditor` — the run's outcome |
+| C31 (only the first defendant's vocabulary is matched) | — | 74 | `base__adult-first-youth-second` — the run's outcome |
+| C35 (hearing date stamped from the wall clock) | — | 4 | `mut__surviving-youth-defendant__hearing-date__hearing-days-not-an-array` — the run's outcome |
+| C36 (recipient-less registers submitted to nobody) | — | 4 | `mut__address-less-youth-and-parent__subscriptions-shape__court-register-but-no-recipient` — the run's outcome |
+| **Unattributed** | — | **0** | — |
+
+The five `registerDate` components C10 was reached at and did not change are the GMT shares, where
+London's offset is zero and the legacy's mislabelled wall clock happens to name the right instant.
+That is the row working exactly as written, and it is why a corpus recorded only in winter would
+have proved nothing about it.
 
 Three cases carry no oracle at all and are listed rather than counted:
 `mut__{address-less-youth-and-parent,adult-first-youth-second,surviving-youth-defendant}__shared-time__absent`.
@@ -130,6 +154,28 @@ Two mechanisms, because there are two kinds of difference, and neither is an exc
 Every claim's `reference()` is checked against `doc/DEFECT-FIXES.md` by
 `registers_nothing_that_is_not_a_row_of_the_defect_fix_register`, so an entry citing a C-number that
 does not exist cannot attribute a behaviour change to a review that never happened.
+
+### And every claim is shown rejecting what it does not explain
+
+The audit can only prove that every difference the corpus *happens to produce* is claimed by exactly
+one row. It cannot prove the converse — that a row claims nothing else — because a predicate written
+one notch too wide looks identical on a corpus that never built the other shape. That is the failure
+mode a defect-fix register has: a claim quietly becomes an exclusion wearing a C-number, and the
+first regression in that component ships inside a green build.
+
+`RegisteredDefectFixesRejectionTest` reads every entry as a pair — the shape the row describes,
+asserted to be claimed by that row *alone*, and the same shape with one detail wrong, asserted to be
+claimed by **nothing**. Writing it found three claims that were too wide, and all three are now
+derived rather than recognised:
+
+| Row | Accepted | Now requires |
+|---|---|---|
+| C23 | any code-shaped value at `verdictCode` | the register entry joined back to the payload offence it was mapped from (offence code + order index), and exactly `verdictType.verdictCode`, or its `categoryType` where the payload carries no code |
+| C7 | any outcome that was not a suppression | the recorded skip to be the orchestrator's own loose-equality line, **and** the port to have reached the register that skip was suppressing — assembled, or refused by the frozen contract |
+| C12 | any difference in the subscription-set day | both days computed from the case's own shared time: the port owes its UTC day, the legacy asked for its `Europe/London` one |
+
+All three still explain exactly the same divergences afterwards — 147, 4 and 3 — so the narrowing
+cost the audit nothing and closed three ways for a port defect to be waved through.
 
 ---
 
@@ -313,3 +359,5 @@ only as good as the blind spots are visible:
 | Corpus extended rather than claim weakened? | **Yes** — 351 → 381 cases, five new operators, one new comparison; all 351 earlier recordings byte-identical. |
 | Audit runs in `./gradlew build`? | **Yes** — untagged, ~2 s, no container. |
 | Port defects found? | **Two**, both fixed red/green (`805599c`, `360d29a`); C10 and C11 amended to record what the audit found. |
+| Every claim shown rejecting what it does not explain? | **Yes** — `RegisteredDefectFixesRejectionTest` reads each entry as a control/near-miss pair. Three claims were too wide and are now derived (C23, C7, C12), explaining the same 147, 4 and 3 divergences afterwards. |
+| A refused document held to more than agreement? | **Yes** — the obligation branches on `contractStatus`: 59 classified, 4 repaired at the pointer the contract named, 6 ended elsewhere, 1 never ran. An unchanged invalid output fails. |

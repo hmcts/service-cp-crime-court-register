@@ -11,7 +11,10 @@ Postgres idempotency guard, deferred Flyway, suspend-on-store-outage, the agreed
 plus the full ported pipeline — payload fetch (Lettuce + results-query fallback), register
 building, subscription matching, the twelve-mapper outbound document, pre-send contract validation
 against the vendored Progression schemas, and a 202-only submission gateway with a real failure
-taxonomy. All 34 catalogued defects are fixed and pinned; `doc/DEFECT-FIXES.md` is the ledger.
+taxonomy. Of the 34 catalogued defects, the **31 that live in this service are fixed and pinned**
+and the other 3 (C18/C28/C34) are externally-owned remediations tracked to conclusion; **2 further
+rows (C35, C36) were appended** under the constitution's append mechanism when the differential
+audit reached shapes the catalogue had not. `doc/DEFECT-FIXES.md` is the ledger, at 36 rows.
 
 Technical approach: identical ports-and-adapters shape to the informant service. The clone is
 mechanical for `inbound/`, `application/`, `persistence/`, the domain state machine and the
@@ -89,7 +92,7 @@ against the approved v2.0.0 design (Principle I = Defect-Fix-First with Characte
 
 | # | Principle | Verdict for this increment |
 |---|-----------|----------------------------|
-| I | Defect-Fix-First with Characterised Legacy | **PASS — this increment is the principle's reason to exist.** All 34 catalogued fixes are pre-approved; every fix lands with its DEFECT-FIXES row and pinning test in the same commit; legacy behaviour is reproduced for everything uncatalogued and the differential audit (Phase 8) enforces it. |
+| I | Defect-Fix-First with Characterised Legacy | **PASS — this increment is the principle's reason to exist.** All 34 catalogued fixes are pre-approved (31 in-service, 3 externally owned); every fix lands with its DEFECT-FIXES row and pinning test in the same commit; legacy behaviour is reproduced for everything uncatalogued. **Phase 8 enforced it and is complete**: 381 recorded legacy runs, zero unattributed differences, and 2 rows (C35, C36) appended for shapes the catalogue had not — see `checklists/differential-audit.md`. |
 | II | Test-Driven Development | **PASS** — the test matrix below names the planned test for every FR/SC and every C-fix; test tasks precede implementation tasks; red runs quoted in commit narratives; fix tests are written to fail against the legacy behaviour and pass against the fix. |
 | III | Message-Contract First | **PASS with one named cross-team fact** — inbound schema owned here (court-register `$id`); outbound is Progression's frozen `add-court-register` (`additionalProperties: false`). Several fixes change outbound **values** (dates, verdict code, wording, filename) but none change the outbound **shape**; the pre-send validator enforces the frozen shape on every document. The content changes are the sign-off items DEFECT-FIXES flags for Progression/business before cutover. |
 | IV | Canonical JSON In, Typed Models Out | **PASS** — hearing payloads stay `JsonNode` (platform Jackson generation, BigDecimal floats) end-to-end; outbound is typed records validated against the vendored schemas (C26 is exactly this principle applied). |
@@ -112,7 +115,8 @@ specs/001-court-register-port/
 ├── contracts/
 │   └── README.md        # Pointers to the canonical inbound + vendored outbound contracts
 ├── checklists/
-│   └── requirements.md  # Spec quality checklist (+ the differential audit report lands here)
+│   ├── requirements.md        # Spec quality checklist
+│   └── differential-audit.md  # T075: the audit's report against the recorded legacy oracle
 └── tasks.md             # Phase-ordered TDD task list
 ```
 
