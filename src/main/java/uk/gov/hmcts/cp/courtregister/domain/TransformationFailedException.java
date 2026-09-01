@@ -34,8 +34,26 @@ public class TransformationFailedException extends RuntimeException implements C
      * @param detail a bounded description of what could not be transformed; never payload content
      */
     public TransformationFailedException(final String detail) {
+        this(detail, ReasonCode.TRANSFORMATION_FAILED);
+    }
+
+    /**
+     * Creates the failure under a more specific bounded reason.
+     *
+     * <p>The <em>classification</em> is still fixed — every way the transformation can fail is
+     * non-transient — but not every one of them is best read as "the payload could not be
+     * transformed". A document that was assembled and then refused by the frozen progression
+     * contract is {@link ReasonCode#OUTBOUND_CONTRACT_VIOLATION} (defect fix C29): support acts on
+     * it differently, because what is wrong is the register rather than the hearing, and a
+     * dead-letter that said {@code TRANSFORMATION_FAILED} would send them to the wrong end of the
+     * pipeline.
+     *
+     * @param detail a bounded description of what could not be transformed; never payload content
+     * @param reason the bounded code recorded for this failure
+     */
+    public TransformationFailedException(final String detail, final ReasonCode reason) {
         super(detail);
-        this.reasonCode = ReasonCode.TRANSFORMATION_FAILED;
+        this.reasonCode = reason;
     }
 
     /**

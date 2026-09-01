@@ -486,11 +486,38 @@ vocabulary and matching semantics.
       hearing reaches `Json.dereferenced` today and fails with a message about `courtCentre`, and
       one carrying no shared time throws a bare `NullPointerException`, so both are asserted as
       classified failures and the chain has to say what it means.)*
-- [ ] T056 [US3] Implement `pipeline/RegisterTransformationChain` + `pipeline/AggregationMapper`
+- [x] T056 [US3] Implement `pipeline/RegisterTransformationChain` + `pipeline/AggregationMapper`
       wiring into `RegisterTransformer` (green T055a and T051 chain cases;
       `DistributionPipelineTest` end-to-end unit path now green). *(T051's cases are already green —
       `AggregationMapper`'s body landed with T054 — so what remains here is the chain and the
       transformer wiring, not the assembly.)*
+      *(done — T055a's 20 cases green, and C6 moves to FIXED. `RegisterTransformationChain`
+      implements the `RegisterTransformer` port over four stages: build, address, assemble, hold to
+      the contract. Three decisions, and one thing this task deliberately did **not** do:
+      **(1)** the chain asks the **gather** question before the subscription question, which is the
+      opposite of `OutboundCourtRegister/index.js:17` before `:22` and is the whole of C6 — a
+      register with no defendants matches no subscription either, so the legacy's order answers
+      `no-subscriptions` for a hearing whose outcome is `no-defendants`. The aggregation keeps its
+      own order and its own guards, because it is called directly by its suite and a stage that is
+      only safe when its caller asked first is not safe; the two sites read the same flag on the same
+      fragment and cannot disagree.
+      **(2)** `AggregationMapper.map` was left exactly as T054 wrote it, returning `null`. Giving it
+      a richer return would have been tidier for the chain and would have left `map` a wrapper called
+      only from its own tests — production code with no production caller, which is the class of
+      thing C26 exists to refuse. The chain names the remaining two outcomes itself instead: handed a
+      non-empty match, the aggregation's only remaining answers are the youth filter and C36.
+      **(3)** `TransformationFailedException` gained a second constructor taking a `ReasonCode`. The
+      classification stays fixed — every transformation failure is non-transient — but a document the
+      frozen contract refuses is `OUTBOUND_CONTRACT_VIOLATION`, the code `data-model.md` already
+      reserves for the C29 pre-send check: support acts on it differently, because what is wrong is
+      the register rather than the hearing.
+      **What was not done: `PipelineConfig` is not widened.** The pipeline's full constructor needs
+      `NowSubscriptionsSource` and `RegisterSubmissionClient`, and neither exists until T066/T067 —
+      so wiring the transformer bean now would take every run past the skeleton's early completion
+      and into an NPE on the ports that are still null, and declaring the transformation beans
+      without wiring them is the dead wiring T039 refused for the same reason. The e2e ITs start the
+      real context (they carry no `test` profile), so this is not hypothetical. The final wiring is
+      T068a's task; this note is here so the omission is visible rather than silent.)*
 
 **Checkpoint**: fragment → validated outbound document, all mapper fixes pinned.
 
