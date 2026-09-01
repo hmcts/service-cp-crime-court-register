@@ -1038,11 +1038,46 @@ documentation-final states.
       both. `JsonParity` now reports differences as data as well as prose, because a register
       predicate reading a difference back out of a formatted string would be parsing the
       comparator's own sentences.)*
-- [ ] T075 [A] [US5] Run the audit, commit the report to
+- [x] T075 [A] [US5] Run the audit, commit the report to
       `specs/001-court-register-port/checklists/differential-audit.md` (zero unexplained
       differences), and reconcile DEFECT-FIXES rows against observed diffs (every content-changing
       fix must actually appear in the diff set — a fix that produces no diff is evidence the
       corpus misses its shape; extend the corpus, not the claim).
+      *(Done — report at `checklists/differential-audit.md`. **Forwards the audit was already
+      clean**: 351/351 cases, every difference claimed by exactly one C-row, nothing unattributed.
+      The work of this task was the **reverse** reconciliation, which was not: eight
+      content-changing rows explained nothing at all — C4, C5, C12, C20, C21, C25, C30, C35 — and
+      the reason was the corpus, not the fixes. The real 274-entry subscription capture matches
+      every court-register entry on `selectedCourtHouses` and nothing else (no `informantCode`, no
+      prison flag, no NOWs flag, and `anyMajorCreditor` set on **zero** of 274), all six base
+      hearings carry both ethnicity descriptions, and every base carries an ordered date with an
+      empty `hearingDays` — the one route through `getHearingDate` that neither reads the clock nor
+      throws. So five operators were added to the analysis pack and the corpus re-recorded at
+      **381**: `subscription-routing` 18 (C4/C5/C30, with the two major-creditor controls that must
+      NOT match on the same empty lists), `hearing-date` 4 (C35, all four legs), `ethnicity-partial`
+      3 (C25, with a control), `application-reference` 3 (C20) and `asn-record-without-person` 2
+      (C21 — reaching `getASN` needs the person-less record *beside* an intact defendant, because
+      C19 throws first otherwise). **All 351 earlier `expected.json` files are byte-identical after
+      the rebuild**; only `oracleDigest` moved. C12 needed no recording at all — the recorder had
+      captured `…now-subscriptions?on=2020-06-02` for a 23:00Z share all along and the audit was
+      simply not looking, so it now compares that day against `Dates.subscriptionDay` and reports it
+      like any other difference. Two audit-side changes, both narrowing: the clock-dependent
+      exclusion now covers only the `shared-time__absent` cases, because C35's clock legs carry a
+      complete payload and one clock-stamped field and excluding them would have hidden the row the
+      corpus was extended to reach; and C35's claim covers the shape where the port, having no
+      ordered date to fall back to, assembles a document the frozen contract refuses **at
+      `/hearingDate`** — which is what that row says leg (a) must do. **Result: 381/381, twenty-one
+      rows explaining differences, zero unattributed, in `./gradlew build` untagged in ~2 s.**
+      Eighteen of the nineteen content-changing rows now appear. The nineteenth is C20, and the
+      extension settled it as a finding rather than a gap: its unguarded application lookup has no
+      trigger, because `DefendantContextBaseService.js:149` only ever pushes ids of applications
+      that passed `isEligible` and the mapper looks them up in that same array, so `applications` is
+      always a subset of the ids present. The three `application-reference` cases move the ids,
+      remove the eligibility and add an ineligible application, and all three produce a register and
+      swallow nothing — measured, not argued. Rows amended to record what the audit reached: C4, C5,
+      C12, C20, C21, C25, C30, C35, and the register's differential preamble rewritten to the as-run
+      truth. No port defects found in this run; T074's two remain the audit's catch. Full
+      `./gradlew build` green — tests, Checkstyle, PMD, SpotBugs and the coverage gate.)*
 
 ---
 

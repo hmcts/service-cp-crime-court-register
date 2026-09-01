@@ -31,14 +31,16 @@
 - [x] Plan (constitution check, configuration, structure, test matrix) complete
 - [x] Research decisions recorded with alternatives (research.md §1–§15)
 - [x] Data model records the one structural delta and the completion-reason vocabulary
-- [ ] Tasks executed to completion — in progress; tracked in tasks.md checkboxes
-- [ ] Differential audit report committed (`checklists/differential-audit.md`) — Phase 8 output
+- [x] Tasks executed to completion — tracked in tasks.md checkboxes
+- [x] Differential audit report committed (`checklists/differential-audit.md`) — Phase 8 output:
+      381 recorded legacy runs, zero unattributed differences, and the reverse reconciliation of
+      every content-changing register row against the observed diff set
 
 ## Notes
 
-Authored at bootstrap together with spec/plan/tasks; the two open boxes are the increment's known
-open ends, not gaps in the specification. Review rounds are recorded in the phase-final commit
-narratives rather than re-listed here.
+Authored at bootstrap together with spec/plan/tasks; the one open box is the increment's known open
+end, not a gap in the specification — business sign-off gates cutover, not implementation. Review
+rounds are recorded in the phase-final commit narratives rather than re-listed here.
 
 **Re-verified at documentation finalisation (T072, 2026-09-01):** every ticked box above still
 holds against the tree as built. The "34/34 rows" measure reads as "all 34 catalogued rows
