@@ -3,16 +3,18 @@ package uk.gov.hmcts.cp.courtregister.adapter.refdata;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.Map;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPause;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
 import uk.gov.hmcts.cp.courtregister.application.NowSubscriptionsSource;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
@@ -44,7 +46,11 @@ import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
  * {@code NON_TRANSIENT} under
  * {@link uk.gov.hmcts.cp.courtregister.domain.ReasonCode#REFERENCE_DATA_REFUSED}, so the pipeline
  * parks it rather than spending the whole delivery budget on an answer that will not change and
- * parking it under an exhausted retry budget instead.
+ * parking it under an exhausted retry budget instead. It is not merely the same list: all three
+ * clients hold the same {@link uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy} object, so
+ * the taxonomy, the doubling back-off bounded by {@code max-backoff}, and what a
+ * {@code Retry-After} is worth on any retryable answer are decided in one place and cannot drift
+ * apart between them.
  *
  * <p><strong>An empty answer and no answer are different things.</strong> The legacy catches
  * everything and returns {@code null} ({@code :50-53}), which
@@ -74,36 +80,35 @@ public class ReferenceDataNowSubscriptionsClient implements NowSubscriptionsSour
     private static final Logger LOG =
             LoggerFactory.getLogger(ReferenceDataNowSubscriptionsClient.class);
 
-    /** The attempt budget remaining when the attempt being taken is the last permitted one. */
-    private static final int LAST_ATTEMPT = 1;
-
     private final RestClient restClient;
     private final String systemUserId;
     private final Map<String, String> extraHeaders;
     private final ObjectMapper objectMapper;
-    private final int maxAttempts;
-    private final Duration retryInterval;
+    private final RetryPolicy retryPolicy;
+    private final RetryPause pause;
 
     /**
      * Builds the client over an already-configured HTTP client.
      *
-     * @param restClient    the client, carrying the reference-data base URL and its timeouts
-     * @param systemUserId  the {@code CJSCPPUID} identity for a run naming no user; a secret, never
-     *                      logged
-     * @param extraHeaders  any further headers the mesh requires, name to value
-     * @param objectMapper  the shared mapper, so a response is read exactly as any other JSON is
-     * @param maxAttempts   total attempts including the first
-     * @param retryInterval the wait between retryable attempts
+     * @param restClient   the client, carrying the reference-data base URL and its timeouts
+     * @param systemUserId the {@code CJSCPPUID} identity for a run naming no user; a secret, never
+     *                     logged
+     * @param extraHeaders any further headers the mesh requires, name to value
+     * @param objectMapper the shared mapper, so a response is read exactly as any other JSON is
+     * @param retryPolicy  the shared retry policy: attempts, back-off and what a
+     *                     {@code Retry-After} is worth
+     * @param pause        how a wait between attempts is taken
      */
     public ReferenceDataNowSubscriptionsClient(final RestClient restClient,
             final String systemUserId, final Map<String, String> extraHeaders,
-            final ObjectMapper objectMapper, final int maxAttempts, final Duration retryInterval) {
+            final ObjectMapper objectMapper, final RetryPolicy retryPolicy,
+            final RetryPause pause) {
         this.restClient = restClient;
         this.systemUserId = systemUserId;
         this.extraHeaders = Map.copyOf(extraHeaders);
         this.objectMapper = objectMapper;
-        this.maxAttempts = maxAttempts;
-        this.retryInterval = retryInterval;
+        this.retryPolicy = retryPolicy;
+        this.pause = pause;
     }
 
     @Override
@@ -112,18 +117,21 @@ public class ReferenceDataNowSubscriptionsClient implements NowSubscriptionsSour
         // caller, exactly as the legacy's one `input.cjscppuid` is
         // (ReferenceDataService.js:44).
         final String identity = caller.orSystem(systemUserId);
+        final int maxAttempts = retryPolicy.maxAttempts();
         JsonNode answer = null;
-        for (int attemptsLeft = maxAttempts; answer == null; attemptsLeft--) {
-            final boolean lastAttempt = attemptsLeft <= LAST_ATTEMPT;
+        for (int attempt = 1; answer == null; attempt++) {
+            final boolean lastAttempt = attempt >= maxAttempts;
+            Optional<Duration> asked = Optional.empty();
             try {
                 answer = content(get(registerDay, identity), registerDay);
             } catch (RestClientResponseException refused) {
+                asked = RetryPolicy.retryAfter(refused.getResponseHeaders());
                 refused(registerDay, refused.getStatusCode().value(), lastAttempt);
             } catch (RestClientException unanswered) {
                 neverAnswered(registerDay, lastAttempt);
             }
             if (answer == null) {
-                pause(registerDay);
+                waited(registerDay, retryPolicy.waitAfter(attempt, asked));
             }
         }
         return answer;
@@ -172,7 +180,7 @@ public class ReferenceDataNowSubscriptionsClient implements NowSubscriptionsSour
     private void refused(final LocalDate registerDay, final int status, final boolean lastAttempt) {
         // The status is reference data's own answer and is bounded by HTTP; the body is text
         // somebody else wrote and this line reaches the log index.
-        if (!retryable(status)) {
+        if (!RetryPolicy.retryable(status)) {
             LOG.warn("Reference data refused the now-subscriptions read and no redelivery can "
                     + "change that, so the register cannot be addressed. queryDate={} status={}",
                     registerDay, status);
@@ -183,16 +191,6 @@ public class ReferenceDataNowSubscriptionsClient implements NowSubscriptionsSour
                     + "addressed. queryDate={} status={}", registerDay, status);
             throw unavailable();
         }
-    }
-
-    /**
-     * The statuses another attempt may answer differently — the same list the progression submission
-     * client applies, which is what makes the two agree about what a redelivery can fix.
-     */
-    private static boolean retryable(final int status) {
-        return status == HttpStatus.REQUEST_TIMEOUT.value()
-                || status == HttpStatus.TOO_MANY_REQUESTS.value()
-                || status >= HttpStatus.INTERNAL_SERVER_ERROR.value();
     }
 
     /** A read that never reached an answer: retried while attempts remain, then reported. */
@@ -234,10 +232,10 @@ public class ReferenceDataNowSubscriptionsClient implements NowSubscriptionsSour
         return answer;
     }
 
-    private void pause(final LocalDate registerDay) {
-        if (!retryInterval.isZero() && !retryInterval.isNegative()) {
+    private void waited(final LocalDate registerDay, final Duration wait) {
+        if (!wait.isZero() && !wait.isNegative()) {
             try {
-                Thread.sleep(retryInterval);
+                pause.pause(wait);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 LOG.warn("Interrupted while waiting to retry the now-subscriptions read. "

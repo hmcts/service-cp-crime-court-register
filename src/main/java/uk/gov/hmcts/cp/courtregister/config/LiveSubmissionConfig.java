@@ -9,9 +9,10 @@ import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPause;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
 import uk.gov.hmcts.cp.courtregister.adapter.progression.ProgressionCommandGateway;
 import uk.gov.hmcts.cp.courtregister.adapter.progression.ProgressionRegisterSubmissionClient;
-import uk.gov.hmcts.cp.courtregister.adapter.progression.SubmissionPause;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedOutputRepository;
 
@@ -64,10 +65,9 @@ public class LiveSubmissionConfig {
                         .build(),
                 progression.systemUserId(),
                 progression.headers(),
-                progression.maxAttempts(),
-                progression.initialBackoff(),
-                progression.maxBackoff(),
-                (SubmissionPause) Thread::sleep,
+                new RetryPolicy(progression.maxAttempts(), progression.initialBackoff(),
+                        progression.maxBackoff()),
+                (RetryPause) Thread::sleep,
                 clock);
     }
 

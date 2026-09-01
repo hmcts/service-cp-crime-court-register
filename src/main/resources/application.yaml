@@ -79,24 +79,27 @@ courtregister:
     # here rather than left to relaxed binding: a variable a comment documents and no key reads is
     # a deployment that sets it correctly and still fails to start.
     system-user-id: ${COURT_REGISTER_SYSTEM_USER_ID:}
-    # Retry policy for the POST (defect fixes C1/C3). Connect and read failures, 5xx, 429 AND 408
-    # are retried with exponential back-off; any other 4xx is a refusal and is never retried; a
-    # Retry-After header is honoured in delta-seconds only and bounded by max-backoff (an HTTP-date
-    # value is classified, never parsed). Success is 202 and nothing else. The numbers are this
-    # service's own: the contract documents that back-off happens, not how much of it, so they are
-    # configuration rather than constants.
+    # Retry policy for the POST (defect fixes C1/C3), and the SAME three keys the payload fallback
+    # and the reference-data read carry: one RetryPolicy object serves all three clients, so
+    # max-attempts / initial-backoff / max-backoff mean the same thing wherever they appear.
+    # Connect and read failures, 5xx, 429 AND 408 are retried with exponential back-off; any other
+    # 4xx is a refusal and is never retried; a Retry-After header is honoured on EVERY retryable
+    # answer, in delta-seconds only and bounded by max-backoff (an HTTP-date value is classified,
+    # never parsed). Success is 202 and nothing else. The numbers are this service's own: the
+    # contract documents that back-off happens, not how much of it, so they are configuration
+    # rather than constants.
     max-attempts: 4
     initial-backoff: 500ms
-    # The ceiling on any wait, a server-supplied Retry-After included. Worst case must stay well
-    # inside courtregister.claim.processing-deadline, or a run would still be waiting when its
-    # claim is reclaimed.
-    max-backoff: 20s
+    # The ceiling on any wait, a server-supplied Retry-After included — and therefore the WORST CASE
+    # for every wait, since a remote service may ask for the ceiling on every attempt. Startup
+    # budgets it that way: three waits of 5s plus four attempts of 5s + 10s is 75s of the
+    # four-minute deadline.
+    max-backoff: 5s
     connect-timeout: 5s
     # Bounded so the whole run fits: the payload fetch, the now-subscriptions read and this
     # submission are spent inside ONE claim, and startup refuses a set of timeouts whose sum plus a
     # fixed 30s margin for the guard's writes and the transformation reaches
-    # courtregister.claim.processing-deadline. Four attempts of 5s + 10s with the back-off between
-    # them is 63.5s of the four-minute budget.
+    # courtregister.claim.processing-deadline.
     read-timeout: 10s
     # headers: an optional map of extra static headers for the POST, bound but empty by default.
 
@@ -141,18 +144,21 @@ courtregister:
     # a different one. REQUIRED in LIVE mode: an anonymous query is refused every time, so the
     # service refuses to start rather than park every hearing that produced a register.
     system-user-id: ${REFERENCEDATA_SYSTEM_USER_ID:${COURT_REGISTER_SYSTEM_USER_ID:}}
-    # Attempt count and interval carried from the function app's DEFAULT_PUBLISH_RETRY_COUNT and
-    # DEFAULT_PUBLISH_RETRY_INTERVAL (AxiosRetryWrapper.js:10-11) — but the retry TAXONOMY is the
-    # corrected one (defect fix C3), applied to every named client: connect/IO failures, 5xx, 429
-    # and 408 retry; any other 4xx never does. The legacy wrapper's inverted policy (every status
-    # at or below 429 non-retryable) is a catalogued defect, not a behaviour to keep.
+    # Attempt count carried from the function app's DEFAULT_PUBLISH_RETRY_COUNT
+    # (AxiosRetryWrapper.js:10-11) — but the retry POLICY is the corrected one (defect fix C3) and
+    # it is the same object every named client holds: connect/IO failures, 5xx, 429 and 408 retry
+    # with exponential back-off bounded by max-backoff, a Retry-After is honoured on every retryable
+    # answer, and any other 4xx never retries. The legacy wrapper's inverted policy (every status at
+    # or below 429 non-retryable) and its fixed one-second interval are catalogued defects, not
+    # behaviours to keep — which is why DEFAULT_PUBLISH_RETRY_INTERVAL has no key here any more.
     max-attempts: 3
-    retry-interval: 1s
+    initial-backoff: 1s
+    max-backoff: 2s
     connect-timeout: 5s
     # Shorter than the processing deadline on purpose, for the reason the payload read's is: a read
     # that outlives the deadline outlives the claim behind it — and shorter again so that this read,
     # the payload fetch and the submission TOGETHER fit inside one run's budget, which is what
-    # startup now checks. Three attempts of 5s + 10s with the intervals between them is 47s.
+    # startup now checks. Three attempts of 5s + 10s with two bounded waits of 2s is 49s.
     read-timeout: 10s
 
   stub:
@@ -184,16 +190,19 @@ courtregister:
       connect-timeout: 5s
       command-timeout: 5s
     fallback:
-      # Attempt count and interval carried from the function app's defaults; the retry taxonomy is
-      # the corrected C3 one (connect/IO, 5xx, 429, 408 retry; other 4xx never), same as every
-      # named client in this file.
+      # Attempt count carried from the function app's defaults; the retry POLICY is the corrected C3
+      # one and is the same object every named client in this file holds — connect/IO, 5xx, 429 and
+      # 408 retry with exponential back-off bounded by max-backoff, a Retry-After is honoured on
+      # every retryable answer, and no other 4xx ever retries.
       max-attempts: 3
-      retry-interval: 1s
+      initial-backoff: 1s
+      max-backoff: 2s
       connect-timeout: 5s
       # Shorter than the processing deadline on purpose: a read that outlives the deadline outlives
       # the claim behind it, and then two runners believe they own the same request. Shorter again so
       # the fetch leaves room for the now-subscriptions read and the submission spent in the same
-      # run: 20s of cache reads and three attempts of 5s + 10s is 67s of the four-minute budget.
+      # run: 20s of cache reads and three attempts of 5s + 10s with two bounded waits of 2s is 69s
+      # of the four-minute budget.
       read-timeout: 10s
 
 # Application Insights is configured by the Java agent (lib/applicationinsights.json).

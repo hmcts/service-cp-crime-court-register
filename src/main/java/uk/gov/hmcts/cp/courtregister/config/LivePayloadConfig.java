@@ -11,6 +11,8 @@ import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPause;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
 import uk.gov.hmcts.cp.courtregister.adapter.payload.CachedHearingPayloadAdapter;
 import uk.gov.hmcts.cp.courtregister.adapter.payload.HearingPayloadCache;
 import uk.gov.hmcts.cp.courtregister.adapter.payload.HearingPayloadQuery;
@@ -134,8 +136,9 @@ public class LivePayloadConfig {
                         .build(),
                 properties.results().systemUserId(),
                 objectMapper,
-                fallback.maxAttempts(),
-                fallback.retryInterval());
+                new RetryPolicy(fallback.maxAttempts(), fallback.initialBackoff(),
+                        fallback.maxBackoff()),
+                (RetryPause) Thread::sleep);
     }
 
     /**

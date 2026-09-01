@@ -126,8 +126,10 @@ class ConfigurationValidationTest {
                 assertThat(properties.payload().redis().commandTimeout())
                         .isEqualTo(Duration.ofSeconds(5));
                 assertThat(properties.payload().fallback().maxAttempts()).isEqualTo(3);
-                assertThat(properties.payload().fallback().retryInterval())
+                assertThat(properties.payload().fallback().initialBackoff())
                         .isEqualTo(Duration.ofSeconds(1));
+                assertThat(properties.payload().fallback().maxBackoff())
+                        .isEqualTo(Duration.ofSeconds(2));
                 assertThat(properties.payload().fallback().connectTimeout())
                         .isEqualTo(Duration.ofSeconds(5));
                 assertThat(properties.payload().fallback().readTimeout())
@@ -137,8 +139,10 @@ class ConfigurationValidationTest {
                         .isEqualTo(SubscriptionsSourceMode.LIVE);
                 assertThat(properties.referencedata().headers()).isEmpty();
                 assertThat(properties.referencedata().maxAttempts()).isEqualTo(3);
-                assertThat(properties.referencedata().retryInterval())
+                assertThat(properties.referencedata().initialBackoff())
                         .isEqualTo(Duration.ofSeconds(1));
+                assertThat(properties.referencedata().maxBackoff())
+                        .isEqualTo(Duration.ofSeconds(2));
                 assertThat(properties.referencedata().connectTimeout())
                         .isEqualTo(Duration.ofSeconds(5));
                 assertThat(properties.referencedata().readTimeout())
@@ -148,7 +152,7 @@ class ConfigurationValidationTest {
                 assertThat(properties.progression().maxAttempts()).isEqualTo(4);
                 assertThat(properties.progression().initialBackoff())
                         .isEqualTo(Duration.ofMillis(500));
-                assertThat(properties.progression().maxBackoff()).isEqualTo(Duration.ofSeconds(20));
+                assertThat(properties.progression().maxBackoff()).isEqualTo(Duration.ofSeconds(5));
                 assertThat(properties.progression().connectTimeout())
                         .isEqualTo(Duration.ofSeconds(5));
                 assertThat(properties.progression().readTimeout())
@@ -184,10 +188,12 @@ class ConfigurationValidationTest {
                     "courtregister.payload.redis.ssl=true",
                     "courtregister.payload.redis.key-prefix=OTHER_",
                     "courtregister.payload.fallback.max-attempts=2",
-                    "courtregister.payload.fallback.retry-interval=3s",
+                    "courtregister.payload.fallback.initial-backoff=3s",
+                    "courtregister.payload.fallback.max-backoff=6s",
                     "courtregister.results.base-url=http://results.internal:8080",
                     "courtregister.referencedata.max-attempts=4",
-                    "courtregister.referencedata.retry-interval=2s",
+                    "courtregister.referencedata.initial-backoff=2s",
+                    "courtregister.referencedata.max-backoff=4s",
                     "courtregister.referencedata.headers.X-Mesh-Group=court-register",
                     "courtregister.progression.max-attempts=2",
                     "courtregister.progression.initial-backoff=250ms",
@@ -227,15 +233,19 @@ class ConfigurationValidationTest {
                         assertThat(properties.payload().redis().ssl()).isTrue();
                         assertThat(properties.payload().redis().keyPrefix()).isEqualTo("OTHER_");
                         assertThat(properties.payload().fallback().maxAttempts()).isEqualTo(2);
-                        assertThat(properties.payload().fallback().retryInterval())
+                        assertThat(properties.payload().fallback().initialBackoff())
                                 .isEqualTo(Duration.ofSeconds(3));
+                        assertThat(properties.payload().fallback().maxBackoff())
+                                .isEqualTo(Duration.ofSeconds(6));
 
                         assertThat(properties.results().baseUrl())
                                 .isEqualTo("http://results.internal:8080");
 
                         assertThat(properties.referencedata().maxAttempts()).isEqualTo(4);
-                        assertThat(properties.referencedata().retryInterval())
+                        assertThat(properties.referencedata().initialBackoff())
                                 .isEqualTo(Duration.ofSeconds(2));
+                        assertThat(properties.referencedata().maxBackoff())
+                                .isEqualTo(Duration.ofSeconds(4));
                         assertThat(properties.referencedata().headers())
                                 .isEqualTo(Map.of("X-Mesh-Group", "court-register"));
 
@@ -561,10 +571,26 @@ class ConfigurationValidationTest {
         @Test
         void a_negative_wait_between_attempts_should_fail_startup() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
-                    "courtregister.referencedata.retry-interval=-1s").run(context -> {
+                    "courtregister.referencedata.initial-backoff=-1s").run(context -> {
                         assertThat(context).hasFailed();
                         assertThat(context.getStartupFailure())
-                                .hasMessageContaining("courtregister.referencedata.retry-interval");
+                                .hasMessageContaining("courtregister.referencedata.initial-backoff");
+                    });
+        }
+
+        /**
+         * The shared policy's other rule, asked of this client because it is asked of all three: a
+         * ceiling below the first wait shortens the very wait it exists to bound.
+         */
+        @Test
+        void a_ceiling_below_the_first_wait_should_fail_startup() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.referencedata.initial-backoff=10s",
+                    "courtregister.referencedata.max-backoff=5s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.referencedata.max-backoff")
+                                .hasMessageContaining("courtregister.referencedata.initial-backoff");
                     });
         }
 
@@ -601,14 +627,18 @@ class ConfigurationValidationTest {
         /**
          * The waits between attempts count too: they are spent inside the same run as the reads.
          * The shipped three attempts of 5s + 10s is 45s, comfortably inside the 4m deadline — until
-         * the two waits between them are lengthened, which no other rule looks at.
+         * the two waits between them are lengthened, which no other rule looks at. The wait counted
+         * is {@code max-backoff}, not the doubling schedule: a {@code Retry-After} is honoured on
+         * every retryable answer and the ceiling is the only thing bounding what a remote service
+         * can ask for.
          */
         @Test
         void the_waits_between_attempts_should_count_towards_the_deadline() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
                     // 45s of reads, and two 70s waits between the three attempts, is 185s — inside
                     // the deadline on its own, and not inside the run it shares.
-                    "courtregister.referencedata.retry-interval=70s").run(context -> {
+                    "courtregister.referencedata.initial-backoff=70s",
+                    "courtregister.referencedata.max-backoff=70s").run(context -> {
                         assertThat(context).hasFailed();
                         assertThat(context.getStartupFailure())
                                 .hasMessageContaining("courtregister.referencedata")
@@ -625,7 +655,8 @@ class ConfigurationValidationTest {
         void a_read_that_exactly_fills_the_deadline_should_fail_startup() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
                     "courtregister.referencedata.max-attempts=2",
-                    "courtregister.referencedata.retry-interval=10s",
+                    "courtregister.referencedata.initial-backoff=10s",
+                    "courtregister.referencedata.max-backoff=10s",
                     // Two attempts of 5s + 110s, with a 10s wait between them, is the 4m deadline
                     // to the second.
                     "courtregister.referencedata.read-timeout=110s").run(context -> {
@@ -647,7 +678,8 @@ class ConfigurationValidationTest {
         void a_read_that_leaves_the_rest_of_the_run_nothing_should_fail_startup() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
                     "courtregister.referencedata.max-attempts=2",
-                    "courtregister.referencedata.retry-interval=10s",
+                    "courtregister.referencedata.initial-backoff=10s",
+                    "courtregister.referencedata.max-backoff=10s",
                     "courtregister.referencedata.read-timeout=PT109.5S").run(context -> {
                         assertThat(context).hasFailed();
                         assertThat(context.getStartupFailure())
@@ -694,13 +726,27 @@ class ConfigurationValidationTest {
         }
 
         @Test
-        void a_negative_retry_interval_should_fail_startup() {
+        void a_negative_initial_backoff_should_fail_startup() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
-                    "courtregister.payload.fallback.retry-interval=-1s").run(context -> {
+                    "courtregister.payload.fallback.initial-backoff=-1s").run(context -> {
                         assertThat(context).hasFailed();
                         assertThat(context.getStartupFailure())
                                 .hasMessageContaining(
-                                        "courtregister.payload.fallback.retry-interval");
+                                        "courtregister.payload.fallback.initial-backoff");
+                    });
+        }
+
+        /** The same shared rule the reference-data block is held to, on the third client. */
+        @Test
+        void a_ceiling_below_the_first_wait_should_fail_startup() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.payload.fallback.initial-backoff=10s",
+                    "courtregister.payload.fallback.max-backoff=5s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.payload.fallback.max-backoff")
+                                .hasMessageContaining(
+                                        "courtregister.payload.fallback.initial-backoff");
                     });
         }
 

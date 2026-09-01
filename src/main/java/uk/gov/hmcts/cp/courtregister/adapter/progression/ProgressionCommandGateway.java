@@ -7,15 +7,15 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPause;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
@@ -56,16 +56,20 @@ import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
  *       <em>unknown</em>, not failed;</li>
  *   <li>5xx, 429 and 408 are retried, with the wait doubling each time and bounded by
  *       {@code max-backoff};</li>
- *   <li>a {@code Retry-After} is honoured in delta-seconds only and capped by the same ceiling; an
- *       HTTP-date is classified before it is read, never parsed, because acting on one would measure
- *       a remote clock against this pod's and could park a run past the claim it holds;</li>
+ *   <li>a {@code Retry-After} on any of them is honoured in delta-seconds only and capped by the
+ *       same ceiling; an HTTP-date is classified before it is read, never parsed, because acting on
+ *       one would measure a remote clock against this pod's and could park a run past the claim it
+ *       holds;</li>
  *   <li>any other 4xx is a refusal, is never retried, and comes back non-transient: the same bytes
  *       will be refused again and the delivery budget is finite.</li>
  * </ul>
  *
- * <p>It is the same taxonomy {@code ResultsQueryHearingPayloadClient} and
- * {@code ReferenceDataNowSubscriptionsClient} apply, which is what makes the three agree about what
- * a redelivery can fix.
+ * <p>Not the same taxonomy as {@code ResultsQueryHearingPayloadClient} and
+ * {@code ReferenceDataNowSubscriptionsClient} — <strong>the same object</strong>. All three are
+ * handed a {@link uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy}, so what a redelivery can
+ * fix, how long a wait grows and what a {@code Retry-After} is worth are decided once and cannot
+ * drift apart between them, which is what C3's row promises and what three separate implementations
+ * of one sentence could not hold to.
  *
  * <p><strong>Every one of those waits is bounded by the run's claim, not only by
  * {@code max-backoff}.</strong> The caller hands in the instant its run promised to have stopped by,
@@ -114,53 +118,33 @@ public class ProgressionCommandGateway {
 
     private static final Logger LOG = LoggerFactory.getLogger(ProgressionCommandGateway.class);
 
-    private static final String RETRY_AFTER_HEADER = "Retry-After";
-
-    /**
-     * The only {@code Retry-After} form this client acts on: delta-seconds, at most ten digits.
-     *
-     * <p>RFC 9110 also permits an HTTP-date, and honouring one would mean measuring a remote clock
-     * against this pod's — a server a few minutes ahead would park a run past the claim lease it
-     * holds. The form is recognised before it is read, so an unusable value is classified rather
-     * than parsed and caught, and every unusable form falls back to the back-off.
-     */
-    private static final Pattern DELTA_SECONDS = Pattern.compile("\\d{1,10}");
-
     private final RestClient restClient;
     private final String systemUserId;
     private final Map<String, String> extraHeaders;
-    private final int maxAttempts;
-    private final Duration initialBackoff;
-    private final Duration maxBackoff;
-    private final SubmissionPause pause;
+    private final RetryPolicy retryPolicy;
+    private final RetryPause pause;
     private final Clock clock;
 
     /**
      * Builds the gateway over an already-configured HTTP client.
      *
-     * @param restClient     the client, carrying the progression base URL and its timeouts
-     * @param systemUserId   the {@code CJSCPPUID} identity for a run naming no user; a secret, never
-     *                       logged
-     * @param extraHeaders   any further headers the mesh requires, name to value
-     * @param maxAttempts    total attempts including the first
-     * @param initialBackoff the first wait between retryable attempts; doubled each time
-     * @param maxBackoff     the ceiling on any wait, a server-supplied {@code Retry-After} included
-     * @param pause          how a wait between attempts is taken
-     * @param clock          elapsed-time source for the caller's deadline; local readings only, so
-     *                       no decision here compares one pod's clock with another's
+     * @param restClient   the client, carrying the progression base URL and its timeouts
+     * @param systemUserId the {@code CJSCPPUID} identity for a run naming no user; a secret, never
+     *                     logged
+     * @param extraHeaders any further headers the mesh requires, name to value
+     * @param retryPolicy  the shared retry policy: attempts, back-off and what a
+     *                     {@code Retry-After} is worth
+     * @param pause        how a wait between attempts is taken
+     * @param clock        elapsed-time source for the caller's deadline; local readings only, so no
+     *                     decision here compares one pod's clock with another's
      */
-    // Seven collaborators and settings, every one of them a separate operator decision. Grouping
-    // them behind a holder would hide which setting a change touches.
     public ProgressionCommandGateway(final RestClient restClient, final String systemUserId,
-            final Map<String, String> extraHeaders, final int maxAttempts,
-            final Duration initialBackoff, final Duration maxBackoff, final SubmissionPause pause,
-            final Clock clock) {
+            final Map<String, String> extraHeaders, final RetryPolicy retryPolicy,
+            final RetryPause pause, final Clock clock) {
         this.restClient = restClient;
         this.systemUserId = systemUserId;
         this.extraHeaders = Map.copyOf(extraHeaders);
-        this.maxAttempts = maxAttempts;
-        this.initialBackoff = initialBackoff;
-        this.maxBackoff = maxBackoff;
+        this.retryPolicy = retryPolicy;
         this.pause = pause;
         this.clock = clock;
     }
@@ -189,7 +173,7 @@ public class ProgressionCommandGateway {
         // Resolved once per command, not once per attempt: a retry made as a different caller would
         // be a second, differently attributed command for the same hearing.
         final String identity = caller.orSystem(systemUserId);
-        Duration backoff = initialBackoff;
+        final int maxAttempts = retryPolicy.maxAttempts();
         OptionalInt lastStatus = OptionalInt.empty();
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -208,12 +192,11 @@ public class ProgressionCommandGateway {
                         FailureClassification.NON_TRANSIENT, outcome.refusal().get(), lastStatus);
             }
             if (attempt < maxAttempts) {
-                final Duration wait = capped(outcome.retryAfter().orElse(backoff));
+                final Duration wait = retryPolicy.waitAfter(attempt, outcome.retryAfter());
                 if (!fitsInside(wait, deadline)) {
                     throw overran(attempt, lastStatus);
                 }
                 waitFor(wait);
-                backoff = capped(backoff.multipliedBy(2));
             }
         }
 
@@ -284,16 +267,17 @@ public class ProgressionCommandGateway {
             LOG.error("Progression answered a success this contract does not define, so the command "
                     + "cannot be assumed enqueued. status={}", code);
             outcome = Outcome.refused(ReasonCode.SUBMISSION_NOT_ACCEPTED, code);
-        } else if (code == HttpStatus.TOO_MANY_REQUESTS.value()) {
-            LOG.warn("Progression asked this service to slow down. attempt={}", attempt);
-            outcome = Outcome.retryable(retryAfter(response), OptionalInt.of(code));
-        } else if (code == HttpStatus.REQUEST_TIMEOUT.value() || status.is5xxServerError()) {
-            // The two the legacy never retries and every server error. AxiosRetryWrapper.js:34
-            // abandons on any status at or below 429, which makes 408 and 429 — the two statuses
-            // that most plainly mean "ask me again" — the least-retried failures it has (C3).
+        } else if (RetryPolicy.retryable(code)) {
+            // 408, 429 and every server error — the two the legacy never retries and the family it
+            // abandons. AxiosRetryWrapper.js:34 abandons on any status at or below 429, which makes
+            // 408 and 429 — the two statuses that most plainly mean "ask me again" — the
+            // least-retried failures it has (C3). A `Retry-After` is read from any of them: a 503
+            // carrying one is a service saying when it expects to be back, and the header exists
+            // because the server knows better than the client's schedule.
             LOG.warn("Progression could not process the command. attempt={} status={}",
                     attempt, code);
-            outcome = Outcome.retryable(Optional.empty(), OptionalInt.of(code));
+            outcome = Outcome.retryable(
+                    RetryPolicy.retryAfter(response.getHeaders()), OptionalInt.of(code));
         } else {
             // Any other 4xx: the request was understood and declined, so the same bytes will be
             // declined again and the delivery budget is finite.
@@ -302,32 +286,6 @@ public class ProgressionCommandGateway {
             outcome = Outcome.refused(ReasonCode.SUBMISSION_REJECTED, code);
         }
         return outcome;
-    }
-
-    /**
-     * The wait progression asked for, where it asked for one this client can act on.
-     *
-     * @return the delta-seconds wait, or empty for every other form — which falls back to the
-     *     back-off, the same outcome as no header at all
-     */
-    private static Optional<Duration> retryAfter(final ClientHttpResponse response) {
-        final String header = response.getHeaders().getFirst(RETRY_AFTER_HEADER);
-        final String asked = header == null ? "" : header.trim();
-        final Optional<Duration> wait;
-        if (DELTA_SECONDS.matcher(asked).matches()) {
-            wait = Optional.of(Duration.ofSeconds(Long.parseLong(asked)));
-        } else {
-            if (!asked.isEmpty()) {
-                LOG.warn("Retry-After was not a number of seconds, so the back-off is used instead.");
-            }
-            wait = Optional.empty();
-        }
-        return wait;
-    }
-
-    /** The ceiling on any wait, a server-supplied one included: a run holds a bounded claim. */
-    private Duration capped(final Duration wait) {
-        return wait.compareTo(maxBackoff) > 0 ? maxBackoff : wait;
     }
 
     /**

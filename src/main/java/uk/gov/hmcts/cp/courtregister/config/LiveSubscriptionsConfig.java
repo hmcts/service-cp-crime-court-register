@@ -9,6 +9,8 @@ import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPause;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
 import uk.gov.hmcts.cp.courtregister.adapter.refdata.ReferenceDataNowSubscriptionsClient;
 import uk.gov.hmcts.cp.courtregister.application.NowSubscriptionsSource;
 
@@ -61,8 +63,9 @@ public class LiveSubscriptionsConfig {
                 settings.systemUserId(),
                 settings.headers(),
                 objectMapper,
-                settings.maxAttempts(),
-                settings.retryInterval());
+                new RetryPolicy(settings.maxAttempts(), settings.initialBackoff(),
+                        settings.maxBackoff()),
+                (RetryPause) Thread::sleep);
     }
 
     /**

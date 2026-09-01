@@ -13,6 +13,8 @@ import org.springframework.web.client.RestClientResponseException;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPause;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
@@ -41,9 +43,11 @@ import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
  * <p><strong>The retry taxonomy is the corrected one — defect fix C3.</strong>
  * {@code CommonUtility/AxiosRetryWrapper.js:19,34} abandons the moment a response arrives carrying a
  * status at or below 429, which makes 429 and 408 — the two statuses that most plainly mean "ask me
- * again" — the least-retried failures there are. This client retries connect and read failures, 5xx,
- * 429 and 408, and never retries any other 4xx; it is the same taxonomy the progression submission
- * client applies, which is what makes the two agree about what a redelivery can fix.
+ * again" — the least-retried failures there are, and its fixed one-second interval never grows. This
+ * client retries connect and read failures, 5xx, 429 and 408, never retries any other 4xx, backs off
+ * exponentially and honours a {@code Retry-After} on every retryable answer — because it holds the
+ * same {@link uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy} object the progression gateway
+ * and the reference-data read hold, rather than its own implementation of the same sentence.
  *
  * <p><strong>Nothing it cannot answer is silent — defect fix C32.</strong>
  * {@code getPrefixHearing} ({@code index.js:34-57}) returns {@code undefined} when the body has no
@@ -77,32 +81,31 @@ public class ResultsQueryHearingPayloadClient implements HearingPayloadQuery {
     private static final Logger LOG =
             LoggerFactory.getLogger(ResultsQueryHearingPayloadClient.class);
 
-    /** The attempt budget remaining when the attempt being taken is the last permitted one. */
-    private static final int LAST_ATTEMPT = 1;
-
     private final RestClient restClient;
     private final String systemUserId;
     private final ObjectMapper objectMapper;
-    private final int maxAttempts;
-    private final Duration retryInterval;
+    private final RetryPolicy retryPolicy;
+    private final RetryPause pause;
 
     /**
      * Builds the client over an already-configured HTTP client.
      *
-     * @param restClient    the client, carrying the results base URL and its timeouts
-     * @param systemUserId  the fallback identity for a message that names no user; a secret, never
-     *                      logged
-     * @param objectMapper  the shared mapper, so a response is read exactly as any other JSON is
-     * @param maxAttempts   total attempts including the first
-     * @param retryInterval the wait between retryable attempts
+     * @param restClient   the client, carrying the results base URL and its timeouts
+     * @param systemUserId the fallback identity for a message that names no user; a secret, never
+     *                     logged
+     * @param objectMapper the shared mapper, so a response is read exactly as any other JSON is
+     * @param retryPolicy  the shared retry policy: attempts, back-off and what a
+     *                     {@code Retry-After} is worth
+     * @param pause        how a wait between attempts is taken
      */
     public ResultsQueryHearingPayloadClient(final RestClient restClient, final String systemUserId,
-            final ObjectMapper objectMapper, final int maxAttempts, final Duration retryInterval) {
+            final ObjectMapper objectMapper, final RetryPolicy retryPolicy,
+            final RetryPause pause) {
         this.restClient = restClient;
         this.systemUserId = systemUserId;
         this.objectMapper = objectMapper;
-        this.maxAttempts = maxAttempts;
-        this.retryInterval = retryInterval;
+        this.retryPolicy = retryPolicy;
+        this.pause = pause;
     }
 
     @Override
@@ -130,20 +133,23 @@ public class ResultsQueryHearingPayloadClient implements HearingPayloadQuery {
      * participant that knows the cache missed too, so it is the one that classifies the pair.
      */
     private Optional<JsonNode> attempt(final DistributionCommand command, final String caller) {
+        final int maxAttempts = retryPolicy.maxAttempts();
         Optional<JsonNode> payload = Optional.empty();
         boolean answered = false;
-        for (int attemptsLeft = maxAttempts; !answered; attemptsLeft--) {
-            final boolean lastAttempt = attemptsLeft <= LAST_ATTEMPT;
+        for (int attempt = 1; !answered; attempt++) {
+            final boolean lastAttempt = attempt >= maxAttempts;
+            Optional<Duration> asked = Optional.empty();
             try {
                 payload = content(get(command.hearingId(), caller));
                 answered = true;
             } catch (RestClientResponseException refused) {
                 answered = heldNothing(command, refused.getStatusCode().value(), lastAttempt);
+                asked = RetryPolicy.retryAfter(refused.getResponseHeaders());
             } catch (RestClientException unanswered) {
                 neverAnswered(command, lastAttempt);
             }
             if (!answered) {
-                pause(command);
+                waited(command, retryPolicy.waitAfter(attempt, asked));
             }
         }
         return payload;
@@ -181,7 +187,7 @@ public class ResultsQueryHearingPayloadClient implements HearingPayloadQuery {
     private boolean heldNothing(final DistributionCommand command, final int status,
             final boolean lastAttempt) {
         final boolean notHeld = status == HttpStatus.NOT_FOUND.value();
-        if (!notHeld && !retryable(status)) {
+        if (!notHeld && !RetryPolicy.retryable(status)) {
             LOG.warn("The results query API refused the payload read, and no redelivery can change "
                     + "that. requestId={} hearingId={} status={}",
                     command.requestId(), command.hearingId(), status);
@@ -193,19 +199,6 @@ public class ResultsQueryHearingPayloadClient implements HearingPayloadQuery {
             throw unavailable();
         }
         return notHeld;
-    }
-
-    /**
-     * The statuses another attempt may answer differently.
-     *
-     * <p>The legacy's rule is the inverse for the two that matter: {@code AxiosRetryWrapper.js:34}
-     * abandons on any status at or below 429, so a service answering "slow down" or "you timed out"
-     * is the one thing it never asks again (defect fix C3).
-     */
-    private static boolean retryable(final int status) {
-        return status == HttpStatus.REQUEST_TIMEOUT.value()
-                || status == HttpStatus.TOO_MANY_REQUESTS.value()
-                || status >= HttpStatus.INTERNAL_SERVER_ERROR.value();
     }
 
     /** A read that never reached an answer: retried while attempts remain, then reported. */
@@ -255,10 +248,10 @@ public class ResultsQueryHearingPayloadClient implements HearingPayloadQuery {
         return payload;
     }
 
-    private void pause(final DistributionCommand command) {
-        if (!retryInterval.isZero() && !retryInterval.isNegative()) {
+    private void waited(final DistributionCommand command, final Duration wait) {
+        if (!wait.isZero() && !wait.isNegative()) {
             try {
-                Thread.sleep(retryInterval);
+                pause.pause(wait);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 LOG.warn("Interrupted while waiting to retry the payload read. requestId={} "

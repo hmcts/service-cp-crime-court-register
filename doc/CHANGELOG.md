@@ -16,6 +16,34 @@ released, so everything sits under Unreleased.
 
 ### Changed
 
+- 2026-09-01 — **C3's shared retry policy is now actually shared, and it costs three renamed
+  settings.** The defect-fix register promises "a config-driven retry policy applied identically to
+  all three named clients"; what the three shared was the status taxonomy, and nothing else. The
+  progression gateway had a doubling back-off and read `Retry-After`; the payload fallback and the
+  reference-data read kept the legacy's fixed one-second interval and ignored the header. All three
+  now hold one `RetryPolicy` object, which owns the taxonomy, the doubling back-off bounded by
+  `max-backoff`, and `Retry-After` — honoured on **every** retryable answer rather than only on a
+  429, in delta-seconds only (an HTTP-date is classified, never parsed), and capped by the same
+  ceiling.
+
+  **Operator-visible, and a breaking rename.** `courtregister.payload.fallback.retry-interval` and
+  `courtregister.referencedata.retry-interval` are **gone**, replaced by `initial-backoff` (default
+  `1s`) and `max-backoff` (default `2s`) — the same two keys, with the same meanings, that
+  `courtregister.progression` already had. An environment still setting `retry-interval` is setting
+  a key nothing reads. `courtregister.progression.max-backoff` drops from **20s to 5s**, for the
+  arithmetic below.
+
+  **The startup budget is stricter, because the policy is more generous.** A `Retry-After` is now
+  honoured on every retryable answer in every client, and the only thing bounding what a remote
+  service can ask for is `max-backoff` — so the worst case for a wait is the ceiling, not the
+  doubling schedule, and `PropertiesValidator` now budgets `(max-attempts - 1) × max-backoff` per
+  client. The shipped numbers satisfy it with room: a payload fetch of 69s (20s of cache reads,
+  three attempts of 5s + 10s, two waits of 2s), a now-subscriptions read of 49s, a submission of 75s
+  (four attempts of 5s + 10s, three waits of 5s) and the fixed 30s margin come to 223s against a
+  four-minute deadline. An environment that lengthens an attempt count or a ceiling must keep the
+  sum inside the deadline or the pod refuses to start, with a message naming each step's
+  contribution.
+
 - 2026-09-01 — **A read the other side refused is parked, not redelivered to exhaustion.** The
   payload query and the reference-data clients already knew which statuses were worth asking again —
   the C3 taxonomy — but threw the same always-TRANSIENT failure whichever way the answer went. A

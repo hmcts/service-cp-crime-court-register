@@ -11,11 +11,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.client.ResponseDefinitionBuilder;
 import com.github.tomakehurst.wiremock.http.Fault;
 import com.github.tomakehurst.wiremock.stubbing.Scenario;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.assertj.core.api.InstanceOfAssertFactories;
@@ -26,10 +29,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPause;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
@@ -104,9 +110,14 @@ class ResultsQueryHearingPayloadClientTest {
 
     private static final ObjectMapper MAPPER = JacksonConfig.contractObjectMapper();
 
+    /** The shipped back-off settings for this client, so the suite asserts what an operator gets. */
+    private static final Duration INITIAL_BACKOFF = Duration.ofSeconds(1);
+    private static final Duration MAX_BACKOFF = Duration.ofSeconds(2);
+
     private static WireMockServer server;
 
     private ResultsQueryHearingPayloadClient client;
+    private RecordingPause pause;
 
     @BeforeAll
     static void startStub() {
@@ -122,21 +133,33 @@ class ResultsQueryHearingPayloadClientTest {
     @BeforeEach
     void resetStub() {
         server.resetAll();
+        pause = new RecordingPause();
         client = clientFor(SYSTEM_USER_ID);
     }
 
     /**
-     * The configured retry interval is a second. Waiting three of them to observe an attempt count
-     * would make the suite slow without making it say anything more, so the wait is zero and the
-     * count is what is read.
+     * The shipped policy waits a second and then two. Living through three of those to observe an
+     * attempt count would make the suite slow without making it say anything more, so the waits are
+     * recorded rather than taken — and recording them is also how the policy itself is asserted.
      */
-    private static ResultsQueryHearingPayloadClient clientFor(final String systemUserId) {
+    private ResultsQueryHearingPayloadClient clientFor(final String systemUserId) {
         return new ResultsQueryHearingPayloadClient(
                 RestClient.builder().baseUrl(server.baseUrl()).build(),
                 systemUserId,
                 MAPPER,
-                MAX_ATTEMPTS,
-                Duration.ZERO);
+                new RetryPolicy(MAX_ATTEMPTS, INITIAL_BACKOFF, MAX_BACKOFF),
+                pause);
+    }
+
+    /** Records what the client would have waited, so the suite proves the policy without living it. */
+    private static final class RecordingPause implements RetryPause {
+
+        private final List<Duration> waits = new ArrayList<>();
+
+        @Override
+        public void pause(final Duration duration) {
+            waits.add(duration);
+        }
     }
 
     private static DistributionCommand command() {
@@ -159,6 +182,20 @@ class ResultsQueryHearingPayloadClientTest {
                 .willReturn(aResponse().withStatus(status)
                         .withHeader("Content-Type", ResultsQueryHearingPayloadClient.ACCEPT)
                         .withBody(body)));
+    }
+
+    /** Answers once with {@code first}, carrying a {@code Retry-After}, then serves the payload. */
+    private static void answeringThenServing(final int first, final String retryAfter) {
+        final ResponseDefinitionBuilder refusal = aResponse().withStatus(first);
+        server.stubFor(get(urlPathEqualTo(PATH)).inScenario("recovers")
+                .whenScenarioStateIs(Scenario.STARTED)
+                .willReturn(retryAfter == null || retryAfter.isBlank()
+                        ? refusal
+                        : refusal.withHeader("Retry-After", retryAfter))
+                .willSetStateTo("up"));
+        server.stubFor(get(urlPathEqualTo(PATH)).inScenario("recovers")
+                .whenScenarioStateIs("up")
+                .willReturn(aResponse().withStatus(200).withBody(PAYLOAD)));
     }
 
     @Nested
@@ -408,6 +445,58 @@ class ResultsQueryHearingPayloadClientTest {
 
             assertThatThrownBy(() -> client.fetch(command()))
                     .hasMessage(ReasonCode.PAYLOAD_UNAVAILABLE.code());
+        }
+    }
+
+    /**
+     * The policy the three clients share, seen from this one — defect fix C3.
+     *
+     * <p>The register's row promises a policy "applied identically to all three named clients", and
+     * for a while that was true of the status taxonomy and of nothing else: this client waited the
+     * legacy's fixed second, however unwell the results context was, and ignored a
+     * {@code Retry-After} it was sent. It now holds the same
+     * {@link uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy} object the progression gateway
+     * and the reference-data read hold, so the three cannot disagree about a wait.
+     *
+     * <p><strong>503 is the status these cases are written on.</strong> It is the one every client
+     * retries and the one a service under load actually answers with, and it is where honouring a
+     * {@code Retry-After} matters most — a 429-only reading would ignore precisely the service that
+     * has told you when it will be back.
+     */
+    @Nested
+    @DisplayName("the shared retry policy — defect fix C3")
+    class SharedPolicy {
+
+        @Test
+        @DisplayName("the wait between attempts grows rather than hammering the query side")
+        void the_wait_between_attempts_grows_rather_than_hammering_the_query_side() {
+            answering(503, "");
+
+            assertThatThrownBy(() -> client.fetch(command()))
+                    .isInstanceOf(PayloadUnavailableException.class);
+
+            assertThat(pause.waits)
+                    .as("the legacy waits a fixed second, every time, however unwell the other "
+                            + "side is")
+                    .containsExactly(INITIAL_BACKOFF, MAX_BACKOFF);
+        }
+
+        @ParameterizedTest(name = "Retry-After: [{0}] waits {1}")
+        @CsvSource({
+            "1,                              PT1S",
+            "2,                              PT2S",
+            "3600,                           PT2S",
+            "'Wed, 21 Oct 2026 07:28:00 GMT',PT1S",
+            "when I say so,                  PT1S",
+            "'',                             PT1S",
+        })
+        @DisplayName("retry_after_is_honoured_on_a_503_bounded_and_delta_seconds_only")
+        void retry_after_is_honoured_on_a_503_bounded_and_delta_seconds_only(
+                final String header, final Duration expectedWait) {
+            answeringThenServing(503, header);
+
+            assertThat(client.fetch(command())).isPresent();
+            assertThat(pause.waits).containsExactly(expectedWait);
         }
     }
 

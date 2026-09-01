@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
 import uk.gov.hmcts.cp.courtregister.adapter.progression.ProgressionCommandGateway;
 import uk.gov.hmcts.cp.courtregister.adapter.progression.ProgressionRegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
@@ -122,9 +123,7 @@ class SubmissionRedeliveryIT {
                         .build(),
                 SYSTEM_USER_ID,
                 Map.of(),
-                1,
-                Duration.ofMillis(1),
-                Duration.ofSeconds(1),
+                new RetryPolicy(1, Duration.ofMillis(1), Duration.ofSeconds(1)),
                 duration -> {
                     // Nothing waits here; a single attempt never reaches a wait at all.
                 },

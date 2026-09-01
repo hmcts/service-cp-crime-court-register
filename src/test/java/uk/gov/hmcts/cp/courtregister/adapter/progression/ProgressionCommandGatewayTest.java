@@ -33,6 +33,8 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPause;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
@@ -140,7 +142,7 @@ class ProgressionCommandGatewayTest {
 
     private ProgressionCommandGateway gateway(final int maxAttempts,
             final Map<String, String> extraHeaders, final Duration readTimeout,
-            final SubmissionPause waiting) {
+            final RetryPause waiting) {
         final SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Duration.ofSeconds(2));
         requestFactory.setReadTimeout(readTimeout);
@@ -151,9 +153,7 @@ class ProgressionCommandGatewayTest {
                         .build(),
                 SYSTEM_USER_ID,
                 extraHeaders,
-                maxAttempts,
-                INITIAL_BACKOFF,
-                MAX_BACKOFF,
+                new RetryPolicy(maxAttempts, INITIAL_BACKOFF, MAX_BACKOFF),
                 waiting,
                 clock);
     }
@@ -565,6 +565,27 @@ class ProgressionCommandGatewayTest {
             assertThat(pause.waits).containsExactly(expectedWait);
         }
 
+        /**
+         * <strong>Every retryable answer, not only a 429.</strong> A 503 carrying a
+         * {@code Retry-After} is a service saying when it expects to be back — the header exists
+         * because the server knows better than the client's schedule, and a reading that took it
+         * only from a 429 would ignore precisely the service that told you. It is the same rule the
+         * payload query and the reference-data read now apply, because all three read it out of one
+         * shared policy.
+         */
+        @ParameterizedTest(name = "a Retry-After on a {0} is honoured")
+        @ValueSource(ints = {408, 429, 500, 503})
+        @DisplayName("retry_after_is_honoured_on_every_retryable_answer")
+        void retry_after_is_honoured_on_every_retryable_answer(final int status) {
+            answeringThenAccepting(status, "2");
+
+            assertThat(gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline()))
+                    .isEqualTo(ACCEPTED);
+            assertThat(pause.waits)
+                    .as("the back-off would have been half a second")
+                    .containsExactly(Duration.ofSeconds(2));
+        }
+
         @Test
         @DisplayName("a Retry-After beyond the ceiling never outlives the run's claim")
         void a_retry_after_beyond_the_ceiling_is_capped() {
@@ -856,7 +877,7 @@ class ProgressionCommandGatewayTest {
     }
 
     /** Records what the gateway would have waited, so the suite proves the policy without living it. */
-    private static final class RecordingPause implements SubmissionPause {
+    private static final class RecordingPause implements RetryPause {
 
         private final List<Duration> waits = new ArrayList<>();
 

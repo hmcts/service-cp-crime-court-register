@@ -65,7 +65,6 @@ public class PropertiesValidator implements InitializingBean {
     private static final String SYSTEM_USER_ID = "courtregister.results.system-user-id";
     private static final String FALLBACK = PAYLOAD + ".fallback";
     private static final String FALLBACK_MAX_ATTEMPTS = FALLBACK + ".max-attempts";
-    private static final String RETRY_INTERVAL = FALLBACK + ".retry-interval";
     private static final String REDIS = PAYLOAD + ".redis";
     private static final String CONNECT_TIMEOUT_SUFFIX = ".connect-timeout";
     private static final String REFDATA = "courtregister.referencedata";
@@ -73,13 +72,14 @@ public class PropertiesValidator implements InitializingBean {
     private static final String REFDATA_BASE_URL = REFDATA + ".base-url";
     private static final String REFDATA_SYSTEM_USER_ID = REFDATA + ".system-user-id";
     private static final String REFDATA_MAX_ATTEMPTS = REFDATA + ".max-attempts";
-    private static final String REFDATA_RETRY_INTERVAL = REFDATA + ".retry-interval";
     private static final String PROGRESSION = "courtregister.progression";
     private static final String PROGRESSION_BASE_URL = PROGRESSION + ".base-url";
     private static final String PROGRESSION_SYSTEM_USER_ID = PROGRESSION + ".system-user-id";
     private static final String PROGRESSION_MAX_ATTEMPTS = PROGRESSION + ".max-attempts";
-    private static final String INITIAL_BACKOFF = PROGRESSION + ".initial-backoff";
-    private static final String MAX_BACKOFF = PROGRESSION + ".max-backoff";
+
+    /** The three clients read the same two keys, so the two suffixes are named once. */
+    private static final String INITIAL_BACKOFF_SUFFIX = ".initial-backoff";
+    private static final String MAX_BACKOFF_SUFFIX = ".max-backoff";
     private static final String VALIDATE_OUTBOUND = "courtregister.submission.validate-outbound";
 
     /** Shared so the wording of a lower-bound refusal is one string and not five. */
@@ -236,10 +236,7 @@ public class PropertiesValidator implements InitializingBean {
                             + " could have answered, and the request is retried to the dead-letter"
                             + " queue instead");
         }
-        if (fallback.retryInterval().isNegative()) {
-            throw new IllegalStateException(
-                    RETRY_INTERVAL + " (" + fallback.retryInterval() + ") must not be negative");
-        }
+        validateTheBackOffIsUsable(FALLBACK, fallback.initialBackoff(), fallback.maxBackoff());
         requirePositive(fallback.connectTimeout(), FALLBACK + CONNECT_TIMEOUT_SUFFIX);
         requirePositive(fallback.readTimeout(), FALLBACK + ".read-timeout");
     }
@@ -249,7 +246,7 @@ public class PropertiesValidator implements InitializingBean {
      *
      * <p>So the whole fetch's worst case has to fit inside the processing deadline: the two cache
      * reads that come first, each able to spend its connect and command timeouts, and then every
-     * fallback attempt spending its connect and read timeouts with an interval between them. A
+     * fallback attempt spending its connect and read timeouts with a bounded wait between them. A
      * configuration where it does not guarantees exactly what the deadline exists to prevent: a
      * runner still waiting on a socket while another runner takes its request.
      *
@@ -281,12 +278,12 @@ public class PropertiesValidator implements InitializingBean {
                 .multipliedBy(CACHE_READS_PER_FETCH);
     }
 
-    /** Every query-side attempt spending both timeouts, with the intervals between them. */
+    /** Every query-side attempt spending both timeouts, with the waits between them. */
     private static Duration queryReadsWorstCase(
             final CourtRegisterProperties.Fallback fallback) {
         return attemptsWorstCase(fallback.connectTimeout(), fallback.readTimeout(),
                 fallback.maxAttempts())
-                .plus(fallback.retryInterval().multipliedBy(fallback.maxAttempts() - 1L));
+                .plus(backOffWorstCase(fallback.maxBackoff(), fallback.maxAttempts()));
     }
 
     /** The whole payload fetch, or nothing at all where the stub is the selected source. */
@@ -386,11 +383,8 @@ public class PropertiesValidator implements InitializingBean {
                             + MINIMUM_ATTEMPTS + " — at zero the query is never made and every"
                             + " hearing that produced a register is parked having asked nobody");
         }
-        if (referencedata.retryInterval().isNegative()) {
-            throw new IllegalStateException(
-                    REFDATA_RETRY_INTERVAL + " (" + referencedata.retryInterval()
-                            + ") must not be negative");
-        }
+        validateTheBackOffIsUsable(
+                REFDATA, referencedata.initialBackoff(), referencedata.maxBackoff());
         requirePositive(referencedata.connectTimeout(), REFDATA + CONNECT_TIMEOUT_SUFFIX);
         requirePositive(referencedata.readTimeout(), REFDATA + ".read-timeout");
     }
@@ -398,10 +392,11 @@ public class PropertiesValidator implements InitializingBean {
     /**
      * The now-subscriptions read happens inside the run, so its worst case has to fit inside it.
      *
-     * <p>Every attempt can spend its connect and its read timeout, with the retry interval between
-     * them, and nothing else bounds the total. Ten attempts against a minute-long read is a startup
-     * that succeeds and a run that is still waiting on a socket ten minutes later — long after its
-     * claim became reclaimable and another delivery began processing the same request.
+     * <p>Every attempt can spend its connect and its read timeout, with a wait bounded by
+     * {@code max-backoff} between them, and nothing else bounds the total. Ten attempts against a
+     * minute-long read is a startup that succeeds and a run that is still waiting on a socket ten
+     * minutes later — long after its claim became reclaimable and another delivery began processing
+     * the same request.
      *
      * <p>The bound here is per-step: it refuses a reference-data read that cannot finish inside a
      * run at all. Whether this step and the two around it fit inside one run <em>together</em> is a
@@ -428,8 +423,8 @@ public class PropertiesValidator implements InitializingBean {
                 ? Duration.ZERO
                 : attemptsWorstCase(referencedata.connectTimeout(), referencedata.readTimeout(),
                         referencedata.maxAttempts())
-                        .plus(referencedata.retryInterval()
-                                .multipliedBy(referencedata.maxAttempts() - 1L));
+                        .plus(backOffWorstCase(referencedata.maxBackoff(),
+                                referencedata.maxAttempts()));
     }
 
     /**
@@ -478,18 +473,8 @@ public class PropertiesValidator implements InitializingBean {
                             + MINIMUM_ATTEMPTS + ": a policy with no attempts posts no register at"
                             + " all and hands every hearing back unsent");
         }
-        if (progression.initialBackoff().isNegative()) {
-            throw new IllegalStateException(
-                    INITIAL_BACKOFF + " (" + progression.initialBackoff() + ") must not be negative:"
-                            + " a negative wait throws from inside the retry rather than being"
-                            + " taken");
-        }
-        if (progression.maxBackoff().compareTo(progression.initialBackoff()) < 0) {
-            throw new IllegalStateException(
-                    MAX_BACKOFF + " (" + progression.maxBackoff() + MUST_BE_AT_LEAST
-                            + INITIAL_BACKOFF + " (" + progression.initialBackoff() + "), or the"
-                            + " ceiling shortens the very wait it exists to bound");
-        }
+        validateTheBackOffIsUsable(
+                PROGRESSION, progression.initialBackoff(), progression.maxBackoff());
         requirePositive(progression.connectTimeout(), PROGRESSION + CONNECT_TIMEOUT_SUFFIX);
         requirePositive(progression.readTimeout(), PROGRESSION + ".read-timeout");
     }
@@ -498,11 +483,11 @@ public class PropertiesValidator implements InitializingBean {
      * The POST happens inside the run the payload fetch and the reference-data read happen in, so
      * its worst case is held to the same bound theirs are.
      *
-     * <p>Every attempt can spend its connect and read timeouts, and between them sits a back-off
-     * that doubles from {@code initial-backoff} until {@code max-backoff} caps it — which is where a
-     * retry policy that looks modest stops being one. A run still waiting on the last of them when
-     * its claim becomes reclaimable is a second runner processing the same hearing, and this flow
-     * POSTs a document that progression appends rather than replaces.
+     * <p>Every attempt can spend its connect and read timeouts, and between them sits a wait the
+     * policy bounds at {@code max-backoff} — which is where a retry policy that looks modest stops
+     * being one. A run still waiting on the last of them when its claim becomes reclaimable is a
+     * second runner processing the same hearing, and this flow POSTs a document that progression
+     * appends rather than replaces.
      */
     private static void validateTheSubmissionFinishesInsideTheRun(
             final CourtRegisterProperties properties) {
@@ -510,7 +495,8 @@ public class PropertiesValidator implements InitializingBean {
         final Duration deadline = properties.claim().processingDeadline();
         final Duration attempts = attemptsWorstCase(progression.connectTimeout(),
                 progression.readTimeout(), progression.maxAttempts());
-        final Duration waits = backOffWorstCase(progression);
+        final Duration waits =
+                backOffWorstCase(progression.maxBackoff(), progression.maxAttempts());
         final Duration worstCase = submissionWorstCase(properties);
         if (worstCase.compareTo(deadline) >= 0) {
             throw new IllegalStateException(
@@ -526,7 +512,7 @@ public class PropertiesValidator implements InitializingBean {
         final CourtRegisterProperties.Progression progression = properties.progression();
         return attemptsWorstCase(progression.connectTimeout(), progression.readTimeout(),
                 progression.maxAttempts())
-                .plus(backOffWorstCase(progression));
+                .plus(backOffWorstCase(progression.maxBackoff(), progression.maxAttempts()));
     }
 
     /**
@@ -574,26 +560,53 @@ public class PropertiesValidator implements InitializingBean {
     }
 
     /**
-     * The doubling back-off, summed and capped.
+     * The shared retry policy's two waits, held to what a wait has to be to be takeable.
      *
-     * <p>Accumulated a wait at a time rather than by formula so the ceiling is applied where the
-     * retry applies it, and so a long attempt count cannot overflow the doubling before the cap has
-     * a chance to stop it.
+     * <p>One rule for all three clients, because there is one policy: {@code initial-backoff} and
+     * {@code max-backoff} mean the same thing wherever they are read, and so does a configuration
+     * that makes them unusable. A negative first wait throws from inside the retry rather than being
+     * taken, and a ceiling below the first wait shortens the very wait it exists to bound.
+     *
+     * @param prefix         the settings prefix, so the message names the client that is misconfigured
+     * @param initialBackoff the first wait between retryable attempts
+     * @param maxBackoff     the ceiling on any wait
      */
-    private static Duration backOffWorstCase(
-            final CourtRegisterProperties.Progression progression) {
-        Duration total = Duration.ZERO;
-        Duration wait = progression.initialBackoff();
-        for (int taken = 0; taken < progression.maxAttempts() - 1; taken++) {
-            final Duration capped = wait.compareTo(progression.maxBackoff()) > 0
-                    ? progression.maxBackoff()
-                    : wait;
-            total = total.plus(capped);
-            wait = capped.compareTo(progression.maxBackoff()) < 0
-                    ? capped.multipliedBy(2)
-                    : progression.maxBackoff();
+    private static void validateTheBackOffIsUsable(final String prefix,
+            final Duration initialBackoff, final Duration maxBackoff) {
+        if (initialBackoff.isNegative()) {
+            throw new IllegalStateException(
+                    prefix + INITIAL_BACKOFF_SUFFIX + " (" + initialBackoff + ") must not be"
+                            + " negative: a negative wait throws from inside the retry rather than"
+                            + " being taken");
         }
-        return total;
+        if (maxBackoff.compareTo(initialBackoff) < 0) {
+            throw new IllegalStateException(
+                    prefix + MAX_BACKOFF_SUFFIX + " (" + maxBackoff + MUST_BE_AT_LEAST + prefix
+                            + INITIAL_BACKOFF_SUFFIX + " (" + initialBackoff + "), or the ceiling"
+                            + " shortens the very wait it exists to bound");
+        }
+    }
+
+    /**
+     * Every wait a retry policy can take, at its worst.
+     *
+     * <p><strong>{@code max-backoff} per wait, not the doubling schedule.</strong> The schedule is
+     * what the client waits when nothing tells it otherwise, and it is not the bound: a
+     * {@code Retry-After} is honoured on <em>every</em> retryable answer in all three clients, and
+     * the only thing limiting what a remote service can ask for is {@code max-backoff}. So a service
+     * answering {@code Retry-After: 3600} on every attempt costs a full ceiling per wait, and a
+     * budget computed from the doubling would licence a run that cannot finish inside its claim —
+     * which is exactly the shape this validation exists to refuse. The doubling only ever makes the
+     * real cost smaller.
+     *
+     * @param maxBackoff  the ceiling on any wait
+     * @param maxAttempts total attempts including the first
+     * @return the worst case the waits between those attempts can cost
+     */
+    private static Duration backOffWorstCase(final Duration maxBackoff, final int maxAttempts) {
+        return maxAttempts <= MINIMUM_ATTEMPTS
+                ? Duration.ZERO
+                : maxBackoff.multipliedBy(maxAttempts - 1L);
     }
 
     /**

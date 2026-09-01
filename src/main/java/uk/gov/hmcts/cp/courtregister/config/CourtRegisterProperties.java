@@ -142,18 +142,23 @@ public record CourtRegisterProperties(
     /**
      * The query-side payload read.
      *
-     * <p>The attempt count and interval are the function app's {@code DEFAULT_PUBLISH_RETRY_COUNT}
-     * and {@code DEFAULT_PUBLISH_RETRY_INTERVAL} defaults; the retry <em>taxonomy</em> is the
-     * corrected one (fix C3), which is a property of the client rather than of these numbers.
+     * <p>The attempt count is the function app's {@code DEFAULT_PUBLISH_RETRY_COUNT} default; the
+     * retry <em>policy</em> is the corrected one (fix C3), and it is the same policy the other two
+     * clients read — three keys with the same names and the same meanings everywhere, because there
+     * is one {@code RetryPolicy} object behind them. The legacy's fixed
+     * {@code DEFAULT_PUBLISH_RETRY_INTERVAL} is gone: a wait that never grows hammers a service that
+     * is already unwell.
      *
      * @param maxAttempts    total attempts including the first
-     * @param retryInterval  the wait between attempts
+     * @param initialBackoff the first wait between retryable attempts; doubled each time
+     * @param maxBackoff     the ceiling on any wait, a server-supplied {@code Retry-After} included
      * @param connectTimeout how long to wait for a connection
      * @param readTimeout    how long to wait for a response
      */
     public record Fallback(
             @DefaultValue("3") int maxAttempts,
-            @DefaultValue("1s") Duration retryInterval,
+            @DefaultValue("1s") Duration initialBackoff,
+            @DefaultValue("2s") Duration maxBackoff,
             @DefaultValue("5s") Duration connectTimeout,
             @DefaultValue("10s") Duration readTimeout) {
     }
@@ -194,7 +199,8 @@ public record CourtRegisterProperties(
      * @param systemUserId   the {@code CJSCPPUID} identity; a secret, never logged
      * @param headers        any further headers the mesh requires, name to value
      * @param maxAttempts    total attempts including the first
-     * @param retryInterval  the wait between attempts
+     * @param initialBackoff the first wait between retryable attempts; doubled each time
+     * @param maxBackoff     the ceiling on any wait, a server-supplied {@code Retry-After} included
      * @param connectTimeout how long to wait for a connection
      * @param readTimeout    how long to wait for a response once connected
      */
@@ -204,7 +210,8 @@ public record CourtRegisterProperties(
             String systemUserId,
             Map<String, String> headers,
             @DefaultValue("3") int maxAttempts,
-            @DefaultValue("1s") Duration retryInterval,
+            @DefaultValue("1s") Duration initialBackoff,
+            @DefaultValue("2s") Duration maxBackoff,
             @DefaultValue("5s") Duration connectTimeout,
             @DefaultValue("10s") Duration readTimeout) {
 
@@ -240,7 +247,7 @@ public record CourtRegisterProperties(
             Map<String, String> headers,
             @DefaultValue("4") int maxAttempts,
             @DefaultValue("500ms") Duration initialBackoff,
-            @DefaultValue("20s") Duration maxBackoff,
+            @DefaultValue("5s") Duration maxBackoff,
             @DefaultValue("5s") Duration connectTimeout,
             @DefaultValue("10s") Duration readTimeout) {
 
