@@ -641,8 +641,21 @@ vocabulary and matching semantics.
       replay skips the POST and still completes `submitted`, and a receipt that could not tell the
       two apart would have the run log a call it never made. The existing pipeline and composition
       suites were carried across unchanged in meaning and stay green.)*
-- [ ] T063 [P] [US1] `adapter/payload/LettuceHearingPayloadCacheIT` (Redis container) — live
+- [x] T063 [P] [US1] `adapter/payload/LettuceHearingPayloadCacheIT` (Redis container) — live
       GET/dated-undated forms, TLS options honoured.
+      *(done — 16 cases red against the `LettuceHearingPayloadCache` seam, which reaches the real
+      server through `HearingPayloadCacheKey`'s seam as well. Two notes. **(1)** Every case writes
+      under the **literal** key the producer publishes and reads through the key builder: the
+      producer writes those keys and this service only guesses at them, so a suite that wrote through
+      the builder too would agree with whatever the builder does and pass while production read
+      nothing. The dated and undated forms are asserted as **two keys**, including that an undated
+      payload is *absent* from the dated key — which is why the adapter tries one and then the other
+      rather than choosing. **(2)** C15 is asserted by connecting rather than by reading a setting
+      back. `LivePayloadConfigTest.transport_security` pins that the URI asks for a verified
+      certificate; what it cannot show is that the client acts on it, so here a cache configured for
+      TLS is pointed at the plaintext container and must fail to read — and fail as a miss, like any
+      other cache outage. The container stays plaintext deliberately: one carrying a self-signed
+      certificate would only prove a suite can be told to trust one.)*
 - [ ] T064 [P] [US2] `application/SubmissionRedeliveryIT` (PG + WireMock) — POSTED replay skips the
       POST; PENDING/FAILED replays re-attempt.
 
