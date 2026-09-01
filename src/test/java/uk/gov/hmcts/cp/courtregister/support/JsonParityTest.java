@@ -107,37 +107,108 @@ class JsonParityTest {
     }
 
     /**
-     * The register as it stands: empty, and therefore invisible.
+     * The register as it stands, and what it leaves alone.
      *
-     * <p>This port fixes thirty-one catalogued defects, so components whose rendering a fix changes
-     * will eventually be reconciled against the oracle by derivation rather than by equality. None
-     * is registered yet — entries arrive with the differential audit (T074), which is where a fix
-     * first meets a recorded oracle value — and the consequence has to be pinned, because "the
-     * comparator has a register" and "the register is doing something" are two different claims and
-     * only the second one could be mistaken for the first.
+     * <p>Two components are checked by derivation: {@code registerDate}, whose legacy rendering is a
+     * London wall clock with a meaningless {@code Z} on it (C10), and {@code wording}, whose legacy
+     * rendering carries progression's {@code ####} sentinel and, where an offence has no
+     * legislation, the literal text {@code undefined} (C24). Everything else in the tree is compared
+     * for equality, and that is the half worth pinning: "the comparator has a register" and "the
+     * register has swallowed the comparison" are two different claims, and only the second one could
+     * be mistaken for the first.
      */
     @Nested
-    @DisplayName("the defect-fix register, empty")
-    class EmptyRegister {
+    @DisplayName("the defect-fix register, as it stands")
+    class TheRegister {
 
         @Test
-        @DisplayName("registers nothing, so every component is compared by equality")
-        void registers_nothing_so_every_component_is_compared_by_equality() {
-            assertThat(RegisteredDefectFixes.forProperty("registerDate")).isNull();
-            assertThat(RegisteredDefectFixes.forProperty("fileName")).isNull();
+        @DisplayName("registers the two components a fix re-renders, and nothing else")
+        void registers_the_two_components_a_fix_re_renders() {
+            assertThat(RegisteredDefectFixes.forProperty("registerDate").reference())
+                    .startsWith("C10 ");
+            assertThat(RegisteredDefectFixes.forProperty("wording").reference())
+                    .startsWith("C24 ");
             assertThat(RegisteredDefectFixes.forProperty("verdictCode")).isNull();
+            assertThat(RegisteredDefectFixes.forProperty("fileName")).isNull();
         }
 
         @Test
-        @DisplayName("compares a component a fix will one day cover exactly as it compares any other")
-        void compares_a_future_component_exactly_as_it_compares_any_other() {
+        @DisplayName("compares an unregistered component exactly as it always did")
+        void compares_an_unregistered_component_exactly_as_it_always_did() {
             assertMatches(
-                    "{\"registerDate\":\"2020-06-01T10:00:00Z\"}",
+                    "{\"fileName\":\"court-register_2020-06-01_B01LY00_h.pdf\"}",
+                    "{\"fileName\":\"court-register_2020-06-01_B01LY00_h.pdf\"}");
+            assertDiffers(
+                    "{\"fileName\":\"court-register_2020-06-01T11:00:00Z_B01LY00.pdf\"}",
+                    "{\"fileName\":\"court-register_2020-06-01_B01LY00_h.pdf\"}",
+                    "/fileName");
+        }
+
+        @Test
+        @DisplayName("requires the port to re-render a registered component, not to repeat it")
+        void requires_the_port_to_re_render_a_registered_component() {
+            // The BST share the whole of C10 is about: the recording says 11:00 "Z" for a 10:00Z
+            // instant, and the port owes the instant.
+            assertMatches(
+                    "{\"registerDate\":\"2020-06-01T11:00:00Z\"}",
                     "{\"registerDate\":\"2020-06-01T10:00:00Z\"}");
             assertDiffers(
                     "{\"registerDate\":\"2020-06-01T11:00:00Z\"}",
-                    "{\"registerDate\":\"2020-06-01T10:00:00Z\"}",
-                    "/registerDate");
+                    "{\"registerDate\":\"2020-06-01T11:00:00Z\"}",
+                    "C10 ");
+        }
+
+        @Test
+        @DisplayName("leaves a GMT share exactly where it was, because nothing was relabelled")
+        void leaves_a_gmt_share_where_it_was() {
+            // The derivation is the identity for half the year, which is why C10 is invisible in
+            // winter and why a suite recorded only in winter would have proved nothing.
+            assertMatches(
+                    "{\"registerDate\":\"2020-12-01T00:00:00Z\"}",
+                    "{\"registerDate\":\"2020-12-01T00:00:00Z\"}");
+        }
+
+        @Test
+        @DisplayName("permits either offset in the hour London repeats")
+        void permits_either_offset_in_the_repeated_hour() {
+            // 01:30 on the fall-back day happened twice and the recording — a wall clock plus a
+            // meaningless Z — does not say which. Both are accepted; nothing else is.
+            assertMatches(
+                    "{\"registerDate\":\"2020-10-25T01:30:00Z\"}",
+                    "{\"registerDate\":\"2020-10-25T00:30:00Z\"}");
+            assertMatches(
+                    "{\"registerDate\":\"2020-10-25T01:30:00Z\"}",
+                    "{\"registerDate\":\"2020-10-25T01:30:00Z\"}");
+            assertDiffers(
+                    "{\"registerDate\":\"2020-10-25T01:30:00Z\"}",
+                    "{\"registerDate\":\"2020-10-25T02:30:00Z\"}",
+                    "C10 ");
+        }
+
+        @Test
+        @DisplayName("joins a wording to its legislation with a newline, and drops the residue")
+        void joins_a_wording_to_its_legislation_with_a_newline() {
+            assertMatches(
+                    "{\"wording\":\"Stole a bicycle.####Contrary to section 1.\"}",
+                    "{\"wording\":\"Stole a bicycle.\\nContrary to section 1.\"}");
+            assertMatches(
+                    "{\"wording\":\"Stole a bicycle.####undefined\"}",
+                    "{\"wording\":\"Stole a bicycle.\"}");
+            assertDiffers(
+                    "{\"wording\":\"Stole a bicycle.####undefined\"}",
+                    "{\"wording\":\"Stole a bicycle.####undefined\"}",
+                    "C24 ");
+        }
+
+        @Test
+        @DisplayName("reports a wording carrying no sentinel rather than passing it")
+        void reports_a_wording_carrying_no_sentinel() {
+            // The legacy writes the sentinel unconditionally, so a recording without one is not a
+            // value this fix describes and the component has stopped being covered by it.
+            assertDiffers(
+                    "{\"wording\":\"Stole a bicycle.\"}",
+                    "{\"wording\":\"Stole a bicycle.\"}",
+                    "cannot derive");
         }
     }
 

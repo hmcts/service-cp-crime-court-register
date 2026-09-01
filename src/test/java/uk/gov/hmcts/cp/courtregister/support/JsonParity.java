@@ -32,14 +32,18 @@ import tools.jackson.databind.JsonNode;
  * {@link RegisteredDefectFixes} is checked by <em>derivation</em> instead of by equality: the golden
  * file keeps the Node oracle's rendering, and the comparator computes from it the value the port is
  * now required to write. Nothing is skipped and nothing is excluded — the check is as strict as
- * equality was, and the register itself is tested in {@code JsonParityTest}. This port fixes
- * thirty-one catalogued defects, so several components will eventually be checked this way; the
- * register is empty today and its entries arrive with the differential audit (T074), each carrying
- * the C-number of the {@code doc/DEFECT-FIXES.md} row that authorises it.
+ * equality was, and the register itself is tested in {@code JsonParityTest}. Each registered entry
+ * carries the C-number of the {@code doc/DEFECT-FIXES.md} row that authorises it.
  *
  * <p>Differences are reported together, with the JSON pointer of each, rather than one per run: a
  * parity failure is usually a systematic difference across many nodes, and being told about it one
  * node per test run turns a single fix into a dozen cycles.
+ *
+ * <p><strong>They are also reported as data.</strong> {@link #differences} answers with the nodes
+ * either side of each difference and not only with a sentence about them, because the differential
+ * audit has to ask a further question of every one — which {@code doc/DEFECT-FIXES.md} row explains
+ * this — and a register predicate reading a difference back out of a formatted string would be
+ * parsing this class's prose.
  */
 public final class JsonParity {
 
@@ -91,8 +95,7 @@ public final class JsonParity {
             final String what,
             final Function<String, RegisteredDefectFixes.Fix> register) {
 
-        final List<String> differences = new ArrayList<>();
-        compare(expected, actual, "", differences, register);
+        final List<Difference> differences = differences(expected, actual, register);
         if (differences.isEmpty()) {
             return;
         }
@@ -103,13 +106,54 @@ public final class JsonParity {
                 .append(differences.size())
                 .append(" difference(s):");
         differences.stream().limit(MAX_REPORTED)
-                .forEach(difference -> message.append("\n  ").append(difference));
+                .forEach(difference -> message.append("\n  ").append(difference.message()));
         if (differences.size() > MAX_REPORTED) {
             message.append("\n  ... and ")
                     .append(differences.size() - MAX_REPORTED)
                     .append(" more");
         }
         throw new AssertionError(message.toString());
+    }
+
+    /**
+     * Every difference between a ported result and its golden file, reconciled against the
+     * defect-fix register.
+     *
+     * @param expected the golden tree
+     * @param actual   the ported tree
+     * @return the differences, empty where the trees agree
+     */
+    public static List<Difference> differences(final JsonNode expected, final JsonNode actual) {
+        return differences(expected, actual, RegisteredDefectFixes::forProperty);
+    }
+
+    /**
+     * The same, against a caller-supplied register.
+     *
+     * @param expected the golden tree
+     * @param actual   the ported tree
+     * @param register the fix registered against a property name, or {@code null} for none
+     * @return the differences, empty where the trees agree
+     */
+    public static List<Difference> differences(
+            final JsonNode expected,
+            final JsonNode actual,
+            final Function<String, RegisteredDefectFixes.Fix> register) {
+
+        final List<Difference> differences = new ArrayList<>();
+        compare(expected, actual, "", differences, register);
+        return List.copyOf(differences);
+    }
+
+    /**
+     * One difference, as the nodes either side of it and the sentence about them.
+     *
+     * @param path     the JSON pointer of the component, or the empty string for the root
+     * @param expected the golden node, or {@code null} where the golden carries nothing there
+     * @param actual   the ported node, or {@code null} where the port wrote nothing there
+     * @param message  the difference as a reader of a red build meets it
+     */
+    public record Difference(String path, JsonNode expected, JsonNode actual, String message) {
     }
 
     /**
@@ -125,7 +169,7 @@ public final class JsonParity {
             final JsonNode expected,
             final JsonNode actual,
             final String path,
-            final List<String> differences,
+            final List<Difference> differences,
             final Function<String, RegisteredDefectFixes.Fix> register) {
 
         if (expected.isObject() && actual.isObject()) {
@@ -134,11 +178,12 @@ public final class JsonParity {
             compareArrays(expected, actual, path, differences, register);
         } else if (expected.isNumber() && actual.isNumber()) {
             if (expected.decimalValue().compareTo(actual.decimalValue()) != 0) {
-                differences.add(pathLabel(path) + ": expected " + expected + " but was " + actual);
+                differences.add(difference(path, expected, actual,
+                        "expected " + expected + " but was " + actual));
             }
         } else if (!expected.equals(actual)) {
-            differences.add(pathLabel(path) + ": expected " + describe(expected)
-                    + " but was " + describe(actual));
+            differences.add(difference(path, expected, actual,
+                    "expected " + describe(expected) + " but was " + describe(actual)));
         }
     }
 
@@ -155,7 +200,7 @@ public final class JsonParity {
             final JsonNode expected,
             final JsonNode actual,
             final String path,
-            final List<String> differences,
+            final List<Difference> differences,
             final Function<String, RegisteredDefectFixes.Fix> register) {
 
         final Set<String> names = new LinkedHashSet<>();
@@ -168,11 +213,11 @@ public final class JsonParity {
             final String childPath = path + "/" + name;
 
             if (expectedValue == null) {
-                differences.add(pathLabel(childPath) + ": unexpected field, was "
-                        + describe(actualValue));
+                differences.add(difference(childPath, null, actualValue,
+                        "unexpected field, was " + describe(actualValue)));
             } else if (actualValue == null) {
-                differences.add(pathLabel(childPath) + ": missing field, expected "
-                        + describe(expectedValue));
+                differences.add(difference(childPath, expectedValue, null,
+                        "missing field, expected " + describe(expectedValue)));
             } else {
                 final RegisteredDefectFixes.Fix fix = register.apply(name);
                 if (fix == null) {
@@ -204,24 +249,24 @@ public final class JsonParity {
             final JsonNode expected,
             final JsonNode actual,
             final String path,
-            final List<String> differences) {
+            final List<Difference> differences) {
 
         final List<String> permitted = expected.isString()
                 ? fix.permittedFor(expected.stringValue())
                 : List.of();
 
         if (permitted.isEmpty()) {
-            differences.add(pathLabel(path) + ": registered defect fix " + fix.reference()
+            differences.add(difference(path, expected, actual, "registered defect fix " + fix.reference()
                     + " cannot derive the required rendering from the golden value "
                     + describe(expected)
                     + " — the golden is not a value this fix describes, so the component is "
-                    + "no longer covered by it and the difference stands");
+                    + "no longer covered by it and the difference stands"));
             return;
         }
         if (!actual.isString() || !permitted.contains(actual.stringValue())) {
-            differences.add(pathLabel(path) + ": registered defect fix " + fix.reference()
+            differences.add(difference(path, expected, actual, "registered defect fix " + fix.reference()
                     + " requires the golden " + describe(expected) + " to be re-rendered as "
-                    + String.join(" or ", permitted) + " but was " + describe(actual));
+                    + String.join(" or ", permitted) + " but was " + describe(actual)));
         }
     }
 
@@ -238,12 +283,12 @@ public final class JsonParity {
             final JsonNode expected,
             final JsonNode actual,
             final String path,
-            final List<String> differences,
+            final List<Difference> differences,
             final Function<String, RegisteredDefectFixes.Fix> register) {
 
         if (expected.size() != actual.size()) {
-            differences.add(pathLabel(path) + ": expected " + expected.size()
-                    + " element(s) but was " + actual.size());
+            differences.add(difference(path, expected, actual, "expected " + expected.size()
+                    + " element(s) but was " + actual.size()));
         }
         final int shared = Math.min(expected.size(), actual.size());
         for (int index = 0; index < shared; index++) {
@@ -269,6 +314,20 @@ public final class JsonParity {
                     : rendered.substring(0, RENDER_LIMIT) + "...";
         }
         return described;
+    }
+
+    /**
+     * One difference, with its path, its two nodes and the sentence a reader meets.
+     *
+     * @param path     the JSON pointer of the component
+     * @param expected the golden node, or {@code null} where the golden carries nothing there
+     * @param actual   the ported node, or {@code null} where the port wrote nothing there
+     * @param what     the difference, in words
+     * @return the difference
+     */
+    private static Difference difference(
+            final String path, final JsonNode expected, final JsonNode actual, final String what) {
+        return new Difference(path, expected, actual, pathLabel(path) + ": " + what);
     }
 
     /**
