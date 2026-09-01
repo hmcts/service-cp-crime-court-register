@@ -27,8 +27,23 @@ final class HearingVenueMapper {
      *
      * @param hearing the hearing payload
      * @return the mapped venue
+     * @throws uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException if the hearing
+     *     carries no court centre, which the legacy dereferences without a guard
      */
     /* default */ static CourtRegisterHearingVenue map(final JsonNode hearing) {
-        throw new UnsupportedOperationException("HearingVenueMapper.map is implemented by T054");
+        // `this.hearingJson.courtCentre.address` in the constructor: a hearing with no court centre
+        // is a TypeError there, swallowed at `OutboundCourtRegister/index.js:62-64` along with the
+        // register. Kept as a refusal — `courtHouse` is required by the frozen contract, so there is
+        // no venue to print — but a named, classified one rather than a silence.
+        final JsonNode courtCentre = Json.dereferenced(hearing, "courtCentre");
+        final JsonNode localJusticeArea = Json.at(courtCentre, "lja");
+
+        return new CourtRegisterHearingVenue(
+                Json.truthy(localJusticeArea) ? Json.text(localJusticeArea, "ljaName") : null,
+                Json.text(courtCentre, "name"),
+                // The legacy writes the address body out a second time here rather than reusing the
+                // address mapper. It is the same six fields and the same case change, so it is the
+                // address mapper.
+                AddressMapper.map(Json.at(courtCentre, "address")));
     }
 }

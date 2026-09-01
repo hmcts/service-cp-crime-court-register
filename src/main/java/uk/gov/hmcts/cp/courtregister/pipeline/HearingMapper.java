@@ -30,7 +30,17 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterDefendant;
  * defendant rather than the fragment: the ordered day and the defendant ids are both on it, and the
  * fragment's {@code registerDate} is no longer part of the answer.
  */
+// PMD.OnlyOneReturn: the attendance search answers where it finds its record, and the three
+// appearance renderings answer where they are recognised; a single exit would replace the legacy's
+// own `find` and its `if` ladder with control flow neither of them has.
+@SuppressWarnings("PMD.OnlyOneReturn")
 final class HearingMapper {
+
+    /** The hearing's list of who attended, and on which days. */
+    private static final String DEFENDANT_ATTENDANCE = "defendantAttendance";
+
+    /** The days one attendance record covers. */
+    private static final String ATTENDANCE_DAYS = "attendanceDays";
 
     private HearingMapper() {
     }
@@ -49,6 +59,90 @@ final class HearingMapper {
             final JsonNode hearing,
             final RegisterDefendant registerDefendant,
             final JsonNode defendant) {
-        throw new UnsupportedOperationException("HearingMapper.map is implemented by T054");
+
+        final JsonNode attendanceDay = attendanceDay(hearing, registerDefendant);
+
+        return new CourtRegisterHearing(
+                Json.text(hearing, "jurisdictionType"),
+                // `this.hearingJson.type.description` — read through without a guard.
+                Json.text(Json.dereferenced(hearing, "type"), "description"),
+                attendanceDay != null,
+                appearanceDetails(attendanceDay),
+                attendingSolicitorName(defendant));
+    }
+
+    /**
+     * The defendant's attendance record for the day their results were ordered — defect fix C8 and
+     * C9 together.
+     *
+     * <p>C8 is the selection: {@code find(d => d.defendantId = defendantId)} is an assignment, so
+     * the legacy answers with element zero whatever its id and writes the sought id over that
+     * element's own on the way past. Here the record is the one whose {@code defendantId} is one of
+     * the mapped defendant's own, and nothing is written to the hearing at all.
+     *
+     * <p>C9 is the day: the legacy compares the attendance day with the fragment's
+     * {@code registerDate}, a datetime, so the comparison is false on every production register.
+     * Here it is compared with the day the defendant's latest result was ordered, which is the
+     * shared kernel's own attendance rule ({@code VocabularyService.getAttendanceInfo:245-274}).
+     *
+     * @param hearing           the hearing payload, which is only ever read
+     * @param registerDefendant the gathered defendant
+     * @return the attendance day, or {@code null} where the defendant has none on the ordered day
+     */
+    private static JsonNode attendanceDay(
+            final JsonNode hearing, final RegisterDefendant registerDefendant) {
+
+        final String orderedDate = registerDefendant.orderedDate();
+        if (orderedDate == null) {
+            // Nothing was ordered for this defendant, so there is no day to have attended on.
+            return null;
+        }
+        for (final JsonNode attendance : Json.array(hearing, DEFENDANT_ATTENDANCE)) {
+            if (!registerDefendant.defendantIds().contains(Json.text(attendance, "defendantId"))) {
+                continue;
+            }
+            for (final JsonNode day : Json.array(attendance, ATTENDANCE_DAYS)) {
+                if (orderedDate.equals(Json.text(day, "day"))) {
+                    return day;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * How the defendant attended, as the register prints it.
+     *
+     * <p>Three renderings and no fourth: an attendance type this mapper does not know is described
+     * by nothing, exactly as the legacy's {@code if}/{@code else if} ladder falls off its end.
+     *
+     * @param attendanceDay the attendance day, or {@code null} where there was none
+     * @return the appearance details, or {@code null}
+     */
+    private static String appearanceDetails(final JsonNode attendanceDay) {
+        return switch (Json.text(attendanceDay, "attendanceType")) {
+            case "IN_PERSON" -> "In person";
+            case "BY_VIDEO" -> "By video link";
+            case "NOT_PRESENT" -> "Not present";
+            case null, default -> null;
+        };
+    }
+
+    /**
+     * The defence organisation named against this defendant, where they had one.
+     *
+     * @param defendant the payload's defendant record
+     * @return the organisation's name, or {@code null}
+     */
+    private static String attendingSolicitorName(final JsonNode defendant) {
+        final JsonNode associated = Json.at(defendant, "associatedDefenceOrganisation");
+        if (!Json.truthy(associated)) {
+            return null;
+        }
+        // Guarded on the association and then read straight through, as the legacy's ternary does.
+        return Json.text(
+                Json.dereferenced(Json.dereferenced(associated, "defenceOrganisation"),
+                        "organisation"),
+                "name");
     }
 }
