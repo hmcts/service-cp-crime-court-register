@@ -417,8 +417,36 @@ vocabulary and matching semantics.
 
 ### Implementation (serialised: T054 → T055 → T056)
 
-- [ ] T054 [US3] Implement the twelve mappers + `domain/CourtRegisterDocument` records (green
+- [x] T054 [US3] Implement the twelve mappers + `domain/CourtRegisterDocument` records (green
       T040–T051) — updates C8/C9/C11/C19/C20/C21/C23/C24/C25/C27 and the mapper half of C26/C33.
+      *(done — thirteen bodies, not twelve. `AggregationMapper` is implemented here rather than at
+      T056 because **every case `AggregationMapperTest` writes calls `AggregationMapper.map`
+      directly**: T051 has no chain-level case, so there was nothing the mapper surface could not
+      satisfy and nothing to carry forward. T056 keeps the wiring — `RegisterTransformationChain`,
+      `RegisterTransformer` — which is what its own description asks for; the assembly itself is
+      green now. The `CourtRegisterDocument` record family needed no change: T039a's signatures
+      matched the schemas and the mappers wrote exactly what they declare.
+      Four decisions the suites forced and this task made:
+      **(1)** `OffenceMapper` answers `null` rather than `[]` for an application that gathered no
+      offence, which `ProsecutionCaseOrApplicationMapperTest.an_application_with_neither_carries_no_offences`
+      requires and which `CourtRegisterCaseOrApplication`'s own `minItems: 1` note already
+      specified — the legacy sends `[]`, a document progression rejects.
+      **(2)** An application that is *ineligible* (non-prosecuting applicant, or another
+      defendant's subject) is skipped **in silence**; only a **dangling** reference is counted as
+      `unresolvable-application`. Nothing is wrong with an ineligible application's payload.
+      **(3)** The C19 warning carries the bounded reason and the **hearing id** and nothing else,
+      where C20's names its application id — that row authorises an id and this one does not.
+      **(4)** The register day in the C11 file name is `Dates.localDate(registerDate)` — the
+      court's own calendar day — not a substring of the instant.
+      Two shared helpers landed rather than four copies: `JsStrings` (the filter-on-truthiness name
+      join the counsel, parent-guardian and youth-defendant mappers each spell out, plus the
+      recipient trim and C24's wording join) and `Json.elements`, which is `Json.array`'s iteration
+      rule for a caller already holding the array; `Json.array` delegates to it and no behaviour
+      moved. `pmdMain` was **red at the start of this task** with six violations and is green at the
+      end: four were the seam fields these bodies now use, and the two genuinely pre-existing ones
+      (`CourtRegisterProperties` duplicate `@DefaultValue` literal, `NoRegisterReason` field/method
+      name) took narrow inline suppressions with reasons. `OutboundContractValidator`'s unused
+      `json` field carries a suppression that says it comes off with T055's body.)*
 - [ ] T055 [US3] Implement `adapter/progression/OutboundContractValidator` (green T052) — updates
       C29 (validation half) and C26 (schema authority).
 - [ ] T055a [US3] Write `pipeline/RegisterTransformationChainTest` (red; seam:
@@ -427,7 +455,9 @@ vocabulary and matching semantics.
       exceptions classify, never swallow.
 - [ ] T056 [US3] Implement `pipeline/RegisterTransformationChain` + `pipeline/AggregationMapper`
       wiring into `RegisterTransformer` (green T055a and T051 chain cases;
-      `DistributionPipelineTest` end-to-end unit path now green).
+      `DistributionPipelineTest` end-to-end unit path now green). *(T051's cases are already green —
+      `AggregationMapper`'s body landed with T054 — so what remains here is the chain and the
+      transformer wiring, not the assembly.)*
 
 **Checkpoint**: fragment → validated outbound document, all mapper fixes pinned.
 

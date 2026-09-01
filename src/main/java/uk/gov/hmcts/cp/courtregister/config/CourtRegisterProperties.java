@@ -26,6 +26,11 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param submission    what is checked before a register is sent
  */
 @ConfigurationProperties(prefix = "courtregister")
+// PMD.AvoidDuplicateLiterals: the repeated literal is a `@DefaultValue`, which must be a compile-
+// time constant on the annotation itself. Four unrelated ten-second defaults happen to agree today;
+// naming one constant for them would tie four independent settings together, which is the opposite
+// of what a per-setting default is for.
+@SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public record CourtRegisterProperties(
         @DefaultValue Consumer consumer,
         @DefaultValue Servicebus servicebus,

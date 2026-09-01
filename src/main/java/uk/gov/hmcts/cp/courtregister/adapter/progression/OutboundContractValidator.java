@@ -35,6 +35,9 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 public final class OutboundContractValidator {
 
     /** Renders the typed document to the tree the schema is applied to. */
+    // PMD.UnusedPrivateField: the constructor is the seam T052 writes against and the field is what
+    // T055's body reads; the suppression comes off with that body.
+    @SuppressWarnings("PMD.UnusedPrivateField")
     private final ObjectMapper json;
 
     /**

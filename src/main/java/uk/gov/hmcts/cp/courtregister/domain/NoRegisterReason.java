@@ -25,6 +25,9 @@ public enum NoRegisterReason {
     /** Subscriptions matched, and the youth filter left nobody on the register. */
     NO_YOUTH_DEFENDANTS(CompletionReason.NO_YOUTH_DEFENDANTS);
 
+    // PMD.AvoidFieldNameMatchingMethodName: the accessor is deliberately named after what it
+    // answers, in the record-style this codebase uses throughout; renaming the field would say less.
+    @SuppressWarnings("PMD.AvoidFieldNameMatchingMethodName")
     private final CompletionReason completion;
 
     NoRegisterReason(final CompletionReason completion) {

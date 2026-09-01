@@ -2,8 +2,14 @@ package uk.gov.hmcts.cp.courtregister.pipeline;
 
 import java.util.List;
 import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
+import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDefendant;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
+import uk.gov.hmcts.cp.courtregister.domain.RegisterDefendant;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterFragment;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 
@@ -14,19 +20,47 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
  * ids carried across from the fragment, the file name, and the three mappers that produce the venue,
  * the recipients and the defendants.
  *
- * <p><strong>Not one of the twelve mappers</strong> — it is what calls them, and it lands with the
- * transformation chain in T056 rather than with the mapper bodies in T054. It is declared here so
- * that T051 can write against a seam nobody else owns, on the same terms as the twelve.
+ * <p><strong>Not one of the twelve mappers</strong> — it is what calls them. The terminal states its
+ * three {@code null}s become are the transformation chain's to name (T056); what this method owes
+ * the chain is an answer that says <em>which</em> outcome it was.
  *
- * <p>Three fixes meet in this one method. C33: the two early returns — no matched subscriptions, no
- * youth defendants — are the flow's two most common outcomes and both surface today as a bare
- * {@code null} that the orchestration reports as success; here each becomes its own named
- * completion. C26: {@code courtCentreId} is read under the spelling the fragment actually uses,
- * where the legacy reads "Center" off an object carrying "Centre" and sends {@code undefined}. C11:
- * the file name is the register day, the court centre code and the hearing id, with no colons in it
- * and no collision between two hearings at one centre in the same second.
+ * <p>Four fixes meet in this one method.
+ *
+ * <ul>
+ *   <li><strong>C33</strong> — the two early returns, no matched subscriptions and no youth
+ *       defendants, are this flow's two most common outcomes and both surface in the legacy as a
+ *       bare {@code null} the orchestration reports as {@code Success: true}. Each names its own
+ *       {@link CompletionReason} here, so the two are countable apart.</li>
+ *   <li><strong>C36</strong> — a register whose every matched recipient was dropped is not
+ *       assembled at all. The legacy posts it with {@code recipients: undefined}; progression stores
+ *       it, renders the PDF at 18:00, and then emits a notification nothing subscribes to, so the
+ *       register sticks at GENERATED forever, visible to nobody. There is nobody to distribute to,
+ *       which is the {@code no-subscriptions} outcome by another route.</li>
+ *   <li><strong>C26</strong> — {@code courtCentreId} is read under the spelling the fragment
+ *       actually uses, where the legacy reads {@code courtCenterId} off an object carrying
+ *       "Centre" and sends {@code undefined} on every register progression has ever received.</li>
+ *   <li><strong>C11</strong> — the file name is the register day, the court centre code and the
+ *       hearing id. The legacy embeds the full instant, so the name carries colons a Windows file
+ *       system will not take, and two hearings at one court centre sharing a second collide.</li>
+ * </ul>
+ *
+ * <p>The court centre code in that name is the <strong>hearing's</strong>
+ * {@code courtCentre.code}, not the fragment's {@code courtCentreOUCode}. They are gathered from the
+ * same place and agree in every fixture, so nothing could ever have distinguished them; the legacy
+ * reads the hearing's, and so does this.
+ *
+ * <p>Pure, like everything else in the transformation: no clock, and the anomaly recorder is the
+ * caller's (constitution Principle V).
  */
+// PMD.OnlyOneReturn: the three no-op answers are three distinct outcomes, and naming each where it
+// is reached is the whole of C33 and C36 — a single exit would put them back behind one `null`.
+@SuppressWarnings("PMD.OnlyOneReturn")
 public final class AggregationMapper {
+
+    private static final Logger LOG = LoggerFactory.getLogger(AggregationMapper.class);
+
+    /** The register's date handling; pure, and the only thing here that reads a date. */
+    private static final Dates DATES = new Dates();
 
     private AggregationMapper() {
     }
@@ -46,6 +80,64 @@ public final class AggregationMapper {
             final List<JsonNode> matchedSubscriptions,
             final JsonNode hearing,
             final Consumer<TransformationAnomaly> anomalies) {
-        throw new UnsupportedOperationException("AggregationMapper.map is implemented by T056");
+
+        if (matchedSubscriptions == null || matchedSubscriptions.isEmpty()) {
+            LOG.info("No subscription matched the court centre, so the register has no audience. "
+                            + "hearingId={} reason={}",
+                    fragment.hearingId(), CompletionReason.NO_SUBSCRIPTIONS.value());
+            return null;
+        }
+
+        final List<RegisterDefendant> youthDefendants = fragment.registerDefendants().stream()
+                .filter(RegisterDefendant::youthDefendant)
+                .toList();
+        if (youthDefendants.isEmpty()) {
+            LOG.info("The hearing gathered no youth defendant, so there is no register to build. "
+                            + "hearingId={} reason={}",
+                    fragment.hearingId(), CompletionReason.NO_YOUTH_DEFENDANTS.value());
+            return null;
+        }
+
+        final List<CourtRegisterRecipient> recipients =
+                new RecipientMapper(anomalies).map(matchedSubscriptions);
+        if (recipients == null) {
+            // C36. Each drop has already been counted and warned about by the recipient mapper; what
+            // this line adds is that the run as a whole reached nobody.
+            LOG.info("Every matched subscription was dropped, so the register reaches nobody and is "
+                            + "not submitted. hearingId={} reason={}",
+                    fragment.hearingId(), CompletionReason.NO_SUBSCRIPTIONS.value());
+            return null;
+        }
+
+        final List<CourtRegisterDefendant> defendants =
+                new YouthDefendantMapper(anomalies).map(youthDefendants, hearing);
+
+        LOG.info("Outbound court register assembled. hearingId={} defendants={} recipients={}",
+                fragment.hearingId(), defendants.size(), recipients.size());
+
+        return new CourtRegisterDocument(
+                fragment.registerDate(),
+                fragment.hearingDate(),
+                fragment.hearingId(),
+                fragment.courtCentreId(),
+                fileName(fragment, hearing),
+                HearingVenueMapper.map(hearing),
+                recipients,
+                defendants);
+    }
+
+    /**
+     * The name progression stores the rendered register under — defect fix C11.
+     *
+     * @param fragment the hearing's register fragment
+     * @param hearing  the hearing payload, which carries the court centre's code
+     * @return the file name
+     */
+    private static String fileName(final RegisterFragment fragment, final JsonNode hearing) {
+        return "court-register_"
+                + DATES.localDate(fragment.registerDate())
+                + '_' + Json.text(Json.at(hearing, "courtCentre"), "code")
+                + '_' + fragment.hearingId()
+                + ".pdf";
     }
 }
