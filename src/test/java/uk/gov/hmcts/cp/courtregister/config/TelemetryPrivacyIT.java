@@ -261,7 +261,13 @@ class TelemetryPrivacyIT {
         }
     }
 
-    /** Every line this service wrote about anything, at any level, while the leg ran. */
+    /**
+     * Every line this service wrote at the level a deployed pod writes at.
+     *
+     * <p>Used only to refuse a vacuous pass: a leg that logged nothing would satisfy a
+     * "no marker appears" assertion perfectly. The assertions themselves read the whole capture,
+     * this service's lower levels included.
+     */
     private static List<ILoggingEvent> linesFromThisService(final CapturedLog log) {
         return log.events().stream()
                 .filter(event -> event.getLoggerName().startsWith(THIS_SERVICE))

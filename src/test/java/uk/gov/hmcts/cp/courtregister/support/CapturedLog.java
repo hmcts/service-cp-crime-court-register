@@ -39,17 +39,26 @@ public final class CapturedLog implements AutoCloseable {
 
     private final Logger logger;
     private final CollectingAppender appender;
-    private final Logger lowered;
+
+    /**
+     * The logger whose level was lowered, held by name rather than by reference.
+     *
+     * <p>By name because a second field of logger type is a class with two loggers as far as static
+     * analysis is concerned, and the rule that says so is worth keeping for the classes it is
+     * actually about. Re-resolving by name at close is exact: logback interns one logger per name.
+     */
+    private final String loweredName;
+
     private final Level levelToRestore;
 
     private CapturedLog(
             final Logger logger,
             final CollectingAppender appender,
-            final Logger lowered,
+            final String loweredName,
             final Level levelToRestore) {
         this.logger = logger;
         this.appender = appender;
-        this.lowered = lowered;
+        this.loweredName = loweredName;
         this.levelToRestore = levelToRestore;
     }
 
@@ -122,11 +131,14 @@ public final class CapturedLog implements AutoCloseable {
         final CollectingAppender appender = new CollectingAppender();
         appender.start();
         logger.addAppender(appender);
-        final Level previous = toLower == null ? null : toLower.getLevel();
+        Level previous = null;
+        String loweredName = null;
         if (toLower != null) {
+            previous = toLower.getLevel();
+            loweredName = toLower.getName();
             toLower.setLevel(loweredTo);
         }
-        return new CapturedLog(logger, appender, toLower, previous);
+        return new CapturedLog(logger, appender, loweredName, previous);
     }
 
     /**
@@ -168,8 +180,8 @@ public final class CapturedLog implements AutoCloseable {
     public void close() {
         logger.detachAppender(appender);
         appender.stop();
-        if (lowered != null) {
-            lowered.setLevel(levelToRestore);
+        if (loweredName != null) {
+            ((Logger) LoggerFactory.getLogger(loweredName)).setLevel(levelToRestore);
         }
     }
 

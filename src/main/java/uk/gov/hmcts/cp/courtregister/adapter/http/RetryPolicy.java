@@ -107,15 +107,6 @@ public final class RetryPolicy {
     }
 
     /**
-     * What one attempt can cost at worst: the connect timeout plus the read timeout.
-     *
-     * @return the attempt's worst case
-     */
-    public Duration attemptWorstCase() {
-        return attemptWorstCase;
-    }
-
-    /**
      * Whether a whole attempt can be made and still leave the run inside its claim.
      *
      * <p>The reservation, and it is deliberately made against the attempt's <em>worst</em> case
