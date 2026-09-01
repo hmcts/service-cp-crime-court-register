@@ -165,6 +165,22 @@ public final class RegisterStackSupport implements AutoCloseable {
     }
 
     /**
+     * Publishes whatever the caller likes under the dated key, parseable or not.
+     *
+     * <p>For the one thing {@link #cached(UUID, LocalDate, JsonNode)} cannot express: a cached value
+     * that is not a payload at all. A truncated write is the everyday version, and the interesting
+     * half of it is what the cache adapter says while treating the key as absent — a parser quotes
+     * the token it choked on, and in a truncated hearing that token is a child.
+     *
+     * @param hearingId  the hearing the value is stored against
+     * @param hearingDay the day the request names
+     * @param value      whatever is stored under the key
+     */
+    public void cachedRaw(final UUID hearingId, final LocalDate hearingDay, final String value) {
+        cache.sync().set(HearingPayloadCacheKey.cacheKey("INT_", hearingId, hearingDay), value);
+    }
+
+    /**
      * Forgets whatever was cached for a hearing, under both key forms.
      *
      * @param hearingId  the hearing
@@ -194,6 +210,22 @@ public final class RegisterStackSupport implements AutoCloseable {
      */
     public void queryHoldsNothing(final UUID hearingId) {
         contexts.stubFor(queryFor(hearingId).willReturn(aResponse().withStatus(404)));
+    }
+
+    /**
+     * The query side answers with a status and a body of the caller's choosing.
+     *
+     * <p>For the suites whose subject is what this service does with somebody else's words. A query
+     * side explaining a refusal quotes the hearing it refused about, and the exception a client
+     * raises from it carries that text wherever the exception goes.
+     *
+     * @param hearingId the hearing
+     * @param status    the status it answers with
+     * @param body      the body it answers with
+     */
+    public void queryAnswers(final UUID hearingId, final int status, final String body) {
+        contexts.stubFor(queryFor(hearingId)
+                .willReturn(aResponse().withStatus(status).withBody(body)));
     }
 
     /**
@@ -262,6 +294,17 @@ public final class RegisterStackSupport implements AutoCloseable {
      */
     public void subscriptionsAnswer(final int status) {
         contexts.stubFor(subscriptionsRead().willReturn(aResponse().withStatus(status)));
+    }
+
+    /**
+     * Reference data answers the now-subscriptions read with a status and a body.
+     *
+     * @param status the status it answers with
+     * @param body   the body it answers with, which names the organisations it was asked about
+     */
+    public void subscriptionsAnswer(final int status, final String body) {
+        contexts.stubFor(subscriptionsRead()
+                .willReturn(aResponse().withStatus(status).withBody(body)));
     }
 
     /**
@@ -347,6 +390,20 @@ public final class RegisterStackSupport implements AutoCloseable {
      */
     public void progressionAnswers(final int status) {
         contexts.stubFor(addCourtRegister().willReturn(aResponse().withStatus(status)));
+    }
+
+    /**
+     * Progression's answer to the command, with the words it chose to explain itself.
+     *
+     * <p>A refusal from {@code add-court-register} quotes the document it refused, and that document
+     * is a court register: the body of a 400 or a 422 from this endpoint can name a child.
+     *
+     * @param status the status it answers with
+     * @param body   the body it answers with
+     */
+    public void progressionAnswers(final int status, final String body) {
+        contexts.stubFor(addCourtRegister()
+                .willReturn(aResponse().withStatus(status).withBody(body)));
     }
 
     /**

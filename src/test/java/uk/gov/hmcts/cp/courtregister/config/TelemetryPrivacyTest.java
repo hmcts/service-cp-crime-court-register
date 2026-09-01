@@ -37,7 +37,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.node.ObjectNode;
 import uk.gov.hmcts.cp.courtregister.application.DistributionPipeline;
 import uk.gov.hmcts.cp.courtregister.application.HearingPayloadSource;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
@@ -60,6 +59,7 @@ import uk.gov.hmcts.cp.courtregister.inbound.ServiceBusConsumerConfig;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
 import uk.gov.hmcts.cp.courtregister.support.NowSubscriptionFixtures;
+import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
 import uk.gov.hmcts.cp.courtregister.support.QueueHealthTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.StoreGateTestSupport;
 
@@ -92,6 +92,17 @@ import uk.gov.hmcts.cp.courtregister.support.StoreGateTestSupport;
  * whatever they write, about a child whose every personal field is a marker. A suite that mocked the
  * transformation would prove nothing about the twelve classes that actually hold the child's details.
  *
+ * <p><strong>What the doubles cost, and where it is paid.</strong> Four doubled ports are four
+ * classes that never write a line, and they are precisely the classes with a child's data in their
+ * hands and a far end's text in their exception messages — the cache that holds the payload, the
+ * query client that parses it, the reference-data client that is handed the recipients, and the
+ * gateway that is handed progression's answer. Nothing below can fail if one of them starts quoting
+ * what it read. {@code config/TelemetryPrivacyIT} is the other half: the same markers, the same
+ * root-appender capture, and the live adapters against a real Redis container and real HTTP
+ * contexts, over a success leg and four failure legs. The markers themselves live in
+ * {@link uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers} so the two suites cannot come to
+ * sweep for different values.
+ *
  * <p>Every assertion is made against a capture of <em>everything</em>, at TRACE, including the
  * rendered text of any exception attached to a line. A stack trace reaches a log index exactly as a
  * message does, and an exception somebody else wrote is the commonest way a payload fragment or a
@@ -108,13 +119,6 @@ class TelemetryPrivacyTest {
     private static final Set<String> CORRELATION =
             Set.of("source", "requestId", "hearingId", "hearingDay");
 
-    private static final String CHILD_NAME_MARKER = "CHILDNAMEMARKERZQX7";
-    private static final String CHILD_ADDRESS_MARKER = "CHILDADDRESSMARKERZQX7";
-    private static final String CHILD_NINO_MARKER = "CHILDNINOMARKERZQX7";
-    private static final String CHILD_EMAIL_MARKER = "child.contact.marker.zqx7@example.invalid";
-    private static final String ETHNICITY_MARKER = "ETHNICITYMARKERZQX7";
-    private static final String GUARDIAN_MARKER = "GUARDIANMARKERZQX7";
-    private static final String FACTS_MARKER = "STATEMENTOFFACTSMARKERZQX7";
     private static final String MESSAGE_ID_MARKER = "MESSAGEIDMARKERZQX7";
     private static final String FIELD_NAME_MARKER = "FIELDNAMEMARKERZQX7";
     private static final String TRANSPORT_MARKER = "TRANSPORTMARKERZQX7";
@@ -124,23 +128,11 @@ class TelemetryPrivacyTest {
     private static final String SECRET_MARKER = "SECRETMARKERZQX7";
 
     /**
-     * The child's date of birth — a real date rather than a marker word, because the mappers parse
-     * it and a hearing whose child has no readable birthday would never reach the lines under test.
-     * It is nonetheless a value nothing else in this repository produces.
-     */
-    private static final String DATE_OF_BIRTH_MARKER = "2009-11-23";
-
-    /**
      * The sharing user, as a canonical uuid the eye can pick out of a log index. It has to be a real
      * one — a marker word would be rejected by the parser and the run would never start, which would
      * prove nothing about what a run that <em>does</em> carry a user writes down.
      */
     private static final String CALLER_MARKER = "0dd0dd0d-dead-beef-cafe-facade000001";
-
-    /** Every marker that names or describes a person, and must never appear at any level. */
-    private static final List<String> PERSONAL_MARKERS = List.of(
-            CHILD_NAME_MARKER, CHILD_ADDRESS_MARKER, CHILD_NINO_MARKER, CHILD_EMAIL_MARKER,
-            ETHNICITY_MARKER, GUARDIAN_MARKER, FACTS_MARKER, DATE_OF_BIRTH_MARKER);
 
     /** The hearing the base fixtures are built around, and the court house its centre carries. */
     private static final String HEARING_ID = "1828f356-f746-4f2d-932b-79ef2df95c80";
@@ -225,7 +217,7 @@ class TelemetryPrivacyTest {
                             .as("a run that logged nothing would satisfy the assertion below "
                                     + "vacuously")
                             .isNotEmpty();
-                    for (final String marker : PERSONAL_MARKERS) {
+                    for (final String marker : PersonalDataMarkers.PERSONAL) {
                         assertThat(log.renderings())
                                 .as("a child's own details reached the log index: %s", marker)
                                 .noneMatch(line -> line.contains(marker));
@@ -537,31 +529,14 @@ class TelemetryPrivacyTest {
     /**
      * The base hearing, with every field that identifies its child replaced by a marker.
      *
+     * <p>The marking is {@link PersonalDataMarkers}', because {@code config/TelemetryPrivacyIT}
+     * sweeps for the same values through the live adapters: two copies of this method are how one
+     * of the two suites comes to look for a field the other has stopped setting.
+     *
      * @return the claim-check envelope the payload source answers with
      */
     private JsonNode markedHearing() {
-        final JsonNode envelope = payload("hearing-with-surviving-youth-defendant.json");
-        final ObjectNode prosecutionCase = (ObjectNode) envelope
-                .get("hearing").get("prosecutionCases").get(0);
-        prosecutionCase.put("statementOfFacts", FACTS_MARKER);
-
-        final JsonNode defendant = prosecutionCase.get("defendants").get(0);
-        final ObjectNode personDetails =
-                (ObjectNode) defendant.get("personDefendant").get("personDetails");
-        personDetails.put("firstName", CHILD_NAME_MARKER);
-        personDetails.put("lastName", CHILD_NAME_MARKER);
-        personDetails.put("dateOfBirth", DATE_OF_BIRTH_MARKER);
-        personDetails.put("nationalInsuranceNumber", CHILD_NINO_MARKER);
-        ((ObjectNode) personDetails.get("address")).put("address1", CHILD_ADDRESS_MARKER);
-        ((ObjectNode) personDetails.get("contact")).put("primaryEmail", CHILD_EMAIL_MARKER);
-        ((ObjectNode) personDetails.get("ethnicity"))
-                .put("selfDefinedEthnicityDescription", ETHNICITY_MARKER);
-
-        final ObjectNode guardian =
-                (ObjectNode) defendant.get("associatedPersons").get(0).get("person");
-        guardian.put("firstName", GUARDIAN_MARKER);
-        guardian.put("lastName", GUARDIAN_MARKER);
-        return envelope;
+        return PersonalDataMarkers.marked(payload("hearing-with-surviving-youth-defendant.json"));
     }
 
     /**

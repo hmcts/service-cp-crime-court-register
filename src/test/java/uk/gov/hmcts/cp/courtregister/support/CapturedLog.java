@@ -39,17 +39,17 @@ public final class CapturedLog implements AutoCloseable {
 
     private final Logger logger;
     private final CollectingAppender appender;
-    private final boolean levelWasLowered;
+    private final Logger lowered;
     private final Level levelToRestore;
 
     private CapturedLog(
             final Logger logger,
             final CollectingAppender appender,
-            final boolean levelWasLowered,
+            final Logger lowered,
             final Level levelToRestore) {
         this.logger = logger;
         this.appender = appender;
-        this.levelWasLowered = levelWasLowered;
+        this.lowered = lowered;
         this.levelToRestore = levelToRestore;
     }
 
@@ -60,7 +60,7 @@ public final class CapturedLog implements AutoCloseable {
      * @return the capture, to be closed when the assertions are done
      */
     public static CapturedLog capturing(final Class<?> type) {
-        return attachTo((Logger) LoggerFactory.getLogger(type), false, null);
+        return attachTo((Logger) LoggerFactory.getLogger(type), null, null);
     }
 
     /**
@@ -74,7 +74,7 @@ public final class CapturedLog implements AutoCloseable {
      * @param loggerName the logger to attach to, typically a package
      */
     public static CapturedLog capturing(final String loggerName) {
-        return attachTo((Logger) LoggerFactory.getLogger(loggerName), false, null);
+        return attachTo((Logger) LoggerFactory.getLogger(loggerName), null, null);
     }
 
     /**
@@ -86,17 +86,47 @@ public final class CapturedLog implements AutoCloseable {
      */
     public static CapturedLog everything() {
         final Logger root = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
-        final Level previous = root.getLevel();
-        root.setLevel(Level.TRACE);
-        return attachTo(root, true, previous);
+        return attachTo(root, root, Level.TRACE);
+    }
+
+    /**
+     * Starts capturing every line <em>anything</em> writes at the level a deployed pod writes at,
+     * and everything one named logger writes down to TRACE.
+     *
+     * <p>{@link #everything()}'s reading of "any level" is the right one where nothing else is
+     * running. It is the wrong one where real infrastructure is: an HTTP client, a cache client and
+     * a broker client all log the bytes they carried at TRACE — that is what TRACE is for — so a
+     * suite that turned TRACE on across a live stack would be asserting that third-party libraries
+     * do not do the thing they are designed to do, and would fail without this service having
+     * written anything at all. The shipped configuration puts the root at INFO and
+     * {@code TelemetryPrivacyTest} refuses any level below it, so those lines cannot exist in a
+     * deployed pod.
+     *
+     * <p>What this captures is therefore exactly what a deployed pod can emit — every logger at the
+     * shipped threshold — plus every level of the one package whose lines this repository writes and
+     * could be asked to turn up for a local diagnosis.
+     *
+     * @param tracedLoggerName the logger, typically this service's package root, to capture down to
+     *                         TRACE
+     * @return the capture, to be closed when the assertions are done
+     */
+    public static CapturedLog everythingAndAllOf(final String tracedLoggerName) {
+        return attachTo(
+                (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME),
+                (Logger) LoggerFactory.getLogger(tracedLoggerName),
+                Level.TRACE);
     }
 
     private static CapturedLog attachTo(
-            final Logger logger, final boolean levelWasLowered, final Level levelToRestore) {
+            final Logger logger, final Logger toLower, final Level loweredTo) {
         final CollectingAppender appender = new CollectingAppender();
         appender.start();
         logger.addAppender(appender);
-        return new CapturedLog(logger, appender, levelWasLowered, levelToRestore);
+        final Level previous = toLower == null ? null : toLower.getLevel();
+        if (toLower != null) {
+            toLower.setLevel(loweredTo);
+        }
+        return new CapturedLog(logger, appender, toLower, previous);
     }
 
     /**
@@ -138,8 +168,8 @@ public final class CapturedLog implements AutoCloseable {
     public void close() {
         logger.detachAppender(appender);
         appender.stop();
-        if (levelWasLowered) {
-            logger.setLevel(levelToRestore);
+        if (lowered != null) {
+            lowered.setLevel(levelToRestore);
         }
     }
 
