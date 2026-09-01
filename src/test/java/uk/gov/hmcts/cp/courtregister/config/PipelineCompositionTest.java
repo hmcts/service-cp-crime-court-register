@@ -21,7 +21,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 import uk.gov.hmcts.cp.courtregister.application.DistributionPipeline;
 import uk.gov.hmcts.cp.courtregister.application.HearingPayloadSource;
@@ -39,6 +38,7 @@ import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
+import uk.gov.hmcts.cp.courtregister.support.NowSubscriptionFixtures;
 
 /**
  * The bean graph the running service actually has, driven end to end over one hearing.
@@ -82,8 +82,6 @@ class PipelineCompositionTest {
 
     /** The court house every subscription here selects, which is the base hearings' own. */
     private static final String OU_CODE = "B01LY00";
-
-    private final ObjectMapper mapper = JacksonConfig.contractObjectMapper();
 
     private final IdempotencyGuard guard = mock(IdempotencyGuard.class);
     private final HearingPayloadSource payloadSource = mock(HearingPayloadSource.class);
@@ -195,12 +193,8 @@ class PipelineCompositionTest {
      * @param subscriptions the subscriptions in force
      */
     private void answerWith(final JsonNode... subscriptions) {
-        final ArrayNode inForce = mapper.createArrayNode();
-        for (final JsonNode subscription : subscriptions) {
-            inForce.add(subscription);
-        }
         when(subscriptionsSource.subscriptionsOn(any(LocalDate.class), any(CallerIdentity.class)))
-                .thenReturn(mapper.createObjectNode().set("nowSubscriptions", inForce));
+                .thenReturn(NowSubscriptionFixtures.answerOf(subscriptions));
     }
 
     /**
@@ -235,31 +229,12 @@ class PipelineCompositionTest {
     }
 
     /** A court-register subscription for this court centre, keyed on youth defendants. */
-    private ObjectNode youthSubscription() {
-        final ObjectNode subscription =
-                (ObjectNode) LegacyFixtures.read("Subscriptions.json").get(0).deepCopy();
-        subscription.put("isNowSubscription", false);
-        subscription.put("isCourtRegisterSubscription", true);
-        subscription.put("emailTemplateName", "cr_youth");
-        subscription.putArray("selectedCourtHouses").add(OU_CODE);
-
-        final ObjectNode vocabulary = (ObjectNode) subscription.get("subscriptionVocabulary");
-        vocabulary.setAll((ObjectNode) mapper.readTree("""
-            {"anyAppearance":true,"anyCourtHearing":true,"ignoreCustody":true,
-             "ignoreResults":true}"""));
-        vocabulary.put("youthDefendant", true);
-
-        final ObjectNode recipient = (ObjectNode) subscription.get("recipient");
-        recipient.put("organisationName", "Youth Offending Service - South West London");
-        recipient.put("emailAddress1", "yos.southwest@example.gov.uk");
-        return subscription;
+    private static ObjectNode youthSubscription() {
+        return NowSubscriptionFixtures.youthCourtRegisterSubscription(OU_CODE);
     }
 
     /** The same subscriber, asking for the post instead of email, which this channel cannot serve. */
-    private ObjectNode byFirstClassPost() {
-        final ObjectNode subscription = youthSubscription();
-        subscription.put("emailDelivery", false);
-        subscription.put("firstClassLetterDelivery", true);
-        return subscription;
+    private static ObjectNode byFirstClassPost() {
+        return NowSubscriptionFixtures.byFirstClassPost(OU_CODE);
     }
 }

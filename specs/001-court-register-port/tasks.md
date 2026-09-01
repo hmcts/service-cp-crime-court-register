@@ -728,8 +728,39 @@ documentation-final states.
 
 ## Phase 7: Assembly, e2e, docs (US1/US4)
 
-- [ ] T068 [US4] Write `HttpSurfaceTest`, `SharedObjectMapperTest`, `TelemetryPrivacyTest`
+- [x] T068 [US4] Write `HttpSurfaceTest`, `SharedObjectMapperTest`, `TelemetryPrivacyTest`
       (red; the privacy test red on a seeded violation) — actuator-only surface; no PII at INFO+.
+      *(done — 22 cases, and the red is one seeded line rather than a missing implementation, which
+      is what this task's own text asks for. Three things worth stating. **(1) Two of the three
+      suites passed on arrival and are recorded as characterisation, not as red runs.**
+      `HttpSurfaceTest` reads the actuator's own link list — the surface an operator, a scanner and
+      an attacker all see — and finds exactly `health, info, metrics, prometheus`; the eleven
+      endpoints a dependency could publish all 404. `SharedObjectMapperTest` pins the *injected*
+      mapper rather than the static factory, which is the assertion `JacksonConfig`'s own note asks
+      for and the only one that would notice the running service reading money as binary floating
+      point while every unit suite stayed green. Neither could have gone red honestly: they claim
+      what is already true, and the tasks.md rule is to investigate and record rather than to claim
+      a red.
+      **(2) The privacy suite passed on arrival too, so the violation was seeded** —
+      `AggregationMapper`'s assembly line was made to log the register's defendant names, the exact
+      shape of the mistake somebody makes while debugging a register with the wrong people on it.
+      The recorded red:
+      `[a child's own details reached the log index: CHILDNAMEMARKERZQX7] Expecting no elements ...
+      to match given predicate but this element did: "Outbound court register assembled.
+      hearingId=1828f356-… defendants=1 recipients=1 names=[CHILDNAMEMARKERZQX7 Duncan
+      CHILDNAMEMARKERZQX7]"`. The seed is production code and is removed by T068a.
+      **(3) The register is really assembled under the capture.** The suite drives the listener over
+      the bean graph `PipelineConfig` builds, doubling the four outward ports only, so the fragment
+      builder, the matcher, the twelve mappers and the contract validator each get to write whatever
+      they write about a child whose every personal field is a marker — name, address, NINO, contact
+      email, ethnicity, date of birth, the guardian's name and the statement of facts. A suite that
+      mocked the transformation would have proved nothing about the twelve classes that hold those
+      fields. Beside that: correlation on every INFO+ line, the caller identity, the producer's
+      message id, field name and body, a transport fault's words, a refused settlement's words, an
+      adapter failure's words, the broker credential, and two claims about the shipped configuration
+      — `logback.xml` emits the MDC, and `application.yaml` turns no logger below INFO.
+      `support/NowSubscriptionFixtures` is extracted from `PipelineCompositionTest` so the two
+      suites cannot come to disagree about what a matching subscription is.)*
 - [ ] T068a [US4] Implement `config/PipelineConfig` + the final `application.yaml`
       (green for T068; the logging swept against the privacy test).
       *(partly done, ahead of its phase — 2026-09-01 review. `PipelineConfig` now builds the real

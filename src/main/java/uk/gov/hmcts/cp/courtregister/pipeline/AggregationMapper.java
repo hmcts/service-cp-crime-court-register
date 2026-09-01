@@ -112,8 +112,13 @@ public final class AggregationMapper {
         final List<CourtRegisterDefendant> defendants =
                 new YouthDefendantMapper(anomalies).map(youthDefendants, hearing);
 
-        LOG.info("Outbound court register assembled. hearingId={} defendants={} recipients={}",
-                fragment.hearingId(), defendants.size(), recipients.size());
+        // SEEDED VIOLATION — T068 red run only, removed by T068a.
+        // The shape of the mistake this suite exists to catch: somebody debugging a register that
+        // came out with the wrong people on it logs who was on it. Every one of them is a child.
+        LOG.info("Outbound court register assembled. hearingId={} defendants={} recipients={} "
+                        + "names={}",
+                fragment.hearingId(), defendants.size(), recipients.size(),
+                defendants.stream().map(CourtRegisterDefendant::name).toList());
 
         return new CourtRegisterDocument(
                 fragment.registerDate(),
