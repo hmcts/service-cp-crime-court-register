@@ -214,6 +214,87 @@ class YouthDefendantMapperTest {
     }
 
     @Nested
+    @DisplayName("the space a child's name is trimmed of — JavaScript's set, not Java's")
+    class TrimmedTheWayTheLegacyTrims {
+
+        @Test
+        @DisplayName("a non-breaking space either side of the name is not part of the name")
+        void a_non_breaking_space_either_side_is_not_part_of_the_name() {
+            // `YouthDefendantMapper.js:37-39` joins the three parts and calls
+            // String.prototype.trim(), which strips the whole Unicode whitespace set. Java's
+            // String.trim() strips codepoints up to U+0020 and String.strip() asks
+            // Character.isWhitespace, which answers false for U+00A0 — so this padding survives
+            // here and does not survive there. The recorded corpus catches it at
+            // mut__surviving-youth-defendant__unicode-name__nbsp-padded, where the legacy wrote
+            // "Fred Smith" and this port wrote a child's name with a space either side of it.
+            assertThat(youthNamed("\u00a0Fred", null, "Smith\u00a0").name())
+                    .isEqualTo("Fred Smith");
+        }
+
+        @Test
+        @DisplayName("and neither is any other space JavaScript recognises")
+        void nor_is_any_other_space_javascript_recognises() {
+            // The rest of the set, so the fix is the rule and not a patch for one character: an
+            // ideographic space, a line separator and a byte-order mark are all whitespace to
+            // String.prototype.trim() and none of them is to Java.
+            assertThat(youthNamed("\u3000Fred", null, "Smith\u2028").name())
+                    .isEqualTo("Fred Smith");
+            assertThat(youthNamed("\ufeffFred", null, "Smith\u205f").name())
+                    .isEqualTo("Fred Smith");
+        }
+
+        @Test
+        @DisplayName("a zero-width space is not space, and stays in the name it was sent in")
+        void a_zero_width_space_is_not_space() {
+            // U+200B is a format character, not whitespace, and String.prototype.trim() leaves it
+            // alone. A fix that reached for Character.isWhitespace or for a regex of its own
+            // choosing would take it out, and the child would be renamed on the way to court.
+            assertThat(youthNamed("\u200bFred", null, "Smith\u200b").name())
+                    .isEqualTo("\u200bFred Smith\u200b");
+        }
+
+        @Test
+        @DisplayName("a unit separator is not space either, whatever Java's own trim thinks")
+        void a_unit_separator_is_not_space_either() {
+            // The over-trim in the other direction: String.trim() strips every codepoint up to
+            // U+0020, which includes the four separator controls JavaScript does not strip. The
+            // port owes the legacy's answer in both directions or it is not the legacy's rule.
+            assertThat(youthNamed("\u001fFred", null, "Smith").name())
+                    .isEqualTo("\u001fFred Smith");
+        }
+
+        @Test
+        @DisplayName("space between the parts is the join's, and is left where it is")
+        void space_between_the_parts_is_left_where_it_is() {
+            assertThat(youthNamed("Fred", "\u00a0", "Smith").name())
+                    .isEqualTo("Fred \u00a0 Smith");
+        }
+
+        /**
+         * The surviving youth, renamed.
+         *
+         * @param firstName  their first name
+         * @param middleName their middle name, or {@code null} for none
+         * @param lastName   their last name
+         * @return the mapped defendant
+         */
+        private CourtRegisterDefendant youthNamed(
+                final String firstName, final String middleName, final String lastName) {
+
+            final ObjectNode hearing = survivingYouthHearing();
+            final ObjectNode details = personDetails(hearing);
+            details.put("firstName", firstName);
+            details.put("lastName", lastName);
+            if (middleName == null) {
+                details.remove("middleName");
+            } else {
+                details.put("middleName", middleName);
+            }
+            return map(hearing, youth(YOUTH_ID)).get(0);
+        }
+    }
+
+    @Nested
     @DisplayName("which ethnicity is printed (C25)")
     class Ethnicity {
 

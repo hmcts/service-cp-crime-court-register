@@ -174,6 +174,32 @@ class RecipientMapperTest {
             assertThat(map(subscription)).isNull();
             assertThat(anomalies).containsExactly(TransformationAnomaly.RECIPIENT_MISSING_EMAIL);
         }
+
+        @Test
+        @DisplayName("a non-breaking space is space too, because trim() there says it is")
+        void a_non_breaking_space_is_space_too() {
+            // `RecipientMapper.js:36-38` calls String.prototype.trim(), which strips the whole
+            // Unicode whitespace set. Java's String.trim() strips codepoints up to U+0020 and
+            // String.strip() asks Character.isWhitespace, which answers false for U+00A0 — so a
+            // padded address survives here and does not survive there, and the difference reaches
+            // progression as an address with a space in it.
+            final ObjectNode subscription = deliverable();
+            ((ObjectNode) subscription.get("recipient"))
+                    .put("emailAddress1", "\u00a0yos.southwest@example.gov.uk\u00a0");
+
+            assertThat(map(subscription).get(0).emailAddress1())
+                    .isEqualTo("yos.southwest@example.gov.uk");
+        }
+
+        @Test
+        @DisplayName("an address that is nothing but non-breaking space is nothing either")
+        void an_address_that_is_only_non_breaking_space_is_nothing() {
+            final ObjectNode subscription = deliverable();
+            ((ObjectNode) subscription.get("recipient")).put("emailAddress1", "\u00a0\u00a0");
+
+            assertThat(map(subscription)).isNull();
+            assertThat(anomalies).containsExactly(TransformationAnomaly.RECIPIENT_MISSING_EMAIL);
+        }
     }
 
     @Nested
