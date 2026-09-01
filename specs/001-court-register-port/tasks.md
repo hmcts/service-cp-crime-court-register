@@ -656,8 +656,19 @@ vocabulary and matching semantics.
       TLS is pointed at the plaintext container and must fail to read — and fail as a miss, like any
       other cache outage. The container stays plaintext deliberately: one carrying a self-signed
       certificate would only prove a suite can be told to trust one.)*
-- [ ] T064 [P] [US2] `application/SubmissionRedeliveryIT` (PG + WireMock) — POSTED replay skips the
+- [x] T064 [P] [US2] `application/SubmissionRedeliveryIT` (PG + WireMock) — POSTED replay skips the
       POST; PENDING/FAILED replays re-attempt.
+      *(done — 5 cases red over a real Postgres, a real repository and a real socket. The suite
+      exists because the two unit suites cannot fail together: the repository IT proves the
+      statements and the adapter test proves the ordering against a **mock** of the very decision
+      under test, so "already POSTED is skipped" is asserted there against a stub of itself. All
+      three of an output row's states answer a replay differently and all three are here — POSTED is
+      terminal and the POST is skipped, FAILED is re-claimed and re-sent, and PENDING (a runner that
+      died between claiming the row and learning the outcome) is re-sent too, because that row is
+      evidence a POST may have been made and a duplicate progression's sweep absorbs is preferred to
+      a loss nothing does. The fifth case is the fence end to end: a runner whose claim was reclaimed
+      while it worked selects no row, so it never posts at all — which is what stops one hearing
+      acquiring two registers when a lease lapses under a slow run.)*
 
 ### Implementation
 
