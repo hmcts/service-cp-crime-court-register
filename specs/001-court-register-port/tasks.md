@@ -688,8 +688,19 @@ vocabulary and matching semantics.
       already serves the port and startup already refuses it where the deployed credential source is
       in use, so the live beans landing beside it changes nothing about how one of the pair is
       chosen.)*
-- [ ] T066 [US1] Implement `adapter/refdata/ReferenceDataNowSubscriptionsClient` + configs (green
+- [x] T066 [US1] Implement `adapter/refdata/ReferenceDataNowSubscriptionsClient` + configs (green
       T060).
+      *(done — 28 cases green, and `config/LiveSubscriptionsConfig` is the LIVE half of the pair
+      `StubSubscriptionsConfig` was already the other half of. Three notes. **(1)** Every status
+      reference data answers with is a failure here, `404` included — the resource always exists, so
+      a `404` on it is a misconfigured path, and this is the one status on which this client and the
+      payload client deliberately differ. **(2)** The mesh headers are applied first and the two
+      contract headers set over them, so a header configured under a contract name replaces the
+      contract value rather than joining it. **(3)** The startup rules the composition remediation
+      put in place still hold and needed no change: `PropertiesValidator` refuses `STUB` wherever the
+      deployed credential source is in use and beside a LIVE payload source, which
+      `ConfigurationValidationTest` re-proved on this run — the live bean landing beside the stub
+      changes which of the pair is chosen, never whether the refusals apply.)*
 - [ ] T067 [US1] Implement `adapter/progression/{ProgressionCommandGateway,
       ProgressionRegisterSubmissionClient}` (green T061, T062, T064) — updates C1/C3 and the
       submission half of C29.
