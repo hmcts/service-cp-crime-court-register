@@ -1005,9 +1005,39 @@ documentation-final states.
       corpus reproduces C1, C7, C8, C10, C13, C22, C29 and C31 as evidence for T075, and surfaces
       one uncatalogued in-contract loss — a legal-entity defendant throws in `YouthDefendantMapper`
       and the register vanishes — which needs a C-number with review or the legacy stands.)*
-- [ ] T074 [US5] Write `support/RegisteredDefectFixes` + `DifferentialAuditTest` (red only in the
+- [x] T074 [US5] Write `support/RegisteredDefectFixes` + `DifferentialAuditTest` (red only in the
       sense that unattributed diffs fail) — every legacy-vs-port difference derives from a
       C-number; `SCHEMA_INVALID` corpus cases asserted as classified failures.
+      *(Done — all 351 recorded runs go through the real chain (group-proceedings policy, fragment
+      builder, subscription matcher, twelve mappers, frozen-contract validator) with the
+      subscriptions pre-fetched, in ~2s and with no container, so it runs in `./gradlew build`
+      untagged. The register has two halves: a **derivation** for a component the port re-renders and
+      whose required value can be computed from the recording's own — `registerDate` (C10, through
+      `Europe/London`'s real offsets, both answers accepted in the repeated autumn hour) and
+      `wording` (C24, split at the `####` sentinel, re-joined with a newline, the `undefined` residue
+      dropped) — and a **claim** for everything a value-for-value derivation cannot express, each
+      carrying a predicate that recognises the signature of one fix. The claims are mutually
+      exclusive and the audit asserts it, so a divergence two rows could explain fails as loudly as
+      one no row explains. Obligations follow the recorder's own output axis: IN_CONTRACT reproduce
+      and claim every difference, SCHEMA_INVALID classify (refuse at the contract with a pointer the
+      recorder's validator named, or repair under a row), NO_DOCUMENT end where the row governs — and
+      a run the legacy ended by swallowing an exception is never agreement, because reporting success
+      on a failure is C2. Three `shared-time__absent` cases are held to a refusal rather than a
+      comparison: `moment` reads an absent date as *now*, so the recording is a reading of the corpus
+      clock and there is no oracle in it. Attribution, whole corpus: C9 236, C24 263, C23 138, C10
+      124, C11 123, C31 74, C29 59, C2 18, C22 8, C7 4, C19 4, C26 4, C36 4, C8 1 — zero unclaimed.
+      **Two port defects found and fixed, red/green each.** (1) `JsStrings` trimmed with Java's
+      `String.trim()` where the legacy trims with `String.prototype.trim()`; they disagree in both
+      directions, so a child's name reached the register padded with the U+00A0 it arrived in
+      (`unicode-name__nbsp-padded`) — `jsTrim` is now ECMA-262's own set, and the email trim behind
+      C27 gets it too (`41c6ae2`/`805599c`). (2) C11's file name took its day from `Dates.localDate`,
+      London's calendar day, so a 23:00Z share was filed under the following day and under a
+      different day from the subscription set it was addressed by — which C10's row says must move
+      and, until now, did not (`shared-time__bst-2300-utc`); `Dates.registerDay` answers the UTC day
+      and is asserted equal to `subscriptionDay` (`7efee83`/`360d29a`). C10 and C11 amended to record
+      both. `JsonParity` now reports differences as data as well as prose, because a register
+      predicate reading a difference back out of a formatted string would be parsing the
+      comparator's own sentences.)*
 - [ ] T075 [A] [US5] Run the audit, commit the report to
       `specs/001-court-register-port/checklists/differential-audit.md` (zero unexplained
       differences), and reconcile DEFECT-FIXES rows against observed diffs (every content-changing
