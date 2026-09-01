@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
@@ -301,6 +302,123 @@ class DatesTest {
         void refuses_rather_than_ordering_against_an_unreadable_date() {
             assertThatThrownBy(() -> dates.isGreater("2020-01-19", "not a date"))
                     .isInstanceOf(TransformationFailedException.class);
+        }
+    }
+
+    /**
+     * The day the register says the hearing was held on — {@code getHearingDate}, and the two things
+     * the port had to decide about it.
+     *
+     * <p><strong>Reach.</strong> {@code RegisterFragmentService.js:47} guards on
+     * {@code if (hearingObj.hearingDays)} and then calls {@code .find} on it, and inside the
+     * predicate reads {@code hearingDay.sittingDay}. Both of those <em>throw</em> for shapes a
+     * payload can carry: a truthy value that is not an array has no {@code find}, and reading a
+     * property off a {@code null} member is a {@code TypeError}. The exception is swallowed upstream
+     * into {@code Success: true}, so the legacy loses the whole hearing's register. Iterating those
+     * shapes safely would be the one direction this port must not drift in — it would produce a
+     * register the legacy never sends, for a payload the transformation cannot actually read. They
+     * are classified transformation failures instead: recorded, parked, and replayable.
+     *
+     * <p><strong>Determinism — defect fix C35.</strong> The legacy has two legs that answer with
+     * {@code moment.tz(undefined, zone)}, which is the wall clock: a hearing that gathered no ordered
+     * date at all, and a sitting record carrying no {@code sittingDay} whose absent day formats as
+     * today and so matches an ordered date of today. Neither is reproduced — the transformation is
+     * pure and has no clock (constitution Principle V) — and neither is silent: they are registered
+     * as C35 with the deterministic answers pinned below.
+     *
+     * @see <a href="file:../../../../../../../../doc/DEFECT-FIXES.md">doc/DEFECT-FIXES.md</a> row C35
+     */
+    @Nested
+    @DisplayName("hearingDate — reach and determinism (C35)")
+    class HearingDate {
+
+        /** The ordered date most cases below are dated by. */
+        private static final String ORDERED = "2020-01-20";
+
+        @ParameterizedTest
+        @ValueSource(strings = {"{\"sittingDay\":\"2020-01-20\"}", "\"2020-01-20\"", "7", "true"})
+        @DisplayName("refuses a hearingDays that is truthy and is not a list")
+        void refuses_a_hearing_days_that_is_not_a_list(final String hearingDays) {
+            // `hearingObj.hearingDays.find` is not a function for any of these, so the legacy throws
+            // and the hearing produces no register at all. Iterating them as "no sitting days" would
+            // date the register by the ordered date and send it.
+            assertThatThrownBy(() -> resolve(ORDERED, "{\"hearingDays\":" + hearingDays + "}"))
+                    .isInstanceOf(TransformationFailedException.class);
+        }
+
+        @Test
+        @DisplayName("refuses a sitting record that is null rather than reading through it")
+        void refuses_a_sitting_record_that_is_null() {
+            // `hearingDay.sittingDay` on a null member is a TypeError, and the register is lost.
+            assertThatThrownBy(() -> resolve(ORDERED, "{\"hearingDays\":[null]}"))
+                    .isInstanceOf(TransformationFailedException.class);
+        }
+
+        @Test
+        @DisplayName("reads a sitting record that names no day, which the legacy reads too")
+        void reads_a_sitting_record_that_names_no_day() {
+            // The control the refusals need. Reading `.sittingDay` off an object that does not
+            // carry it is legal JavaScript and answers `undefined`; only `null` and `undefined`
+            // members throw. Refusing this shape would lose registers the legacy sends.
+            assertThat(resolve(ORDERED, "{\"hearingDays\":[{\"courtRoom\":\"1\"}]}"))
+                    .isEqualTo("2020-01-20T00:00:00Z");
+        }
+
+        @Test
+        @DisplayName("carries the sitting day that falls on the ordered date, with its time")
+        void carries_the_sitting_day_falling_on_the_ordered_date() {
+            assertThat(resolve(ORDERED,
+                    "{\"hearingDays\":[{\"sittingDay\":\"2020-01-20T09:30:00Z\"}]}"))
+                    .isEqualTo("2020-01-20T09:30:00Z");
+        }
+
+        /**
+         * C35, first leg. A hearing whose gathered results name no ordered date reaches
+         * {@code dateService.getLocalDateTime(undefined)}, and {@code moment.tz(undefined, zone)} is
+         * the current time — so the legacy dates the register by whenever the function app happened
+         * to run, and two replays of the same hearing produce two different registers.
+         */
+        @Test
+        @DisplayName("has no hearing date at all where the legacy stamps the wall clock")
+        void has_no_hearing_date_where_the_legacy_stamps_the_wall_clock() {
+            assertThat(resolve(null, "{\"hearingDays\":[{\"sittingDay\":\"2020-01-20\"}]}")).isNull();
+            assertThat(resolve(null, "{\"hearingDays\":[]}")).isNull();
+        }
+
+        /**
+         * C35, second leg. A sitting record carrying no {@code sittingDay} has
+         * {@code getLocalDate(undefined)} formatted as <em>today</em>, so on the day a hearing's
+         * results are ordered that record matches — and the hearing date it then carries is
+         * {@code getLocalDateTime(undefined)}, the wall clock again. Here the record matches nothing
+         * and the ordered date is carried, which is what the register says on every other day.
+         */
+        @Test
+        @DisplayName("a sitting record naming no day matches nothing, even on the ordered day")
+        void a_sitting_record_naming_no_day_matches_nothing() {
+            final String today =
+                    LocalDate.now(java.time.ZoneId.of("Europe/London")).toString();
+
+            assertThat(resolve(today, "{\"hearingDays\":[{}]}"))
+                    .isEqualTo(today + "T00:00:00Z");
+        }
+
+        @Test
+        @DisplayName("has no hearing date when the hearing lists no sitting days at all")
+        void has_no_hearing_date_when_the_hearing_lists_none() {
+            // `getHearingDate`'s `if` has no `else`, so an absent list answers nothing — unchanged.
+            assertThat(resolve(ORDERED, "{\"id\":\"hearing-1\"}")).isNull();
+        }
+
+        /**
+         * The hearing date for one hearing and one ordered date.
+         *
+         * @param orderedDate the latest date any gathered result was ordered; may be {@code null}
+         * @param hearing     the hearing, as JSON text
+         * @return the hearing date the register carries
+         */
+        private String resolve(final String orderedDate, final String hearing) {
+            return HearingDates.resolve(orderedDate,
+                    JacksonConfig.contractObjectMapper().readTree(hearing), dates);
         }
     }
 
