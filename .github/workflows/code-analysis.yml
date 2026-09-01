@@ -30,6 +30,10 @@ jobs:
           rulesets: '.github/pmd-ruleset.xml'
           sourcePath: 'src/main/java'
           analyzeModifiedFilesOnly: false
+          # Pinned to the same PMD the Gradle build runs (gradle/pmd.gradle) so the two
+          # analyses cannot disagree: an unpinned action floats to newer PMD releases whose
+          # new rules fail CI on code the build's own gate accepts.
+          version: '7.22.0'
 
       - name: Fail build if there are violations
         if: always()
