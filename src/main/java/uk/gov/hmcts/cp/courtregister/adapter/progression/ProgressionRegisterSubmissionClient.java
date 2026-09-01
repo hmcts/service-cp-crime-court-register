@@ -11,7 +11,9 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterSubmission;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.application.SubmissionReceipt;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.ProcessedOutputClaim;
+import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedOutputRepository;
@@ -35,6 +37,23 @@ import uk.gov.hmcts.cp.courtregister.persistence.ProcessedOutputRepository;
  *       rethrown, so the log never shows a submission in flight that nothing is going to finish, and
  *       the status progression answered is recorded with it.</li>
  * </ol>
+ *
+ * <p><strong>Every exit from the POST settles the row, and a settlement that lands on nothing
+ * changes what happens next.</strong> Both are the same rule read twice. A failure nothing here
+ * anticipated would otherwise leave the claimed row PENDING with nothing going to finish it; and a
+ * fenced write that affects no row means an overlapping delivery reached the row first, or this
+ * runner's claim was reclaimed while it worked — so what this runner believes happened is not what
+ * the log durably says, and returning normally on it would complete the run {@code submitted} on an
+ * in-memory belief. The delivery is handed back TRANSIENT instead, including where the write that
+ * failed was a NON_TRANSIENT refusal: parking is a terminal verdict, and this runner's verdict is
+ * not the recorded one.
+ *
+ * <p>What the redelivery then does is the processed log's decision, and it is the one
+ * {@code SubmissionRedeliveryIT} pins against a real Postgres: a row an overlapping delivery already
+ * POSTED is terminal, so the replay's claim is refused and its run completes {@code submitted}
+ * without a second POST; a row left PENDING or FAILED is re-claimed and re-sent. That second case is
+ * the crash-window trade this service makes deliberately — a duplicate the downstream sweep absorbs,
+ * in preference to a loss nothing absorbs.
  *
  * <p>Writing the row first is what makes an unknown outcome survivable. A POST that times out leaves
  * a PENDING row carrying the digest of exactly the bytes that were attempted and the bounded counts
@@ -117,25 +136,116 @@ public class ProgressionRegisterSubmissionClient implements RegisterSubmissionCl
     /**
      * The POST, and the outcome write that follows it whichever way it goes.
      *
+     * <p><strong>Every exit from here settles the claimed row first.</strong> The claim is a promise
+     * made in the database — this delivery is about to POST, and until the row moves the log says a
+     * submission is in flight — so a frame that let a failure past without settling it would leave a
+     * PENDING row behind with nothing going to finish it.
+     *
      * @return the status progression accepted the command with
      */
+    // PMD.AvoidCatchingGenericException: this frame holds a claimed row, and the row has to be
+    // settled whatever the failure was. It is a catch-and-record, not a catch-and-ignore: the
+    // failure is written down and then continues upward unchanged (constitution Principle VI).
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private int sent(final byte[] body, final RegisterSubmission submission, final RunClaim claim) {
         final int responseCode;
         try {
             responseCode = gateway.post(body, submission.caller(), submission.deadline());
         } catch (SubmissionFailedException failure) {
             // Caught to record, never to absorb — the whole of defect fix C1. The row is moved to
-            // FAILED carrying whatever progression answered, and the same exception continues with
-            // the classification the pipeline settles the delivery on.
-            recorded(outputs.recordFailed(claim, answered(failure)), "FAILED", claim);
-            throw failure;
+            // FAILED carrying whatever progression answered, and a failure the log accepted
+            // continues with the classification the pipeline settles the delivery on.
+            throw settled(failure, claim);
+        } catch (RuntimeException unexpected) {
+            throw unrecorded(unexpected, claim);
         }
 
-        recorded(outputs.recordPosted(claim, responseCode), "POSTED", claim);
+        if (!outputs.recordPosted(claim, responseCode)) {
+            throw ambiguous(responseCode, claim);
+        }
         LOG.info("The court register was submitted to progression. source={} requestId={} "
                         + "responseCode={} anomalies={}",
                 claim.source(), claim.requestId(), responseCode, submission.anomalies().size());
         return responseCode;
+    }
+
+    /**
+     * A classified failure, written down before it is allowed to continue.
+     *
+     * <p>Where the write lands on a row, the failure the transport raised is the failure the
+     * pipeline settles on. Where it lands on nothing, it is not: a NON_TRANSIENT refusal is a
+     * terminal verdict, and this runner has just been told its verdict is not the one the log holds.
+     * Parking on it would dead-letter a request whose row may say POSTED, so the delivery is handed
+     * back instead and the redelivery reads the row and decides.
+     *
+     * @param failure what the transport raised
+     * @param claim   the claim this run holds
+     * @return the failure to continue with
+     */
+    private SubmissionFailedException settled(
+            final SubmissionFailedException failure, final RunClaim claim) {
+
+        final SubmissionFailedException settled;
+        if (outputs.recordFailed(claim, answered(failure))) {
+            settled = failure;
+        } else {
+            unrecordable("FAILED", claim);
+            settled = new SubmissionFailedException(FailureClassification.TRANSIENT,
+                    ReasonCode.SUBMISSION_TRANSIENT, answered(failure));
+        }
+        return settled;
+    }
+
+    /**
+     * Progression accepted the command and the processed log would not say so.
+     *
+     * <p>The ambiguous outcome, from the one direction the transport cannot see. Returning normally
+     * would complete the run {@code submitted} on the strength of an in-memory belief while the row
+     * that decides whether a redelivery may send again said something else — the silent success this
+     * service exists to end. So the delivery is handed back TRANSIENT, and what happens next is the
+     * processed log's to decide: a row an overlapping delivery already POSTED is terminal, so the
+     * redelivery's claim is refused and its run completes {@code submitted} without a second POST;
+     * a row left PENDING or FAILED is re-claimed and re-sent, which is the crash-window trade this
+     * service makes deliberately — a duplicate progression's {@code max(register_time) per
+     * hearing_id} sweep absorbs, in preference to a loss nothing absorbs and nobody sees.
+     *
+     * @param responseCode what progression answered
+     * @param claim        the claim this run holds
+     * @return the failure to continue with
+     */
+    private static SubmissionFailedException ambiguous(
+            final int responseCode, final RunClaim claim) {
+        unrecordable("POSTED", claim);
+        return new SubmissionFailedException(FailureClassification.TRANSIENT,
+                ReasonCode.SUBMISSION_TRANSIENT, responseCode);
+    }
+
+    /**
+     * A failure nothing here anticipated, met after the row was claimed.
+     *
+     * <p>Settled FAILED and then let out unchanged: the pipeline's own catch-all classifies it and
+     * settles the delivery, and this leg's business is only that the row it claimed does not stay
+     * PENDING with nothing going to finish it. A settlement that itself affects no row needs no
+     * second decision — the failure is already on its way to a hand-back, which is what a refused
+     * write asks for.
+     *
+     * <p>The type reaches the log line and the message never does: a layer that was handling a
+     * register can quote one in its message, and every defendant on a register is a child.
+     *
+     * @param unexpected what was raised
+     * @param claim      the claim this run holds
+     * @return the failure to continue with
+     */
+    private RuntimeException unrecorded(final RuntimeException unexpected, final RunClaim claim) {
+        LOG.error("The add-court-register submission failed in a way nothing anticipated; the "
+                        + "claimed row is settled before the failure continues. source={} "
+                        + "requestId={} type={} reason={}",
+                claim.source(), claim.requestId(), unexpected.getClass().getName(),
+                ReasonCode.UNEXPECTED_FAILURE.code());
+        if (!outputs.recordFailed(claim, null)) {
+            unrecordable("FAILED", claim);
+        }
+        return unexpected;
     }
 
     /**
@@ -175,15 +285,13 @@ public class ProgressionRegisterSubmissionClient implements RegisterSubmissionCl
      * <p>A claim was granted moments before, so a statement that affects no row means an overlapping
      * delivery reached it first and POSTED it, or that this runner's claim was reclaimed while it
      * worked. Either way two runners were working the same request, and what this one believes
-     * happened is not what the log durably says.
+     * happened is not what the log durably says — which is why every caller of this method changes
+     * what it does next rather than only saying so.
      */
-    private static void recorded(
-            final boolean written, final String intended, final RunClaim claim) {
-        if (!written) {
-            LOG.error("Outcome write affected no row; an overlapping delivery reached it first, or "
-                            + "the claim was reclaimed. source={} requestId={} intendedStatus={}",
-                    claim.source(), claim.requestId(), intended);
-        }
+    private static void unrecordable(final String intended, final RunClaim claim) {
+        LOG.error("Outcome write affected no row; an overlapping delivery reached it first, or "
+                        + "the claim was reclaimed. source={} requestId={} intendedStatus={}",
+                claim.source(), claim.requestId(), intended);
     }
 
     private static String digestOf(final byte[] body) {

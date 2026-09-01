@@ -16,6 +16,24 @@ released, so everything sits under Unreleased.
 
 ### Changed
 
+- 2026-09-01 — **A claimed submission row is always settled, and a settlement the log refuses hands
+  the delivery back.** Two holes on the same path. A failure nothing anticipated — anything other
+  than the classified `SubmissionFailedException` — escaped the submission leg after the
+  `processed_output` row had been claimed, leaving PENDING behind with nothing going to finish it;
+  the row is now moved to FAILED, by type and a bounded reason and never the failure's own words,
+  before the failure continues upward unchanged. And a fenced `recordPosted`/`recordFailed` that
+  affected no row was an ERROR line the code then ignored: it means an overlapping delivery reached
+  the row first, or this runner's claim was reclaimed while it worked, so what the runner believes
+  happened is not what the log says. Both cases now hand the delivery back TRANSIENT — including
+  where the write that failed was recording a NON_TRANSIENT refusal, because parking is a terminal
+  verdict and this runner's verdict is not the recorded one.
+
+  **Operator-visible:** a run in either state is RETRYING rather than COMPLETED `submitted`, and the
+  redelivery decides from the row: POSTED is terminal and its claim is refused, so the replay
+  completes `submitted` with no second POST; PENDING or FAILED is re-claimed and re-sent, the
+  crash-window trade this service already makes — a duplicate progression's
+  `max(register_time) per hearing_id` sweep absorbs, in preference to a loss nothing absorbs.
+
 - 2026-09-01 — **The submission's retries are bounded by the run's claim, not only by
   `max-backoff`.** The processing deadline was read before the POST started and never again, so the
   transport's own policy — up to `courtregister.progression.max-attempts` attempts, each able to

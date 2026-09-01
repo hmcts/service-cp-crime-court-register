@@ -20,7 +20,9 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.UUID;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -375,50 +377,186 @@ class ProgressionRegisterSubmissionClientTest {
     }
 
     /**
-     * The outcome write is the durable half of a submission, and it is checked rather than assumed.
+     * The outcome write is the durable half of a submission, and a refused one decides what happens
+     * next rather than merely being mentioned.
      *
-     * <p>A claim was granted moments before, so the only way one of these statements can affect no
-     * row is that a delivery this one overlapped with reached the row first and POSTED it — POSTED
-     * being terminal in the log — or that this runner's claim was reclaimed while it worked. Either
-     * means two runners were working the same request, which is worth an ERROR: what this runner
-     * believes happened is not what the log durably says.
+     * <p>A claim was granted moments before, so the only way one of these fenced statements can
+     * affect no row is that a delivery this one overlapped with reached the row first and POSTED it —
+     * POSTED being terminal in the log — or that this runner's claim was reclaimed while it worked.
+     * Either means two runners were working the same request, and <strong>what this runner believes
+     * happened is not what the log durably says</strong>. Returning normally from that is the
+     * silent-success shape the whole service exists to end: the run would complete
+     * {@code submitted} on the strength of an in-memory belief, and the row that decides whether a
+     * redelivery may send again would say something else.
+     *
+     * <p>So the delivery is handed back, TRANSIENT. What the redelivery then finds is exactly the
+     * question {@code SubmissionRedeliveryIT} answers against a real Postgres: a row that is POSTED
+     * is skipped and the run completes {@code submitted} without a second POST; a row left PENDING
+     * or FAILED is re-claimed and re-sent, which is the crash-window trade this service makes
+     * deliberately — a duplicate progression's {@code max(register_time) per hearing_id} sweep
+     * absorbs, in preference to a loss nothing absorbs and nobody sees.
      */
     @Nested
     @DisplayName("an outcome write that lands on nothing")
     class OutcomeNotRecorded {
 
+        /**
+         * The ambiguous-outcome case. Progression accepted the command and the log would not say so:
+         * this delivery cannot prove the register is on record, so it does not claim it did.
+         */
         @Test
-        @DisplayName("a POST that recorded nothing is reported rather than assumed written")
-        void a_post_that_recorded_nothing_is_reported_rather_than_assumed_written() {
+        @DisplayName("a POST the log would not record hands the delivery back rather than completing")
+        void a_post_the_log_would_not_record_hands_the_delivery_back() {
             claimGranted();
-            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class))).thenReturn(ACCEPTED);
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class)))
+                    .thenReturn(ACCEPTED);
             when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(false);
 
             try (CapturedLog log =
                          CapturedLog.capturing(ProgressionRegisterSubmissionClient.class)) {
-                client().submit(submission());
+                assertThatThrownBy(() -> client().submit(submission()))
+                        .isInstanceOf(SubmissionFailedException.class)
+                        .asInstanceOf(
+                                InstanceOfAssertFactories.type(SubmissionFailedException.class))
+                        .satisfies(failure -> {
+                            assertThat(failure.classification())
+                                    .as("the redelivery reads the row and decides; this run cannot")
+                                    .isEqualTo(FailureClassification.TRANSIENT);
+                            assertThat(failure.reason())
+                                    .isEqualTo(ReasonCode.SUBMISSION_TRANSIENT);
+                            assertThat(failure.responseCode())
+                                    .as("what progression answered is still what was observed")
+                                    .isEqualTo(OptionalInt.of(ACCEPTED));
+                        });
 
                 assertThat(log.renderings())
                         .anyMatch(line -> line.contains("Outcome write affected no row"));
             }
         }
 
+        /**
+         * The same rule on the failure path, and it changes the classification. A refusal is
+         * NON_TRANSIENT and would be parked — but a park is a terminal verdict, and this runner has
+         * just been told its verdict was not the one recorded. It hands the delivery back instead.
+         */
         @Test
-        @DisplayName("a failure that recorded nothing still reaches the pipeline")
-        void a_failure_that_recorded_nothing_still_reaches_the_pipeline() {
+        @DisplayName("a failure the log would not record comes back transient, not parked")
+        void a_failure_the_log_would_not_record_comes_back_transient() {
             claimGranted();
             when(outputs.recordFailed(claim, REFUSED)).thenReturn(false);
             doThrow(new SubmissionFailedException(FailureClassification.NON_TRANSIENT,
                     ReasonCode.SUBMISSION_REJECTED, REFUSED))
-                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class), any(Instant.class));
+                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class),
+                            any(Instant.class));
 
             try (CapturedLog log =
                          CapturedLog.capturing(ProgressionRegisterSubmissionClient.class)) {
                 assertThatThrownBy(() -> client().submit(submission()))
-                        .isInstanceOf(SubmissionFailedException.class);
+                        .isInstanceOf(SubmissionFailedException.class)
+                        .extracting(failure ->
+                                ((SubmissionFailedException) failure).classification())
+                        .as("parking a request whose row says something else is a lie the DLQ keeps")
+                        .isEqualTo(FailureClassification.TRANSIENT);
 
                 assertThat(log.renderings())
                         .as("a failure the log could not record is still a failure")
+                        .anyMatch(line -> line.contains("Outcome write affected no row"));
+            }
+        }
+
+        @Test
+        @DisplayName("a failure the log did record keeps the classification the transport gave it")
+        void a_failure_the_log_did_record_keeps_its_classification() {
+            claimGranted();
+            when(outputs.recordFailed(claim, REFUSED)).thenReturn(true);
+            doThrow(new SubmissionFailedException(FailureClassification.NON_TRANSIENT,
+                    ReasonCode.SUBMISSION_REJECTED, REFUSED))
+                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class),
+                            any(Instant.class));
+
+            assertThatThrownBy(() -> client().submit(submission()))
+                    .isInstanceOf(SubmissionFailedException.class)
+                    .extracting(failure -> ((SubmissionFailedException) failure).classification())
+                    .isEqualTo(FailureClassification.NON_TRANSIENT);
+        }
+    }
+
+    /**
+     * A failure nothing here anticipated, met after the row was claimed.
+     *
+     * <p>The claim is a promise made in the database: this delivery is about to POST, and until the
+     * row moves the log says a submission is in flight. A failure that escaped this frame would
+     * leave that PENDING row behind with nothing going to finish it — and the next delivery, reading
+     * a PENDING row, re-claims and re-sends, which is right for a crash and wrong for a body that
+     * cannot be serialised or a gateway that threw before it reached the wire.
+     *
+     * <p>So the row is settled FAILED before the failure continues upward, and the failure continues
+     * upward: caught to record, never to absorb, which is the whole of C1. The reason written is
+     * bounded — the exception's type reaches the log line, never its message, because a message from
+     * a layer that was handling a register can quote one.
+     */
+    @Nested
+    @DisplayName("a failure nothing anticipated, after the row was claimed")
+    class UnexpectedFailure {
+
+        @Test
+        @DisplayName("settles the claimed row FAILED before the failure continues")
+        void an_unexpected_failure_settles_the_row_before_it_continues() {
+            claimGranted();
+            when(outputs.recordFailed(claim, null)).thenReturn(true);
+            doThrow(new IllegalStateException("the gateway broke"))
+                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class),
+                            any(Instant.class));
+
+            assertThatThrownBy(() -> client().submit(submission()))
+                    .as("the failure is recorded, not absorbed")
+                    .isInstanceOf(IllegalStateException.class);
+
+            final InOrder order = inOrder(gateway, outputs);
+            order.verify(gateway).post(any(byte[].class), any(CallerIdentity.class),
+                    any(Instant.class));
+            order.verify(outputs).recordFailed(claim, null);
+            verify(outputs, never()).recordPosted(any(RunClaim.class),
+                    org.mockito.ArgumentMatchers.anyInt());
+        }
+
+        @Test
+        @DisplayName("names the type and a bounded reason, never the failure's own words")
+        void an_unexpected_failure_is_reported_by_type_and_bounded_reason() {
+            claimGranted();
+            when(outputs.recordFailed(claim, null)).thenReturn(true);
+            doThrow(new IllegalStateException(DEFENDANT_NAME + " could not be serialised"))
+                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class),
+                            any(Instant.class));
+
+            try (CapturedLog log =
+                         CapturedLog.capturing(ProgressionRegisterSubmissionClient.class)) {
+                assertThatThrownBy(() -> client().submit(submission()))
+                        .isInstanceOf(IllegalStateException.class);
+
+                assertThat(log.renderings())
+                        .anyMatch(line -> line.contains(IllegalStateException.class.getName())
+                                && line.contains(ReasonCode.UNEXPECTED_FAILURE.code()))
+                        .as("every defendant on this register is a child")
+                        .noneMatch(line -> line.contains(DEFENDANT_NAME));
+            }
+        }
+
+        @Test
+        @DisplayName("says so when even that settlement lands on no row")
+        void an_unexpected_failure_whose_settlement_lands_on_nothing_is_reported() {
+            claimGranted();
+            when(outputs.recordFailed(claim, null)).thenReturn(false);
+            doThrow(new IllegalStateException("the gateway broke"))
+                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class),
+                            any(Instant.class));
+
+            try (CapturedLog log =
+                         CapturedLog.capturing(ProgressionRegisterSubmissionClient.class)) {
+                assertThatThrownBy(() -> client().submit(submission()))
+                        .isInstanceOf(IllegalStateException.class);
+
+                assertThat(log.renderings())
                         .anyMatch(line -> line.contains("Outcome write affected no row"));
             }
         }
