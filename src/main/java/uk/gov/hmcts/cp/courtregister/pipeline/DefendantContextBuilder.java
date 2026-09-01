@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterResult;
 import uk.gov.hmcts.cp.courtregister.domain.ResultLevel;
@@ -53,6 +55,8 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
 // clause they stand for answers; one exit would hide which half of the gate refused an application.
 @SuppressWarnings("PMD.OnlyOneReturn")
 public final class DefendantContextBuilder {
+
+    private static final Logger LOG = LoggerFactory.getLogger(DefendantContextBuilder.class);
 
     private static final String ID = "id";
     private static final String OFFENCES = "offences";
@@ -293,24 +297,45 @@ public final class DefendantContextBuilder {
     private static void addApplicationCases(
             final DefendantContext context, final JsonNode application) {
 
+        final String applicationId = Json.text(application, ID);
         for (final JsonNode applicationCase : Json.array(application, COURT_APPLICATION_CASES)) {
-            addCaseOnce(context, Json.text(applicationCase, PROSECUTION_CASE_ID));
+            addCaseOnce(context, Json.text(applicationCase, PROSECUTION_CASE_ID), applicationId);
         }
         if (Json.truthy(application, COURT_ORDER)) {
             for (final JsonNode courtOrderOffence : Json.dereferencedArray(
                     Json.at(application, COURT_ORDER), COURT_ORDER_OFFENCES)) {
-                addCaseOnce(context, Json.text(courtOrderOffence, PROSECUTION_CASE_ID));
+                addCaseOnce(
+                        context, Json.text(courtOrderOffence, PROSECUTION_CASE_ID), applicationId);
             }
         }
     }
 
     /**
-     * Adds a prosecution case to the context unless it is already there.
+     * Adds a prosecution case to the context unless it is already there, or unless there is none to
+     * add.
      *
-     * @param context the defendant's context
-     * @param caseId  the prosecution case's id
+     * <p>{@code DefendantContextBaseService.js:151-165} pushes the id it was given whatever it is,
+     * so an application case naming no prosecution case leaves a bare {@code undefined} on the
+     * list. That reference is not fatal there: it reaches
+     * {@code ProsecutionCaseOrApplicationMapper.js:27-33}, matches no prosecution case, and is
+     * warned about and skipped by the SNI-9005 guard ({@code 0781bbc2}) — the register is filed
+     * without that case. A {@code null} here would not travel as far: {@code RegisterDefendant}
+     * copies the list, and a hearing the legacy files would become an unexpected failure on the
+     * dead-letter queue instead. So the skip happens at the gather, in the words the mapper's own
+     * guard uses.
+     *
+     * @param context       the defendant's context
+     * @param caseId        the prosecution case's id, if the record named one
+     * @param applicationId the application the reference came from, for the warning
      */
-    private static void addCaseOnce(final DefendantContext context, final String caseId) {
+    private static void addCaseOnce(
+            final DefendantContext context, final String caseId, final String applicationId) {
+
+        if (caseId == null) {
+            LOG.warn("[Case ID: null] - Prosecution case not found in hearingJson.prosecutionCases,"
+                    + " skipping. applicationId={}", applicationId);
+            return;
+        }
         if (!context.cases().contains(caseId)) {
             context.cases().add(caseId);
         }
