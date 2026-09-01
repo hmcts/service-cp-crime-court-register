@@ -552,10 +552,24 @@ vocabulary and matching semantics.
       and the suite pins both halves — the query side is still asked, and a failure that is not the
       cache's own is not absorbed even when it happens to be a `RedisException` that escaped its own
       handler.)*
-- [ ] T058 [P] [US1] `adapter/payload/ResultsQueryHearingPayloadClientTest` (WireMock) — K1/K4/K6
+- [x] T058 [P] [US1] `adapter/payload/ResultsQueryHearingPayloadClientTest` (WireMock) — K1/K4/K6
       twins repaired (real base URI, media type, CJSCPPUID); K2 repointed to the retry policy;
       K3 repaired (absent cjscppuid outcome asserted); **C32**: empty body / 404 ⇒
       `PayloadUnavailableException` (transient), never silence.
+      *(done — 30 cases red against the `ResultsQueryHearingPayloadClient` seam. Three things the
+      suite decides. **(1)** K8's `?hearingDate=` query string is not twinned and its absence is
+      asserted instead: that form belongs to the `EXT_` endpoint (`index.js:63-67`), and the `INT_`
+      entry this flow uses takes the hearing id alone. **(2)** C32's two silences are told apart
+      rather than merged — a query side that answered and held nothing (empty body, `{}`, 404) is
+      an empty answer, and it is `CachedHearingPayloadAdapter` that turns it into a transient
+      failure once the cache has missed too, which the `DoubleMiss` nest proves over real HTTP; a
+      read that could not be made at all (exhausted retries, a refusal, a body that is not JSON)
+      raises in the client. **(3)** K3's repair is the branch it was written over: `index.js:176-178`
+      drops the run when no `cjscppuid` was supplied, so the twin asserts that a run with no
+      identity anywhere is a recorded transient failure and that no unauthenticated request is sent.
+      `retry_taxonomy_matches_the_submission_client` is a parameterised case over 408/429/5xx, with
+      its counterpart over 400/401/403/422 — the fixed C3 taxonomy, and the one T061 will hold the
+      progression gateway to.)*
 - [ ] T059 [P] [US1] `config/LivePayloadConfigTest` — **C15**: TLS verification on
       (`TransportSecurity`); C14 retirement asserted (no legacy retry env vars bound).
 - [ ] T060 [P] [US1] `adapter/refdata/ReferenceDataNowSubscriptionsClientTest` (WireMock) —
