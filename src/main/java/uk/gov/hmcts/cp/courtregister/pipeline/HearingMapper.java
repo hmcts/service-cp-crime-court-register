@@ -26,9 +26,9 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterDefendant;
  * </ul>
  *
  * <p>The fix takes the attendance record by equality against the mapped defendant's own ids and
- * matches the day against the defendant's latest ordered date — which is why this takes the register
- * defendant rather than the fragment: the ordered day and the defendant ids are both on it, and the
- * fragment's {@code registerDate} is no longer part of the answer.
+ * matches the day against <em>any</em> day one of their gathered results was ordered on — which is
+ * why this takes the register defendant rather than the fragment: the results and the defendant ids
+ * are both on it, and the fragment's {@code registerDate} is no longer part of the answer.
  */
 // PMD.OnlyOneReturn: the attendance search answers where it finds its record, and the three
 // appearance renderings answer where they are recognised; a single exit would replace the legacy's
@@ -82,32 +82,54 @@ final class HearingMapper {
      *
      * <p>C9 is the day: the legacy compares the attendance day with the fragment's
      * {@code registerDate}, a datetime, so the comparison is false on every production register.
-     * Here it is compared with the day the defendant's latest result was ordered, which is the
-     * shared kernel's own attendance rule ({@code VocabularyService.getAttendanceInfo:245-274}).
+     * Here it is compared with the days the defendant's results were ordered on — all of them, which
+     * is the shared kernel's own attendance rule ({@code VocabularyService.getAttendanceInfo:
+     * 245-274}).
      *
      * @param hearing           the hearing payload, which is only ever read
      * @param registerDefendant the gathered defendant
-     * @return the attendance day, or {@code null} where the defendant has none on the ordered day
+     * @return the attendance day, or {@code null} where the defendant attended on no resulted day
      */
     private static JsonNode attendanceDay(
             final JsonNode hearing, final RegisterDefendant registerDefendant) {
 
-        final String orderedDate = registerDefendant.orderedDate();
-        if (orderedDate == null) {
-            // Nothing was ordered for this defendant, so there is no day to have attended on.
-            return null;
-        }
         for (final JsonNode attendance : Json.array(hearing, DEFENDANT_ATTENDANCE)) {
             if (!registerDefendant.defendantIds().contains(Json.text(attendance, "defendantId"))) {
                 continue;
             }
             for (final JsonNode day : Json.array(attendance, ATTENDANCE_DAYS)) {
-                if (orderedDate.equals(Json.text(day, "day"))) {
+                if (wasResultedOn(registerDefendant, Json.text(day, "day"))) {
                     return day;
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * Whether any of the defendant's gathered results was ordered on the given day.
+     *
+     * <p>{@code results.some(result => result.judicialResult.orderedDate === attendanceDay.day)},
+     * which is the kernel's rule verbatim ({@code VocabularyService.js:257}). <strong>Every</strong>
+     * gathered result is asked, not only the latest: a hearing that sat over several days orders
+     * results on each of them, and a defendant who attended on the first is present on the register
+     * the fragment dates by the last. Reading only {@link RegisterDefendant#orderedDate()} — the
+     * latest — would report that defendant absent, which is the same false answer C9 exists to end,
+     * arrived at from a different direction.
+     *
+     * <p>A day the payload does not record is not a day anyone attended, so it matches nothing. The
+     * kernel's {@code ===} would pair an absent {@code orderedDate} with an absent {@code day} and
+     * report presence for a payload that records neither, which is not a fact about attendance.
+     *
+     * @param registerDefendant the gathered defendant, carrying their results
+     * @param day               the attendance day being tested
+     * @return whether a result was ordered on that day
+     */
+    private static boolean wasResultedOn(
+            final RegisterDefendant registerDefendant, final String day) {
+
+        return day != null && registerDefendant.results().stream()
+                .anyMatch(result -> day.equals(Json.text(result.judicialResult(), "orderedDate")));
     }
 
     /**
