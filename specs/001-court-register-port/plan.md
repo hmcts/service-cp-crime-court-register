@@ -165,10 +165,17 @@ public interface NowSubscriptionsSource {
 }
 
 public interface RegisterTransformer {
-    TransformationResult transform(DistributionCommand command, JsonNode hearingPayload)
+    // Pure: no I/O at all. The now-subscriptions answer is an argument, read by
+    // DistributionPipeline between two pure stages, so no stage behind this port
+    // reaches a port of its own (constitution Principle V).
+    TransformationResult transform(DistributionCommand command, JsonNode hearingPayload,
+                                   JsonNode subscriptions)
         throws TransformationFailedException;
-    // TransformationResult = COMPLETED(reason ∈ {group-proceedings, no-defendants,
-    //   no-subscriptions, no-youth-defendants}) | Document(CourtRegisterDocument)
+    // TransformationResult = NoRegister(NoRegisterReason ∈ {no-defendants, no-subscriptions,
+    //   no-youth-defendants}) | Register(CourtRegisterDocument)
+    // group-proceedings is NOT one of them: that decision is made before the transformation is
+    // called, and submitted is progression's answer. A restricted reason type is what keeps the
+    // five run outcomes mutually exclusive by construction.
 }
 
 public interface RegisterSubmissionClient {
@@ -197,14 +204,14 @@ Layers: **U** unit · **W** WireMock · **PG** Postgres `*IT` · **SB** emulator
 | Transport | `QueueSettlementIT`, `ContractValidationDeadLetterIT`, `DeliveryExhaustionIT`, `DuplicateDetectionIT`, `StoreOutageIT`, `ProlongedStoreOutageIT`, `ReadinessPolicyIT`, `StartupWithQueueDownIT`, `QueueOutageRecoveryIT` | SB/PG | inherited transport semantics on `courtregister.requests` |
 | Transport | `RequestDedupeIT` | SB/PG | C17 end to end through the real listener + guard, distinct broker `messageId`s: identical redelivery ⇒ one run, row untouched, completed; changed immutable field ⇒ collision dead-letter, record untouched |
 | Health | `ServiceBusHealthIndicatorTest` | U | broker-silence model |
-| Pipeline | `DistributionPipelineTest` | U | N1–N7 orchestration; C2 always-a-terminal-status; C32 transient; four no-op reasons N29–N33; C6 |
+| Pipeline | `DistributionPipelineTest` | U | N1–N7 orchestration; C2 always-a-terminal-status; C32 transient; four no-op reasons N29–N33; C6; the reference-data read the core owns (day, identity, unanswered ⇒ transient — the CS1 split's second half); the cumulative run budget under a moving clock |
 | Pipeline | `GroupProceedingsPolicyTest` | U | N8–N12; C7 strict boolean + WARN + reason |
 | Register build | `RegisterBuilderTest` | U | S1 twin repointed (C10: `registerDate` = the true instant), three-dates trap, `courtCentreOUCode`, 18-key vocabulary attached |
 | Contexts | `DefendantContextBuilderTest` | U | DC1–DC10 twins; C22 fix (eligibility = subject **and** prosecuting-authority applicant); result-level tagging |
 | Vocabulary | `VocabularyBuilderTest` | U | 18 keys exact (`containsOnlyKeys`), custody/appearance/cps branches, C30 consistent emptiness |
 | Court extract | `CourtExtractFilterTest` | U | RF1 twin; result+prompt level filtering |
-| Dates | `DatesTest` | U | DT twins; C10 fix; C13 fix (ISO parse, catch that cannot throw); BST-boundary refdata day (C12) |
-| Matching | `SubscriptionMatcherTest` | U | CS1–CS4 twins (CS1 split empty-vs-unanswered; CS4 real `ouCode` lock); N17–N19 C31 per-defendant matching |
+| Dates | `DatesTest` | U | DT twins; C10 fix; C13 fix (ISO parse, catch that cannot throw); BST-boundary refdata day (C12); C35 hearing-date determinism and the two shapes `getHearingDate`'s own dereference throws on |
+| Matching | `SubscriptionMatcherTest` | U | CS1–CS4 twins (CS1's empty-answer half — the unanswered half is `DistributionPipelineTest`'s, since the read is the core's; CS4 real `ouCode` lock); N17–N19 C31 per-defendant matching |
 | Matching | `SubscriptionRulesTest` | U | SS-CR1 twin, SS-CR2 repaired, included/excluded NOWS + prompt/result branches, C4 fix (court-house rule only), C5 explicit court-register branch, **C30 fix (`major_creditor_flags_never_match_a_court_register` — all three flags require a non-empty list)** |
 | Mappers | `AggregationMapperTest` | U | O1–O3 (repointed C33 / repaired courtCentreId + C11 fixed unique fileName), venue/recipients/defendants assembly |
 | Mappers | `HearingVenueMapperTest`, `RecipientMapperTest`, `YouthDefendantMapperTest`, `ParentGuardianMapperTest`, `HearingMapperTest`, `ProsecutionCaseOrApplicationMapperTest`, `OffenceMapperTest`, `ResultMapperTest`, `DefendantMapperTest`, `AddressMapperTest`, `AliasMapperTest`, `CounselMapperTest` | U | every twin/repair in the map; C8/C9 (HearingMapper), C19/C25 + custody statuses + name composition (YouthDefendant), C29 shapes + guardian fallback (ParentGuardian), C20/C21/C22 exhibits + PC1–PC7 (ProsecutionCaseOrApplication), C23/C24 + offence-level scoping pin (Offence), A1/A2 repaired + `postcode`→`postCode` (Address), absent≠empty asymmetries (Alias/Counsel), `cr_standard` + logged drops C27 (Recipient) |
