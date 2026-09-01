@@ -10,7 +10,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.stubbing.Scenario;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -125,7 +127,8 @@ class SubmissionRedeliveryIT {
                 Duration.ofSeconds(1),
                 duration -> {
                     // Nothing waits here; a single attempt never reaches a wait at all.
-                });
+                },
+                Clock.systemUTC());
         return new ProgressionRegisterSubmissionClient(
                 new ProcessedOutputRepository(ProcessedLogTestSupport.jdbcClient()),
                 gateway,
@@ -286,10 +289,18 @@ class SubmissionRedeliveryIT {
     }
 
     private static RegisterSubmission submission(final RunClaim claim) {
-        return new RegisterSubmission(claim, document(), OU_CODE, REGISTER_DAY,
+        return new RegisterSubmission(claim, deadline(), document(), OU_CODE, REGISTER_DAY,
                 new CallerIdentity(Optional.of(
                         UUID.fromString("6e2f0a1c-9d4b-4f38-8a52-1c7b3e5d9f04"))),
                 Map.of(TransformationAnomaly.LETTER_DELIVERY_DROPPED, 2));
+    }
+
+    /**
+     * A budget no case here can exhaust: what is under test is what the processed log permits a
+     * second delivery to do, and a run that stopped itself on the clock would never reach it.
+     */
+    private static Instant deadline() {
+        return Clock.systemUTC().instant().plus(Duration.ofMinutes(4));
     }
 
     private static ProcessedOutputClaim outputClaim() {

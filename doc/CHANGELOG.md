@@ -16,6 +16,24 @@ released, so everything sits under Unreleased.
 
 ### Changed
 
+- 2026-09-01 — **The submission's retries are bounded by the run's claim, not only by
+  `max-backoff`.** The processing deadline was read before the POST started and never again, so the
+  transport's own policy — up to `courtregister.progression.max-attempts` attempts, each able to
+  spend a connect and a read timeout, with a doubling back-off or a server-chosen `Retry-After`
+  between them — could keep waiting long after the run had promised to stop. A POST made then is a
+  POST made under a claim another delivery may already hold, and `add-court-register` *appends*: the
+  second runner's send is a second register for the hearing. The run now hands the instant its
+  budget ends to the submission port, and the transport reads it **before every attempt and before
+  every wait**, the back-off's and progression's alike. A wait that would end after the deadline is
+  refused rather than shortened — a truncated wait would hammer a service that has just asked for
+  room.
+
+  **Operator-visible:** an overrun inside the submission is reported as the TRANSIENT reason
+  `PROCESSING_DEADLINE_EXCEEDED`, which until now only a run that overran *outside* the POST could
+  produce; the delivery is handed back and the redelivery gets a whole fresh budget with nothing sent
+  twice. It is deliberately not `SUBMISSION_TRANSIENT` — a rise in this code is a capacity signal
+  about this service, where a rise in that one is a signal about progression.
+
 - 2026-09-01 — **Static analysis now gates `src/test`, and the coverage report is written before
   the gate reads it.** `pmdMain` loses the `onlyIf` that kept it out of `build` and joins `check`
   alongside a newly enabled `pmdTest` (its own ruleset, `.github/pmd-test-ruleset.xml` — the main

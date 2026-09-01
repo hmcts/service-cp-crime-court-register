@@ -15,6 +15,7 @@ import com.github.tomakehurst.wiremock.stubbing.Scenario;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +37,7 @@ import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
+import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
 /**
@@ -104,19 +106,32 @@ class ProgressionCommandGatewayTest {
             "{\"hearingId\":\"1828f356-f746-4f2d-932b-79ef2df95c80\"}"
                     .getBytes(StandardCharsets.UTF_8);
 
+    /** The instant every case that is not about the budget is measured from. */
+    private static final Instant NOW = Instant.parse("2020-06-01T10:00:00Z");
+
     private WireMockServer progression;
     private RecordingPause pause;
+    private AdjustableClock clock;
 
     @BeforeEach
     void startProgression() {
         progression = new WireMockServer(wireMockConfig().dynamicPort());
         progression.start();
         pause = new RecordingPause();
+        clock = AdjustableClock.startingAt(NOW);
     }
 
     @AfterEach
     void stopProgression() {
         progression.stop();
+    }
+
+    /**
+     * A budget no case in this file can exhaust, so a case that is not about the deadline never
+     * meets it. The clock does not move on its own, so an hour is unreachable by construction.
+     */
+    private static Instant farDeadline() {
+        return NOW.plus(Duration.ofHours(1));
     }
 
     private ProgressionCommandGateway gateway() {
@@ -139,7 +154,8 @@ class ProgressionCommandGatewayTest {
                 maxAttempts,
                 INITIAL_BACKOFF,
                 MAX_BACKOFF,
-                waiting);
+                waiting,
+                clock);
     }
 
     /** A run made by the user who shared the results, as a message naming one produces. */
@@ -173,7 +189,7 @@ class ProgressionCommandGatewayTest {
         void an_accepted_command_answers_202() {
             answering(ACCEPTED);
 
-            final int status = gateway().post(BODY, CallerIdentity.SYSTEM);
+            final int status = gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline());
 
             assertThat(status)
                     .as("the status is carried back so processed_output.response_code can hold it")
@@ -187,7 +203,7 @@ class ProgressionCommandGatewayTest {
         void the_command_carries_the_contract_path_media_type_and_identity() {
             answering(ACCEPTED);
 
-            gateway().post(BODY, CallerIdentity.SYSTEM);
+            gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline());
 
             progression.verify(postRequestedFor(urlEqualTo(PATH))
                     .withHeader("Content-Type", equalTo(MEDIA_TYPE))
@@ -205,7 +221,7 @@ class ProgressionCommandGatewayTest {
         void the_command_is_posted_as_the_user_the_run_names() {
             answering(ACCEPTED);
 
-            gateway().post(BODY, sharingUser());
+            gateway().post(BODY, sharingUser(), farDeadline());
 
             progression.verify(postRequestedFor(urlEqualTo(PATH))
                     .withHeader("CJSCPPUID", equalTo(SHARING_USER)));
@@ -216,7 +232,7 @@ class ProgressionCommandGatewayTest {
         void the_command_is_posted_as_the_configured_identity_when_the_run_names_nobody() {
             answering(ACCEPTED);
 
-            gateway().post(BODY, CallerIdentity.SYSTEM);
+            gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline());
 
             progression.verify(postRequestedFor(urlEqualTo(PATH))
                     .withHeader("CJSCPPUID", equalTo(SYSTEM_USER_ID)));
@@ -229,7 +245,7 @@ class ProgressionCommandGatewayTest {
             // be a second, differently attributed command for the same hearing.
             answeringThenAccepting(503, null);
 
-            gateway().post(BODY, sharingUser());
+            gateway().post(BODY, sharingUser(), farDeadline());
 
             progression.verify(2, postRequestedFor(urlEqualTo(PATH))
                     .withHeader("CJSCPPUID", equalTo(SHARING_USER)));
@@ -240,7 +256,7 @@ class ProgressionCommandGatewayTest {
         void the_body_is_sent_byte_for_byte() {
             answering(ACCEPTED);
 
-            gateway().post(BODY, CallerIdentity.SYSTEM);
+            gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline());
 
             assertThat(progression.getAllServeEvents().getFirst().getRequest().getBody())
                     .isEqualTo(BODY);
@@ -260,7 +276,7 @@ class ProgressionCommandGatewayTest {
             gateway(MAX_ATTEMPTS,
                     Map.of("X-Mesh-Route", "progression", "Content-Type", "text/plain"),
                     Duration.ofSeconds(5), pause)
-                    .post(BODY, CallerIdentity.SYSTEM);
+                    .post(BODY, CallerIdentity.SYSTEM, farDeadline());
 
             progression.verify(postRequestedFor(urlEqualTo(PATH))
                     .withHeader("X-Mesh-Route", equalTo("progression"))
@@ -274,7 +290,7 @@ class ProgressionCommandGatewayTest {
             // progression's own store. The header is the only place it belongs.
             answering(ACCEPTED);
 
-            gateway().post(BODY, sharingUser());
+            gateway().post(BODY, sharingUser(), farDeadline());
 
             final LoggedRequest sent =
                     progression.findAll(postRequestedFor(urlEqualTo(PATH))).getFirst();
@@ -298,7 +314,7 @@ class ProgressionCommandGatewayTest {
         void only_202_is_success(final int status) {
             answering(status);
 
-            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM))
+            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                     .isInstanceOf(SubmissionFailedException.class)
                     .asInstanceOf(InstanceOfAssertFactories.type(SubmissionFailedException.class))
                     .satisfies(failure -> {
@@ -316,7 +332,7 @@ class ProgressionCommandGatewayTest {
         void a_success_the_contract_does_not_define_is_never_posted_again() {
             answering(200);
 
-            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM))
+            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                     .isInstanceOf(SubmissionFailedException.class);
 
             assertThat(progression.getAllServeEvents())
@@ -340,7 +356,7 @@ class ProgressionCommandGatewayTest {
         void a_400_is_a_refusal_that_carries_its_status_for_the_output_row() {
             answering(400);
 
-            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM))
+            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                     .isInstanceOf(SubmissionFailedException.class)
                     .asInstanceOf(InstanceOfAssertFactories.type(SubmissionFailedException.class))
                     .satisfies(failure -> {
@@ -355,7 +371,7 @@ class ProgressionCommandGatewayTest {
         void a_refusal_is_attempted_once(final int status) {
             answering(status);
 
-            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM))
+            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                     .isInstanceOf(SubmissionFailedException.class)
                     .extracting(failure -> ((SubmissionFailedException) failure).classification())
                     .isEqualTo(FailureClassification.NON_TRANSIENT);
@@ -371,7 +387,7 @@ class ProgressionCommandGatewayTest {
                     .withBody("{\"error\":\"defendant " + DEFENDANT_MARKER + " is not known\"}")));
 
             try (CapturedLog log = CapturedLog.capturing(ProgressionCommandGateway.class)) {
-                assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM))
+                assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                         .isInstanceOf(SubmissionFailedException.class)
                         .hasMessage(ReasonCode.SUBMISSION_REJECTED.code())
                         .hasMessageNotContaining(DEFENDANT_MARKER);
@@ -398,7 +414,7 @@ class ProgressionCommandGatewayTest {
         void four_two_nine_and_four_oh_eight_are_retryable(final int status) {
             answering(status);
 
-            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM))
+            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                     .isInstanceOf(SubmissionFailedException.class)
                     .extracting(failure -> ((SubmissionFailedException) failure).classification())
                     .isEqualTo(FailureClassification.TRANSIENT);
@@ -412,7 +428,7 @@ class ProgressionCommandGatewayTest {
         void a_server_error_is_retried_and_the_next_attempt_can_succeed(final int status) {
             answeringThenAccepting(status, null);
 
-            assertThat(gateway().post(BODY, CallerIdentity.SYSTEM)).isEqualTo(ACCEPTED);
+            assertThat(gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline())).isEqualTo(ACCEPTED);
             assertThat(progression.getAllServeEvents()).hasSize(2);
             assertThat(pause.waits).containsExactly(INITIAL_BACKOFF);
         }
@@ -423,7 +439,7 @@ class ProgressionCommandGatewayTest {
         void the_wait_between_attempts_grows_rather_than_hammering_progression() {
             answering(503);
 
-            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM))
+            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                     .isInstanceOf(SubmissionFailedException.class);
 
             assertThat(pause.waits).containsExactly(
@@ -441,7 +457,7 @@ class ProgressionCommandGatewayTest {
                     .whenScenarioStateIs("up")
                     .willReturn(aResponse().withStatus(ACCEPTED)));
 
-            assertThat(gateway().post(BODY, CallerIdentity.SYSTEM)).isEqualTo(ACCEPTED);
+            assertThat(gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline())).isEqualTo(ACCEPTED);
             assertThat(pause.waits).containsExactly(INITIAL_BACKOFF);
         }
 
@@ -457,7 +473,7 @@ class ProgressionCommandGatewayTest {
                     .willReturn(aResponse().withStatus(ACCEPTED)));
 
             final int status = gateway(MAX_ATTEMPTS, Map.of(), Duration.ofMillis(250), pause)
-                    .post(BODY, CallerIdentity.SYSTEM);
+                    .post(BODY, CallerIdentity.SYSTEM, farDeadline());
 
             assertThat(status).isEqualTo(ACCEPTED);
             assertThat(pause.waits).containsExactly(INITIAL_BACKOFF);
@@ -482,7 +498,7 @@ class ProgressionCommandGatewayTest {
                     .whenScenarioStateIs("answering")
                     .willReturn(aResponse().withStatus(ACCEPTED)));
 
-            assertThat(gateway().post(BODY, CallerIdentity.SYSTEM)).isEqualTo(ACCEPTED);
+            assertThat(gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline())).isEqualTo(ACCEPTED);
 
             assertThat(progression.findAll(postRequestedFor(urlEqualTo(PATH))))
                     .as("progression received the command twice; the sweep absorbs the duplicate")
@@ -506,7 +522,7 @@ class ProgressionCommandGatewayTest {
                     .willReturn(aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
 
             try (CapturedLog log = CapturedLog.capturing(ProgressionCommandGateway.class)) {
-                assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM))
+                assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                         .isInstanceOf(SubmissionFailedException.class);
 
                 assertThat(log.renderings())
@@ -545,7 +561,7 @@ class ProgressionCommandGatewayTest {
                 final String header, final Duration expectedWait) {
             answeringThenAccepting(429, header);
 
-            assertThat(gateway().post(BODY, CallerIdentity.SYSTEM)).isEqualTo(ACCEPTED);
+            assertThat(gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline())).isEqualTo(ACCEPTED);
             assertThat(pause.waits).containsExactly(expectedWait);
         }
 
@@ -554,7 +570,7 @@ class ProgressionCommandGatewayTest {
         void a_retry_after_beyond_the_ceiling_is_capped() {
             answeringThenAccepting(429, "86400");
 
-            gateway().post(BODY, CallerIdentity.SYSTEM);
+            gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline());
 
             assertThat(pause.waits)
                     .as("a run holds its claim for a bounded lease")
@@ -577,7 +593,7 @@ class ProgressionCommandGatewayTest {
         void exhaustion_hands_back_the_transient_the_guard_turns_into_failed() {
             answering(500);
 
-            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM))
+            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                     .isInstanceOf(SubmissionFailedException.class)
                     .asInstanceOf(InstanceOfAssertFactories.type(SubmissionFailedException.class))
                     .satisfies(failure -> {
@@ -596,7 +612,7 @@ class ProgressionCommandGatewayTest {
             progression.stubFor(post(urlEqualTo(PATH))
                     .willReturn(aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
 
-            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM))
+            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                     .isInstanceOf(SubmissionFailedException.class)
                     .asInstanceOf(InstanceOfAssertFactories.type(SubmissionFailedException.class))
                     .satisfies(failure -> assertThat(failure.responseCode())
@@ -610,7 +626,7 @@ class ProgressionCommandGatewayTest {
             answering(503);
 
             try (CapturedLog log = CapturedLog.capturing(ProgressionCommandGateway.class)) {
-                assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM))
+                assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                         .isInstanceOf(SubmissionFailedException.class);
 
                 assertThat(log.events())
@@ -636,12 +652,12 @@ class ProgressionCommandGatewayTest {
             answering(500);
 
             assertThatThrownBy(() -> gateway(1, Map.of(), Duration.ofSeconds(5), pause)
-                    .post(BODY, CallerIdentity.SYSTEM))
+                    .post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                     .isInstanceOf(SubmissionFailedException.class);
             final int afterFirst = progression.getAllServeEvents().size();
 
             assertThatThrownBy(() -> gateway(3, Map.of(), Duration.ofSeconds(5), pause)
-                    .post(BODY, CallerIdentity.SYSTEM))
+                    .post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                     .isInstanceOf(SubmissionFailedException.class);
 
             assertThat(afterFirst).isEqualTo(1);
@@ -658,7 +674,7 @@ class ProgressionCommandGatewayTest {
                     });
 
             try {
-                assertThatThrownBy(() -> interruptible.post(BODY, CallerIdentity.SYSTEM))
+                assertThatThrownBy(() -> interruptible.post(BODY, CallerIdentity.SYSTEM, farDeadline()))
                         .isInstanceOf(SubmissionFailedException.class)
                         .extracting(failure ->
                                 ((SubmissionFailedException) failure).classification())
@@ -670,6 +686,172 @@ class ProgressionCommandGatewayTest {
             } finally {
                 Thread.interrupted();
             }
+        }
+    }
+
+    /**
+     * The run's budget, enforced by the transport rather than only around it.
+     *
+     * <p>The pipeline reads what is left of the run before it hands a register over, and that check
+     * bounds the instant the POST <em>starts</em> and nothing after it. What happens after it is this
+     * class: up to {@code max-attempts} attempts, each able to spend a connect and a read timeout,
+     * with a doubling wait — or a server-supplied {@code Retry-After} — between them. A policy that
+     * kept waiting past the instant the run promised to stop by would be posting under a claim
+     * another delivery may already hold, and {@code add-court-register} <em>appends</em>: the second
+     * runner's POST is a second register for the hearing, which is the one outcome the budget exists
+     * to prevent.
+     *
+     * <p>So the deadline travels in with the command. It is read before every attempt and every wait
+     * is measured against it, whether the wait came from the back-off or from progression's own
+     * header. An overrun is TRANSIENT under {@code PROCESSING_DEADLINE_EXCEEDED} — the run did not
+     * fail, it ran out of the time its claim guarantees it — and the redelivery gets a whole fresh
+     * budget with nothing sent twice.
+     */
+    @Nested
+    @DisplayName("a budget that runs out before the attempts do")
+    class RunBudget {
+
+        /** Long enough to answer, far too short to wait out a back-off. */
+        private static final Duration ALMOST_GONE = Duration.ofMillis(100);
+
+        @Test
+        @DisplayName("starts no attempt at all once the run's budget is already spent")
+        void no_attempt_is_started_once_the_budget_is_already_spent() {
+            answering(ACCEPTED);
+
+            assertThatThrownBy(() -> gateway().post(BODY, CallerIdentity.SYSTEM, NOW))
+                    .isInstanceOf(SubmissionFailedException.class)
+                    .asInstanceOf(InstanceOfAssertFactories.type(SubmissionFailedException.class))
+                    .satisfies(failure -> {
+                        assertThat(failure.classification())
+                                .isEqualTo(FailureClassification.TRANSIENT);
+                        assertThat(failure.reason())
+                                .isEqualTo(ReasonCode.PROCESSING_DEADLINE_EXCEEDED);
+                    });
+
+            assertThat(progression.getAllServeEvents())
+                    .as("a POST made past the deadline is a POST made under a claim that may "
+                            + "already have been reclaimed")
+                    .isEmpty();
+        }
+
+        /**
+         * The ordinary back-off path. One attempt fits inside what is left; the 500ms wait after it
+         * does not, so the wait is refused rather than taken and the delivery goes back with a
+         * budget nothing has overspent.
+         */
+        @Test
+        @DisplayName("refuses a back-off that would be taken past the deadline")
+        void a_back_off_that_would_cross_the_deadline_is_refused_rather_than_taken() {
+            answering(503);
+
+            assertThatThrownBy(() -> gateway()
+                    .post(BODY, CallerIdentity.SYSTEM, NOW.plus(ALMOST_GONE)))
+                    .isInstanceOf(SubmissionFailedException.class)
+                    .asInstanceOf(InstanceOfAssertFactories.type(SubmissionFailedException.class))
+                    .satisfies(failure -> {
+                        assertThat(failure.classification())
+                                .isEqualTo(FailureClassification.TRANSIENT);
+                        assertThat(failure.reason())
+                                .isEqualTo(ReasonCode.PROCESSING_DEADLINE_EXCEEDED);
+                        assertThat(failure.responseCode())
+                                .as("the row still records what progression last answered")
+                                .isEqualTo(OptionalInt.of(503));
+                    });
+
+            assertThat(pause.waits)
+                    .as("a wait that ends after the deadline is never begun")
+                    .isEmpty();
+            assertThat(progression.getAllServeEvents())
+                    .as("the attempt that fitted was made; the ones behind the wait were not")
+                    .hasSize(1);
+        }
+
+        /**
+         * The other wait, and the one a remote service chooses. A {@code Retry-After} is bounded by
+         * {@code max-backoff} already; it is bounded by the run's own budget too, because a run
+         * holds a claim for a finite lease and progression does not know when that lease ends.
+         */
+        @Test
+        @DisplayName("refuses a Retry-After that would be waited out past the deadline")
+        void a_retry_after_that_would_cross_the_deadline_is_refused_rather_than_taken() {
+            answeringThenAccepting(429, "2");
+
+            assertThatThrownBy(() -> gateway()
+                    .post(BODY, CallerIdentity.SYSTEM, NOW.plus(Duration.ofSeconds(1))))
+                    .isInstanceOf(SubmissionFailedException.class)
+                    .asInstanceOf(InstanceOfAssertFactories.type(SubmissionFailedException.class))
+                    .satisfies(failure -> {
+                        assertThat(failure.classification())
+                                .isEqualTo(FailureClassification.TRANSIENT);
+                        assertThat(failure.reason())
+                                .isEqualTo(ReasonCode.PROCESSING_DEADLINE_EXCEEDED);
+                    });
+
+            assertThat(pause.waits)
+                    .as("progression asked for two seconds the run does not have")
+                    .isEmpty();
+            assertThat(progression.getAllServeEvents()).hasSize(1);
+        }
+
+        /**
+         * The check before the attempt is a second gate, not a restatement of the check before the
+         * wait, and this is the case that tells them apart. A wait is permitted because it was going
+         * to finish inside the budget — but {@link Thread#sleep(java.time.Duration)} guarantees a
+         * minimum and not a maximum, and time is spent by the attempt itself as well. So the budget
+         * is read again on the way in, and an attempt that no longer fits is not made.
+         */
+        @Test
+        @DisplayName("starts no further attempt once a permitted wait has overrun the budget")
+        void no_further_attempt_is_started_once_a_permitted_wait_has_overrun_the_budget() {
+            answering(503);
+            final ProgressionCommandGateway overrunning = gateway(MAX_ATTEMPTS, Map.of(),
+                    Duration.ofSeconds(5), duration -> {
+                        pause.pause(duration);
+                        clock.advance(duration.multipliedBy(2));
+                    });
+
+            assertThatThrownBy(() -> overrunning
+                    .post(BODY, CallerIdentity.SYSTEM, NOW.plus(Duration.ofMillis(600))))
+                    .isInstanceOf(SubmissionFailedException.class)
+                    .extracting(failure -> ((SubmissionFailedException) failure).reason())
+                    .isEqualTo(ReasonCode.PROCESSING_DEADLINE_EXCEEDED);
+
+            assertThat(pause.waits)
+                    .as("the wait was permitted: it was going to finish inside the budget")
+                    .containsExactly(INITIAL_BACKOFF);
+            assertThat(progression.getAllServeEvents())
+                    .as("one attempt, one wait that overran, and then no second attempt")
+                    .hasSize(1);
+        }
+
+        @Test
+        @DisplayName("says the budget ran out rather than reporting exhausted attempts")
+        void an_overrun_is_reported_as_an_overrun_and_not_as_exhaustion() {
+            answering(503);
+
+            try (CapturedLog log = CapturedLog.capturing(ProgressionCommandGateway.class)) {
+                assertThatThrownBy(() -> gateway()
+                        .post(BODY, CallerIdentity.SYSTEM, NOW.plus(ALMOST_GONE)))
+                        .isInstanceOf(SubmissionFailedException.class);
+
+                assertThat(log.renderings())
+                        .as("a run that ran out of time is a capacity signal, not a downstream one")
+                        .anyMatch(line -> line.contains(
+                                ReasonCode.PROCESSING_DEADLINE_EXCEEDED.code()))
+                        .noneMatch(line -> line.contains("exhausted"));
+            }
+        }
+
+        /** The budget bounds a run; it does not shorten one that finishes inside it. */
+        @Test
+        @DisplayName("leaves a command that fits inside the budget alone")
+        void a_command_that_fits_inside_the_budget_is_posted_normally() {
+            answeringThenAccepting(503, null);
+
+            assertThat(gateway().post(BODY, CallerIdentity.SYSTEM, NOW.plus(Duration.ofMinutes(4))))
+                    .isEqualTo(ACCEPTED);
+            assertThat(pause.waits).containsExactly(INITIAL_BACKOFF);
         }
     }
 

@@ -1,7 +1,9 @@
 package uk.gov.hmcts.cp.courtregister.adapter.progression;
 
 import java.io.IOException;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -65,6 +67,17 @@ import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
  * {@code ReferenceDataNowSubscriptionsClient} apply, which is what makes the three agree about what
  * a redelivery can fix.
  *
+ * <p><strong>Every one of those waits is bounded by the run's claim, not only by
+ * {@code max-backoff}.</strong> The caller hands in the instant its run promised to have stopped by,
+ * and it is read before every attempt and before every wait — the back-off's and progression's
+ * {@code Retry-After} alike. A wait that would end after the deadline is refused rather than
+ * shortened: the run is handed back TRANSIENT under
+ * {@link uk.gov.hmcts.cp.courtregister.domain.ReasonCode#PROCESSING_DEADLINE_EXCEEDED} and the
+ * redelivery gets a whole fresh budget. Without that check a policy sized in seconds can still spend
+ * minutes — four attempts, each able to spend a connect and a read timeout, with a server-chosen
+ * wait between them — and a POST made after the claim became reclaimable is a POST a second runner
+ * may be making too, which for a command that <em>appends</em> is a second register for one hearing.
+ *
  * <p><strong>An unknown outcome is retried, and that is not at-most-once.</strong> A POST that timed
  * out may have been applied. Retrying it can create a duplicate {@code court_register_request} row —
  * which progression's {@code max(register_time) per hearing_id} sweep absorbs for generation, like a
@@ -120,6 +133,7 @@ public class ProgressionCommandGateway {
     private final Duration initialBackoff;
     private final Duration maxBackoff;
     private final SubmissionPause pause;
+    private final Clock clock;
 
     /**
      * Builds the gateway over an already-configured HTTP client.
@@ -132,10 +146,15 @@ public class ProgressionCommandGateway {
      * @param initialBackoff the first wait between retryable attempts; doubled each time
      * @param maxBackoff     the ceiling on any wait, a server-supplied {@code Retry-After} included
      * @param pause          how a wait between attempts is taken
+     * @param clock          elapsed-time source for the caller's deadline; local readings only, so
+     *                       no decision here compares one pod's clock with another's
      */
+    // Seven collaborators and settings, every one of them a separate operator decision. Grouping
+    // them behind a holder would hide which setting a change touches.
     public ProgressionCommandGateway(final RestClient restClient, final String systemUserId,
             final Map<String, String> extraHeaders, final int maxAttempts,
-            final Duration initialBackoff, final Duration maxBackoff, final SubmissionPause pause) {
+            final Duration initialBackoff, final Duration maxBackoff, final SubmissionPause pause,
+            final Clock clock) {
         this.restClient = restClient;
         this.systemUserId = systemUserId;
         this.extraHeaders = Map.copyOf(extraHeaders);
@@ -143,6 +162,7 @@ public class ProgressionCommandGateway {
         this.initialBackoff = initialBackoff;
         this.maxBackoff = maxBackoff;
         this.pause = pause;
+        this.clock = clock;
     }
 
     /**
@@ -154,15 +174,18 @@ public class ProgressionCommandGateway {
      * literally {@code undefined} in the one test that asserts it), and the identity is resolved once
      * so that every attempt of a run posts as the same caller.
      *
-     * @param body   the serialised document, sent byte for byte
-     * @param caller who the command is posted as
+     * @param body     the serialised document, sent byte for byte
+     * @param caller   who the command is posted as
+     * @param deadline the instant the run holding the claim promised to have stopped by; no attempt
+     *                 is started and no wait is taken across it
      * @return the status progression answered with, which is {@code 202} or nothing
      * @throws uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException carrying
      *     {@code NON_TRANSIENT} when the command was refused or answered with a success the contract
      *     does not define, and {@code TRANSIENT} when the attempts ran out with the outcome still
-     *     unresolved; the status progression answered travels with it where there was one
+     *     unresolved or the run's budget ran out first; the status progression answered travels with
+     *     it where there was one
      */
-    public int post(final byte[] body, final CallerIdentity caller) {
+    public int post(final byte[] body, final CallerIdentity caller, final Instant deadline) {
         // Resolved once per command, not once per attempt: a retry made as a different caller would
         // be a second, differently attributed command for the same hearing.
         final String identity = caller.orSystem(systemUserId);
@@ -170,6 +193,9 @@ public class ProgressionCommandGateway {
         OptionalInt lastStatus = OptionalInt.empty();
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            if (spent(deadline)) {
+                throw overran(attempt, lastStatus);
+            }
             final Outcome outcome = attempt(body, identity, attempt);
             if (outcome.status().isPresent()) {
                 lastStatus = outcome.status();
@@ -182,7 +208,11 @@ public class ProgressionCommandGateway {
                         FailureClassification.NON_TRANSIENT, outcome.refusal().get(), lastStatus);
             }
             if (attempt < maxAttempts) {
-                waitFor(capped(outcome.retryAfter().orElse(backoff)));
+                final Duration wait = capped(outcome.retryAfter().orElse(backoff));
+                if (!fitsInside(wait, deadline)) {
+                    throw overran(attempt, lastStatus);
+                }
+                waitFor(wait);
                 backoff = capped(backoff.multipliedBy(2));
             }
         }
@@ -298,6 +328,60 @@ public class ProgressionCommandGateway {
     /** The ceiling on any wait, a server-supplied one included: a run holds a bounded claim. */
     private Duration capped(final Duration wait) {
         return wait.compareTo(maxBackoff) > 0 ? maxBackoff : wait;
+    }
+
+    /**
+     * Whether the run holding this claim has used the time the claim guarantees it.
+     *
+     * <p>Read the same way the pipeline reads its own budget: strictly before, so a run standing
+     * exactly on the deadline has already spent it and may not start another attempt.
+     *
+     * @param deadline the instant the run promised to have stopped by
+     * @return whether the budget is gone
+     */
+    private boolean spent(final Instant deadline) {
+        return !clock.instant().isBefore(deadline);
+    }
+
+    /**
+     * Whether a wait can be taken and still leave the run inside its claim.
+     *
+     * <p>The check that stops a retry policy outliving the claim it was made under. Waiting is the
+     * longest thing this class does — a doubling back-off, or whatever number progression put in a
+     * {@code Retry-After} — and a wait begun with less budget than it needs ends with the run past
+     * its deadline and the claim behind it reclaimable, which for {@code add-court-register} is a
+     * second register for the hearing. So a wait that would not finish inside the budget is not
+     * shortened, it is refused: a truncated wait would hammer a service that has just asked for
+     * room, and the delivery is worth more handed back with a fresh budget than spent here.
+     *
+     * @param wait     the wait that would be taken
+     * @param deadline the instant the run promised to have stopped by
+     * @return whether the wait ends before the deadline
+     */
+    private boolean fitsInside(final Duration wait, final Instant deadline) {
+        return clock.instant().plus(wait).isBefore(deadline);
+    }
+
+    /**
+     * The run's budget ran out before its attempts did.
+     *
+     * <p>TRANSIENT, and under its own reason: the command did not fail, the run ran out of the time
+     * its claim guarantees it, and the redelivery gets a whole fresh budget with nothing sent twice.
+     * It is deliberately not {@code SUBMISSION_TRANSIENT} — a rise in this code is a capacity signal
+     * about this service, where a rise in that one is a signal about progression.
+     *
+     * @param attempt    the attempt the budget ran out on
+     * @param lastStatus the last status progression answered, where anything answered
+     * @return the failure to raise
+     */
+    private static SubmissionFailedException overran(
+            final int attempt, final OptionalInt lastStatus) {
+        LOG.error("The run's budget ran out before the add-court-register command was resolved, so "
+                        + "the delivery is handed back rather than posted under a claim that may "
+                        + "have been reclaimed. attempt={} reason={}",
+                attempt, ReasonCode.PROCESSING_DEADLINE_EXCEEDED.code());
+        return failed(FailureClassification.TRANSIENT,
+                ReasonCode.PROCESSING_DEADLINE_EXCEEDED, lastStatus);
     }
 
     private void waitFor(final Duration wait) {

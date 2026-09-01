@@ -122,7 +122,7 @@ public class ProgressionRegisterSubmissionClient implements RegisterSubmissionCl
     private int sent(final byte[] body, final RegisterSubmission submission, final RunClaim claim) {
         final int responseCode;
         try {
-            responseCode = gateway.post(body, submission.caller());
+            responseCode = gateway.post(body, submission.caller(), submission.deadline());
         } catch (SubmissionFailedException failure) {
             // Caught to record, never to absorb — the whole of defect fix C1. The row is moved to
             // FAILED carrying whatever progression answered, and the same exception continues with

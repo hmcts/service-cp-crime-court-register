@@ -13,6 +13,8 @@ import static org.mockito.Mockito.when;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.HexFormat;
 import java.util.List;
@@ -106,6 +108,10 @@ class ProgressionRegisterSubmissionClientTest {
     private static final String DEFENDANT_NAME = "SMITH, John";
     private static final String DEFENDANT_ADDRESS_LINE = "1 High Street";
 
+    /** The instant the run promised to have stopped by; every case here fits comfortably inside it. */
+    private static final Instant DEADLINE =
+            Instant.parse("2020-06-01T10:00:00Z").plus(Duration.ofMinutes(4));
+
     private static final int ACCEPTED = 202;
     private static final int REFUSED = 400;
 
@@ -133,7 +139,7 @@ class ProgressionRegisterSubmissionClientTest {
 
     private RegisterSubmission submission(final Map<TransformationAnomaly, Integer> anomalies) {
         return new RegisterSubmission(
-                claim, document(), OU_CODE, REGISTER_DAY, CALLER, anomalies);
+                claim, DEADLINE, document(), OU_CODE, REGISTER_DAY, CALLER, anomalies);
     }
 
     private void claimGranted() {
@@ -148,14 +154,14 @@ class ProgressionRegisterSubmissionClientTest {
         @DisplayName("claims the row before the POST and marks it posted after")
         void the_row_is_claimed_before_the_post_and_marked_posted_after() {
             claimGranted();
-            when(gateway.post(any(byte[].class), any(CallerIdentity.class))).thenReturn(ACCEPTED);
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class))).thenReturn(ACCEPTED);
             when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(true);
 
             client().submit(submission());
 
             final InOrder order = inOrder(outputs, gateway);
             order.verify(outputs).claimPending(eq(claim), any(ProcessedOutputClaim.class));
-            order.verify(gateway).post(any(byte[].class), any(CallerIdentity.class));
+            order.verify(gateway).post(any(byte[].class), any(CallerIdentity.class), any(Instant.class));
             order.verify(outputs).recordPosted(claim, ACCEPTED);
             order.verifyNoMoreInteractions();
         }
@@ -164,7 +170,7 @@ class ProgressionRegisterSubmissionClientTest {
         @DisplayName("answers a receipt carrying the status, and saying this delivery sent it")
         void the_receipt_says_this_delivery_sent_it() {
             claimGranted();
-            when(gateway.post(any(byte[].class), any(CallerIdentity.class))).thenReturn(ACCEPTED);
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class))).thenReturn(ACCEPTED);
             when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(true);
 
             final SubmissionReceipt receipt = client().submit(submission());
@@ -176,13 +182,13 @@ class ProgressionRegisterSubmissionClientTest {
         @DisplayName("posts the bytes this service produced from the document")
         void the_bytes_posted_are_the_document_this_service_produced() {
             claimGranted();
-            when(gateway.post(any(byte[].class), any(CallerIdentity.class))).thenReturn(ACCEPTED);
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class))).thenReturn(ACCEPTED);
             when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(true);
             final ArgumentCaptor<byte[]> sent = ArgumentCaptor.forClass(byte[].class);
 
             client().submit(submission());
 
-            verify(gateway).post(sent.capture(), any(CallerIdentity.class));
+            verify(gateway).post(sent.capture(), any(CallerIdentity.class), any(Instant.class));
             assertThat(new String(sent.getValue(), StandardCharsets.UTF_8))
                     .isEqualTo(MAPPER.writeValueAsString(document()));
         }
@@ -196,14 +202,14 @@ class ProgressionRegisterSubmissionClientTest {
         @DisplayName("posts as the caller the run resolved")
         void the_caller_posted_as_is_the_one_the_run_resolved() {
             claimGranted();
-            when(gateway.post(any(byte[].class), any(CallerIdentity.class))).thenReturn(ACCEPTED);
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class))).thenReturn(ACCEPTED);
             when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(true);
             final ArgumentCaptor<CallerIdentity> caller =
                     ArgumentCaptor.forClass(CallerIdentity.class);
 
             client().submit(submission());
 
-            verify(gateway).post(any(byte[].class), caller.capture());
+            verify(gateway).post(any(byte[].class), caller.capture(), any(Instant.class));
             assertThat(caller.getValue()).isEqualTo(CALLER);
         }
 
@@ -211,13 +217,13 @@ class ProgressionRegisterSubmissionClientTest {
         @DisplayName("writes the digest of exactly the bytes that went out")
         void the_digest_written_is_the_sha_256_of_the_bytes_that_went_out() {
             claimGranted();
-            when(gateway.post(any(byte[].class), any(CallerIdentity.class))).thenReturn(ACCEPTED);
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class))).thenReturn(ACCEPTED);
             when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(true);
             final ArgumentCaptor<byte[]> sent = ArgumentCaptor.forClass(byte[].class);
 
             client().submit(submission());
 
-            verify(gateway).post(sent.capture(), any(CallerIdentity.class));
+            verify(gateway).post(sent.capture(), any(CallerIdentity.class), any(Instant.class));
             assertThat(claimed().requestDigest()).isEqualTo(sha256(sent.getValue()));
         }
 
@@ -225,7 +231,7 @@ class ProgressionRegisterSubmissionClientTest {
         @DisplayName("names the register the row is about, before it is sent")
         void the_row_written_before_the_post_names_the_register_it_is_about() {
             claimGranted();
-            when(gateway.post(any(byte[].class), any(CallerIdentity.class))).thenReturn(ACCEPTED);
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class))).thenReturn(ACCEPTED);
             when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(true);
 
             client().submit(submission());
@@ -252,7 +258,7 @@ class ProgressionRegisterSubmissionClientTest {
         @DisplayName("writes the counts of what the register survived, before it is sent")
         void the_counts_of_what_the_register_survived_are_written_before_it_is_sent() {
             claimGranted();
-            when(gateway.post(any(byte[].class), any(CallerIdentity.class))).thenReturn(ACCEPTED);
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class))).thenReturn(ACCEPTED);
             when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(true);
 
             client().submit(submission(Map.of(
@@ -277,7 +283,7 @@ class ProgressionRegisterSubmissionClientTest {
 
             client().submit(submission());
 
-            verify(gateway, never()).post(any(byte[].class), any(CallerIdentity.class));
+            verify(gateway, never()).post(any(byte[].class), any(CallerIdentity.class), any(Instant.class));
             verify(outputs, never()).recordPosted(any(RunClaim.class), org.mockito.ArgumentMatchers
                     .anyInt());
             verify(outputs, never()).recordFailed(any(RunClaim.class), any());
@@ -316,7 +322,7 @@ class ProgressionRegisterSubmissionClientTest {
             when(outputs.recordFailed(claim, REFUSED)).thenReturn(true);
             doThrow(new SubmissionFailedException(FailureClassification.NON_TRANSIENT,
                     ReasonCode.SUBMISSION_REJECTED, REFUSED))
-                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class));
+                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class), any(Instant.class));
 
             assertThatThrownBy(() -> client().submit(submission()))
                     .isInstanceOf(SubmissionFailedException.class)
@@ -324,7 +330,7 @@ class ProgressionRegisterSubmissionClientTest {
                     .isEqualTo(ReasonCode.SUBMISSION_REJECTED);
 
             final InOrder order = inOrder(gateway, outputs);
-            order.verify(gateway).post(any(byte[].class), any(CallerIdentity.class));
+            order.verify(gateway).post(any(byte[].class), any(CallerIdentity.class), any(Instant.class));
             order.verify(outputs).recordFailed(claim, REFUSED);
             verify(outputs, never()).recordPosted(any(RunClaim.class),
                     org.mockito.ArgumentMatchers.anyInt());
@@ -337,7 +343,7 @@ class ProgressionRegisterSubmissionClientTest {
             when(outputs.recordFailed(claim, 503)).thenReturn(true);
             doThrow(new SubmissionFailedException(FailureClassification.TRANSIENT,
                     ReasonCode.SUBMISSION_TRANSIENT, 503))
-                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class));
+                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class), any(Instant.class));
 
             assertThatThrownBy(() -> client().submit(submission()))
                     .isInstanceOf(SubmissionFailedException.class)
@@ -359,7 +365,7 @@ class ProgressionRegisterSubmissionClientTest {
             when(outputs.recordFailed(claim, null)).thenReturn(true);
             doThrow(new SubmissionFailedException(FailureClassification.TRANSIENT,
                     ReasonCode.SUBMISSION_TRANSIENT))
-                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class));
+                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class), any(Instant.class));
 
             assertThatThrownBy(() -> client().submit(submission()))
                     .isInstanceOf(SubmissionFailedException.class);
@@ -385,7 +391,7 @@ class ProgressionRegisterSubmissionClientTest {
         @DisplayName("a POST that recorded nothing is reported rather than assumed written")
         void a_post_that_recorded_nothing_is_reported_rather_than_assumed_written() {
             claimGranted();
-            when(gateway.post(any(byte[].class), any(CallerIdentity.class))).thenReturn(ACCEPTED);
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class))).thenReturn(ACCEPTED);
             when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(false);
 
             try (CapturedLog log =
@@ -404,7 +410,7 @@ class ProgressionRegisterSubmissionClientTest {
             when(outputs.recordFailed(claim, REFUSED)).thenReturn(false);
             doThrow(new SubmissionFailedException(FailureClassification.NON_TRANSIENT,
                     ReasonCode.SUBMISSION_REJECTED, REFUSED))
-                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class));
+                    .when(gateway).post(any(byte[].class), any(CallerIdentity.class), any(Instant.class));
 
             try (CapturedLog log =
                          CapturedLog.capturing(ProgressionRegisterSubmissionClient.class)) {
@@ -426,7 +432,7 @@ class ProgressionRegisterSubmissionClientTest {
         @DisplayName("no line carries the document or anyone named in it")
         void no_line_carries_the_document_or_anyone_named_in_it() {
             claimGranted();
-            when(gateway.post(any(byte[].class), any(CallerIdentity.class))).thenReturn(ACCEPTED);
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class))).thenReturn(ACCEPTED);
             when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(true);
 
             try (CapturedLog log =
@@ -444,7 +450,7 @@ class ProgressionRegisterSubmissionClientTest {
         @DisplayName("the caller never reaches a log line")
         void the_identity_never_reaches_a_log_line() {
             claimGranted();
-            when(gateway.post(any(byte[].class), any(CallerIdentity.class))).thenReturn(ACCEPTED);
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class))).thenReturn(ACCEPTED);
             when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(true);
 
             try (CapturedLog log =

@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Map;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
@@ -30,7 +31,17 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
  * register date. Re-deriving it in the adapter would be a second derivation of the day C12 exists to
  * fix, so the day the recipients were read for is the day the row records, by construction.
  *
+ * <p><strong>The deadline is here for the same reason the claim is.</strong> A submission is the last
+ * and longest network step of a run, and the only one whose retries can spend minutes: the transport
+ * behind this port takes waits between attempts, and a wait taken past the instant the run promised
+ * to stop by is a POST made while the claim behind it may already have been reclaimed — which for
+ * {@code add-court-register}, which appends, is a second register for the hearing. The port therefore
+ * carries what is left of the run's budget as the absolute instant it ends, so the transport can
+ * refuse an attempt and refuse a wait rather than discovering afterwards that it had no claim.
+ *
  * @param claim             the claim this run holds; every output write is fenced on it
+ * @param deadline          the instant the run promised to have stopped by; no attempt is started
+ *                          and no wait is taken across it
  * @param document          the assembled {@code add-court-register} command
  * @param courtCentreOuCode the court centre's OU code, or {@code null} where the hearing carried none
  * @param registerDay       the day the register covers, as the subscriptions were read for it (C12)
@@ -39,6 +50,7 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
  */
 public record RegisterSubmission(
         RunClaim claim,
+        Instant deadline,
         CourtRegisterDocument document,
         String courtCentreOuCode,
         LocalDate registerDay,

@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
+import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -44,12 +45,17 @@ public class LiveSubmissionConfig {
      * <p>The wait between attempts is {@link Thread#sleep(java.time.Duration)}, injected rather than
      * called, so a suite can prove the back-off policy without living through it.
      *
+     * <p>The clock is the run's, and it is the same bean the pipeline measures its own deadline with:
+     * a transport bounding a run against a different reading of now would be a second answer to one
+     * question.
+     *
      * @param properties the bound settings
+     * @param clock      elapsed-time source for the caller's deadline
      * @return the transport
      */
     @Bean
     public ProgressionCommandGateway progressionCommandGateway(
-            final CourtRegisterProperties properties) {
+            final CourtRegisterProperties properties, final Clock clock) {
         final CourtRegisterProperties.Progression progression = properties.progression();
         return new ProgressionCommandGateway(
                 RestClient.builder()
@@ -61,7 +67,8 @@ public class LiveSubmissionConfig {
                 progression.maxAttempts(),
                 progression.initialBackoff(),
                 progression.maxBackoff(),
-                (SubmissionPause) Thread::sleep);
+                (SubmissionPause) Thread::sleep,
+                clock);
     }
 
     /**

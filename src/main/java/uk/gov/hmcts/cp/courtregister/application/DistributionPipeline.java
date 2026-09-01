@@ -486,6 +486,14 @@ public class DistributionPipeline {
      * hearing. So the budget is read once more here and an overrun is handed back before anything
      * leaves the service; the redelivery has the whole deadline again.
      *
+     * <p><strong>The budget travels with the register, not only around it.</strong> Reading it once
+     * here would bound the moment the POST <em>starts</em> and nothing after it: the transport
+     * retries, and the waits between its attempts are the longest thing a run does. So the deadline
+     * itself is handed to the port, which refuses to start an attempt or take a wait across it — an
+     * overrun inside the submission comes back TRANSIENT under the same
+     * {@link ReasonCode#PROCESSING_DEADLINE_EXCEEDED} an overrun outside it does, and the redelivery
+     * gets a whole fresh budget.
+     *
      * <p>The completion that follows a successful send is <strong>not</strong> withheld for the
      * budget. The register has gone; a run that declined to record it would be redelivered and would
      * send it a second time, which is the one outcome the budget exists to prevent.
@@ -511,8 +519,8 @@ public class DistributionPipeline {
             outcome = overran(claim, budget);
         } else {
             final SubmissionReceipt receipt = submissionClient.submit(new RegisterSubmission(
-                    claim, register.document(), register.courtCentreOuCode(), registerDay,
-                    CallerIdentity.of(command), anomalies));
+                    claim, budget.deadline(), register.document(), register.courtCentreOuCode(),
+                    registerDay, CallerIdentity.of(command), anomalies));
             // `sentNow` distinguishes a POST this delivery made from a register the processed log
             // already held POSTED, whose POST this delivery deliberately skipped. Both complete the
             // run submitted; only one of them is a call that just happened, and a line that said
