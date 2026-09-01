@@ -481,9 +481,18 @@ class RegisterTransformationChainTest {
         return courtRegisterSubscription("youthDefendant", "SOMEWHERE_ELSE");
     }
 
-    /** A matching subscriber who asked for the post, which this channel cannot serve. */
+    /**
+     * A matching subscriber who asked for the post <em>instead of</em> email, which this channel
+     * cannot serve.
+     *
+     * <p>Both halves matter. `RecipientMapper.js:13` reads `emailDelivery && forDistribution &&
+     * recipient` and never looks at the letter flags at all, so a subscriber who asked for both is
+     * emailed and is not dropped — raising the letter flag alone would leave this hearing with a
+     * recipient and this case asserting nothing.
+     */
     private ObjectNode byFirstClassPost() {
         final ObjectNode subscription = youthSubscription();
+        subscription.put("emailDelivery", false);
         subscription.put("firstClassLetterDelivery", true);
         return subscription;
     }
