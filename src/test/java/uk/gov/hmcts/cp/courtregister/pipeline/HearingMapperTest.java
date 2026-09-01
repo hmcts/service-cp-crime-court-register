@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.pipeline;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -12,6 +13,8 @@ import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterHearing;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterDefendant;
+import uk.gov.hmcts.cp.courtregister.domain.RegisterResult;
+import uk.gov.hmcts.cp.courtregister.domain.ResultLevel;
 import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
 
 /**
@@ -172,6 +175,16 @@ class HearingMapperTest {
             assertThat(hearing.defendantPresent()).isFalse();
             assertThat(hearing.defendantAppearanceDetails()).isNull();
         }
+
+        @Test
+        @DisplayName("attendance on an earlier resulted day counts, not only on the latest one")
+        void attendance_on_any_resulted_day_counts() {
+            final CourtRegisterHearing hearing = HearingMapper.map(
+                    baseHearing(), defendantResultedOn("2020-02-20", ORDERED_DAY), anyDefendant());
+
+            assertThat(hearing.defendantPresent()).isTrue();
+            assertThat(hearing.defendantAppearanceDetails()).isEqualTo("In person");
+        }
     }
 
     @Nested
@@ -331,7 +344,39 @@ class HearingMapperTest {
             final String orderedDate, final String... defendantIds) {
 
         return new RegisterDefendant(
-                List.of(defendantIds), List.of(), List.of(), List.of(),
+                List.of(defendantIds),
+                orderedDate == null ? List.of() : resultsOrderedOn(orderedDate),
+                List.of(), List.of(),
                 YOUTH_DEFENDANT, true, orderedDate, null);
+    }
+
+    /**
+     * A register defendant whose results were ordered on several days, the first of them the latest.
+     *
+     * <p>The shape the kernel's rule is about and a single-result defendant cannot show: the
+     * fragment's own {@code orderedDate} is one day, the gathered results name others, and the
+     * defendant attended on one of the others.
+     *
+     * @param orderedDays the days their results were ordered, latest first
+     * @return the register defendant
+     */
+    private RegisterDefendant defendantResultedOn(final String... orderedDays) {
+        return new RegisterDefendant(
+                List.of(YOUTH_DEFENDANT), resultsOrderedOn(orderedDays), List.of(), List.of(),
+                YOUTH_DEFENDANT, true, orderedDays[0], null);
+    }
+
+    /**
+     * Gathered results carrying nothing but the days they were ordered on.
+     *
+     * @param orderedDays the days
+     * @return the results, in the order given
+     */
+    private List<RegisterResult> resultsOrderedOn(final String... orderedDays) {
+        return Arrays.stream(orderedDays)
+                .map(day -> new RegisterResult(
+                        null, null, null, null, ResultLevel.OFFENCE, YOUTH_DEFENDANT,
+                        mapper.readTree("{\"orderedDate\":\"" + day + "\"}"), null, null))
+                .toList();
     }
 }
