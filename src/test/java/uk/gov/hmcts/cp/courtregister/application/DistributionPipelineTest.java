@@ -43,6 +43,7 @@ import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
+import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
 
 /**
  * One request, from the payload fetch to the recorded outcome — the orchestration the legacy has no
@@ -91,6 +92,7 @@ class DistributionPipelineTest {
     private final IdempotencyGuard guard = mock(IdempotencyGuard.class);
     private final HearingPayloadSource payloadSource = mock(HearingPayloadSource.class);
     private final GroupProceedingsPolicy groupProceedings = mock(GroupProceedingsPolicy.class);
+    private final NowSubscriptionsSource subscriptionsSource = mock(NowSubscriptionsSource.class);
     private final RegisterTransformer transformer = mock(RegisterTransformer.class);
     private final RegisterSubmissionClient submissionClient = mock(RegisterSubmissionClient.class);
 
@@ -120,6 +122,9 @@ class DistributionPipelineTest {
             "{\"hearing\":{\"id\":\"1828f356-f746-4f2d-932b-79ef2df95c80\"},"
                     + "\"sharedTime\":\"2020-06-01T10:00:00Z\"}");
 
+    /** Reference data's answer for the register's day: an answer, carrying nobody. */
+    private final JsonNode subscriptions = mapper.readTree("{\"nowSubscriptions\":[]}");
+
     @BeforeEach
     void theOrdinaryRun() {
         when(guard.admit(any(DistributionCommand.class), any(DeliveryIdentity.class)))
@@ -138,7 +143,10 @@ class DistributionPipelineTest {
         when(payloadSource.fetch(any(DistributionCommand.class))).thenReturn(payload);
         when(groupProceedings.suppresses(any(DistributionCommand.class), any(JsonNode.class)))
                 .thenReturn(false);
-        when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+        when(subscriptionsSource.subscriptionsOn(any(LocalDate.class), any(CallerIdentity.class)))
+                .thenReturn(subscriptions);
+        when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                    any(JsonNode.class)))
                 .thenReturn(new TransformationResult.Register(document));
         when(submissionClient.submit(any(CourtRegisterDocument.class), any(CallerIdentity.class)))
                 .thenReturn(new SubmissionReceipt(202));
@@ -150,15 +158,19 @@ class DistributionPipelineTest {
     class StageSequence {
 
         @Test
-        @DisplayName("fetches, decides, transforms, submits, records — in that order")
+        @DisplayName("fetches, decides, reads reference data, transforms, submits, records — in "
+                + "that order")
         void runs_the_stages_in_order() {
             final GuardDecision decision = run();
 
-            final InOrder stages =
-                    inOrder(payloadSource, groupProceedings, transformer, submissionClient, guard);
+            final InOrder stages = inOrder(payloadSource, groupProceedings, subscriptionsSource,
+                    transformer, submissionClient, guard);
             stages.verify(payloadSource).fetch(command);
             stages.verify(groupProceedings).suppresses(eqCommand(), any(JsonNode.class));
-            stages.verify(transformer).transform(eqCommand(), any(JsonNode.class));
+            stages.verify(subscriptionsSource).subscriptionsOn(any(LocalDate.class),
+                    any(CallerIdentity.class));
+            stages.verify(transformer).transform(eqCommand(), any(JsonNode.class),
+                    any(JsonNode.class));
             stages.verify(submissionClient).submit(any(CourtRegisterDocument.class),
                     any(CallerIdentity.class));
             stages.verify(guard).recordCompletion(claim, CompletionReason.SUBMITTED);
@@ -178,7 +190,7 @@ class DistributionPipelineTest {
 
             run();
 
-            verify(transformer).transform(eqCommand(), handedOn.capture());
+            verify(transformer).transform(eqCommand(), handedOn.capture(), any(JsonNode.class));
             assertThat(handedOn.getValue()).isEqualTo(pristine);
             assertThat(payload)
                     .as("the fetched tree belongs to the producer, not to this service")
@@ -236,6 +248,104 @@ class DistributionPipelineTest {
     }
 
     /**
+     * The reference-data read, which belongs here and not behind the transformation port.
+     *
+     * <p>These cases were {@code SubscriptionMatcherTest}'s until the transformation was made pure.
+     * The matcher reached {@link NowSubscriptionsSource} itself, which put I/O inside the chain the
+     * constitution requires to be pure — "no I/O, no clock, no randomness" (Principle V) — and made
+     * the stage that decides who a register reaches untestable without a port double. The read moves
+     * up here, between two pure stages; the assertions are the same ones, made at the seam that now
+     * owns them.
+     *
+     * <p>What they pin is the whole of the read's contract: the day it is made for is the day the
+     * results were shared (defect fix C12, consumed here), the identity it is made as is the request's
+     * own, its answer reaches the transformation unaltered, and reference data declining to answer is
+     * a retry rather than a register addressed to nobody.
+     */
+    @Nested
+    @DisplayName("the reference-data read")
+    class ReferenceDataRead {
+
+        @Test
+        @DisplayName("asks for the subscriptions in force on the day the results were shared")
+        void asks_for_the_day_the_results_were_shared() {
+            // The `on=` day comes from the register date, which is the share instant rather than a
+            // London wall clock relabelled `Z` — so an evening share reads the set in force on the
+            // day it was shared and not the next day's (C12).
+            final ArgumentCaptor<LocalDate> day = ArgumentCaptor.forClass(LocalDate.class);
+
+            run();
+
+            verify(subscriptionsSource).subscriptionsOn(day.capture(), any(CallerIdentity.class));
+            assertThat(day.getValue()).isEqualTo(LocalDate.parse("2020-06-01"));
+        }
+
+        @Test
+        @DisplayName("makes the read as the user who shared the results")
+        void makes_the_read_as_the_user_who_shared_the_results() {
+            final ArgumentCaptor<CallerIdentity> caller =
+                    ArgumentCaptor.forClass(CallerIdentity.class);
+
+            run();
+
+            verify(subscriptionsSource).subscriptionsOn(any(LocalDate.class), caller.capture());
+            assertThat(caller.getValue()).isEqualTo(CallerIdentity.of(command));
+        }
+
+        @Test
+        @DisplayName("hands the transformation the answer reference data gave, unaltered")
+        void hands_the_transformation_the_answer_reference_data_gave() {
+            final ArgumentCaptor<JsonNode> handedOn = ArgumentCaptor.forClass(JsonNode.class);
+
+            run();
+
+            verify(transformer).transform(eqCommand(), any(JsonNode.class), handedOn.capture());
+            assertThat(handedOn.getValue()).isEqualTo(subscriptions);
+        }
+
+        @Test
+        @DisplayName("reads reference data once per run, whatever the register turns out to be")
+        void reads_reference_data_once_per_run() {
+            run();
+
+            verify(subscriptionsSource, times(1)).subscriptionsOn(any(LocalDate.class),
+                    any(CallerIdentity.class));
+        }
+
+        @Test
+        @DisplayName("retries a register whose recipients reference data would not name")
+        void retries_a_register_whose_recipients_reference_data_would_not_name() {
+            // The half of the legacy's single case that has to stop being a completion. A register
+            // whose recipients are unknown is retried, not published to nobody and recorded as this
+            // flow's commonest legitimate outcome.
+            when(subscriptionsSource.subscriptionsOn(any(LocalDate.class),
+                    any(CallerIdentity.class)))
+                    .thenThrow(new ReferenceDataUnavailableException("subscriptions-read-failed"));
+
+            final GuardDecision decision = run();
+
+            assertThat(decision).isEqualTo(
+                    new GuardDecision.Abandon(ReasonCode.REFERENCE_DATA_UNAVAILABLE));
+            verify(transformer, never()).transform(any(DistributionCommand.class),
+                    any(JsonNode.class), any(JsonNode.class));
+            verify(guard, never()).recordCompletion(any(RunClaim.class),
+                    any(CompletionReason.class));
+        }
+
+        @Test
+        @DisplayName("asks reference data nothing about a hearing the group-proceedings skip took")
+        void asks_reference_data_nothing_about_a_suppressed_hearing() {
+            when(payloadSource.fetch(any(DistributionCommand.class)))
+                    .thenReturn(payloadFlagged("true"));
+
+            pipelineOverTheRealPolicy().process(command, delivery());
+
+            verify(subscriptionsSource, never()).subscriptionsOn(any(LocalDate.class),
+                    any(CallerIdentity.class));
+        }
+    }
+
+    /**
      * Defect C33. Four separate legacy guards, one undifferentiated success. Two of these four are
      * the commonest results this service has, so telling them apart is what makes a pipeline that
      * has quietly stopped working distinguishable from a quiet week.
@@ -249,7 +359,8 @@ class DistributionPipelineTest {
                 names = {"NO_DEFENDANTS", "NO_SUBSCRIPTIONS", "NO_YOUTH_DEFENDANTS"})
         @DisplayName("no op outcomes are distinguishable")
         void no_op_outcomes_are_distinguishable(final CompletionReason reason) {
-            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                    any(JsonNode.class)))
                     .thenReturn(new TransformationResult.NoRegister(reason));
 
             final GuardDecision decision = run();
@@ -265,7 +376,8 @@ class DistributionPipelineTest {
                 names = {"NO_DEFENDANTS", "NO_SUBSCRIPTIONS", "NO_YOUTH_DEFENDANTS"})
         @DisplayName("sends nothing at all when there is nothing to send")
         void sends_nothing_when_there_is_nothing_to_send(final CompletionReason reason) {
-            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                    any(JsonNode.class)))
                     .thenReturn(new TransformationResult.NoRegister(reason));
 
             run();
@@ -277,7 +389,8 @@ class DistributionPipelineTest {
         @Test
         @DisplayName("records a hearing that gathered nobody as no-defendants (C6)")
         void records_a_hearing_that_gathered_nobody_as_no_defendants() {
-            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                    any(JsonNode.class)))
                     .thenReturn(new TransformationResult.NoRegister(
                             CompletionReason.NO_DEFENDANTS));
 
@@ -312,7 +425,7 @@ class DistributionPipelineTest {
             verify(guard).recordCompletion(claim, CompletionReason.GROUP_PROCEEDINGS);
             assertThat(completions("group-proceedings")).isEqualTo(1);
             verify(transformer, never()).transform(any(DistributionCommand.class),
-                    any(JsonNode.class));
+                    any(JsonNode.class), any(JsonNode.class));
             verify(submissionClient, never()).submit(any(CourtRegisterDocument.class),
                     any(CallerIdentity.class));
         }
@@ -352,7 +465,8 @@ class DistributionPipelineTest {
             final ArgumentCaptor<ReasonCode> recorded = ArgumentCaptor.forClass(ReasonCode.class);
 
             for (final RuntimeException failure : everyWayARunCanFail()) {
-                when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+                when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                    any(JsonNode.class)))
                         .thenThrow(failure);
 
                 final GuardDecision decision = run();
@@ -401,7 +515,7 @@ class DistributionPipelineTest {
             run();
 
             verify(transformer, never()).transform(any(DistributionCommand.class),
-                    any(JsonNode.class));
+                    any(JsonNode.class), any(JsonNode.class));
         }
 
         @Test
@@ -411,7 +525,8 @@ class DistributionPipelineTest {
             // second time, `SetCourtRegister` swallows it, the orchestrator's `:33` guard skips the
             // rest, and the orchestration returns `Success: true`. Here it is a dead-letter with a
             // bounded reason.
-            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                    any(JsonNode.class)))
                     .thenThrow(new TransformationFailedException("ordered-date-unreadable"));
 
             final GuardDecision decision = run();
@@ -420,16 +535,6 @@ class DistributionPipelineTest {
                     DeadLetterReason.NON_TRANSIENT, ReasonCode.TRANSFORMATION_FAILED));
             verify(guard, never()).recordCompletion(any(RunClaim.class),
                     any(CompletionReason.class));
-        }
-
-        @Test
-        @DisplayName("retries a register whose recipients could not be read")
-        void retries_a_register_whose_recipients_could_not_be_read() {
-            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class)))
-                    .thenThrow(new ReferenceDataUnavailableException("subscriptions-read-failed"));
-
-            assertThat(run()).isEqualTo(
-                    new GuardDecision.Abandon(ReasonCode.REFERENCE_DATA_UNAVAILABLE));
         }
 
         @Test
@@ -509,8 +614,8 @@ class DistributionPipelineTest {
      * @return the pipeline
      */
     private DistributionPipeline pipeline() {
-        return new DistributionPipeline(guard, payloadSource, groupProceedings, transformer,
-                submissionClient, metrics, fixedClock(), RUN_DEADLINE);
+        return new DistributionPipeline(guard, payloadSource, groupProceedings, subscriptionsSource,
+                new Dates(), transformer, submissionClient, metrics, fixedClock(), RUN_DEADLINE);
     }
 
     /**
@@ -521,7 +626,8 @@ class DistributionPipelineTest {
      */
     private DistributionPipeline pipelineOverTheRealPolicy() {
         return new DistributionPipeline(guard, payloadSource, new GroupProceedingsPolicy(metrics),
-                transformer, submissionClient, metrics, fixedClock(), RUN_DEADLINE);
+                subscriptionsSource, new Dates(), transformer, submissionClient, metrics,
+                fixedClock(), RUN_DEADLINE);
     }
 
     /**

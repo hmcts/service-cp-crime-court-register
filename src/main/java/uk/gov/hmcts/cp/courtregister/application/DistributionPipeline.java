@@ -6,6 +6,7 @@ import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.MissingNode;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
@@ -20,6 +21,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
+import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
 
 /**
  * One request, from the guard admitting it to the guard recording what happened.
@@ -87,6 +89,8 @@ public class DistributionPipeline {
     private final IdempotencyGuard guard;
     private final HearingPayloadSource payloadSource;
     private final GroupProceedingsPolicy groupProceedings;
+    private final NowSubscriptionsSource subscriptionsSource;
+    private final Dates dates;
     private final RegisterTransformer transformer;
     private final RegisterSubmissionClient submissionClient;
     private final ProcessingMetrics metrics;
@@ -114,27 +118,34 @@ public class DistributionPipeline {
             final ProcessingMetrics metrics,
             final Clock clock,
             final Duration processingDeadline) {
-        this(guard, payloadSource, null, null, null, metrics, clock, processingDeadline);
+        this(guard, payloadSource, null, null, null, null, null, metrics, clock,
+                processingDeadline);
     }
 
     /**
-     * Creates the pipeline over all four ports and the group-proceedings policy.
+     * Creates the pipeline over all four ports, the group-proceedings policy and the register's own
+     * date handling.
      *
-     * @param guard              the {@code (source, requestId)} processed-log guard
-     * @param payloadSource      where the hearing payload comes from
-     * @param groupProceedings   whether the hearing's flag suppresses its register
-     * @param transformer        how a hearing payload becomes a register
-     * @param submissionClient   where an assembled register is sent
-     * @param metrics            the instrument surface every outcome is counted on
-     * @param clock              elapsed-time source for the run's own deadline
-     * @param processingDeadline the enforced bound on a run, strictly shorter than the claim lease
+     * @param guard               the {@code (source, requestId)} processed-log guard
+     * @param payloadSource       where the hearing payload comes from
+     * @param groupProceedings    whether the hearing's flag suppresses its register
+     * @param subscriptionsSource where the now-subscriptions a register is addressed with come from
+     * @param dates               the register's date handling, for the day the subscriptions are
+     *                            read on; pure, so holding it here costs the core no I/O
+     * @param transformer         how a hearing payload and its subscriptions become a register
+     * @param submissionClient    where an assembled register is sent
+     * @param metrics             the instrument surface every outcome is counted on
+     * @param clock               elapsed-time source for the run's own deadline
+     * @param processingDeadline  the enforced bound on a run, strictly shorter than the claim lease
      */
-    // Five ports and two settings, every one of them owned by the core and injected. Grouping them
-    // behind a holder would hide which stage a change touches.
+    // Five ports, one policy, one date helper and two settings, every one of them owned by the core
+    // and injected. Grouping them behind a holder would hide which stage a change touches.
     public DistributionPipeline(
             final IdempotencyGuard guard,
             final HearingPayloadSource payloadSource,
             final GroupProceedingsPolicy groupProceedings,
+            final NowSubscriptionsSource subscriptionsSource,
+            final Dates dates,
             final RegisterTransformer transformer,
             final RegisterSubmissionClient submissionClient,
             final ProcessingMetrics metrics,
@@ -143,6 +154,8 @@ public class DistributionPipeline {
         this.guard = guard;
         this.payloadSource = payloadSource;
         this.groupProceedings = groupProceedings;
+        this.subscriptionsSource = subscriptionsSource;
+        this.dates = dates;
         this.transformer = transformer;
         this.submissionClient = submissionClient;
         this.metrics = metrics;
@@ -258,7 +271,9 @@ public class DistributionPipeline {
         if (groupProceedings.suppresses(command, hearingOf(payload))) {
             outcome = completed(claim, CompletionReason.GROUP_PROCEEDINGS);
         } else {
-            outcome = switch (transformer.transform(command, payload)) {
+            // Seam: the reference-data read the core is about to own is not wired yet, so the
+            // transformation is handed an answer nobody made.
+            outcome = switch (transformer.transform(command, payload, MissingNode.getInstance())) {
                 case TransformationResult.NoRegister nothing -> completed(claim, nothing.reason());
                 case TransformationResult.Register register -> submit(command, register, claim);
             };

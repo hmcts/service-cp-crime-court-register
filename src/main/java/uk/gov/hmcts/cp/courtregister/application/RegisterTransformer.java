@@ -11,9 +11,11 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
  * behind it are the fragment build, the subscription matching and the twelve-mapper aggregation,
  * chained. The pipeline knows only that a payload goes in and one of two answers comes out.
  *
- * <p>The port is pure by contract — no I/O of its own beyond the reference-data read the matching
- * stage owns, no clock, no randomness (constitution Principle V) — which is what lets the whole of
- * the ported transformation be tested against fixtures with no broker, no cache and no progression.
+ * <p>The port is pure by contract — <strong>no I/O at all</strong>, no clock, no randomness
+ * (constitution Principle V) — which is what lets the whole of the ported transformation be tested
+ * against fixtures with no broker, no cache and no progression. The reference data the matching
+ * stage needs is therefore an <em>argument</em>: the core reads it and hands it in, so no stage
+ * behind this port can reach a port of its own.
  */
 public interface RegisterTransformer {
 
@@ -22,10 +24,13 @@ public interface RegisterTransformer {
      *
      * @param command        the validated request
      * @param hearingPayload the hearing payload, exactly as the producer sent it
+     * @param subscriptions  reference data's now-subscriptions answer for the register's own day,
+     *                       already read; an answer carrying none is still an answer
      * @return the assembled register, or the bounded reason there is nothing to send
      * @throws TransformationFailedException if the payload cannot be transformed at all — always
      *     non-transient
      */
-    TransformationResult transform(DistributionCommand command, JsonNode hearingPayload)
+    TransformationResult transform(
+            DistributionCommand command, JsonNode hearingPayload, JsonNode subscriptions)
             throws TransformationFailedException;
 }
