@@ -552,6 +552,14 @@ public class PropertiesValidator implements InitializingBean {
 
     /**
      * What every attempt costs when each one spends both of its timeouts.
+     *
+     * <p><strong>The arithmetic is unchanged by the transport's attempt reservation</strong>
+     * ({@code adapter/http/RetryPolicy.attemptFitsBefore}), and deliberately so. This formula
+     * already charges every attempt its whole connect-plus-read worst case, which is the same number
+     * the transport now reserves before starting one; a run that refuses an attempt it cannot afford
+     * spends less than this, never more. So the reservation makes the real worst case smaller and
+     * leaves the bound this method computes exactly where it was — the startup budget stays the
+     * pessimistic one, which is the only kind worth refusing a deployment over.
      */
     private static Duration attemptsWorstCase(final Duration connectTimeout,
                                               final Duration readTimeout,

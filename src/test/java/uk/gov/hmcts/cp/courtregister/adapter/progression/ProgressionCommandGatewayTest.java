@@ -8,6 +8,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.http.Fault;
@@ -96,6 +97,12 @@ class ProgressionCommandGatewayTest {
     private static final int MAX_ATTEMPTS = 4;
     private static final int ACCEPTED = 202;
 
+    /** The connect timeout every gateway here is built with; half of an attempt's worst case. */
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(2);
+
+    /** The read timeout a case that is not about timing out gets; the other half. */
+    private static final Duration READ_TIMEOUT = Duration.ofSeconds(5);
+
     /** Stands in for the defendant detail a progression error body would quote back. */
     private static final String DEFENDANT_MARKER = "DEFENDANTMARKERZQX7";
 
@@ -137,14 +144,35 @@ class ProgressionCommandGatewayTest {
     }
 
     private ProgressionCommandGateway gateway() {
-        return gateway(MAX_ATTEMPTS, Map.of(), Duration.ofSeconds(5), pause);
+        return gateway(MAX_ATTEMPTS, Map.of(), READ_TIMEOUT, pause);
     }
 
+    /**
+     * A gateway whose declared attempt cost is the one a deployment gets: its own two timeouts,
+     * added together, exactly as {@code LiveSubmissionConfig} builds the policy.
+     */
     private ProgressionCommandGateway gateway(final int maxAttempts,
             final Map<String, String> extraHeaders, final Duration readTimeout,
             final RetryPause waiting) {
+        return gateway(maxAttempts, extraHeaders, readTimeout, waiting,
+                CONNECT_TIMEOUT.plus(readTimeout));
+    }
+
+    /**
+     * A gateway whose declared attempt cost is stated separately from its socket timeouts.
+     *
+     * <p>They are two different numbers in principle and one number in a deployment: the policy is
+     * told what an attempt can cost and the request factory is told when to give up, and
+     * {@code LiveSubmissionConfig} reads both out of the same pair of settings. Separating them here
+     * is what lets a budget case declare a cheap attempt — so a wait, not the attempt, is the thing
+     * that does not fit — while the socket timeouts stay long enough that a case meaning to reach a
+     * verdict reaches one.
+     */
+    private ProgressionCommandGateway gateway(final int maxAttempts,
+            final Map<String, String> extraHeaders, final Duration readTimeout,
+            final RetryPause waiting, final Duration attemptWorstCase) {
         final SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofSeconds(2));
+        requestFactory.setConnectTimeout(CONNECT_TIMEOUT);
         requestFactory.setReadTimeout(readTimeout);
         return new ProgressionCommandGateway(
                 RestClient.builder()
@@ -153,7 +181,7 @@ class ProgressionCommandGatewayTest {
                         .build(),
                 SYSTEM_USER_ID,
                 extraHeaders,
-                new RetryPolicy(maxAttempts, INITIAL_BACKOFF, MAX_BACKOFF),
+                new RetryPolicy(maxAttempts, INITIAL_BACKOFF, MAX_BACKOFF, attemptWorstCase),
                 waiting,
                 clock);
     }
@@ -727,6 +755,14 @@ class ProgressionCommandGatewayTest {
      * header. An overrun is TRANSIENT under {@code PROCESSING_DEADLINE_EXCEEDED} — the run did not
      * fail, it ran out of the time its claim guarantees it — and the redelivery gets a whole fresh
      * budget with nothing sent twice.
+     *
+     * <p><strong>And the attempt is measured by what it can cost, not by whether it may begin.</strong>
+     * "The deadline has not passed yet" is not the same question as "this attempt fits": an attempt
+     * that hangs on its connect and then on its read spends the whole of both timeouts, so a run
+     * that started one with a millisecond left would be posting a register long after the claim
+     * behind it became reclaimable. The reservation is the shared policy's
+     * ({@code RetryPolicy.attemptFitsBefore}), stated once for the three clients rather than in the
+     * one that holds a deadline today.
      */
     @Nested
     @DisplayName("a budget that runs out before the attempts do")
@@ -734,6 +770,23 @@ class ProgressionCommandGatewayTest {
 
         /** Long enough to answer, far too short to wait out a back-off. */
         private static final Duration ALMOST_GONE = Duration.ofMillis(100);
+
+        /**
+         * A declared attempt cost small enough that the attempt is never the thing that does not
+         * fit, so a case about a wait is about the wait.
+         */
+        private static final Duration CHEAP_ATTEMPT = Duration.ofMillis(20);
+
+        /** What is left of a run when the reservation case reaches the gateway. */
+        private static final Duration REMAINING = Duration.ofSeconds(1);
+
+        /** Longer than that, so an attempt that is started answers after the deadline. */
+        private static final int SLOWER_THAN_THE_BUDGET = 1_500;
+
+        /** The gateway a case about waits uses: real timeouts, a declared attempt cost of nothing. */
+        private ProgressionCommandGateway budgeted() {
+            return gateway(MAX_ATTEMPTS, Map.of(), READ_TIMEOUT, pause, CHEAP_ATTEMPT);
+        }
 
         @Test
         @DisplayName("starts no attempt at all once the run's budget is already spent")
@@ -757,6 +810,49 @@ class ProgressionCommandGatewayTest {
         }
 
         /**
+         * The attempt's own duration, reserved before it is started.
+         *
+         * <p>The budget is not spent — a second of it is left — so the "has the deadline passed"
+         * question answers yes, go ahead. The question that matters answers no: this gateway's
+         * attempt can cost its connect timeout and then its read timeout, which is seven seconds,
+         * and seven seconds do not fit in one. Progression here takes a second and a half to answer,
+         * which is inside the read timeout and outside the run's remaining budget — the everyday
+         * shape of a busy downstream — so an attempt that <em>is</em> started returns its 202 with
+         * the claim behind it already reclaimable, and {@code add-court-register} appends: a second
+         * runner's POST is a second register for the same hearing.
+         *
+         * <p>So the assertion is about the socket rather than about the exception. Nothing may reach
+         * progression at all.
+         */
+        @Test
+        @DisplayName("starts no attempt whose own worst case would end after the deadline")
+        void no_attempt_is_started_when_the_attempt_itself_cannot_fit_in_what_is_left() {
+            progression.stubFor(post(urlEqualTo(PATH)).willReturn(aResponse()
+                    .withStatus(ACCEPTED)
+                    .withFixedDelay(SLOWER_THAN_THE_BUDGET)));
+
+            final Throwable refused = catchThrowable(
+                    () -> gateway().post(BODY, CallerIdentity.SYSTEM, NOW.plus(REMAINING)));
+
+            assertThat(progression.getAllServeEvents())
+                    .as("an attempt that can cost seven seconds was not started with one second of "
+                            + "the claim left")
+                    .isEmpty();
+            assertThat(refused)
+                    .isInstanceOf(SubmissionFailedException.class)
+                    .asInstanceOf(InstanceOfAssertFactories.type(SubmissionFailedException.class))
+                    .satisfies(failure -> {
+                        assertThat(failure.classification())
+                                .as("the run did not fail; it ran out of the time its claim "
+                                        + "guarantees it, and the redelivery gets a fresh budget")
+                                .isEqualTo(FailureClassification.TRANSIENT);
+                        assertThat(failure.reason())
+                                .isEqualTo(ReasonCode.PROCESSING_DEADLINE_EXCEEDED);
+                    });
+            assertThat(pause.waits).isEmpty();
+        }
+
+        /**
          * The ordinary back-off path. One attempt fits inside what is left; the 500ms wait after it
          * does not, so the wait is refused rather than taken and the delivery goes back with a
          * budget nothing has overspent.
@@ -766,7 +862,7 @@ class ProgressionCommandGatewayTest {
         void a_back_off_that_would_cross_the_deadline_is_refused_rather_than_taken() {
             answering(503);
 
-            assertThatThrownBy(() -> gateway()
+            assertThatThrownBy(() -> budgeted()
                     .post(BODY, CallerIdentity.SYSTEM, NOW.plus(ALMOST_GONE)))
                     .isInstanceOf(SubmissionFailedException.class)
                     .asInstanceOf(InstanceOfAssertFactories.type(SubmissionFailedException.class))
@@ -798,8 +894,8 @@ class ProgressionCommandGatewayTest {
         void a_retry_after_that_would_cross_the_deadline_is_refused_rather_than_taken() {
             answeringThenAccepting(429, "2");
 
-            assertThatThrownBy(() -> gateway()
-                    .post(BODY, CallerIdentity.SYSTEM, NOW.plus(Duration.ofSeconds(1))))
+            assertThatThrownBy(() -> budgeted()
+                    .post(BODY, CallerIdentity.SYSTEM, NOW.plus(REMAINING)))
                     .isInstanceOf(SubmissionFailedException.class)
                     .asInstanceOf(InstanceOfAssertFactories.type(SubmissionFailedException.class))
                     .satisfies(failure -> {
@@ -827,10 +923,10 @@ class ProgressionCommandGatewayTest {
         void no_further_attempt_is_started_once_a_permitted_wait_has_overrun_the_budget() {
             answering(503);
             final ProgressionCommandGateway overrunning = gateway(MAX_ATTEMPTS, Map.of(),
-                    Duration.ofSeconds(5), duration -> {
+                    READ_TIMEOUT, duration -> {
                         pause.pause(duration);
                         clock.advance(duration.multipliedBy(2));
-                    });
+                    }, CHEAP_ATTEMPT);
 
             assertThatThrownBy(() -> overrunning
                     .post(BODY, CallerIdentity.SYSTEM, NOW.plus(Duration.ofMillis(600))))
@@ -852,7 +948,7 @@ class ProgressionCommandGatewayTest {
             answering(503);
 
             try (CapturedLog log = CapturedLog.capturing(ProgressionCommandGateway.class)) {
-                assertThatThrownBy(() -> gateway()
+                assertThatThrownBy(() -> budgeted()
                         .post(BODY, CallerIdentity.SYSTEM, NOW.plus(ALMOST_GONE)))
                         .isInstanceOf(SubmissionFailedException.class);
 

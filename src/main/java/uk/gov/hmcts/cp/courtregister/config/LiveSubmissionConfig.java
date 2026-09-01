@@ -66,7 +66,8 @@ public class LiveSubmissionConfig {
                 progression.systemUserId(),
                 progression.headers(),
                 new RetryPolicy(progression.maxAttempts(), progression.initialBackoff(),
-                        progression.maxBackoff()),
+                        progression.maxBackoff(),
+                        progression.connectTimeout().plus(progression.readTimeout())),
                 (RetryPause) Thread::sleep,
                 clock);
     }

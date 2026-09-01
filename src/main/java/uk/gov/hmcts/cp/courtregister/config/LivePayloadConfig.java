@@ -137,7 +137,8 @@ public class LivePayloadConfig {
                 properties.results().systemUserId(),
                 objectMapper,
                 new RetryPolicy(fallback.maxAttempts(), fallback.initialBackoff(),
-                        fallback.maxBackoff()),
+                        fallback.maxBackoff(),
+                        fallback.connectTimeout().plus(fallback.readTimeout())),
                 (RetryPause) Thread::sleep);
     }
 

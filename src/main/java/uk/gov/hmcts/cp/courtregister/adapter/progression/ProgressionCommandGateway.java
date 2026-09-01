@@ -72,10 +72,13 @@ import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
  * of one sentence could not hold to.
  *
  * <p><strong>Every one of those waits is bounded by the run's claim, not only by
- * {@code max-backoff}.</strong> The caller hands in the instant its run promised to have stopped by,
- * and it is read before every attempt and before every wait — the back-off's and progression's
- * {@code Retry-After} alike. A wait that would end after the deadline is refused rather than
- * shortened: the run is handed back TRANSIENT under
+ * {@code max-backoff} — and so is every attempt.</strong> The caller hands in the instant its run
+ * promised to have stopped by, and it is read before every attempt and before every wait — the
+ * back-off's and progression's {@code Retry-After} alike. An attempt is held to what it can
+ * <em>cost</em> rather than to whether it may begin: its connect timeout plus its read timeout must
+ * still fit, because an attempt started with a millisecond of budget left is a POST that lands after
+ * the claim behind it became reclaimable. A wait that would end after the deadline is refused rather
+ * than shortened: the run is handed back TRANSIENT under
  * {@link uk.gov.hmcts.cp.courtregister.domain.ReasonCode#PROCESSING_DEADLINE_EXCEEDED} and the
  * redelivery gets a whole fresh budget. Without that check a policy sized in seconds can still spend
  * minutes — four attempts, each able to spend a connect and a read timeout, with a server-chosen
@@ -160,8 +163,9 @@ public class ProgressionCommandGateway {
      *
      * @param body     the serialised document, sent byte for byte
      * @param caller   who the command is posted as
-     * @param deadline the instant the run holding the claim promised to have stopped by; no attempt
-     *                 is started and no wait is taken across it
+     * @param deadline the instant the run holding the claim promised to have stopped by; no wait is
+     *                 taken across it, and no attempt is started whose own worst case — a connect
+     *                 timeout and a read timeout — would end after it
      * @return the status progression answered with, which is {@code 202} or nothing
      * @throws uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException carrying
      *     {@code NON_TRANSIENT} when the command was refused or answered with a success the contract
@@ -177,7 +181,7 @@ public class ProgressionCommandGateway {
         OptionalInt lastStatus = OptionalInt.empty();
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            if (spent(deadline)) {
+            if (!attemptFitsInside(deadline)) {
                 throw overran(attempt, lastStatus);
             }
             final Outcome outcome = attempt(body, identity, attempt);
@@ -289,16 +293,31 @@ public class ProgressionCommandGateway {
     }
 
     /**
-     * Whether the run holding this claim has used the time the claim guarantees it.
+     * Whether a whole attempt can be made and still leave the run inside its claim.
      *
-     * <p>Read the same way the pipeline reads its own budget: strictly before, so a run standing
-     * exactly on the deadline has already spent it and may not start another attempt.
+     * <p><strong>The attempt's own worst case is reserved, not merely the instant it starts.</strong>
+     * Asking only whether the deadline had passed would licence the attempt this check exists to
+     * stop: a POST begun with a millisecond of budget left can hang on its connect timeout and then
+     * on its read timeout, and it finishes long after the claim behind it became reclaimable. A
+     * second runner is by then working the same request, and {@code add-court-register}
+     * <em>appends</em> — so the two POSTs are two registers for one hearing, which no downstream
+     * sweep distinguishes from a re-share and no log line records as a fault.
+     *
+     * <p>The reservation is the shared policy's, read out of this client's connect and read
+     * timeouts — the same pair {@code config/PropertiesValidator} budgets the whole run with, so the
+     * transport cannot believe an attempt is cheaper than startup believed it was. Refusing costs
+     * nothing that is not refunded: the delivery is handed back TRANSIENT and the redelivery gets
+     * the whole deadline again, with nothing sent.
+     *
+     * <p>It subsumes the plain "has the budget gone" reading it replaced — an attempt cannot fit
+     * inside a budget that is already spent — so there is one gate on the way into an attempt and
+     * not two that could disagree.
      *
      * @param deadline the instant the run promised to have stopped by
-     * @return whether the budget is gone
+     * @return whether the attempt fits inside what is left
      */
-    private boolean spent(final Instant deadline) {
-        return !clock.instant().isBefore(deadline);
+    private boolean attemptFitsInside(final Instant deadline) {
+        return retryPolicy.attemptFitsBefore(clock.instant(), deadline);
     }
 
     /**

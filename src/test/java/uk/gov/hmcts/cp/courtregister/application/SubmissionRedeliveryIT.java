@@ -123,7 +123,8 @@ class SubmissionRedeliveryIT {
                         .build(),
                 SYSTEM_USER_ID,
                 Map.of(),
-                new RetryPolicy(1, Duration.ofMillis(1), Duration.ofSeconds(1)),
+                new RetryPolicy(1, Duration.ofMillis(1), Duration.ofSeconds(1),
+                        Duration.ofSeconds(7)),
                 duration -> {
                     // Nothing waits here; a single attempt never reaches a wait at all.
                 },

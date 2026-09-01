@@ -107,6 +107,15 @@ class ReferenceDataNowSubscriptionsClientTest {
     private static final Duration INITIAL_BACKOFF = Duration.ofSeconds(1);
     private static final Duration MAX_BACKOFF = Duration.ofSeconds(2);
 
+    /**
+     * The shipped connect and read timeouts added together — what one attempt at this read can cost.
+     *
+     * <p>Nothing here reads it: this client is handed no deadline, so it makes no reservation
+     * against one. It is still stated from the shipped pair rather than invented, so the day the
+     * read does become deadline-bounded the number it reserves is the number startup budgets.
+     */
+    private static final Duration ATTEMPT_WORST_CASE = Duration.ofSeconds(15);
+
     private static WireMockServer server;
 
     private ReferenceDataNowSubscriptionsClient client;
@@ -142,7 +151,7 @@ class ReferenceDataNowSubscriptionsClientTest {
                 SYSTEM_USER_ID,
                 extraHeaders,
                 MAPPER,
-                new RetryPolicy(MAX_ATTEMPTS, INITIAL_BACKOFF, MAX_BACKOFF),
+                new RetryPolicy(MAX_ATTEMPTS, INITIAL_BACKOFF, MAX_BACKOFF, ATTEMPT_WORST_CASE),
                 pause);
     }
 

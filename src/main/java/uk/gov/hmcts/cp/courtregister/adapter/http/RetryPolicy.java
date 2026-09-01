@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.adapter.http;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -38,12 +39,26 @@ import org.springframework.http.HttpStatus;
  *       run past the claim lease it holds. The form is recognised before it is read, so an unusable
  *       value is classified rather than parsed and caught, and every unusable form falls back to the
  *       back-off — the same outcome as no header at all.</li>
+ *   <li><strong>What one attempt can cost</strong>: its connect timeout plus its read timeout, which
+ *       is the reservation {@link #attemptFitsBefore(Instant, Instant)} holds a deadline-bounded
+ *       client to. It is the same number {@code config/PropertiesValidator} budgets a whole run
+ *       with, read out of the same two settings, so a client cannot believe an attempt is cheaper
+ *       than startup believed it was.</li>
  * </ul>
  *
  * <p>The bound matters more here than it looks. Every wait this policy hands out is spent inside a
  * run holding a claim, and {@code config/PropertiesValidator} budgets the whole run against
  * {@code courtregister.claim.processing-deadline} on the assumption that no single wait can exceed
  * {@code max-backoff} — which is true only because a server-supplied wait is capped by it too.
+ *
+ * <p><strong>A wait is not the only thing that can outlive a claim.</strong> An attempt can too: a
+ * connect that hangs to its timeout and then a read that hangs to its own is the longest single
+ * thing an outbound call does, and a client that only asked whether the deadline had already passed
+ * would start that attempt with a millisecond of budget left and finish it fifteen seconds after
+ * the claim behind it became reclaimable. So the reservation is stated here rather than in the
+ * client that happens to hold a deadline today: {@link #attemptFitsBefore(Instant, Instant)} refuses
+ * an attempt whose own worst case does not fit in what is left, and refusing costs nothing — the
+ * delivery is handed back and the redelivery gets a whole fresh budget.
  */
 public final class RetryPolicy {
 
@@ -62,19 +77,24 @@ public final class RetryPolicy {
     private final int attempts;
     private final Duration initialBackoff;
     private final Duration maxBackoff;
+    private final Duration attemptWorstCase;
 
     /**
-     * Builds the policy from an environment's three settings.
+     * Builds the policy from an environment's settings for one client.
      *
-     * @param maxAttempts    total attempts including the first
-     * @param initialBackoff the first wait between retryable attempts; doubled each time
-     * @param maxBackoff     the ceiling on any wait, a server-supplied {@code Retry-After} included
+     * @param maxAttempts      total attempts including the first
+     * @param initialBackoff   the first wait between retryable attempts; doubled each time
+     * @param maxBackoff       the ceiling on any wait, a server-supplied {@code Retry-After}
+     *                         included
+     * @param attemptWorstCase what one attempt can cost at worst — this client's connect timeout
+     *                         plus its read timeout, the same pair startup budgets the run with
      */
     public RetryPolicy(final int maxAttempts, final Duration initialBackoff,
-            final Duration maxBackoff) {
+            final Duration maxBackoff, final Duration attemptWorstCase) {
         this.attempts = maxAttempts;
         this.initialBackoff = initialBackoff;
         this.maxBackoff = maxBackoff;
+        this.attemptWorstCase = attemptWorstCase;
     }
 
     /**
@@ -84,6 +104,38 @@ public final class RetryPolicy {
      */
     public int maxAttempts() {
         return attempts;
+    }
+
+    /**
+     * What one attempt can cost at worst: the connect timeout plus the read timeout.
+     *
+     * @return the attempt's worst case
+     */
+    public Duration attemptWorstCase() {
+        return attemptWorstCase;
+    }
+
+    /**
+     * Whether a whole attempt can be made and still leave the run inside its claim.
+     *
+     * <p>The reservation, and it is deliberately made against the attempt's <em>worst</em> case
+     * rather than against its usual one. An attempt that answers in ten milliseconds ninety-nine
+     * times out of a hundred is not the attempt a deadline exists for; the hundredth hangs on a
+     * connect and then on a read, and a run that started it with a millisecond of budget left ends
+     * it long after the claim behind it became reclaimable. For a command another runner may then
+     * also send, and that progression <em>appends</em>, the arithmetic is a second register for one
+     * hearing.
+     *
+     * <p>Strictly before, the same reading the pipeline and the clients give every other deadline
+     * check: an attempt that would end exactly on the deadline has not finished inside the budget.
+     *
+     * @param now      this pod's reading of now; a local reading only, never compared with another
+     *                 node's clock
+     * @param deadline the instant the run promised to have stopped by
+     * @return whether the attempt fits inside what is left
+     */
+    public boolean attemptFitsBefore(final Instant now, final Instant deadline) {
+        return now.plus(attemptWorstCase).isBefore(deadline);
     }
 
     /**

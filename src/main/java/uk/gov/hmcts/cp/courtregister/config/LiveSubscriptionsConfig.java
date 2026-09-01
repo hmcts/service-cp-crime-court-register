@@ -64,7 +64,8 @@ public class LiveSubscriptionsConfig {
                 settings.headers(),
                 objectMapper,
                 new RetryPolicy(settings.maxAttempts(), settings.initialBackoff(),
-                        settings.maxBackoff()),
+                        settings.maxBackoff(),
+                        settings.connectTimeout().plus(settings.readTimeout())),
                 (RetryPause) Thread::sleep);
     }
 
