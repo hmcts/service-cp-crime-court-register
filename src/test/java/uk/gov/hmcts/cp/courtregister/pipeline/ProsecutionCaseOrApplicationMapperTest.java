@@ -315,9 +315,12 @@ class ProsecutionCaseOrApplicationMapperTest {
         }
 
         @Test
-        @DisplayName("an application with neither carries no offences at all")
-        void an_application_with_neither_carries_no_offences() {
-            assertThat(mapApplication(application()).get(0).offences()).isNull();
+        @DisplayName("an application with neither carries the empty list the legacy sends, which "
+                + "the pre-send validator then refuses (C29)")
+        void an_application_with_neither_carries_an_empty_offence_list() {
+            // `offences.map(...)` over an empty array is `[]`, and `[]` is what the legacy posts.
+            // The contract's `minItems: 1` refuses it — loudly here, silently there (C29 with C1).
+            assertThat(mapApplication(application()).get(0).offences()).isEmpty();
         }
     }
 

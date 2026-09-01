@@ -275,6 +275,26 @@ class OutboundContractValidationTest {
         }
 
         @Test
+        @DisplayName("an application that gathered no offence, which is the register the legacy "
+                + "loses to a swallowed 400")
+        void an_empty_offence_list_on_a_case() {
+            // The mapper keeps the legacy's `[]` rather than inventing an absence the legacy never
+            // sends; `minItems: 1` is what makes it a refusal, and this is where the refusal is.
+            final CourtRegisterDefendant defendant = withCases(
+                    new CourtRegisterCaseOrApplication(
+                            "ref", null, null, List.of(), null, null, null));
+
+            assertThatThrownBy(() -> validator.validate(document(defendant)))
+                    .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.type(
+                            ContractValidationException.class))
+                    .satisfies(refused -> {
+                        assertThat(refused.violation()).isEqualTo(ContractViolation.INVALID_FORMAT);
+                        assertThat(refused.field()).isEqualTo(
+                                "/defendants/0/prosecutionCasesOrApplications/0/offences");
+                    });
+        }
+
+        @Test
         @DisplayName("a case or application with no reference")
         void a_case_with_no_reference() {
             final CourtRegisterDefendant defendant = withCases(
