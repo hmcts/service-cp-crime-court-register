@@ -319,6 +319,20 @@ public final class RegisterStackSupport implements AutoCloseable {
                 .willReturn(okJson(answer)));
     }
 
+    /**
+     * How many times reference data was asked for the subscriptions in force.
+     *
+     * <p>Counted over the path rather than over the {@code on=} day, for the reason the stub is
+     * keyed that way: the day is derived from the payload's own share instant, and a count keyed on
+     * a day this fixture restated would be counting its own arithmetic.
+     *
+     * @return the count
+     */
+    public int subscriptionReads() {
+        return contexts.findAll(
+                getRequestedFor(urlPathEqualTo(ReferenceDataNowSubscriptionsClient.PATH))).size();
+    }
+
     private static MappingBuilder subscriptionsRead() {
         return get(urlPathEqualTo(ReferenceDataNowSubscriptionsClient.PATH))
                 .atPriority(DEFAULT_PRIORITY);

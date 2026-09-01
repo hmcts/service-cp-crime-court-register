@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.e2e;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import com.azure.messaging.servicebus.models.SubQueue;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -25,6 +26,7 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport.OutputRow;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport.Row;
 import uk.gov.hmcts.cp.courtregister.support.RegisterStackSupport;
+import uk.gov.hmcts.cp.courtregister.support.ServiceBusEmulatorTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
 
 /**
@@ -53,6 +55,12 @@ import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
  * identical from outside. That is defect C33, and the assertion that ends it is that four runs which
  * all completed and all sent nothing are told apart in the processed log by
  * {@code completion_reason} alone.
+ *
+ * <p><strong>And what a duplicate costs, counted rather than inferred.</strong> The one claim a
+ * component-level dedupe suite cannot make is the one an operator needs: that a second delivery of a
+ * completed request touched nothing outside the pod. Here the three contexts are real and their
+ * requests are countable, so "no second POST" is a fact about the socket that would have received
+ * it.
  *
  * <p>An acceptance suite over assembled behaviour: it may legitimately pass on introduction, and its
  * first observed result is recorded rather than a red run.
@@ -152,6 +160,69 @@ class CourtRegisterEndToEndIT {
         assertThat(output.anomalySummary())
                 .as("this register was assembled without skipping anything")
                 .isNull();
+    }
+
+    // --- the request that arrives twice ------------------------------------------------------------
+
+    /**
+     * A duplicate costs the world outside this pod nothing — asserted against the world, not against
+     * the log.
+     *
+     * <p>{@code RequestDedupeIT} makes the same claim over a service whose payload port is a stub and
+     * whose submission port is one too, so what it can show is that the guard decided correctly and
+     * the delivery was settled. What it cannot show is the claim an operator actually cares about:
+     * that the second delivery <em>touched nothing</em> — no cache read turning into a query, no
+     * subscription read, and above all no second POST of a command progression appends. Those are
+     * facts about three sockets, and only a suite that owns the sockets can count them.
+     *
+     * <p>So the payload is deliberately left out of the cache and served by the query side, which
+     * turns the fetch into an HTTP call this fixture can count. The first delivery is worth exactly
+     * one of each: one payload read, one now-subscriptions read, one register POSTed. The second is
+     * worth none of them, and the row it did not run is unchanged down to {@code updated_at}.
+     *
+     * <p>A fresh broker identity on the second send, so the queue's own duplicate detection cannot be
+     * what settles it: the processed log has to be.
+     */
+    @Test
+    @DisplayName("a duplicate delivery reaches no payload source, no reference data and no "
+            + "progression")
+    void should_touch_nothing_outside_the_pod_when_a_completed_request_is_delivered_again() {
+        stack.queryHolds(hearingId,
+                RegisterStackSupport.payload("hearing-with-surviving-youth-defendant.json",
+                        hearingId));
+        stack.subscriptionsInForce(NowSubscriptionFixtures.youthCourtRegisterSubscription(OU_CODE));
+
+        publishAndAwaitCompletion();
+        final Row afterFirstDelivery = requireRow();
+
+        assertThat(afterFirstDelivery.completionReason())
+                .isEqualTo(CompletionReason.SUBMITTED.value());
+        assertThat(stack.queriesFor(hearingId)).isEqualTo(1);
+        assertThat(stack.subscriptionReads()).isEqualTo(1);
+        assertThat(stack.registersPosted()).isEqualTo(1);
+
+        final String duplicate =
+                ServiceTestSupport.publish(ServiceTestSupport.validBody(requestId, hearingId));
+        await().atMost(SETTLED_WITHIN).pollInterval(POLL).until(() ->
+                ServiceBusEmulatorTestSupport.peekFor(duplicate, SubQueue.NONE).isEmpty());
+
+        assertThat(stack.queriesFor(hearingId))
+                .as("the duplicate asked the query side for nothing: the guard answers from the "
+                        + "record, before the payload port is reached at all")
+                .isEqualTo(1);
+        assertThat(stack.subscriptionReads())
+                .as("and addressed nobody a second time")
+                .isEqualTo(1);
+        assertThat(stack.registersPosted())
+                .as("and above all posted nothing: add-court-register appends, so a second POST is "
+                        + "a second register for the hearing and no downstream sweep calls it one")
+                .isEqualTo(1);
+        assertThat(requireRow())
+                .as("not one column of the record moved — attempts and updated_at included")
+                .isEqualTo(afterFirstDelivery);
+        assertThat(ServiceBusEmulatorTestSupport.peekFor(duplicate, SubQueue.DEAD_LETTER_QUEUE))
+                .as("and it was completed rather than parked: a duplicate is not a fault")
+                .isEmpty();
     }
 
     // --- the four ways a run legitimately produces nothing ------------------------------------------

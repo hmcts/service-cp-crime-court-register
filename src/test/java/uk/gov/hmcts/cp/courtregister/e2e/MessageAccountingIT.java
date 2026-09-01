@@ -77,6 +77,20 @@ import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
  * payload port holds one request open on a latch, so the accounting snapshot is taken while a run
  * genuinely is in flight rather than while the suite hopes one might be.
  *
+ * <p><strong>How far this suite reaches, stated exactly.</strong> The broker and the store are real
+ * — a Service Bus emulator and a Postgres container — and every settlement, claim and processed-log
+ * row below is the running service's own. The three outward ports are <strong>not</strong> real:
+ * the payload source is a Mockito bean, because the accounting needs a request that fails on demand
+ * and a request that stays in flight until a latch is released, and neither is a thing a cache can
+ * be asked for on cue; selecting the stub payload source selects the stub subscriptions source and
+ * the stub submission client with it, so nothing here reaches a socket. That is the right trade for
+ * a claim about <em>settlement</em>, which is what this file is about, and it is the wrong one for
+ * any claim about what a delivery cost the world outside the pod. The suites that own real sockets
+ * are the five that start {@code RegisterStackSupport}; the duplicate's negative — no second payload
+ * read, no second subscriptions read, no second POST — is
+ * {@code CourtRegisterEndToEndIT.should_touch_nothing_outside_the_pod_when_a_completed_request_is_delivered_again},
+ * and it lives there rather than here for exactly that reason.
+ *
  * <p><strong>And then the same claim under concurrency.</strong> The batch above arrives one message
  * at a time; production does not. A burst published at once is consumed
  * {@code maxConcurrentCalls} at a time, and the accounting has to survive that too: each request run
@@ -330,6 +344,10 @@ class MessageAccountingIT {
 
         // A duplicate of a request already completed: same key, fresh broker identity, so the
         // broker's own duplicate detection cannot be what settles it. The processed log must.
+        //
+        // What is asserted about it here is the accounting — one outcome, the record's, and the row
+        // untouched. What it cost the outside world is asserted where the outside world is real,
+        // over three countable sockets, in CourtRegisterEndToEndIT.
         final Published duplicate = new Published("duplicate", completing, publish(repeatable));
         await().atMost(SETTLED_WITHIN).pollInterval(POLL)
                 .until(() -> !onQueue(duplicate.messageId()));

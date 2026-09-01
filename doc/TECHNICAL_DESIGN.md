@@ -254,9 +254,28 @@ Note the renames from the P0 plan: `payload.fallback.retry-interval` and
 `*Test` = no Docker (unit / WireMock / test-profile Spring context); `*IT` = Testcontainers
 (Postgres 16, Service Bus emulator + Toxiproxy, Redis 7) via static per-JVM fixtures. Fixtures are
 copied from the legacy repo where sound and rebuilt where the twin map found them stale (the 18-key
-vocabulary, complete court centres). Everything runs under `./gradlew test`; the end-to-end suites
-(`e2e/`) drive real messages from the emulator queue through the assembled context to a WireMock
-progression endpoint.
+vocabulary, complete court centres). Everything runs under `./gradlew test`.
+
+The suites in `e2e/` all drive real messages from the emulator queue through the assembled context
+against a real store, and they divide into two kinds — the distinction matters when reading what one
+of them proves:
+
+- **Edge-level (queue to socket).** `CourtRegisterEndToEndIT`, `PayloadSourceEndToEndIT`,
+  `RegisterAddressingEndToEndIT`, `SubmissionOutcomeEndToEndIT` and `RunDeadlineEndToEndIT` start
+  `RegisterStackSupport`: a Redis container for the claim-check payload and one WireMock server
+  answering the results-query, reference-data and progression contracts. Nothing between the queue
+  and the socket is doubled, so these are the suites that can count what a delivery cost the world
+  outside the pod — including the negative that a duplicate posts no second register.
+- **Component-level (real broker and store, stubbed outward ports).** `MessageAccountingIT`,
+  `RequestDedupeIT`, `DuplicateDetectionIT`, `DeliveryExhaustionIT`, `ContractValidationDeadLetterIT`,
+  `QueueOutageRecoveryIT`, `ReadinessPolicyIT`, `TraceabilityIT`, `FailureSignalIT`, `StoreOutageIT`,
+  `ProlongedStoreOutageIT` and `StartupWithQueueDownIT` select the stub payload source — which
+  selects the stub subscriptions source and the stub submission client with it — and some also mock
+  the payload port outright, because a request that fails on cue or stays in flight on a latch is not
+  something a cache can be asked for. Their subject is settlement, the processed log, readiness and
+  accounting; they reach no socket and prove nothing about one. `QueueSettlementIT` is narrower
+  still by design: a real broker under a mocked pipeline, so that what a `complete`, an `abandon` and
+  a `deadLetter` mean to the queue is proven without booting a context at all.
 
 ## Observability
 

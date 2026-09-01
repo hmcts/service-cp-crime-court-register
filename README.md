@@ -35,8 +35,12 @@ Legacy behaviour remains the oracle for everything not catalogued there.
 The full pipeline is implemented and green under the full quality gates: inbound transport with
 explicit settlement and the durable idempotency guard, the ported transformation (fragment build,
 subscription matching, the twelve-mapper aggregation document), pre-send contract validation
-against the vendored progression schemas, and the 202-only submission gateway — proven end to end
-by the `e2e/` suites (queue to socket) and the container smoke. Every in-service defect fix is
+against the vendored progression schemas, and the 202-only submission gateway — proven by the `e2e/`
+suites and the container smoke. Five of those suites are edge-level, driving a hearing from the
+emulator queue to a socket over a real payload cache and real HTTP contexts; the rest run the real
+broker and store with the outward ports stubbed, and are about settlement, the processed log and
+readiness rather than about what reaches a socket. Which is which is listed in
+[doc/TECHNICAL_DESIGN.md](doc/TECHNICAL_DESIGN.md#testing-strategy). Every in-service defect fix is
 landed and pinned; the content-changing ones stay **gated on sign-off before cutover**, tracked
 per row in the [defect-fix register](doc/DEFECT-FIXES.md). What remains of the increment is the
 differential audit against the recorded legacy oracle (Phase 8 of
