@@ -235,17 +235,32 @@ class ProsecutionCaseOrApplicationMapperTest {
             assertThat(mapWithoutMatchingCases()).isEmpty();
         }
 
+        /**
+         * The skip is said out loud, and said in bounded terms.
+         *
+         * <p>The SNI-9005 guard's own message quotes the case id, and this port does not — the same
+         * sweep that took the application id out of {@code DefendantContextBuilder}'s parity
+         * warning. A prosecution case id is not in Principle VII's permitted correlation set
+         * ({@code requestId}, {@code hearingId}, {@code hearingDay}, {@code source}, the court
+         * centre's id or OU code, counts, timings), and no register row authorises it here: C20
+         * authorises an identifier in the <em>application</em> warning below, which is a different
+         * line about a different reference. A row authorises one warning, not a class of them.
+         *
+         * <p>The line still says which guard fired and that a case was skipped, which is what an
+         * operator acts on; {@code requestId} and {@code hearingId} reach it through the MDC, from
+         * the run-aware layer that has them.
+         */
         @Test
-        @DisplayName("a warning names the case id that could not be found")
-        void a_warning_names_the_case_id() {
+        @DisplayName("a warning says a case was skipped, and never which one")
+        void a_warning_says_a_case_was_skipped_and_never_which_one() {
             try (CapturedLog log = CapturedLog.capturing(ProsecutionCaseOrApplicationMapper.class)) {
                 mapWithoutMatchingCases();
 
                 assertThat(warnings(log))
                         .singleElement()
                         .satisfies(message -> assertThat(message)
-                                .contains(CASE_ID)
-                                .contains("Prosecution case not found"));
+                                .contains("Prosecution case not found")
+                                .doesNotContain(CASE_ID));
             }
         }
 

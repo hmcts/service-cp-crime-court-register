@@ -16,6 +16,18 @@ released, so everything sits under Unreleased.
 
 ### Changed
 
+- 2026-09-01 — **Two parity WARNs stop naming the reference they skipped.** The transformation's
+  unnamed-application-case warning carried `applicationId=`, and the ported SNI-9005 guard carried
+  the prosecution case id in the legacy's `[Case ID: …]` form. Neither identifier is in Principle
+  VII's permitted correlation set (`requestId`, `hearingId`, `hearingDay`, `source`, court-centre id
+  / OU code, counts, timings), and neither is authorised by a defect-fix row: the one row that
+  authorises an id in a log line is C20, and that is a different warning — the unresolvable
+  *application* line in `ProsecutionCaseOrApplicationMapper`, which is unchanged. Both lines still
+  say which guard fired and that something was skipped, and `requestId`/`hearingId` reach them
+  through the MDC from the run-aware layer, as they do for every transformation log line. A sweep of
+  the other new adapter and parity warnings found no further instance. Not operator-affecting beyond
+  the log text, which now carries less.
+
 - 2026-09-01 — **C3's shared retry policy is now actually shared, and it costs three renamed
   settings.** The defect-fix register promises "a config-driven retry policy applied identically to
   all three named clients"; what the three shared was the status taxonomy, and nothing else. The

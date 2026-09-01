@@ -383,7 +383,57 @@ class DefendantContextBuilderTest {
                                 + "one stage later")
                         .anySatisfy(message -> assertThat(message)
                                 .contains("Prosecution case not found")
-                                .contains("app-1"));
+                                .contains("skipping"));
+            }
+        }
+
+        /**
+         * The same warning, read as Principle VII reads it.
+         *
+         * <p>This line is a <strong>parity</strong> warning: it exists because the legacy skips the
+         * same reference one stage later, and nothing on the register's fix list authorises it to
+         * carry an identifier. The permitted correlation set at INFO and above is
+         * {@code requestId}, {@code hearingId}, {@code hearingDay}, {@code source}, the court
+         * centre's id or OU code, counts and timings — a court application's id is none of them,
+         * and this builder is a pure transformation stage that holds no correlation of its own
+         * anyway. The run-aware layers put {@code requestId} and {@code hearingId} on the line
+         * through the MDC; what this stage adds is the bounded code and nothing else.
+         *
+         * <p>Exactly one warning in this service names a court application, and it is a different
+         * one: {@code ProsecutionCaseOrApplicationMapper}'s unresolvable-application line, which
+         * the C20 register row authorises in as many words. A row authorises one warning, not a
+         * class of them.
+         *
+         * <p>Written as a refusal rather than as an assertion about wording, because that is the
+         * property that matters: not "the message says X" but "the identifier is nowhere in the
+         * output at all".
+         */
+        @ParameterizedTest(name = "[{index}]")
+        @ValueSource(strings = {
+            """
+            {"courtApplications":[{"id":"app-1",
+              "applicant":{"prosecutingAuthority":{"prosecutionAuthorityId":"auth-1"}},
+              "subject":{"masterDefendant":{"masterDefendantId":"master-1","isYouth":true}},
+              "courtApplicationCases":[{"prosecutionCaseId":"case-1"},{"offences":[]}],
+              "judicialResults":[{"judicialResultId":"jr-1","orderedDate":"2020-04-17"}]}]}""",
+            """
+            {"courtApplications":[{"id":"app-1",
+              "applicant":{"prosecutingAuthority":{"prosecutionAuthorityId":"auth-1"}},
+              "subject":{"masterDefendant":{"masterDefendantId":"master-1","isYouth":true}},
+              "courtApplicationCases":[{"prosecutionCaseId":"case-1"}],
+              "courtOrder":{"courtOrderOffences":[{"offence":{"id":"offence-1"}}]},
+              "judicialResults":[{"judicialResultId":"jr-1","orderedDate":"2020-04-17"}]}]}""",
+        })
+        @DisplayName("never names the application, which is outside the permitted correlations")
+        void never_names_the_application_it_skipped_a_case_for(final String hearing) {
+            try (CapturedLog log = CapturedLog.capturing(DefendantContextBuilder.class)) {
+                gatherJson(hearing);
+
+                assertThat(log.renderings())
+                        .as("a court application's id is not in the permitted correlation set, and "
+                                + "only C20's row authorises an id — in a different warning")
+                        .isNotEmpty()
+                        .noneMatch(line -> line.contains("app-1"));
             }
         }
     }

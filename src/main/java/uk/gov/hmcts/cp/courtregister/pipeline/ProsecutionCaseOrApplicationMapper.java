@@ -121,10 +121,16 @@ final class ProsecutionCaseOrApplicationMapper {
         for (final String caseId : registerDefendant.cases()) {
             final JsonNode prosecutionCase = identified(cases, caseId);
             if (prosecutionCase == null) {
-                // SNI-9005's guard (`0781bbc2`), kept exactly as it stands — warned about and not
+                // SNI-9005's guard (`0781bbc2`), kept as it stands — warned about and not
                 // counted. C20 names the application path; this one was already guarded.
-                LOG.warn("[Case ID: {}] - Prosecution case not found in "
-                        + "hearingJson.prosecutionCases, skipping", caseId);
+                //
+                // The id the legacy's message quotes is not repeated (Principle VII). A prosecution
+                // case id is outside the permitted correlation set, and no register row authorises
+                // one here: C20 authorises an identifier in the application warning below, which is
+                // a different line about a different reference. What an operator acts on is that
+                // this guard fired, and `requestId`/`hearingId` reach the line through the MDC.
+                LOG.warn("[Case ID: unnamed] - Prosecution case not found in "
+                        + "hearingJson.prosecutionCases, skipping");
                 continue;
             }
             mapped.add(new CourtRegisterCaseOrApplication(

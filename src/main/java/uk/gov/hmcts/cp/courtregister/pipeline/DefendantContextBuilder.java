@@ -297,15 +297,13 @@ public final class DefendantContextBuilder {
     private static void addApplicationCases(
             final DefendantContext context, final JsonNode application) {
 
-        final String applicationId = Json.text(application, ID);
         for (final JsonNode applicationCase : Json.array(application, COURT_APPLICATION_CASES)) {
-            addCaseOnce(context, Json.text(applicationCase, PROSECUTION_CASE_ID), applicationId);
+            addCaseOnce(context, Json.text(applicationCase, PROSECUTION_CASE_ID));
         }
         if (Json.truthy(application, COURT_ORDER)) {
             for (final JsonNode courtOrderOffence : Json.dereferencedArray(
                     Json.at(application, COURT_ORDER), COURT_ORDER_OFFENCES)) {
-                addCaseOnce(
-                        context, Json.text(courtOrderOffence, PROSECUTION_CASE_ID), applicationId);
+                addCaseOnce(context, Json.text(courtOrderOffence, PROSECUTION_CASE_ID));
             }
         }
     }
@@ -324,16 +322,26 @@ public final class DefendantContextBuilder {
      * dead-letter queue instead. So the skip happens at the gather, in the words the mapper's own
      * guard uses.
      *
-     * @param context       the defendant's context
-     * @param caseId        the prosecution case's id, if the record named one
-     * @param applicationId the application the reference came from, for the warning
+     * <p><strong>The line names no application</strong> (constitution Principle VII). This is a
+     * parity warning — it exists because the legacy warns about the same reference one stage later —
+     * and nothing on the fix register authorises it to carry an identifier. The permitted
+     * correlation set is {@code requestId}, {@code hearingId}, {@code hearingDay}, {@code source},
+     * the court centre's id or OU code, counts and timings; a court application's id is none of
+     * them, and this stage is pure and holds no correlation of its own to offer instead. The
+     * run-aware layers put {@code requestId} and {@code hearingId} on the line through the MDC,
+     * which is where every correlation on a transformation's logs comes from.
+     *
+     * <p>Exactly one warning in this service names a court application, and it is a different one:
+     * {@code ProsecutionCaseOrApplicationMapper}'s unresolvable-application line, which the C20
+     * register row authorises in as many words. A row authorises one warning, not a class of them.
+     *
+     * @param context the defendant's context
+     * @param caseId  the prosecution case's id, if the record named one
      */
-    private static void addCaseOnce(
-            final DefendantContext context, final String caseId, final String applicationId) {
-
+    private static void addCaseOnce(final DefendantContext context, final String caseId) {
         if (caseId == null) {
             LOG.warn("[Case ID: null] - Prosecution case not found in hearingJson.prosecutionCases,"
-                    + " skipping. applicationId={}", applicationId);
+                    + " skipping");
             return;
         }
         if (!context.cases().contains(caseId)) {
