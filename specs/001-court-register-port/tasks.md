@@ -466,10 +466,26 @@ vocabulary and matching semantics.
       the outer failure — wins. The `minItems ⇒ INVALID_FORMAT` classification T052 specified is
       written down where the mapping lives, with its reason. The seam's `PMD.UnusedPrivateField`
       suppression came off with the body, as it said it would.)*
-- [ ] T055a [US3] Write `pipeline/RegisterTransformationChainTest` (red; seam:
+- [x] T055a [US3] Write `pipeline/RegisterTransformationChainTest` (red; seam:
       `RegisterTransformationChain`) — fragment → matched subscriptions → validated document
       through the chained stages; a no-op at each stage surfaces its distinct reason; stage
       exceptions classify, never swallow.
+      *(done — 20 cases, all red on the seam this task creates. Driven through the **real**
+      collaborators over the six base payloads rather than through mocks: what the suite is about is
+      the joins, and a mocked stage cannot get a join wrong. Three decisions recorded here:
+      **(1)** the C6 case asserts `no-defendants` **and** asserts it is not `no-subscriptions`,
+      because a register with no defendants satisfies no subscription either — asking the questions
+      in the aggregation's own order would answer `no-subscriptions` for it, so the chain's first
+      stage is what makes C6 real and the negative is what pins it. **(2)** The contract check is a
+      chain stage, so a document progression would refuse leaves the chain as a **classified**,
+      non-transient `TransformationFailedException`; the reason is `OUTBOUND_CONTRACT_VIOLATION`,
+      the code `data-model.md` already reserves for the C29 pre-send check, rather than the generic
+      `TRANSFORMATION_FAILED` — the pipeline's catch-all would otherwise read it as an unexpected
+      TRANSIENT failure and hand the delivery back four more times for a document that reads the
+      same every time. **(3)** The envelope guards are the chain's own: a payload carrying no
+      hearing reaches `Json.dereferenced` today and fails with a message about `courtCentre`, and
+      one carrying no shared time throws a bare `NullPointerException`, so both are asserted as
+      classified failures and the chain has to say what it means.)*
 - [ ] T056 [US3] Implement `pipeline/RegisterTransformationChain` + `pipeline/AggregationMapper`
       wiring into `RegisterTransformer` (green T055a and T051 chain cases;
       `DistributionPipelineTest` end-to-end unit path now green). *(T051's cases are already green —
