@@ -110,11 +110,17 @@ class DeliveryExhaustionIT {
     private static String connectionString;
 
     /**
-     * Nothing that resembles hearing content: every defendant on a court register is a youth, and a
-     * placeholder that looked like a payload would invite an assertion to depend on its shape.
+     * The empty claim-check envelope: a hearing that gathered nobody, so the run completes
+     * {@code no-defendants} through the real transformation.
+     *
+     * <p>Nothing in it resembles hearing content — every defendant on a court register is a youth,
+     * and a placeholder that looked like a payload would invite an assertion to depend on its
+     * shape — but it is an envelope, because the pipeline reads the hearing and the share instant
+     * out of what the payload port returns.
      */
     private static final JsonNode PLACEHOLDER =
-            JacksonConfig.contractObjectMapper().readTree("{\"stub\":true}");
+            JacksonConfig.contractObjectMapper().readTree(
+                    "{\"stub\":true,\"sharedTime\":\"1970-01-01T00:00:00Z\",\"hearing\":{\"courtCentre\":{}}}");
 
     @MockitoBean
     private HearingPayloadSource payloadSource;

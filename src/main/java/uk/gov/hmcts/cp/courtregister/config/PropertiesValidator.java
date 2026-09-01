@@ -310,7 +310,8 @@ public class PropertiesValidator implements InitializingBean {
             final CourtRegisterProperties properties) {
         final CourtRegisterProperties.Referencedata referencedata = properties.referencedata();
         if (referencedata.mode() == SubscriptionsSourceMode.STUB) {
-            validateTheRefusingStubIsNotDeployed(properties);
+            validateTheEmptyAnswerIsNotDeployed(properties);
+            validateTheEmptyAnswerIsNotGivenAboutARealHearing(properties);
         } else {
             validateTheLiveSourceCanAskReferenceData(referencedata);
             validateTheSubscriptionsReadIsAttempted(referencedata);
@@ -320,17 +321,38 @@ public class PropertiesValidator implements InitializingBean {
 
     /**
      * Constitution Principle V, the same rule {@link #validateTheStubIsNotDeployed} applies to the
-     * payload stub. This one fails loudly rather than quietly — a refusal is recorded and the
-     * delivery handed back — but a deployed pod running it can never address a register at all, so
-     * every hearing that produces one is parked for ever.
+     * payload stub: a deployed pod running this one asks reference data nothing, so every hearing
+     * it reads completes {@code no-subscriptions} and no register is ever addressed.
      */
-    private static void validateTheRefusingStubIsNotDeployed(
+    private static void validateTheEmptyAnswerIsNotDeployed(
             final CourtRegisterProperties properties) {
         if (hasText(properties.servicebus().namespace())) {
             throw new IllegalStateException(
                     SUBSCRIPTIONS_MODE + " is STUB while " + NAMESPACE + " is set, which is a"
                             + " deployed environment — the stub asks reference data nothing, so every"
-                            + " hearing that produced a register would be parked unaddressed");
+                            + " hearing that produced a register would complete addressed to nobody");
+        }
+    }
+
+    /**
+     * The stub answers "nobody is subscribed", which is a legitimate business outcome, so it must
+     * never be given about a hearing anybody could mistake for a real one.
+     *
+     * <p>This is the pairing that would be indistinguishable from working: a live payload source
+     * fetching real hearings, and a subscriptions source that says nobody wants them. Every run
+     * would complete {@code no-subscriptions} — the flow's commonest legitimate outcome — and the
+     * metrics, the processed log and the queue would all agree that the service was doing its job.
+     * The stub cannot make itself safe here by refusing instead: the read happens before the
+     * transformation, so a refusal would only trade a silent completion for a queue that never
+     * drains. It is the configuration that has to be refused, and it is refused at startup.
+     */
+    private static void validateTheEmptyAnswerIsNotGivenAboutARealHearing(
+            final CourtRegisterProperties properties) {
+        if (properties.payload().mode() == PayloadSourceMode.LIVE) {
+            throw new IllegalStateException(
+                    SUBSCRIPTIONS_MODE + " is STUB while " + PAYLOAD_MODE + " is LIVE — real"
+                            + " hearings would be fetched and every one of them completed"
+                            + " no-subscriptions, because reference data was never asked");
         }
     }
 
@@ -398,7 +420,7 @@ public class PropertiesValidator implements InitializingBean {
         }
     }
 
-    /** The whole now-subscriptions read, or nothing where the refusing stub is selected. */
+    /** The whole now-subscriptions read, or nothing where the stub is selected. */
     private static Duration subscriptionsReadWorstCase(
             final CourtRegisterProperties properties) {
         final CourtRegisterProperties.Referencedata referencedata = properties.referencedata();

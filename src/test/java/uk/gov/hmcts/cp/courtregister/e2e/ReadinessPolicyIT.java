@@ -87,9 +87,15 @@ class ReadinessPolicyIT {
     /** So a failure is reported as a failure rather than as a hang. */
     private static final Duration HELD_AT_MOST = Duration.ofMinutes(2);
 
-    /** Nothing that resembles hearing content: every defendant on a court register is a youth. */
+    /**
+     * The empty claim-check envelope: a hearing that gathered nobody, so a run completes
+     * {@code no-defendants}. Nothing in it resembles hearing content — every defendant on a court
+     * register is a youth — but it is an envelope, because the pipeline reads the hearing and the
+     * share instant out of what the payload port returns.
+     */
     private static final JsonNode PLACEHOLDER =
-            JacksonConfig.contractObjectMapper().readTree("{\"stub\":true}");
+            JacksonConfig.contractObjectMapper().readTree(
+                    "{\"stub\":true,\"sharedTime\":\"1970-01-01T00:00:00Z\",\"hearing\":{\"courtCentre\":{}}}");
 
     private static final String SOURCE = "RECEIVE";
     private static final String ENTITY_PATH = "courtregister.requests";

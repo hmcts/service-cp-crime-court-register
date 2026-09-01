@@ -505,6 +505,7 @@ class ConfigurationValidationTest {
         @Test
         void stub_mode_without_an_endpoint_or_an_identity_should_start() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.payload.mode=STUB",
                     "courtregister.referencedata.mode=STUB",
                     "courtregister.referencedata.base-url=",
                     "courtregister.referencedata.system-user-id=")
@@ -512,9 +513,29 @@ class ConfigurationValidationTest {
         }
 
         /**
-         * Constitution Principle V, the same rule the payload stub is held to. The refusing stub
-         * fails loudly rather than quietly, but a deployed pod running it can never address a
-         * register at all: every hearing that produces one is parked, for ever.
+         * The stub answers "nobody is subscribed", which is a legitimate business outcome and this
+         * flow's commonest one. Given about a real hearing it is indistinguishable from working:
+         * every run completes {@code no-subscriptions}, and the log, the metrics and the queue all
+         * agree the service is doing its job. The stub cannot refuse its way out of that — the read
+         * happens before the transformation, so refusing would only trade a silent completion for a
+         * queue that never drains — so the configuration is what is refused, at startup.
+         */
+        @Test
+        void stub_mode_beside_a_live_payload_source_should_fail_startup() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.payload.mode=LIVE",
+                    "courtregister.referencedata.mode=STUB").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.referencedata.mode")
+                                .hasMessageContaining("courtregister.payload.mode");
+                    });
+        }
+
+        /**
+         * Constitution Principle V, the same rule the payload stub is held to: a deployed pod
+         * running this one asks reference data nothing, so every hearing it reads completes
+         * addressed to nobody and no register is ever sent.
          */
         @Test
         void stub_mode_on_the_deployed_credential_source_should_fail_startup() {
@@ -642,6 +663,7 @@ class ConfigurationValidationTest {
         @Test
         void stub_mode_should_not_be_held_to_the_live_read_timings() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.payload.mode=STUB",
                     "courtregister.referencedata.mode=STUB",
                     "courtregister.referencedata.max-attempts=10",
                     "courtregister.referencedata.read-timeout=1m")

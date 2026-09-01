@@ -34,8 +34,23 @@ public class StubHearingPayloadSource implements HearingPayloadSource {
 
     private static final Logger LOG = LoggerFactory.getLogger(StubHearingPayloadSource.class);
 
+    /**
+     * The empty claim-check envelope this source answers with.
+     *
+     * <p>An <em>envelope</em>, not an arbitrary object: the pipeline reads the hearing and the share
+     * instant out of what the payload source returns, and a placeholder without them is a
+     * transformation failure rather than the no-op a stub is for — every message dead-lettered by a
+     * pod configured exactly as it meant to be. It carries a hearing that gathered nobody and a
+     * court centre with no code, so the run completes {@code no-defendants}, which is the outcome a
+     * payload with no register in it earns anyway.
+     *
+     * <p>Nothing in it resembles hearing content. Every defendant on a court register is a youth,
+     * and a stub payload that looked like a hearing would invite both a test to depend on its shape
+     * and a reader to think this service had one.
+     */
     private static final String PLACEHOLDER = """
-            {"stub":true,"note":"no hearing payload is fetched by the stub payload source"}
+            {"stub":true,"note":"no hearing payload is fetched by the stub payload source",
+             "sharedTime":"1970-01-01T00:00:00Z","hearing":{"courtCentre":{}}}
             """;
 
     private final PayloadFailureMode failureMode;
