@@ -621,8 +621,26 @@ vocabulary and matching semantics.
       pipeline's behaviour through the wrong object. The endpoint and identity startup checks the
       informant gateway makes are `PropertiesValidator`'s here, so one deployment fault has one
       home.)*
-- [ ] T062 [P] [US1] `adapter/progression/ProgressionRegisterSubmissionClientTest` — P1 twin fixed
+- [x] T062 [P] [US1] `adapter/progression/ProgressionRegisterSubmissionClientTest` — P1 twin fixed
       (URL, media type, real CJSCPPUID, digest written before send, response_code recorded).
+      *(done — 16 cases red against the `ProgressionRegisterSubmissionClient` seam, and the seam
+      needed the submission port widened. **The port carried too little to write the row it is
+      supposed to write, and this is where that showed.** `ProcessedOutputRepository` takes no key:
+      every statement selects the row from `processed_request` under this run's `claim_owner` and
+      `claim_token`, so a superseded runner cannot replace the digest of the body the winner is about
+      to send. An adapter handed only `(document, caller, anomalies)` has nothing to fence against —
+      and two of the row's own columns, the court centre's OU code and the register day, are not
+      recoverable from the frozen `add-court-register` body either: the OU code appears only inside
+      the file name, and re-deriving the day in the adapter would be a second derivation of the day
+      C12 exists to fix. So `submit` now takes one `application/RegisterSubmission` — claim,
+      document, OU code, register day, caller, counts — the shape the informant port's
+      `AuthoritySubmission` has minus the fan-out dimension this flow does not have.
+      `TransformationResult.Register` gained the OU code beside the document, sourced from the
+      fragment the register was addressed by, because the transformation is the one participant that
+      holds it. **`SubmissionReceipt` gained `sentByThisDelivery`** for the same reason: a POSTED
+      replay skips the POST and still completes `submitted`, and a receipt that could not tell the
+      two apart would have the run log a call it never made. The existing pipeline and composition
+      suites were carried across unchanged in meaning and stay green.)*
 - [ ] T063 [P] [US1] `adapter/payload/LettuceHearingPayloadCacheIT` (Redis container) — live
       GET/dated-undated forms, TLS options honoured.
 - [ ] T064 [P] [US2] `application/SubmissionRedeliveryIT` (PG + WireMock) — POSTED replay skips the

@@ -121,7 +121,7 @@ public final class RegisterTransformationChain implements RegisterTransformer {
         }
 
         validated(document);
-        return new TransformationResult.Register(document);
+        return new TransformationResult.Register(document, fragment.courtCentreOUCode());
     }
 
     /**

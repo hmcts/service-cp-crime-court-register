@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.application;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -336,11 +337,12 @@ public class DistributionPipeline {
         if (groupProceedings.suppresses(command, hearingOf(payload))) {
             outcome = completed(claim, CompletionReason.GROUP_PROCEEDINGS);
         } else {
-            final JsonNode subscriptions = subscriptionsSource.subscriptionsOn(
-                    dates.subscriptionDay(sharedTimeOf(payload)), CallerIdentity.of(command));
+            final LocalDate registerDay = dates.subscriptionDay(sharedTimeOf(payload));
+            final JsonNode subscriptions =
+                    subscriptionsSource.subscriptionsOn(registerDay, CallerIdentity.of(command));
             outcome = spent(budget)
                     ? overran(claim, budget)
-                    : transformed(command, payload, subscriptions, claim, budget);
+                    : transformed(command, payload, subscriptions, registerDay, claim, budget);
         }
         return outcome;
     }
@@ -355,6 +357,8 @@ public class DistributionPipeline {
      * @param command       the validated request
      * @param payload       the hearing payload the fetch returned
      * @param subscriptions reference data's answer for the register's day
+     * @param registerDay   the day the subscriptions were read for, and the day the output row
+     *                      records (C12)
      * @param claim         the claim this run holds
      * @param budget        what is left of the run's time
      * @return the settlement the outcome calls for
@@ -363,6 +367,7 @@ public class DistributionPipeline {
             final DistributionCommand command,
             final JsonNode payload,
             final JsonNode subscriptions,
+            final LocalDate registerDay,
             final RunClaim claim,
             final RunBudget budget) {
 
@@ -379,7 +384,7 @@ public class DistributionPipeline {
                         : completed(claim, nothing.reason().completion());
             }
             case TransformationResult.Register register ->
-                submit(command, register, anomalies.counts(), claim, budget);
+                submit(command, register, anomalies.counts(), registerDay, claim, budget);
         };
     }
 
@@ -485,16 +490,19 @@ public class DistributionPipeline {
      * budget. The register has gone; a run that declined to record it would be redelivered and would
      * send it a second time, which is the one outcome the budget exists to prevent.
      *
-     * @param command  the validated request
-     * @param register the register the transformation produced
-     * @param claim    the claim this run holds
-     * @param budget   what is left of the run's time
+     * @param command     the validated request
+     * @param register    the register the transformation produced
+     * @param anomalies   how many of each guarded skip it survived
+     * @param registerDay the day the register covers, as its recipients were read for it (C12)
+     * @param claim       the claim this run holds
+     * @param budget      what is left of the run's time
      * @return the settlement the outcome calls for
      */
     private GuardDecision submit(
             final DistributionCommand command,
             final TransformationResult.Register register,
             final Map<TransformationAnomaly, Integer> anomalies,
+            final LocalDate registerDay,
             final RunClaim claim,
             final RunBudget budget) {
 
@@ -502,11 +510,16 @@ public class DistributionPipeline {
         if (spent(budget)) {
             outcome = overran(claim, budget);
         } else {
-            final SubmissionReceipt receipt = submissionClient.submit(
-                    register.document(), CallerIdentity.of(command), anomalies);
-            LOG.info("Register submitted. source={} requestId={} hearingId={} status={}",
+            final SubmissionReceipt receipt = submissionClient.submit(new RegisterSubmission(
+                    claim, register.document(), register.courtCentreOuCode(), registerDay,
+                    CallerIdentity.of(command), anomalies));
+            // `sentNow` distinguishes a POST this delivery made from a register the processed log
+            // already held POSTED, whose POST this delivery deliberately skipped. Both complete the
+            // run submitted; only one of them is a call that just happened, and a line that said
+            // otherwise would report traffic to progression that never left the pod.
+            LOG.info("Register submitted. source={} requestId={} hearingId={} status={} sentNow={}",
                     command.source(), command.requestId(), command.hearingId(),
-                    receipt.responseCode());
+                    receipt.responseCode(), receipt.sentByThisDelivery());
             outcome = completed(claim, CompletionReason.SUBMITTED);
         }
         return outcome;

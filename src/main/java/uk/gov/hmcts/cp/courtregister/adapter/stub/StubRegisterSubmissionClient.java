@@ -1,16 +1,13 @@
 package uk.gov.hmcts.cp.courtregister.adapter.stub;
 
-import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import uk.gov.hmcts.cp.courtregister.application.RegisterSubmission;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.application.SubmissionReceipt;
-import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
-import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
-import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 
 /**
  * A submission client that posts nothing, and refuses rather than pretending.
@@ -33,14 +30,10 @@ public class StubRegisterSubmissionClient implements RegisterSubmissionClient {
     private static final Logger LOG = LoggerFactory.getLogger(StubRegisterSubmissionClient.class);
 
     @Override
-    public SubmissionReceipt submit(
-            final CourtRegisterDocument document,
-            final CallerIdentity caller,
-            final Map<TransformationAnomaly, Integer> anomalies) {
-
+    public SubmissionReceipt submit(final RegisterSubmission submission) {
         LOG.error("STUB submission client invoked: this pod has nowhere to post a register, so the "
                 + "register is not sent and the run is failed. hearingId={} anomalies={}",
-                document.hearingId(), anomalies.size());
+                submission.document().hearingId(), submission.anomalies().size());
         throw new SubmissionFailedException(
                 FailureClassification.NON_TRANSIENT, ReasonCode.SUBMISSION_NOT_ACCEPTED);
     }

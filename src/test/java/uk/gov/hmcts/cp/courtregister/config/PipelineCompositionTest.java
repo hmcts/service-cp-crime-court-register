@@ -27,11 +27,11 @@ import uk.gov.hmcts.cp.courtregister.application.DistributionPipeline;
 import uk.gov.hmcts.cp.courtregister.application.HearingPayloadSource;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
 import uk.gov.hmcts.cp.courtregister.application.NowSubscriptionsSource;
+import uk.gov.hmcts.cp.courtregister.application.RegisterSubmission;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.application.SubmissionReceipt;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
-import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
@@ -165,15 +165,13 @@ class PipelineCompositionTest {
         when(payloadSource.fetch(any(DistributionCommand.class)))
                 .thenReturn(payload("hearing-with-surviving-youth-defendant.json"));
         answerWith(youthSubscription());
-        when(submissionClient.submit(any(CourtRegisterDocument.class), any(CallerIdentity.class),
-                any()))
-                .thenReturn(new SubmissionReceipt(202));
+        when(submissionClient.submit(any(RegisterSubmission.class)))
+                .thenReturn(new SubmissionReceipt(202, true));
 
         runner.run(context -> {
             run(context.getBean(DistributionPipeline.class));
 
-            verify(submissionClient, times(1)).submit(
-                    any(CourtRegisterDocument.class), any(CallerIdentity.class), any());
+            verify(submissionClient, times(1)).submit(any(RegisterSubmission.class));
             verify(guard).recordCompletion(claim, CompletionReason.SUBMITTED);
         });
     }

@@ -40,8 +40,17 @@ public sealed interface TransformationResult {
     /**
      * A register to send.
      *
-     * @param document the assembled {@code add-court-register} command
+     * <p>The OU code travels beside the document rather than in it. The frozen
+     * {@code add-court-register} contract has no field for it, and it is what an operator searches
+     * {@code processed_output} by — so the transformation, which is the one participant holding the
+     * fragment the register was addressed by, says it once rather than leaving the submission
+     * adapter to recover it from a file name.
+     *
+     * @param document          the assembled {@code add-court-register} command
+     * @param courtCentreOuCode the court centre's OU code, or {@code null} where the hearing carried
+     *                          none
      */
-    record Register(CourtRegisterDocument document) implements TransformationResult {
+    record Register(CourtRegisterDocument document, String courtCentreOuCode)
+            implements TransformationResult {
     }
 }
