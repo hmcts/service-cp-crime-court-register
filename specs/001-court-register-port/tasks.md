@@ -919,8 +919,35 @@ documentation-final states.
       settles: five failed runs, five ERRORs, five transient counts and one exhaustion. The
       contract-validation line is deliberately uncorrelated (there is no readable request id to
       correlate by) and is found by its opening words instead.)*
-- [ ] T071 [A] [US4] Container smoke re-verified with the finished service
+- [x] T071 [A] [US4] Container smoke re-verified with the finished service
       (`scripts/container-smoke.sh` locally + the CI step); compose stack documented in README.
+      *(done — **PASS**, recorded verbatim: `[container-smoke] PASS: readiness reported UP within the
+      60s budget`, with `Started Application in 2.219 seconds`. Three things this run settled.
+      **(1) The finished service still starts as a packaged artefact.** No JUnit suite can say so:
+      the `*IT` suites run inside the build's JVM and would all pass with an unbuildable image. What
+      started here is the jar in its container against the committed compose dependencies, with the
+      whole pipeline wired — every adapter, the vendored schemas read at startup and
+      `PropertiesValidator` holding the configuration to its rules.
+      **(2) The broker was still coming up when readiness went UP, which is the designed answer.**
+      The application logged `onTransportError ... Connection refused ... hostName=servicebus-emulator`
+      while reporting ready, because the `servicebus` indicator is deliberately in neither health
+      group (spec FR-011): a broker blip must not roll the pods. The smoke run is the only place that
+      ordering is observed rather than asserted.
+      **(3) The first attempt failed on this machine, and not for the service's reasons.** Host port
+      5432 was already bound by a pre-existing container, so `postgres` could not start and the
+      script failed and tore its stack down cleanly — which is itself the behaviour the teardown trap
+      is for. The run above used a local-only compose override (`COMPOSE_FILE`, host port 55432)
+      supplied from outside the repository: the committed script and compose file are exactly as CI
+      runs them, and nothing in the tree was changed to make the smoke pass.
+      README's quickstart carried two claims that had stopped being true and one that never was:
+      PMD is described as explicit-only and outside `check` (constitution 2.0.3 puts `pmdMain` and
+      `pmdTest` in it); the Docker prerequisite named only the emulator and Postgres, where the `*IT`
+      suites now also start Redis and WireMock; and `./gradlew bootRun`, offered as a bare command,
+      **cannot start** — both adapter modes default to LIVE and startup then demands upstream
+      endpoints and a `CJSCPPUID`. All three are corrected, with the three environment variables the
+      compose `app` service already sets. `specs/.../quickstart.md` carried the same PMD claim and is
+      corrected with them. Nothing else in README was touched: the Status section describes a
+      bootstrap that finished several phases ago, and rewriting it is T072's.)*
 - [ ] T072 [US3] Documentation finalisation: DEFECT-FIXES all 31 fixable rows → FIXED with pinning
       tests verified by grep; TECHNICAL_DESIGN/API_CONTRACTS/SOLUTION_BRIEF/CHANGELOG completed;
       README quickstart + Documentation table final.

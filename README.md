@@ -41,17 +41,18 @@ This service exposes **no REST API**. The only HTTP surface is Spring Boot Actua
 ## Prerequisites
 
 - ☕️ Java 25 on `PATH` (the build resolves a 25 toolchain; use `./gradlew`, never a system Gradle)
-- 🐳 Docker (Service Bus emulator, Postgres, and the `*IT` test fixtures)
+- 🐳 Docker (the compose stack — Postgres and the Service Bus emulator with its SQL Server
+  companion — plus the Redis and WireMock fixtures the `*IT` suites start for themselves)
 
 ## Quickstart
 
 ```bash
-./gradlew build                 # compile + tests + Checkstyle (0 warnings) + JaCoCo gate
-./gradlew test                  # test suite only
+./gradlew build                 # compile + tests + PMD + Checkstyle (0 warnings) + JaCoCo gate
+./gradlew test                  # test suite only; the *IT suites in it need Docker
 ./gradlew checkstyleMain        # style gate on main sources
-./gradlew pmdMain               # PMD (explicit-only; not part of `check`)
+./gradlew pmdMain               # PMD on main sources; `check` runs pmdMain and pmdTest as well
 ./gradlew jacocoTestReport      # coverage report → build/reports/jacoco
-./gradlew bootRun               # local run against docker-compose dependencies
+./gradlew bootRun               # local run against docker-compose dependencies (see below)
 ./scripts/container-smoke.sh    # packaged-artefact smoke: compose up + readiness gate
 ```
 
@@ -59,12 +60,19 @@ Local dependencies:
 
 ```bash
 docker compose up -d postgres servicebus-emulator
+COURTREGISTER_PAYLOAD_MODE=STUB COURTREGISTER_REFERENCEDATA_MODE=STUB \
+  COURT_REGISTER_SYSTEM_USER_ID=00000000-0000-0000-0000-000000000000 ./gradlew bootRun
 ```
 
+Both adapter modes default to `LIVE` — a service that has to be told to fetch payloads is one that
+will be deployed not fetching them — so a bare `bootRun` refuses to start: startup demands upstream
+endpoints and a `CJSCPPUID`, and compose has neither results nor reference data to call. The `app`
+service in `docker-compose.yml` sets the same three variables for the same reason.
+
 The emulator's queue definition lives in `docker/servicebus-emulator/config.json`; the `*IT` test
-fixtures (from phase 1 of the tasks) mount the same file, so local, CI and deployed queue
-properties cannot drift. Compose is local-only; `bootRun` does not inherit compose environment
-variables.
+fixtures mount the same file, so local, CI and deployed queue properties cannot drift. Compose is
+local-only, and `bootRun` does not inherit compose environment variables — which is why the command
+above passes them itself.
 
 ## Documentation
 

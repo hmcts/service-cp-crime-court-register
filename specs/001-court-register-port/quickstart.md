@@ -9,8 +9,7 @@
 ## Full verification before commit
 
 ```bash
-./gradlew build            # compiles, all tests (*Test + *IT), Checkstyle (0 warnings), JaCoCo gate
-./gradlew pmdMain          # PMD is explicit-only — run it by name
+./gradlew build            # compiles, all tests (*Test + *IT), PMD, Checkstyle (0 warnings), JaCoCo gate
 ./gradlew jacocoTestReport # HTML coverage under build/reports/jacoco
 ```
 
