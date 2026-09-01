@@ -20,8 +20,9 @@ Functions hosting is also being retired estate-wide (Modern by Default).
 A queue-consuming Boot service (`courtregister.requests`) with a processed-request log,
 `(source, requestId)` idempotency, explicit settlement, bounded retries, five named terminal
 outcomes, and pre-send schema validation — plus **fixes for the 31 in-service catalogued legacy
-defects** (C18/C28/C34 are externally-owned remediations tracked before cutover), each pinned by a
-test and tracked in [DEFECT-FIXES.md](DEFECT-FIXES.md) with its sign-off state.
+defects** and the two appended under review (C35, C36); C18/C28/C34 are externally-owned
+remediations tracked before cutover. Each fix is pinned by a test and tracked in
+[DEFECT-FIXES.md](DEFECT-FIXES.md) with its sign-off state.
 
 ## Scope
 
@@ -37,10 +38,15 @@ query API (hearing payload); reference data (`now-subscriptions`); progression c
 
 ## Domain Model
 
-`DistributionCommand` → hearing payload (Jackson tree) → one `RegisterFragment` (youth-filtered
-defendant contexts, vocabulary, three dates) → matched subscriptions → one
-`CourtRegisterAggregationRequest` (typed records validated against the vendored progression
-schemas). *TODO: entity list finalised with P4/P5.*
+`DistributionCommand` → hearing payload (Jackson tree, never bound to a typed model) → one
+`RegisterFragment` (youth-filtered defendant contexts, 18-key vocabulary, three dates) → matched
+subscriptions → one `CourtRegisterDocument` (typed records validated against the vendored
+progression schemas: hearing venue, recipients, and per-defendant parent guardian, hearing,
+aliases, prosecution cases/applications with offences and results, defence counsels). Persistence:
+`processed_request` (state machine + claim protocol) and `processed_output` (0..1 per command —
+`UNIQUE (source, request_id)` — carrying `request_digest`, `response_code` and the
+`anomaly_summary` reason-code counts). Entity detail:
+`specs/001-court-register-port/data-model.md`.
 
 ## API Surface
 
@@ -60,10 +66,15 @@ defendant PII in telemetry.
 
 ## Risks & Assumptions
 
-Content-changing fixes are implemented now and **gated on sign-off before cutover** (see the
-register's Sign-off column); the Q9 reference-data snapshot verifies no live subscription depends
-on the accidental matching routes; the rendered-PDF check verifies C24's newline handling on
-`OEE_Layout5`. *TODO: full table with P7.*
+| Risk / assumption | Mitigation / owner |
+|---|---|
+| Content-changing fixes alter what recipients see (dates, verdict code, wording, attendance, ethnicity, recipient sets) | Implemented now, **gated on sign-off before cutover** — per-row markers in the register's Sign-off column (business, progression, IG per Q15) |
+| A live subscription relies on an accidental matching route (informant-code equality, vacuous major-creditor flag, non-court-register branches) | The Q9 `now_subscriptions` snapshot verifies before cutover (C4/C5/C30) |
+| C24's newline handling could render differently | Verified once against a rendered `OEE_Layout5` PDF before cutover |
+| `progression.add-court-register` is append-per-POST | Never shadow-run with sends enabled; duplicates are absorbed for generation by progression's latest-per-hearing sweep (assumption recorded in the spec) |
+| A genuinely address-less youth defendant has no agreed fallback | Design-doc Q4 (refuse vs placeholder) stays open and gates cutover; meanwhile the document is an explicit, replayable `FAILED` (C29) |
+| The outbound schema pin (`criminal-court-public-model` 17.103.13) could drift from progression's deployed version | The vendored copy is the frozen contract; a bump is a cross-team event with a provenance update |
+| C18/C28/C34 remediations live outside this repo | Registered PENDING with owner + trigger; tracked to conclusion before cutover |
 
 ## Open Items
 

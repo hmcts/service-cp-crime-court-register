@@ -39,3 +39,11 @@
 Authored at bootstrap together with spec/plan/tasks; the two open boxes are the increment's known
 open ends, not gaps in the specification. Review rounds are recorded in the phase-final commit
 narratives rather than re-listed here.
+
+**Re-verified at documentation finalisation (T072, 2026-09-01):** every ticked box above still
+holds against the tree as built. The "34/34 rows" measure reads as "all 34 catalogued rows
+present": the register has since grown two appended rows (C35, C36) under the constitution's
+append mechanism (v2.0.2), which extends the catalogue rather than contradicting the criterion —
+every FIXED row's pinning test was verified present in `src/test` by grep. The three unticked
+boxes remain deliberately open: business sign-off gates cutover, and the last two close with
+Phase 8 (T073–T075, the differential audit).

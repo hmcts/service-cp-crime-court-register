@@ -13,8 +13,32 @@ released, so everything sits under Unreleased.
   lifecycle stays in `SUSPENDING`, retries on the next delivery, and this counter is the loud
   signal that the outage response itself is failing. Part of the transport-review remediation
   (review finding 2); the metric surface is pinned by `ProcessingMetricsTest`.
+- 2026-08-31 — **Defect-fix register.** `doc/DEFECT-FIXES.md` catalogues the 34 legacy defects
+  (design doc §7, C1–C34) this port fixes rather than reproduces, each with its legacy citation,
+  fix specification, planned pinning test and sign-off state. All in-service rows start PLANNED
+  and move to FIXED only in the commit whose pinning test passes; content-changing fixes are
+  additionally gated on sign-off before cutover; C18/C28/C34 are legacy-repo items tracked as
+  pending with owner and trigger. (Two further rows, C35 and C36, were appended under review on
+  2026-09-01 — the register is append-only.)
+- 2026-08-31 — **Repository scaffold.** Gradle 9.7 / Java 25 / Spring Boot 4.1 build with the
+  estate quality gates (Checkstyle google_checks at zero warnings, JaCoCo line 0.88 / branch 0.85,
+  PMD — explicit-only at scaffold time, moved into `check` on 2026-09-01, see Changed), CI
+  workflow set, Service Bus emulator compose stack, and the container smoke script — cloned from
+  the informant-register reference implementation and renamed for the court register (queue
+  `courtregister.requests`, package `uk.gov.hmcts.cp.courtregister`).
 
 ### Changed
+
+- 2026-09-01 — **Documentation finalised to as-built.** `TECHNICAL_DESIGN.md`, `API_CONTRACTS.md`
+  and `SOLUTION_BRIEF.md` lose their "target design" banners and TODO markers: the state machine
+  (both `PROCESSING_DEADLINE_EXCEEDED` origins), the shared `RetryPolicy`, the fenced
+  `processed_output` claim with `anomaly_summary`, the composition wiring, the porting map and the
+  full configuration table (including the renamed back-off keys) are documented as implemented.
+  `DEFECT-FIXES.md`: every pinning test re-verified against `src/test` by grep; C16 moves
+  PLANNED → FIXED (the fix-by-omission is complete in-repo — secrets-scanner gate plus the
+  startup refusal; rotation of the legacy-exposed keys stays externally tracked); C15 and C16 now
+  cite their pinning tests by the names the suites actually carry; C35 records its landed fix.
+  README's Status section describes the finished increment. No code change.
 
 - 2026-09-01 — **The configuration says what it does, and the log surface is asserted rather than
   assumed.** `application.yaml` now documents `courtregister.referencedata.headers`, bound and empty
@@ -193,16 +217,3 @@ released, so everything sits under Unreleased.
   with `Instant.toString()`, which emits neither a space separator nor a 61st second. No message
   shape that was accepted before and is refused now can be produced by the agreed producer.
 
-### Added
-
-- 2026-08-31 — **Repository scaffold.** Gradle 9.7 / Java 25 / Spring Boot 4.1 build with the
-  estate quality gates (Checkstyle google_checks at zero warnings, JaCoCo line 0.88 / branch 0.85,
-  PMD explicit-only), CI workflow set, Service Bus emulator compose stack, and the container smoke
-  script — cloned from the informant-register reference implementation and renamed for the court
-  register (queue `courtregister.requests`, package `uk.gov.hmcts.cp.courtregister`).
-- 2026-08-31 — **Defect-fix register.** `doc/DEFECT-FIXES.md` catalogues the 34 legacy defects
-  (design doc §7, C1–C34) this port fixes rather than reproduces, each with its legacy citation,
-  fix specification, planned pinning test and sign-off state. All in-service rows start PLANNED
-  and move to FIXED only in the commit whose pinning test passes; content-changing fixes are
-  additionally gated on sign-off before cutover; C18/C28/C34 are legacy-repo items tracked as
-  pending with owner and trigger.

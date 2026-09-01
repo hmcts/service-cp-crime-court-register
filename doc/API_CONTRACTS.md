@@ -1,8 +1,8 @@
 # Contracts — service-cp-crime-court-register
 
-> **Status: target design.** These are the contracts the service is being built to (per
-> `specs/001-court-register-port/tasks.md`); at P0 bootstrap only the vendored outbound schemas
-> exist in the repo. Sections marked TODO finalise with the phase that lands them.
+> **Status: as built.** Both contracts are implemented and enforced in the tree: the inbound
+> schema is committed and held to the parser case for case; the outbound documents are validated
+> against the vendored progression schemas before every POST.
 
 ## There is no REST API
 
@@ -23,9 +23,9 @@ One JSON body per hearing-resulted distribution command:
 
 `additionalProperties: false`; required `source, requestId, hearingId, hearingDay, sharedTime,
 eventType`; `userId` optional (absent, never null). `source` enum `["RESULTS"]`, `eventType` enum
-`["Hearing_Resulted"]` — the court register has no SJP leg. The canonical schema will live at
-`src/main/resources/contracts/distribution-command.schema.json` (draft-07; authored by task T012,
-not yet in the repo), jointly owned with the producer in `cpp-context-results`.
+`["Hearing_Resulted"]` — the court register has no SJP leg. The canonical schema lives at
+`src/main/resources/contracts/distribution-command.schema.json` (draft-07; court-register `$id`),
+jointly owned with the producer in `cpp-context-results`.
 
 ### Field semantics
 
@@ -55,8 +55,6 @@ refuses fails the build. Where they once diverged, the schema was narrowed rathe
 widened (2026-08-31 — see `doc/CHANGELOG.md`); the schema is the authority, and a contract document
 that does not describe what the service accepts is the defect.
 
-*TODO: finalise alongside P1 (parser + schema corpus tests).*
-
 ### Message properties (broker-level, part of the contract)
 
 `messageId = "RESULTS:{requestId}"` (duplicate-detection key); `contentType = application/json`;
@@ -82,8 +80,20 @@ the recorded status, without reprocessing**: a `COMPLETED` request is acknowledg
 completed, no run, row untouched); a `FAILED` one is re-parked under the identity that exhausted it,
 and replayed under any other identity. Nothing is published anywhere in either case — this service
 has no status channel and no outbound contract other than `add-court-register` (§2), so "the
-terminal status is republished" would name a channel that does not exist. *TODO: full table lands
-with P3.*
+terminal status is republished" would name a channel that does not exist.
+
+| Delivery condition | Settlement | Recorded state |
+|---|---|---|
+| Contract-invalid body (schema/parser refusal) | dead-letter, bounded reason | no processed-log row |
+| Store unavailable | abandon; intake suspends until the probe recovers | none (nothing consumed against a dead store) |
+| Duplicate of a `COMPLETED` request | complete (no run) | row untouched |
+| Duplicate of a `FAILED` request, same `messageId` identity | dead-letter (re-parked) | row untouched |
+| Replay of a `FAILED` request, fresh `messageId` | processed afresh | `FAILED → RECEIVED` and onward |
+| Same `requestId`, different immutable content (fingerprint mismatch) | dead-letter | record untouched (C17) |
+| Transient failure (payload/refdata unanswered, submission transient, deadline overrun) | abandon → broker redelivery | `RETRYING` + bounded reason |
+| Transient failure on the final permitted delivery | dead-letter | `FAILED DELIVERY_LIMIT_EXHAUSTED` + `exhausted_message_id` |
+| Non-transient failure (contract violation, refused read, rejected submission, fatal transformation) | dead-letter on first delivery | `FAILED` + bounded reason |
+| Legitimate no-op (`group-proceedings`, `no-defendants`, `no-subscriptions`, `no-youth-defendants`) | complete | `COMPLETED` + that reason (C33) |
 
 ## 2. Outbound contract — `progression.add-court-register`
 
@@ -95,9 +105,10 @@ The document schema is progression-owned: top level in
 `cpp-context-progression/progression-command/progression-command-api/src/raml/json/schema/progression.add-court-register.json`,
 nested components compiled from `criminal-court-public-model` **17.103.13**. The exact compiled
 schemas are **vendored** at `src/main/resources/contracts/progression/` (`additionalProperties:
-false` throughout); the design has every outbound document validated against them **before**
-sending — a schema-invalid document is an explicit failure, never a swallowed 400 (defect-fix
-C29; the validator lands with tasks T052/T055).
+false` throughout); every outbound document is validated against them **before** sending
+(`adapter/progression/OutboundContractValidator`, wired unconditionally) — a schema-invalid
+document is an explicit `FAILED` with the violation's JSON pointer, never a swallowed 400
+(defect-fix C29).
 
 Content notes that differ deliberately from the legacy app are in
 [DEFECT-FIXES.md](DEFECT-FIXES.md) (C11 filename, C23 verdict code, C24 wording newline, and the

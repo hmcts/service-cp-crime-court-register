@@ -8,12 +8,13 @@ the first half of that flow is a Node.js Azure Durable Functions app that fails 
 the final POST swallows every error, four separate guards report success when nothing happened, and
 a schema-invalid document loses the whole hearing's register without a trace.
 
-This service replaces that function app with a Spring Boot pipeline on AKS. The target design:
-consume hearing commands from the Azure Service Bus queue `courtregister.requests`, build the
-register from the Redis claim-check payload (with the results-query fallback), match
-subscriptions, and POST `progression.add-court-register` — with idempotency, explicit settlement,
-bounded retries, and a recorded terminal state for every command. It lands phase by phase per
-`specs/001-court-register-port/tasks.md`; the Status section below says what exists today.
+This service replaces that function app with a Spring Boot pipeline on AKS: it consumes hearing
+commands from the Azure Service Bus queue `courtregister.requests`, builds the register from the
+Redis claim-check payload (with the results-query fallback), matches subscriptions, and POSTs
+`progression.add-court-register` — with idempotency, explicit settlement, bounded retries, and a
+recorded terminal state for every command. It was built phase by phase, test-first, per
+`specs/001-court-register-port/tasks.md`; the Status section below says where the increment
+stands.
 
 It is deliberately **not** a bug-for-bug port. Of the thirty-four defects catalogued in the
 migration design, the thirty-one that live in this service are **fixed**, each with a pinning test
@@ -29,13 +30,18 @@ Legacy behaviour remains the oracle for everything not catalogued there.
 | Package   | `uk.gov.hmcts.cp.courtregister`                       |
 | Ports     | 8082 local / 4550 Kubernetes                          |
 
-## Status — court-register-port (P0 bootstrap)
+## Status — court-register-port (pipeline complete; differential audit outstanding)
 
-What exists today: the Boot shell (an empty application that builds green under the full quality
-gates), the governance layer (constitution, Spec Kit feature docs, the defect-fix register), and
-the vendored outbound contract. Everything else on this page is the **target design**, being built
-test-first against the feature specification in `specs/001-court-register-port/` — inbound
-transport and idempotency, then the register pipeline, then the outbound progression gateway.
+The full pipeline is implemented and green under the full quality gates: inbound transport with
+explicit settlement and the durable idempotency guard, the ported transformation (fragment build,
+subscription matching, the twelve-mapper aggregation document), pre-send contract validation
+against the vendored progression schemas, and the 202-only submission gateway — proven end to end
+by the `e2e/` suites (queue to socket) and the container smoke. Every in-service defect fix is
+landed and pinned; the content-changing ones stay **gated on sign-off before cutover**, tracked
+per row in the [defect-fix register](doc/DEFECT-FIXES.md). What remains of the increment is the
+differential audit against the recorded legacy oracle (Phase 8 of
+`specs/001-court-register-port/tasks.md`); cutover itself — the producer's queue publisher and the
+legacy kill-switch — is a separate increment.
 This service exposes **no REST API**. The only HTTP surface is Spring Boot Actuator.
 
 ## Prerequisites
@@ -81,8 +87,9 @@ above passes them itself.
 | Solution brief                                    | [doc/SOLUTION_BRIEF.md](doc/SOLUTION_BRIEF.md)     |
 | Technical design                                  | [doc/TECHNICAL_DESIGN.md](doc/TECHNICAL_DESIGN.md) |
 | Contracts (inbound message and outbound command)  | [doc/API_CONTRACTS.md](doc/API_CONTRACTS.md)       |
-| **Defect-fix register** — the 34 legacy defects this port fixes, each with its pinning test and sign-off state | [doc/DEFECT-FIXES.md](doc/DEFECT-FIXES.md) |
+| **Defect-fix register** — all 36 rows: the 34 catalogued legacy defects plus the two appended under review, each with its pinning test and sign-off state | [doc/DEFECT-FIXES.md](doc/DEFECT-FIXES.md) |
 | Changelog                                         | [doc/CHANGELOG.md](doc/CHANGELOG.md)               |
+| OpenAPI placeholder — deliberately empty: there is no REST API (the comment says why) | [doc/openapi.yaml](doc/openapi.yaml)               |
 
 Repository working conventions live in `CLAUDE.md`; the engineering constitution —
 including the defect-fix-first rule the register above enforces — is

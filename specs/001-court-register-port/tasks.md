@@ -948,9 +948,29 @@ documentation-final states.
       compose `app` service already sets. `specs/.../quickstart.md` carried the same PMD claim and is
       corrected with them. Nothing else in README was touched: the Status section describes a
       bootstrap that finished several phases ago, and rewriting it is T072's.)*
-- [ ] T072 [US3] Documentation finalisation: DEFECT-FIXES all 31 fixable rows → FIXED with pinning
+- [x] T072 [US3] Documentation finalisation: DEFECT-FIXES all 31 fixable rows → FIXED with pinning
       tests verified by grep; TECHNICAL_DESIGN/API_CONTRACTS/SOLUTION_BRIEF/CHANGELOG completed;
       README quickstart + Documentation table final.
+      *(done — every pinning test named in the register's 36 rows grep-verified against `src/test`:
+      84 of 86 named cases matched verbatim; the two that did not were the register's citations,
+      not the suites' — C15 cited `transport_security` where the suite carries
+      `TransportSecurity.the_cache_connection_should_verify_the_certificate_when_tls_is_used`, and
+      C16 cited a `system_user_id_is_required` case that was landed as
+      `SubmissionPolicy.a_live_pipeline_without_a_submission_identity_should_fail_startup` — both
+      rows repointed at the real names. C16 was the one residual PLANNED row: investigated and
+      moved to FIXED — the fix-by-omission is complete in this repo (secrets-scanner workflow
+      gates every push; LIVE startup refuses a missing `system-user-id`), while rotation of the
+      keys the legacy repo exposed stays externally tracked. C35's status cell gains the FIXED
+      prefix its landed fix (`ed3af79`/`5157ef0`) had earned; the three PENDING legacy rows
+      (C18/C28/C34) verified accurate. TECHNICAL_DESIGN, API_CONTRACTS and SOLUTION_BRIEF lose
+      their target-design banners and every TODO: the state machine decision tree with both
+      `PROCESSING_DEADLINE_EXCEEDED` origins, the shared `RetryPolicy`, the fenced output claim +
+      `anomaly_summary`, the composition wiring, the porting map, the full configuration table
+      with the renamed back-off keys, and the inbound failure-behaviour table. The cutover section
+      cites the migration design doc §6.5 for replay assurance; README deliberately carries no
+      pre-cutover gate detail. CHANGELOG's duplicate Added headings merged; README Status rewritten
+      to the finished increment and the Documentation table completed. No code changes; no code
+      defects found in review.)*
 
 ---
 
