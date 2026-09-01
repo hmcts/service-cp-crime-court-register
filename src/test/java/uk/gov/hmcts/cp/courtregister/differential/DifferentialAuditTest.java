@@ -49,7 +49,7 @@ import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.PortOutcome;
 import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.PortResult;
 
 /**
- * The differential audit: 351 recorded legacy runs, put through this port, with every difference
+ * The differential audit: 381 recorded legacy runs, put through this port, with every difference
  * made to name the {@code doc/DEFECT-FIXES.md} row that allows it.
  *
  * <p><strong>What the audit is for.</strong> Every other suite in this repository asserts what the
@@ -84,13 +84,24 @@ import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.PortResult;
  *       no-op where no row applies, and the row's own answer where one does.</li>
  * </ul>
  *
- * <p><strong>One recording is not an oracle and says so itself.</strong> The two
- * {@code shared-time__absent} cases are marked {@code clockDependent} by the recorder, because
- * {@code moment} reads an absent date as <em>now</em> and the register they produced is a reading of
- * the clock the corpus was built at. There is nothing there for a port to reproduce — reproducing it
- * would require a clock inside a transformation the constitution requires to be pure — so those
- * cases are held to the one thing that is assertable: the port refuses the payload rather than
- * inventing a date for it.
+ * <p><strong>One recording is not an oracle and says so itself.</strong> The three
+ * {@code shared-time__absent} cases were recorded with no shared time at all, and {@code moment}
+ * reads an absent date as <em>now</em>, so the register they produced is a reading of the clock the
+ * corpus was built at. There is nothing there for a port to reproduce — reproducing it would require
+ * a clock inside a transformation the constitution requires to be pure — so those cases are held to
+ * the one thing that is assertable: the port refuses the payload rather than inventing a date for
+ * it. C35's two {@code hearing-date} cases are recorded clock-dependent as well and are
+ * <em>not</em> treated this way: there the payload is complete and one field is filled from the
+ * clock, so the rest of the document remains an oracle and the field is a difference C35 claims —
+ * by reading the recorded value back as a London wall clock and requiring it to name the instant the
+ * corpus was built at.
+ *
+ * <p><strong>One comparison is about a request rather than a value.</strong> C12 moves which day's
+ * subscription set a hearing is addressed by, and that never reaches the document: a register built
+ * from the wrong day's subscriptions looks entirely ordinary. The recorder captured the whole
+ * {@code now-subscriptions} GET, so the audit compares the day the legacy asked for against the day
+ * this port's own {@link Dates} answers for the same shared time, and reports the difference like
+ * any other.
  *
  * <p><strong>It is fast because it is pure.</strong> The whole corpus runs in seconds against no
  * container, no socket and no clock, so it needs no tag and runs in {@code ./gradlew build} with
@@ -102,7 +113,7 @@ import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.PortResult;
 // runs ended in the same place, which row explains a divergence — and each question answers where it
 // is decided. A single exit would put every one of those answers behind one variable.
 @SuppressWarnings("PMD.OnlyOneReturn")
-@DisplayName("Differential audit — 351 recorded legacy runs against the port")
+@DisplayName("Differential audit — 381 recorded legacy runs against the port")
 class DifferentialAuditTest {
 
     private static final Logger LOG = LoggerFactory.getLogger(DifferentialAuditTest.class);
@@ -127,6 +138,18 @@ class DifferentialAuditTest {
 
     /** Cases the corpus itself disqualifies as oracles, listed in the summary. */
     private static final List<String> NOT_AN_ORACLE = new ArrayList<>();
+
+    /**
+     * One case and place per row, so the summary is checkable rather than only countable.
+     *
+     * <p>A count alone cannot be followed back to anything. The report T075 commits names, for every
+     * row, a case a reader can open — and the first one the audit meets is as good a witness as any
+     * and is stable, because the corpus is enumerated in the order the recorder wrote it.
+     */
+    private static final Map<String, String> EXAMPLES = new LinkedHashMap<>();
+
+    /** The production date reader, for the one comparison that is about a request and not a value. */
+    private static final Dates DATES = new Dates();
 
     private final ObjectMapper mapper = JacksonConfig.contractObjectMapper();
 
@@ -157,11 +180,18 @@ class DifferentialAuditTest {
         final RecordedCase recorded = DifferentialCorpus.load(caseId);
         final PortOutcome port = run(recorded);
 
-        if (recorded.clockDependent() || recorded.sharedTimeAbsent()) {
+        if (recorded.sharedTimeAbsent()) {
             // The recording is a reading of the clock it was made at (moment.tz(undefined, zone) is
             // the current time), so there is no oracle here to agree or disagree with — not the
             // register date, not the file-name day, and not the day the subscription set was read
             // for. What is assertable is that the port did not invent one either.
+            //
+            // Only the shared-time cases are held this way, and deliberately so. C35's two clock
+            // legs are ALSO recorded clock-dependent, but there the whole payload is present and it
+            // is one field the legacy fills from the clock, so the rest of the document is a
+            // perfectly good oracle and the field itself is a difference C35 claims by proving the
+            // recorded value IS the clock. Excluding every clock-dependent case would have hidden
+            // exactly the row the corpus was extended to reach.
             NOT_AN_ORACLE.add(caseId);
             assertThat(port.result())
                     .describedAs("%s was recorded with no shared time, so its output is a reading "
@@ -206,7 +236,7 @@ class DifferentialAuditTest {
     @DisplayName("audits the whole recorded corpus and not a subset of it")
     void audits_the_whole_recorded_corpus() {
         // A corpus that quietly shrank would make this suite pass by looking at less.
-        assertThat(recordedCorpus()).hasSize(351);
+        assertThat(recordedCorpus()).hasSize(381);
     }
 
     /**
@@ -219,7 +249,8 @@ class DifferentialAuditTest {
         EXPLAINED.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
                 .forEach(row -> summary.append("\n  ").append(row.getValue())
-                        .append(" × ").append(row.getKey()));
+                        .append(" × ").append(row.getKey())
+                        .append("\n      e.g. ").append(EXAMPLES.get(row.getKey())));
         summary.append("\n  ").append(NOT_AN_ORACLE.size())
                 .append(" × case(s) the corpus marks clock-dependent, held to a refusal instead: ")
                 .append(NOT_AN_ORACLE);
@@ -321,16 +352,55 @@ class DifferentialAuditTest {
     private static List<Divergence> divergences(
             final RecordedCase recorded, final PortOutcome port) {
 
+        final List<Divergence> divergences = new ArrayList<>(referenceDataDay(recorded, port));
         if (!agrees(recorded, port)) {
-            return List.of(new Divergence.Outcome(recorded, port));
+            divergences.add(new Divergence.Outcome(recorded, port));
+            return List.copyOf(divergences);
         }
         if (!recorded.producedDocument()) {
-            return List.of();
+            return List.copyOf(divergences);
         }
-        return JsonParity.differences(recorded.expected(), port.document()).stream()
+        JsonParity.differences(recorded.expected(), port.document()).stream()
                 .map(difference -> (Divergence) new Divergence.Field(recorded, port,
                         difference.path(), difference.expected(), difference.actual()))
-                .toList();
+                .forEach(divergences::add);
+        return List.copyOf(divergences);
+    }
+
+    /**
+     * Whether the two runs would read the same day's subscription set, as a divergence where they
+     * would not.
+     *
+     * <p>The one externally-visible effect of C10 that never reaches the document. The recorder
+     * captured the whole {@code now-subscriptions} GET — query string included — so the day the
+     * legacy asked for is evidence rather than a re-derivation, and the day this port asks for is
+     * computed here from the same shared time by the production {@link Dates}. A register addressed
+     * from the wrong day's subscription set is otherwise indistinguishable from a correct one, which
+     * is precisely why C12 is its own row and why it took a comparison of its own to observe.
+     *
+     * @param recorded the recorded case
+     * @param port     what the port did
+     * @return the divergence, or nothing where the two days agree or the run never made the read
+     */
+    private static List<Divergence> referenceDataDay(
+            final RecordedCase recorded, final PortOutcome port) {
+
+        final String legacyDay = recorded.referenceDataDay().orElse(null);
+        final String sharedTime = recorded.sharedTime().orElse(null);
+        if (legacyDay == null || sharedTime == null) {
+            return List.of();
+        }
+        final String portDay;
+        try {
+            portDay = DATES.subscriptionDay(sharedTime).toString();
+        } catch (TransformationFailedException theSharedTimeIsUnreadable) {
+            // The port refuses the payload rather than reading a day out of it, which is the whole
+            // of C2's territory and is already claimed as an outcome divergence.
+            return List.of();
+        }
+        return legacyDay.equals(portDay)
+                ? List.of()
+                : List.of(new Divergence.ReferenceDataDay(recorded, port, legacyDay, portDay));
     }
 
     /**
@@ -399,6 +469,7 @@ class DifferentialAuditTest {
                 .hasSize(1);
 
         EXPLAINED.merge(claims.get(0).reference(), 1, Integer::sum);
+        EXAMPLES.putIfAbsent(claims.get(0).reference(), caseId + " — " + where(divergence));
     }
 
     /**
@@ -417,26 +488,29 @@ class DifferentialAuditTest {
         if (!recorded.producedDocument() || port.document() == null) {
             return;
         }
-        countReconciled(recorded.expected());
+        countReconciled(recorded.caseId(), recorded.expected());
     }
 
     /**
      * Walks a recorded document, counting every component a derivation covers.
      *
-     * @param node the node to walk
+     * @param caseId the case being walked, for the report's example
+     * @param node   the node to walk
      */
-    private static void countReconciled(final JsonNode node) {
+    private static void countReconciled(final String caseId, final JsonNode node) {
         if (node.isArray()) {
-            node.forEach(DifferentialAuditTest::countReconciled);
+            node.forEach(entry -> countReconciled(caseId, entry));
         } else if (node.isObject()) {
             node.propertyNames().forEach(name -> {
                 final RegisteredDefectFixes.Fix fix = RegisteredDefectFixes.forProperty(name);
                 if (fix != null) {
                     EXPLAINED.merge(fix.reference(), 1, Integer::sum);
+                    EXAMPLES.putIfAbsent(fix.reference(),
+                            caseId + " — the derived component " + name);
                 }
             });
             node.propertyStream().forEach(property ->
-                    countReconciled(property.getValue()));
+                    countReconciled(caseId, property.getValue()));
         }
     }
 
@@ -447,8 +521,11 @@ class DifferentialAuditTest {
      * @return the JSON pointer, or a word for the run itself
      */
     private static String where(final Divergence divergence) {
-        return divergence instanceof Divergence.Field field
-                ? "the difference at " + field.path()
+        if (divergence instanceof Divergence.Field field) {
+            return "the difference at " + field.path();
+        }
+        return divergence instanceof Divergence.ReferenceDataDay
+                ? "the day the subscription set was read for"
                 : "the run's outcome";
     }
 
@@ -462,6 +539,10 @@ class DifferentialAuditTest {
         if (divergence instanceof Divergence.Field field) {
             return "the legacy wrote " + render(field.oracleValue())
                     + " and the port wrote " + render(field.portValue());
+        }
+        if (divergence instanceof Divergence.ReferenceDataDay day) {
+            return "the legacy read the subscriptions in force on " + day.oracleDay()
+                    + " and the port reads the set in force on " + day.portDay();
         }
         final RecordedCase recorded = divergence.recorded();
         return "the legacy ended as " + recorded.outcome()

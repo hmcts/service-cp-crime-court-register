@@ -1,0 +1,119 @@
+{
+  "caseId": "mut__surviving-youth-defendant__subscription-routing__informant-code-only",
+  "recordedAt": null,
+  "oracle": {
+    "entryPoint": "CourtRegisterOrchestrator guard -> SetCourtRegister -> CourtRegisterSubscriptions -> OutboundCourtRegister",
+    "orchestrator": "CourtRegisterOrchestrator/index.js:21-49",
+    "activityBoundary": "every callActivity argument and return value crosses oracle/lib/boundary.js, as the Durable Task extension serialises them; OutboundCourtRegister therefore receives the ORCHESTRATOR's hearing, not the copy SetCourtRegister mutated",
+    "runner": "oracle/build-corpus.js",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "timezone": "Europe/London, pinned in oracle/lib/stubs.js installEnvironment()"
+  },
+  "sourcePinning": {
+    "nodeAppCommit": "0d63f3ae6bd0f4929e182de8d8ad9429160dd07f",
+    "nodeAppWorkingTreeClean": true,
+    "oracleDigest": "c016073ec65242bf397f688c66d421dc4098700ee80d5f33b288a8a2beb416b4",
+    "contractBundleDigest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
+    "nodeVersion": "v24.18.1",
+    "full": "recorded/provenance.json"
+  },
+  "params": {
+    "sharedTime": "2020-06-01T10:00:00Z",
+    "cjscppuid": "00000000-0000-0000-0000-000000000000",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "subscriptionsInline": true
+  },
+  "observed": {
+    "outcome": "document",
+    "stage": "complete",
+    "noDocumentReason": null,
+    "matchedSubscriptionCount": 5,
+    "registerDefendantCount": 1,
+    "defendantCount": 1,
+    "recipientCount": 5,
+    "subscriptionsReturnedUndefined": false,
+    "swallowedErrors": [],
+    "refdataCallCount": 1,
+    "refdataCalls": [
+      {
+        "verb": "GET",
+        "url": "http://reference-data.oracle.invalid/referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on=2020-06-01",
+        "on": "2020-06-01",
+        "headers": {
+          "CJSCPPUID": "00000000-0000-0000-0000-000000000000",
+          "Accept": "application/vnd.referencedata.query.get-now-subscriptions+json"
+        },
+        "attempt": 1,
+        "answered": "resolve status=200"
+      }
+    ]
+  },
+  "contract": {
+    "status": "IN_CONTRACT",
+    "basis": "the document the legacy produced satisfies the frozen add-court-register contract; progression accepts it, so the port must produce the same document",
+    "violations": null,
+    "validatedAgainst": {
+      "bundle": "src/main/resources/contracts/progression/ (vendored, frozen)",
+      "commandSchema": "http://moj.gov.uk/cpp/progression/command/add-court-register.json",
+      "schemaCount": 15,
+      "validator": "ajv 6.14.0, schemaId:\"id\", format:\"full\", allErrors",
+      "portValidator": "networknt SpecificationVersion.DRAFT_4, formatAssertionsEnabled(true) (OutboundContractValidator)",
+      "keywordSurfaceAudited": [
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "definitions",
+        "description",
+        "enum",
+        "format",
+        "id",
+        "items",
+        "maxLength",
+        "minItems",
+        "minLength",
+        "minimum",
+        "pattern",
+        "properties",
+        "required",
+        "title",
+        "type"
+      ]
+    }
+  },
+  "deterministic": true,
+  "clockDependent": false,
+  "clockProbe": null,
+  "digests": {
+    "hearing": "b47c0c6164bea0deb4b41f77ee92c9f5aeda7ba07408d946abc90345de2e3cee",
+    "subscriptions": "f9a149a2b00e979fa3e695528ec34a3fcc3176072752b1640d92a2d1c90ed657",
+    "params": "3f53a13a913e4cb8ecef27cc2678964edab7e1fefbdb4a57cd0f05b37a1de251",
+    "expected": "78995659879b842229d39a4c31d8a766735bc3dbefa5300460ac1337e5f04fbc"
+  },
+  "inputContract": {
+    "status": "IN_CONTRACT",
+    "basis": "cpp-context-reference-data/referencedata-query/referencedata-query-api/src/raml/json/schema/referencedata.query.get-now-subscriptions.json declares informantCode and 40 entries of the real capture carry one, so the field is producer output. No court-register entry carries one, so the equality is CONSTRUCTED — which is precisely C4's \"iff any live subscription's informantCode equals a court-centre code\"",
+    "note": "The producer can send this. Whatever the legacy did with it is a parity obligation, subject to the OUTPUT axis (contractStatus) saying how it may be asserted."
+  },
+  "evidence": "informantCode is OBSERVED in the real 274-entry capture at $DF/NowsVariantsSubscriptions/test/subscriptions.json, on entries of other kinds; carrying it on a court-register entry is CONSTRUCTED",
+  "provenance": {
+    "kind": "mutation",
+    "baseCase": "surviving-youth-defendant",
+    "baseRole": "spine",
+    "baseFixture": "fixtures/hearings/hearing-with-surviving-youth-defendant.json",
+    "baseFixtureOrigin": "service-cp-crime-court-register/src/test/resources/fixtures/base/hearing-with-surviving-youth-defendant.json (AUTHORED for the port — see BASE_FIXTURE_CAVEAT)",
+    "subscriptionsInput": "fixtures/subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsOrigin": "cpp-context-azure-legalaidagency/azure-functions/durable-functions/NowsVariantsSubscriptions/test/subscriptions.json (five court-register entries, verbatim, including the one entry in the whole capture that covers court house B01LY00)",
+    "sharedTimeSource": "the payload's own sharedTime (2020-06-01T10:00:00Z)",
+    "operator": "subscription-routing",
+    "operatorVariant": "informant-code-only",
+    "note": "A child who survives every filter to the outbound document: youth-flagged, a youth date of birth, a middle name, both ethnicity descriptions, two defendantCaseJudicialResults so postHearingCustodyStatus reaches a real value, an associated defence organisation, a two-entry defendantAttendance with the youth's record SECOND (defect C8), and a prosecuting-authority court application.",
+    "operatorScope": "subscriptions",
+    "operatorBaseScope": "primary",
+    "operatorDescription": "Routes the one subscription that covers the hearing's court house through each of SubscriptionsService.getSubscriptions's OTHER four match arms.",
+    "operatorRationale": "Defect rows C4, C5 and C30 are all statements about which arm of SubscriptionsService.getSubscriptions (lines 15-42) a court-register subscription is allowed to match through, and the real 274-entry capture exercises exactly one of them: every one of its 133 court-register subscriptions matches on `selectedCourtHouses` and nothing else. No entry carries an `informantCode` (40 non-register entries do), none is flagged `isPrisonCourtRegisterSubscription` (3 non-register entries are), none is also a NOWs subscription, and no entry anywhere sets `anyMajorCreditor`. So the corpus recorded the three rows' subject matter not at all, and the audit found them explaining nothing. This operator takes the Wandsworth YOT entry — the ONE entry whose selectedCourtHouses covers B01LY00 — closes the court-house route it currently matches by, and re-opens it through each accidental route in turn. On the legacy every one of them matches and a register is produced; the port matches none of them, so the register is not produced, and THAT is the difference the three rows claim. The two major-creditor variants keep the court-house route open and vary the flag instead, because C30 is about a vocabulary answer and not about a route: `anyMajorCreditor` passes vacuously on empty data while `prosecutorMajorCreditor` cannot pass on the same empty data, which is the asymmetry the row is about and which the pair measures rather than asserts.",
+    "operatorDetail": {
+      "why": "C4 — SubscriptionsService.js:48-54 feeds the SAME ouCode to matchProsecutor (`informantCode ===`) as to matchCourtHouse. With the court-house route closed and informantCode set to the court centre's own code, the legacy matches on the informant arm and produces a register for a subscription that asked for a different court house. The port evaluates the informant arm not at all",
+      "reader": "SubscriptionsService.getSubscriptions:15-42; matchMajorCreditor:255-277"
+    }
+  }
+}

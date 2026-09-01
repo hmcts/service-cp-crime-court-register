@@ -12,7 +12,7 @@
   "sourcePinning": {
     "nodeAppCommit": "0d63f3ae6bd0f4929e182de8d8ad9429160dd07f",
     "nodeAppWorkingTreeClean": true,
-    "oracleDigest": "b304078d4f8f1a519e6ef1c9811d1ca54a281f0440be0720ecd44b1ded2f69e4",
+    "oracleDigest": "c016073ec65242bf397f688c66d421dc4098700ee80d5f33b288a8a2beb416b4",
     "contractBundleDigest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
     "nodeVersion": "v24.18.1",
     "full": "recorded/provenance.json"

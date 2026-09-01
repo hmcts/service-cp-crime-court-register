@@ -9,7 +9,7 @@
     "packageLockSha256": "d7d9a9323992384615871d4732b848d2590e80919000ec800a83022f26c7d859",
     "packageJsonSha256": "3d930ba3ae030352cf55264931e14c19d0d638518522312a5bd8efb70939d45f",
     "nodeVersion": "v24.18.1",
-    "oracleDigest": "b304078d4f8f1a519e6ef1c9811d1ca54a281f0440be0720ecd44b1ded2f69e4",
+    "oracleDigest": "c016073ec65242bf397f688c66d421dc4098700ee80d5f33b288a8a2beb416b4",
     "contractBundle": {
       "dir": "/home/sachin/moj/service-cp-crime-court-register/src/main/resources/contracts/progression",
       "digest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
@@ -49,9 +49,9 @@
       "authority": "the vendored, frozen progression contract in service-cp-crime-court-register/src/main/resources/contracts/progression/",
       "note": "IN_CONTRACT means the document the legacy produced satisfies the frozen add-court-register contract, so the port must reproduce it under golden equality. SCHEMA_INVALID means progression answers 400 and the legacy swallows it (defect C1): the port must NOT reproduce the document but reach a classified, dead-lettered contract failure naming the recorded violation. NO_DOCUMENT means the legacy produced nothing, and observed.noDocumentReason carries the obligation instead.",
       "counts": {
-        "IN_CONTRACT": 123,
-        "SCHEMA_INVALID": 66,
-        "NO_DOCUMENT": 162
+        "IN_CONTRACT": 135,
+        "SCHEMA_INVALID": 70,
+        "NO_DOCUMENT": 176
       }
     },
     "inputAxis": {
@@ -59,9 +59,9 @@
       "authority": "the published hearing model in cpp-platform-core-domain and the event schema public.hearing-resulted.json",
       "note": "IN_CONTRACT means the producer can send the payload, so whatever the legacy did with it is a parity obligation. SCHEMA_INVALID and PRODUCER_IMPLAUSIBLE mean it cannot: the recording is robustness evidence, and the port dead-letters as a message-contract violation. A case is a FULL parity obligation only when both axes say so.",
       "counts": {
-        "IN_CONTRACT": 220,
-        "SCHEMA_INVALID": 99,
-        "PRODUCER_IMPLAUSIBLE": 32
+        "IN_CONTRACT": 246,
+        "SCHEMA_INVALID": 101,
+        "PRODUCER_IMPLAUSIBLE": 34
       },
       "report": "node oracle/mutate.js --contract-report"
     }
@@ -85,7 +85,12 @@
       "reorder-array": "arrays",
       "unicode-name": "arrays",
       "drop-optional-field": "spine",
-      "null-field": "spine"
+      "null-field": "spine",
+      "subscription-routing": "primary",
+      "ethnicity-partial": "spine",
+      "asn-record-without-person": "spine",
+      "hearing-date": "spine",
+      "application-reference": "spine"
     },
     "primaryBases": [
       "surviving-youth-defendant",

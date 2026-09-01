@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.support;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
@@ -125,7 +126,15 @@ public final class RegisteredDefectFixes {
             groupProceedingsReadStrictly(),
             youthDefendantWhoseDetailsCannotBeResolved(),
             attendanceReadFromAnEmptyList(),
-            failureSwallowedAndReportedAsSuccess());
+            failureSwallowedAndReportedAsSuccess(),
+            matchedByAnInformantCode(),
+            matchedByARouteThatIsNotTheCourtRegisterOne(),
+            majorCreditorFlagThatPassesOnEmptyData(),
+            ethnicityFromWhicheverDescriptionIsThere(),
+            asnRecordWithoutAPerson(),
+            hearingDateReadFromTheWallClock(),
+            hearingDateDereferenceThatThrows(),
+            subscriptionsReadForTheDayAfterTheShare());
 
     private RegisteredDefectFixes() {
     }
@@ -570,6 +579,207 @@ public final class RegisteredDefectFixes {
                         && divergence.port().classifiedOrNeverRun());
     }
 
+    /**
+     * C4 — the court-centre code is compared against informant codes.
+     *
+     * @return the claim
+     */
+    private static Claim matchedByAnInformantCode() {
+        return new Claim("C4 (court-centre code compared against informant codes)",
+                "CourtRegisterSubscriptions/index.js:51 feeds the same ouCode — the court centre's "
+                        + "own code — to matchCourtHouse and to matchProsecutor "
+                        + "(SubscriptionsService.js:48-54, `informantCode ===`). A subscription that "
+                        + "asked for a different court house therefore matches anyway when its "
+                        + "informant code happens to equal a court-centre code, and a recipient "
+                        + "nobody subscribed receives a child's register. The port evaluates the "
+                        + "informant arm not at all. The claim requires the recorded reference-data "
+                        + "body to carry exactly that coincidence — no court-register entry covering "
+                        + "the hearing's court house, and at least one whose informantCode is that "
+                        + "court house — so a register lost for any other reason is not explained "
+                        + "here.",
+                divergence -> divergence instanceof Divergence.Outcome
+                        && divergence.port().isNoRegister("no-subscriptions")
+                        && divergence.recorded().producedDocument()
+                        && !coversTheCourtHouse(divergence.recorded())
+                        && matchesTheCourtHouseAsAnInformant(divergence.recorded()));
+    }
+
+    /**
+     * C5 — there is no court-register branch in the matcher.
+     *
+     * @return the claim
+     */
+    private static Claim matchedByARouteThatIsNotTheCourtRegisterOne() {
+        return new Claim("C5 (no court-register branch in the matcher)",
+                "SubscriptionsService.getSubscriptions has no arm keyed on "
+                        + "isCourtRegisterSubscription, so a court-register subscription that does "
+                        + "not cover the court house can still reach the register through the NOWs "
+                        + "arm (line 29, via matchSubscriptionRules) or the prison-register arm "
+                        + "(line 39) — accidental routes that survive the upstream filter because "
+                        + "the entry also carries the court-register flag. The port matches a "
+                        + "court-register subscription through selectedCourtHouses and the "
+                        + "vocabulary predicates and through nothing else. The claim requires the "
+                        + "recorded body to carry one of those two flags on an entry that covers "
+                        + "another court house, and no informant-code coincidence, which is C4's "
+                        + "route and not this one.",
+                divergence -> divergence instanceof Divergence.Outcome
+                        && divergence.port().isNoRegister("no-subscriptions")
+                        && divergence.recorded().producedDocument()
+                        && !coversTheCourtHouse(divergence.recorded())
+                        && !matchesTheCourtHouseAsAnInformant(divergence.recorded())
+                        && carriesAnAccidentalRoute(divergence.recorded()));
+    }
+
+    /**
+     * C30 — major-creditor flags match inconsistently on empty data.
+     *
+     * @return the claim
+     */
+    private static Claim majorCreditorFlagThatPassesOnEmptyData() {
+        return new Claim("C30 (major-creditor flags match inconsistently on empty data)",
+                "VocabularyService.js:329-334 leaves the register's two major-creditor lists empty "
+                        + "forever, and SubscriptionsService.js:295-297 then ends matchMajorCreditor "
+                        + "with `anyMajorCreditor && (prosecutorMajorCreditor != null || "
+                        + "nonProsecutorMajorCreditor != null)`. An empty array is not null, so a "
+                        + "subscription asking for any major creditor matches a court register that "
+                        + "names none — while the two specific flags, tested with `.length > 0` on "
+                        + "the same empty lists, cannot match at all. The port requires a non-empty "
+                        + "list from all three, so the register is not produced. The claim requires "
+                        + "the court-house route to be open — this is a vocabulary answer and not a "
+                        + "route, which is what separates it from C4 and C5 — and an entry covering "
+                        + "the hearing's court house to carry anyMajorCreditor.",
+                divergence -> divergence instanceof Divergence.Outcome
+                        && divergence.port().isNoRegister("no-subscriptions")
+                        && divergence.recorded().producedDocument()
+                        && coversTheCourtHouse(divergence.recorded())
+                        && asksForAnyMajorCreditor(divergence.recorded()));
+    }
+
+    /**
+     * C25 — ethnicity is written only when both descriptions are present.
+     *
+     * @return the claim
+     */
+    private static Claim ethnicityFromWhicheverDescriptionIsThere() {
+        return new Claim("C25 (ethnicity only when both descriptions present)",
+                "YouthDefendantMapper.js:70-74 returns an ethnicity only when the observed AND the "
+                        + "self-defined description are both present, which makes the `||` on line "
+                        + "72 unreachable and drops the ethnicity of a child who stated one and had "
+                        + "no observation recorded. The port writes the observed description when "
+                        + "there is one and the self-defined description otherwise. This adds "
+                        + "ethnicity data to registers that previously carried none, which is why "
+                        + "the row gates on information governance and not only on business "
+                        + "sign-off. The claim requires the recording to carry nothing at this "
+                        + "field and the port's value to be a description the payload itself holds "
+                        + "as its only one — so a port that invented an ethnicity, or copied the "
+                        + "wrong one of two, is still a difference.",
+                divergence -> divergence instanceof Divergence.Field field
+                        && field.path().endsWith("/ethnicity")
+                        && field.oracleValue() == null
+                        && isTheOnlyDescriptionOnRecord(
+                                divergence.recorded().hearing(), string(field.portValue())));
+    }
+
+    /**
+     * C21 — the ASN derivation dies on records with no person.
+     *
+     * @return the claim
+     */
+    private static Claim asnRecordWithoutAPerson() {
+        return new Claim("C21 (ASN derivation dies on legal-entity records)",
+                "ProsecutionCaseOrApplicationMapper.js:46-55 derives the ASN by filtering the "
+                        + "case's defendants to the register defendant's own masterDefendantId and "
+                        + "then reading `d.personDefendant.arrestSummonsNumber` with no "
+                        + "`d.personDefendant &&` guard, so a matching record that carries no person "
+                        + "block throws and OutboundCourtRegister's catch loses the whole hearing's "
+                        + "register. The port's guard is the informant twin's: a record without a "
+                        + "person contributes no ASN and causes no throw. The claim matches on the "
+                        + "recorded dereference itself, so it explains that swallowed TypeError and "
+                        + "no other one.",
+                divergence -> divergence instanceof Divergence.Outcome
+                        && swallowed(divergence.recorded(), "reading 'arrestSummonsNumber'")
+                        && divergence.port().addressedSomebody());
+    }
+
+    /**
+     * C35 — the hearing date is stamped from the wall clock.
+     *
+     * @return the claim
+     */
+    private static Claim hearingDateReadFromTheWallClock() {
+        return new Claim("C35 (hearing date stamped from the wall clock)",
+                "RegisterFragmentService.js:46-55 has two legs that end at "
+                        + "`dateService.getLocalDateTime(undefined)`, and `moment.tz(undefined, "
+                        + "zone)` is the current time: a hearing whose gathered results name no "
+                        + "ordered date, and a sitting record carrying no sittingDay on the day the "
+                        + "results were ordered, both stamp hearingDate with whenever the function "
+                        + "app happened to run. The port is clock-free: no ordered date means no "
+                        + "hearingDate at all, and a sitting record naming no day matches nothing, "
+                        + "so the date falls back to the ordered one. The claim proves the recorded "
+                        + "value IS the clock rather than assuming it — the recording is read back "
+                        + "as a London wall clock through C10's own rendering and must name the "
+                        + "instant the corpus was built at — and requires the port not to have "
+                        + "written that instant. It covers two shapes, because the row's leg (a) "
+                        + "produces two: where the port has an ordered date to fall back to the "
+                        + "difference is the field, and where it has none the document it assembles "
+                        + "carries no hearingDate at all and the frozen contract refuses it at that "
+                        + "very pointer — which is what the row says leg (a) must do, in preference "
+                        + "to accepting a clock reading.",
+                divergence -> {
+                    if (divergence instanceof Divergence.Field field) {
+                        return "/hearingDate".equals(field.path())
+                                && isTheCorpusClock(field.oracleValue(), divergence.recorded())
+                                && !isTheCorpusClock(field.portValue(), divergence.recorded());
+                    }
+                    return divergence instanceof Divergence.Outcome
+                            && divergence.recorded().producedDocument()
+                            && isTheCorpusClock(
+                                    divergence.recorded().expected().get("hearingDate"),
+                                    divergence.recorded())
+                            && divergence.port().refusedByTheContract()
+                            && "/hearingDate".equals(divergence.port().failurePointer());
+                });
+    }
+
+    /**
+     * C35 — the same two dereferences, in the shapes where they throw.
+     *
+     * @return the claim
+     */
+    private static Claim hearingDateDereferenceThatThrows() {
+        return new Claim("C35 (hearing date stamped from the wall clock)",
+                "The other half of the same row. `if (hearingObj.hearingDays)` is a truthiness test "
+                        + "and the callback dereferences `hearingDay.sittingDay`, so a hearingDays "
+                        + "that is a truthy non-array (`.find is not a function`) and a hearingDays "
+                        + "carrying a null element both throw inside SetCourtRegister, which "
+                        + "catches, logs and discards — the whole hearing's register lost with no "
+                        + "trace. The port classifies both as a transformation failure and "
+                        + "dead-letters. The claim matches the two recorded dereferences by name.",
+                divergence -> divergence instanceof Divergence.Outcome
+                        && (swallowed(divergence.recorded(), "hearingDays.find is not a function")
+                                || swallowed(divergence.recorded(), "reading 'sittingDay'"))
+                        && divergence.port().result() == PortResult.FAILED);
+    }
+
+    /**
+     * C12 — an evening share reads the next day's subscription set.
+     *
+     * @return the claim
+     */
+    private static Claim subscriptionsReadForTheDayAfterTheShare() {
+        return new Claim("C12 (evening shares read the next day's subscriptions)",
+                "ReferenceDataService.js:38 computes the reference-data day as `new "
+                        + "Date(registerDate).toISOString().slice(0,10)`, and registerDate has "
+                        + "already been relabelled by C10 — so a hearing shared between 23:00 and "
+                        + "midnight UTC in BST asks for the NEXT day's subscription set and is "
+                        + "addressed by whoever was subscribed then. The port asks for the UTC day "
+                        + "of the shared time. This is the one effect of C10 that never reaches the "
+                        + "document: a register addressed from the wrong day's set looks entirely "
+                        + "ordinary, which is why the recorder captured the whole GET and why the "
+                        + "audit compares the day on the wire rather than a value in the output.",
+                divergence -> divergence instanceof Divergence.ReferenceDataDay);
+    }
+
     // --- reading the trees -----------------------------------------------------------------------
 
     /**
@@ -635,6 +845,178 @@ public final class RegisteredDefectFixes {
      */
     private static boolean swallowed(final RecordedCase recorded, final String text) {
         return recorded.swallowedErrors().stream().anyMatch(error -> error.contains(text));
+    }
+
+    /**
+     * Whether any court-register subscription in the recorded answer covers the hearing's court
+     * house — the one arm the port matches through.
+     *
+     * @param recorded the recorded case
+     * @return whether the court-house route is open
+     */
+    private static boolean coversTheCourtHouse(final RecordedCase recorded) {
+        final String ouCode = recorded.ouCode();
+        return ouCode != null && recorded.courtRegisterSubscriptions().stream()
+                .anyMatch(subscription -> contains(subscription.get("selectedCourtHouses"), ouCode));
+    }
+
+    /**
+     * Whether a court-register subscription's informant code is the hearing's own court house —
+     * C4's coincidence.
+     *
+     * @param recorded the recorded case
+     * @return whether the informant arm would match
+     */
+    private static boolean matchesTheCourtHouseAsAnInformant(final RecordedCase recorded) {
+        final String ouCode = recorded.ouCode();
+        return ouCode != null && recorded.courtRegisterSubscriptions().stream()
+                .anyMatch(subscription -> ouCode.equals(string(subscription.get("informantCode"))));
+    }
+
+    /**
+     * Whether a court-register subscription also carries one of the flags that give it a second way
+     * into the matcher — C5's accidental routes.
+     *
+     * @param recorded the recorded case
+     * @return whether an accidental route is open
+     */
+    private static boolean carriesAnAccidentalRoute(final RecordedCase recorded) {
+        return recorded.courtRegisterSubscriptions().stream().anyMatch(subscription ->
+                isTrue(subscription.get("isPrisonCourtRegisterSubscription"))
+                        || isTrue(subscription.get("isNowSubscription"))
+                        || isTrue(subscription.get("isEDTSubscription")));
+    }
+
+    /**
+     * Whether a subscription covering the hearing's court house asks for any major creditor.
+     *
+     * @param recorded the recorded case
+     * @return whether C30's vacuous flag is set
+     */
+    private static boolean asksForAnyMajorCreditor(final RecordedCase recorded) {
+        final String ouCode = recorded.ouCode();
+        return ouCode != null && recorded.courtRegisterSubscriptions().stream()
+                .filter(subscription -> contains(subscription.get("selectedCourtHouses"), ouCode))
+                .anyMatch(subscription -> {
+                    final JsonNode vocabulary = subscription.get("subscriptionVocabulary");
+                    return vocabulary != null && isTrue(vocabulary.get("anyMajorCreditor"));
+                });
+    }
+
+    /**
+     * Whether a value is the only ethnicity description the payload records for anybody.
+     *
+     * <p>The signature of C25 rather than a licence to write anything at this field: the value the
+     * port wrote must be a description the hearing holds, and the hearing must hold no other one for
+     * that person — which is the shape the legacy's two-sided guard drops.
+     *
+     * @param hearing the recorded hearing
+     * @param value   the value the port wrote
+     * @return whether the payload accounts for it
+     */
+    private static boolean isTheOnlyDescriptionOnRecord(final JsonNode hearing, final String value) {
+        if (value == null) {
+            return false;
+        }
+        for (final JsonNode ethnicity : ethnicities(hearing)) {
+            final String observed = string(ethnicity.get("observedEthnicityDescription"));
+            final String selfDefined = string(ethnicity.get("selfDefinedEthnicityDescription"));
+            final boolean onlyOne = observed == null ^ selfDefined == null;
+            if (onlyOne && value.equals(observed == null ? selfDefined : observed)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Every ethnicity block a hearing carries.
+     *
+     * @param hearing the recorded hearing
+     * @return the blocks, empty where none is recorded
+     */
+    private static List<JsonNode> ethnicities(final JsonNode hearing) {
+        final List<JsonNode> found = new ArrayList<>();
+        for (final JsonNode prosecutionCase : array(hearing, "prosecutionCases")) {
+            for (final JsonNode defendant : array(prosecutionCase, "defendants")) {
+                final JsonNode person = defendant.get("personDefendant");
+                final JsonNode details = person == null ? null : person.get("personDetails");
+                final JsonNode ethnicity = details == null ? null : details.get("ethnicity");
+                if (ethnicity != null && ethnicity.isObject()) {
+                    found.add(ethnicity);
+                }
+            }
+        }
+        return found;
+    }
+
+    /**
+     * Whether a value is the wall clock the corpus was recorded at, read through C10's rendering.
+     *
+     * <p>{@code getLocalDateTime} formats a {@code Europe/London} wall clock and appends a literal
+     * {@code Z}, so the clock reading a C35 leg leaves behind is the corpus's own clock pin written
+     * that way. Reading it back through {@link #instantsOf} and comparing instants proves the
+     * recorded value <em>is</em> the clock rather than assuming it from the case's name.
+     *
+     * @param value    the value to test; may be {@code null}
+     * @param recorded the recorded case, which carries the pin
+     * @return whether the value names the instant the corpus was built at
+     */
+    private static boolean isTheCorpusClock(final JsonNode value, final RecordedCase recorded) {
+        final String pin = string(recorded.params().get("clockPinIso"));
+        final String rendered = string(value);
+        if (pin == null || rendered == null) {
+            return false;
+        }
+        final LocalDateTime pinned = LocalDateTime.ofInstant(Instant.parse(pin), ZoneOffset.UTC)
+                .withNano(0);
+        return instantsOf(rendered).contains(pinned);
+    }
+
+    /**
+     * Whether an array node contains a string.
+     *
+     * @param node  the node; may be {@code null}
+     * @param value the value to look for
+     * @return whether it is there
+     */
+    private static boolean contains(final JsonNode node, final String value) {
+        if (node == null || !node.isArray()) {
+            return false;
+        }
+        for (final JsonNode entry : node) {
+            if (value.equals(string(entry))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether a node is the JSON boolean {@code true}.
+     *
+     * @param node the node; may be {@code null}
+     * @return whether it is true
+     */
+    private static boolean isTrue(final JsonNode node) {
+        return node != null && node.isBoolean() && node.booleanValue();
+    }
+
+    /**
+     * One of a node's arrays, as a list.
+     *
+     * @param node the node; may be {@code null}
+     * @param name the property name
+     * @return the entries, empty where the property is absent or not an array
+     */
+    private static List<JsonNode> array(final JsonNode node, final String name) {
+        final JsonNode value = node == null ? null : node.get(name);
+        if (value == null || !value.isArray()) {
+            return List.of();
+        }
+        final List<JsonNode> entries = new ArrayList<>();
+        value.forEach(entries::add);
+        return entries;
     }
 
     /**
@@ -786,6 +1168,26 @@ public final class RegisteredDefectFixes {
          * @param port     what the port did
          */
         record Outcome(RecordedCase recorded, PortOutcome port) implements Divergence {
+        }
+
+        /**
+         * The two runs asked reference data for different days' subscriptions.
+         *
+         * <p>Its own shape rather than a field of the document, because it is not in the document:
+         * the day is a query parameter of the {@code now-subscriptions} GET, the recorder captured
+         * the whole request, and a register addressed from the wrong day's subscription set is
+         * otherwise indistinguishable from a correct one.
+         *
+         * @param recorded  the recorded case
+         * @param port      what the port did
+         * @param oracleDay the day the legacy asked for
+         * @param portDay   the day this port asks for
+         */
+        record ReferenceDataDay(
+                RecordedCase recorded,
+                PortOutcome port,
+                String oracleDay,
+                String portDay) implements Divergence {
         }
     }
 

@@ -1,0 +1,120 @@
+{
+  "caseId": "mut__surviving-youth-defendant__application-reference__extra-ineligible-application",
+  "recordedAt": null,
+  "oracle": {
+    "entryPoint": "CourtRegisterOrchestrator guard -> SetCourtRegister -> CourtRegisterSubscriptions -> OutboundCourtRegister",
+    "orchestrator": "CourtRegisterOrchestrator/index.js:21-49",
+    "activityBoundary": "every callActivity argument and return value crosses oracle/lib/boundary.js, as the Durable Task extension serialises them; OutboundCourtRegister therefore receives the ORCHESTRATOR's hearing, not the copy SetCourtRegister mutated",
+    "runner": "oracle/build-corpus.js",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "timezone": "Europe/London, pinned in oracle/lib/stubs.js installEnvironment()"
+  },
+  "sourcePinning": {
+    "nodeAppCommit": "0d63f3ae6bd0f4929e182de8d8ad9429160dd07f",
+    "nodeAppWorkingTreeClean": true,
+    "oracleDigest": "c016073ec65242bf397f688c66d421dc4098700ee80d5f33b288a8a2beb416b4",
+    "contractBundleDigest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
+    "nodeVersion": "v24.18.1",
+    "full": "recorded/provenance.json"
+  },
+  "params": {
+    "sharedTime": "2020-06-01T10:00:00Z",
+    "cjscppuid": "00000000-0000-0000-0000-000000000000",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "subscriptionsFixture": "subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsInline": false
+  },
+  "observed": {
+    "outcome": "document",
+    "stage": "complete",
+    "noDocumentReason": null,
+    "matchedSubscriptionCount": 1,
+    "registerDefendantCount": 1,
+    "defendantCount": 1,
+    "recipientCount": 1,
+    "subscriptionsReturnedUndefined": false,
+    "swallowedErrors": [],
+    "refdataCallCount": 1,
+    "refdataCalls": [
+      {
+        "verb": "GET",
+        "url": "http://reference-data.oracle.invalid/referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on=2020-06-01",
+        "on": "2020-06-01",
+        "headers": {
+          "CJSCPPUID": "00000000-0000-0000-0000-000000000000",
+          "Accept": "application/vnd.referencedata.query.get-now-subscriptions+json"
+        },
+        "attempt": 1,
+        "answered": "resolve status=200"
+      }
+    ]
+  },
+  "contract": {
+    "status": "IN_CONTRACT",
+    "basis": "the document the legacy produced satisfies the frozen add-court-register contract; progression accepts it, so the port must produce the same document",
+    "violations": null,
+    "validatedAgainst": {
+      "bundle": "src/main/resources/contracts/progression/ (vendored, frozen)",
+      "commandSchema": "http://moj.gov.uk/cpp/progression/command/add-court-register.json",
+      "schemaCount": 15,
+      "validator": "ajv 6.14.0, schemaId:\"id\", format:\"full\", allErrors",
+      "portValidator": "networknt SpecificationVersion.DRAFT_4, formatAssertionsEnabled(true) (OutboundContractValidator)",
+      "keywordSurfaceAudited": [
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "definitions",
+        "description",
+        "enum",
+        "format",
+        "id",
+        "items",
+        "maxLength",
+        "minItems",
+        "minLength",
+        "minimum",
+        "pattern",
+        "properties",
+        "required",
+        "title",
+        "type"
+      ]
+    }
+  },
+  "deterministic": true,
+  "clockDependent": false,
+  "clockProbe": null,
+  "digests": {
+    "hearing": "69d22763fecce0c8c0387afc9b18ad47d8ca234d4bbeb7651885fe2a97333bae",
+    "subscriptions": "a63ab8f911082e2e2aa7d41c28f6df8c12f2f6bb95a469f9530c640804053f5e",
+    "params": "da206d6a34845aa77c90e1567679130fa350e942d0da4b877172e177fc6171bc",
+    "expected": "bad89268ba5847de8e7018f3676db567cc1882eb63a2210fe972670c4a8ede5e"
+  },
+  "inputContract": {
+    "status": "IN_CONTRACT",
+    "basis": "cpp-platform-core-domain/criminal-court-public-model/src/main/resources/json/schema/global/hearing.json declares courtApplications as a list of applications; a hearing carrying two is ordinary",
+    "note": "The producer can send this. Whatever the legacy did with it is a parity obligation, subject to the OUTPUT axis (contractStatus) saying how it may be asserted."
+  },
+  "evidence": "CONSTRUCTED — the application links are varied on a base hearing by this harness",
+  "provenance": {
+    "kind": "mutation",
+    "baseCase": "surviving-youth-defendant",
+    "baseRole": "spine",
+    "baseFixture": "fixtures/hearings/hearing-with-surviving-youth-defendant.json",
+    "baseFixtureOrigin": "service-cp-crime-court-register/src/test/resources/fixtures/base/hearing-with-surviving-youth-defendant.json (AUTHORED for the port — see BASE_FIXTURE_CAVEAT)",
+    "subscriptionsInput": "fixtures/subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsOrigin": "cpp-context-azure-legalaidagency/azure-functions/durable-functions/NowsVariantsSubscriptions/test/subscriptions.json (five court-register entries, verbatim, including the one entry in the whole capture that covers court house B01LY00)",
+    "sharedTimeSource": "the payload's own sharedTime (2020-06-01T10:00:00Z)",
+    "operator": "application-reference",
+    "operatorVariant": "extra-ineligible-application",
+    "note": "A child who survives every filter to the outbound document: youth-flagged, a youth date of birth, a middle name, both ethnicity descriptions, two defendantCaseJudicialResults so postHearingCustodyStatus reaches a real value, an associated defence organisation, a two-entry defendantAttendance with the youth's record SECOND (defect C8), and a prosecuting-authority court application.",
+    "operatorScope": "hearing",
+    "operatorBaseScope": "spine",
+    "operatorDescription": "Varies the court applications a register defendant is linked to, to find out whether the unguarded lookup at ProsecutionCaseOrApplicationMapper.js:62-65 can be made to miss.",
+    "operatorRationale": "Defect row C20 says the application lookup — `hearingJson.courtApplications.find((ca) => ca.id === applicationId)` with no array guard and no result guard — kills the register on an absent array or an unmatched id, and the fix makes the register survive with the remaining cases. The first audit run found the row explaining nothing, and the obvious remedy — build a hearing with a dangling application reference — turns out to be impossible: the list being iterated and the array being searched are BUILT FROM AND READ FROM THE SAME `courtApplications`. DefendantContextBaseService.js:149 pushes `courtApplication.id` only for applications that passed isEligible, and the mapper then looks that same id up in that same array. So this operator does not manufacture a dangling reference; it MEASURES the coupling that makes one impossible, which is the only honest thing a corpus can do with a guard whose trigger no payload produces. The three variants move the id, remove the eligibility, and add an ineligible application: the invariant to look for in the recordings is that `applications` is always a subset of the ids present, never the reverse, and that every one of these produces a register rather than a swallowed TypeError.",
+    "operatorDetail": {
+      "why": "a SECOND application is added with no subject.masterDefendant, so the array grows and the defendant's applications list does not. Same asymmetry, reached by adding rather than by removing, and with the eligible application still in place so the mapper really does run the lookup",
+      "reader": "ProsecutionCaseOrApplicationMapper.js:62-65 (unguarded find); DefendantContextBaseService.js:139-176 (what fills applications)"
+    }
+  }
+}

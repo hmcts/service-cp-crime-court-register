@@ -275,6 +275,74 @@ public final class DifferentialCorpus {
         }
 
         /**
+         * The calendar day the legacy asked reference data for its subscription set on.
+         *
+         * <p>The recorder captured the whole {@code now-subscriptions} GET, query string included,
+         * so the day is evidence rather than a re-derivation: it is what
+         * {@code ReferenceDataService.js:38} put on the wire. It is the one externally-visible
+         * effect of C10's relabelling that never reaches the document — a register addressed by the
+         * wrong day's subscription set looks perfectly ordinary — which is why C12 has its own row
+         * and why this field has to be read rather than inferred from the output.
+         *
+         * @return the day, or empty where the run never reached the read
+         */
+        public Optional<String> referenceDataDay() {
+            final JsonNode calls = observed.get("refdataCalls");
+            final JsonNode day = calls == null || !calls.isArray() || calls.isEmpty()
+                    ? null
+                    : calls.get(0).get("on");
+            return day == null || !day.isString() ? Optional.empty() : Optional.of(day.stringValue());
+        }
+
+        /**
+         * The shared time the recorder gave the run, where it gave one.
+         *
+         * @return the shared time, or empty
+         */
+        public Optional<String> sharedTime() {
+            final JsonNode shared = params.get("sharedTime");
+            return shared == null || !shared.isString()
+                    ? Optional.empty()
+                    : Optional.of(shared.stringValue());
+        }
+
+        /**
+         * The court-house OU code the subscription match is decided on.
+         *
+         * @return the code, or {@code null} where the hearing carries no court centre code
+         */
+        public String ouCode() {
+            final JsonNode centre = hearing.get("courtCentre");
+            final JsonNode code = centre == null ? null : centre.get("code");
+            return code == null || !code.isString() ? null : code.stringValue();
+        }
+
+        /**
+         * The court-register subscriptions reference data answered with.
+         *
+         * <p>The list the legacy's own upstream filter keeps
+         * ({@code CourtRegisterSubscriptions/index.js:33}), so a claim about which match arm a
+         * subscription took is asked of exactly the entries that reached the matcher.
+         *
+         * @return the entries, empty where the read never answered or carried none
+         */
+        public List<JsonNode> courtRegisterSubscriptions() {
+            final JsonNode entries = subscriptions == null
+                    ? null
+                    : subscriptions.get("nowSubscriptions");
+            final List<JsonNode> courtRegister = new ArrayList<>();
+            if (entries != null && entries.isArray()) {
+                entries.forEach(entry -> {
+                    final JsonNode flag = entry.get("isCourtRegisterSubscription");
+                    if (flag != null && flag.isBoolean() && flag.booleanValue()) {
+                        courtRegister.add(entry);
+                    }
+                });
+            }
+            return List.copyOf(courtRegister);
+        }
+
+        /**
          * How many defendants the legacy's register fragment gathered.
          *
          * @return the count, or empty where the run never got that far
