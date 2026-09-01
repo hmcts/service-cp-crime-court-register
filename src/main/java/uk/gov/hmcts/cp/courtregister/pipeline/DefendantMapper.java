@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.pipeline;
 
+import java.util.ArrayList;
 import java.util.List;
 import tools.jackson.databind.JsonNode;
 
@@ -20,7 +21,14 @@ import tools.jackson.databind.JsonNode;
  * no length check, so an unmatched master defendant id throws, the throw is swallowed, and the whole
  * hearing's register is lost.
  */
+// PMD.OnlyOneReturn: the precedence is the behaviour, and it is an `else` in the legacy — the case
+// answer is returned where it is found, and the applications are only consulted where it was not.
+// A single exit would search both and then choose, which is a different function.
+@SuppressWarnings("PMD.OnlyOneReturn")
 final class DefendantMapper {
+
+    /** The identity a defendant is known by across cases and applications. */
+    private static final String MASTER_DEFENDANT_ID = "masterDefendantId";
 
     private DefendantMapper() {
     }
@@ -35,7 +43,31 @@ final class DefendantMapper {
      */
     /* default */ static List<JsonNode> defendantsOf(
             final JsonNode hearing, final String masterDefendantId) {
-        throw new UnsupportedOperationException(
-                "DefendantMapper.defendantsOf is implemented by T054");
+
+        final List<JsonNode> fromCases = new ArrayList<>();
+        for (final JsonNode prosecutionCase : Json.array(hearing, "prosecutionCases")) {
+            for (final JsonNode defendant : Json.array(prosecutionCase, "defendants")) {
+                if (masterDefendantId.equals(Json.text(defendant, MASTER_DEFENDANT_ID))) {
+                    fromCases.add(defendant);
+                }
+            }
+        }
+        if (!fromCases.isEmpty()) {
+            // `if (matchingDefendantsFromCases.length === 0) { … } else { return … }` — the court
+            // applications are consulted only where the cases found nobody, and no legacy fixture
+            // constructs a defendant who is in both.
+            return List.copyOf(fromCases);
+        }
+
+        final List<JsonNode> fromApplications = new ArrayList<>();
+        for (final JsonNode application : Json.array(hearing, "courtApplications")) {
+            final JsonNode masterDefendant =
+                    Json.at(Json.at(application, "subject"), "masterDefendant");
+            if (Json.truthy(masterDefendant)
+                    && masterDefendantId.equals(Json.text(masterDefendant, MASTER_DEFENDANT_ID))) {
+                fromApplications.add(masterDefendant);
+            }
+        }
+        return List.copyOf(fromApplications);
     }
 }
