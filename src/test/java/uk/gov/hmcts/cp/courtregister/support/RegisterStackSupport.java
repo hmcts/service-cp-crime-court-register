@@ -97,6 +97,10 @@ public final class RegisterStackSupport implements AutoCloseable {
      *
      * @return the running stack, to be closed by the caller
      */
+    // PMD.CloseResource: the client is not a local resource — it is handed to the instance this
+    // method returns and is shut down by close(), which is the only point at which the suite that
+    // owns it is finished with the cache.
+    @SuppressWarnings("PMD.CloseResource")
     public static RegisterStackSupport start() {
         final WireMockServer contexts = new WireMockServer(wireMockConfig().dynamicPort());
         contexts.start();
@@ -420,10 +424,10 @@ public final class RegisterStackSupport implements AutoCloseable {
                 .willReturn(okJson(NOBODY_SUBSCRIBED)));
         contexts.stubFor(post(urlEqualTo(ProgressionCommandGateway.PATH))
                 .atPriority(CATCH_ALL_PRIORITY)
-                .willReturn(accepted()));
+                .willReturn(acceptedResponse()));
     }
 
-    private static ResponseDefinitionBuilder accepted() {
+    private static ResponseDefinitionBuilder acceptedResponse() {
         return aResponse().withStatus(ACCEPTED);
     }
 

@@ -123,6 +123,14 @@ class MessageAccountingIT {
     @Autowired
     private MeterRegistry registry;
 
+    private final UUID completing = UUID.randomUUID();
+    private final UUID failing = UUID.randomUUID();
+    private final UUID held = UUID.randomUUID();
+    private final UUID invalid = UUID.randomUUID();
+
+    /** Released once the accounting snapshot has been taken. */
+    private final CountDownLatch release = new CountDownLatch(1);
+
     /** Where every message in the batch ends up, by the outcome the criterion names. */
     private enum Outcome {
         COMPLETED,
@@ -135,14 +143,6 @@ class MessageAccountingIT {
     /** One published message: what it was, where it went. */
     private record Published(String label, UUID requestId, String messageId) {
     }
-
-    private final UUID completing = UUID.randomUUID();
-    private final UUID failing = UUID.randomUUID();
-    private final UUID held = UUID.randomUUID();
-    private final UUID invalid = UUID.randomUUID();
-
-    /** Released once the accounting snapshot has been taken. */
-    private final CountDownLatch release = new CountDownLatch(1);
 
     @DynamicPropertySource
     static void wireTheContainers(final DynamicPropertyRegistry registry) {

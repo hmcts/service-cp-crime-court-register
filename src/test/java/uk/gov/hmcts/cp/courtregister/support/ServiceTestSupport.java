@@ -51,6 +51,18 @@ public final class ServiceTestSupport {
      */
     public static final String SYSTEM_USER_ID = "00000000-0000-4000-8000-000000000000";
 
+    /**
+     * The hearing day every body published here carries.
+     *
+     * <p>Named because the payload cache is keyed on it: a suite that seeds a hearing into Redis has
+     * to build the same key the service will read, and a second copy of the literal is how the two
+     * come to disagree — which reads as a cold cache rather than as a mistake.
+     */
+    public static final LocalDate HEARING_DAY = LocalDate.parse("2026-08-31");
+
+    /** The share instant every body published here carries, unless a suite names its own. */
+    public static final Instant SHARED_TIME = Instant.parse("2026-08-31T08:00:00Z");
+
     private ServiceTestSupport() {
         // Static fixture holder.
     }
@@ -193,18 +205,6 @@ public final class ServiceTestSupport {
         }
         return messageId;
     }
-
-    /**
-     * The hearing day every body published here carries.
-     *
-     * <p>Named because the payload cache is keyed on it: a suite that seeds a hearing into Redis has
-     * to build the same key the service will read, and a second copy of the literal is how the two
-     * come to disagree — which reads as a cold cache rather than as a mistake.
-     */
-    public static final LocalDate HEARING_DAY = LocalDate.parse("2026-08-31");
-
-    /** The share instant every body published here carries, unless a suite names its own. */
-    public static final Instant SHARED_TIME = Instant.parse("2026-08-31T08:00:00Z");
 
     /**
      * A valid request body for the given identifiers.
