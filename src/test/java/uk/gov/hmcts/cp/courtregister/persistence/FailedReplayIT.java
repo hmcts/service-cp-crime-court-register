@@ -1,9 +1,11 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
-
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
@@ -20,10 +22,6 @@ import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport.Row;
-
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * A parked request is replayable, and only under a fresh message identity.

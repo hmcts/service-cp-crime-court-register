@@ -21,10 +21,10 @@ import org.testcontainers.containers.GenericContainer;
 public final class RedisTestSupport {
 
     private static final String IMAGE = "redis:7-alpine";
-    private static final int PORT = 6379;
+    private static final int REDIS_PORT = 6379;
 
-    private static final GenericContainer<?> CONTAINER =
-            new GenericContainer<>(IMAGE).withExposedPorts(PORT);
+    private static final GenericContainer<?> REDIS =
+            new GenericContainer<>(IMAGE).withExposedPorts(REDIS_PORT);
 
     private RedisTestSupport() {
         // Static fixture holder.
@@ -34,10 +34,10 @@ public final class RedisTestSupport {
      * Returns the shared container, starting it if this is the first call.
      */
     public static GenericContainer<?> container() {
-        if (!CONTAINER.isRunning()) {
-            CONTAINER.start();
+        if (!REDIS.isRunning()) {
+            REDIS.start();
         }
-        return CONTAINER;
+        return REDIS;
     }
 
     /**
@@ -59,6 +59,6 @@ public final class RedisTestSupport {
      * The port the shared container answers on.
      */
     public static int port() {
-        return container().getMappedPort(PORT);
+        return container().getMappedPort(REDIS_PORT);
     }
 }

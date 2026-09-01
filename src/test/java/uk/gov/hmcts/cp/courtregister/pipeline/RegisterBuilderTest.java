@@ -45,6 +45,9 @@ import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
 @DisplayName("RegisterBuilder")
 class RegisterBuilderTest {
 
+    /** Room for the handful of inline results a fixture hearing carries. */
+    private static final int RESULTS_BUFFER = 256;
+
     /** The hearing the legacy {@code SetCourtRegister} case is written against. */
     private static final String S1_HEARING_ID = "1828f356-f746-4f2d-932b-79ef2df95c80";
 
@@ -399,7 +402,7 @@ class RegisterBuilderTest {
      * @return the hearing
      */
     private JsonNode hearingOrderedOn(final String... orderedDates) {
-        final StringBuilder results = new StringBuilder();
+        final StringBuilder results = new StringBuilder(RESULTS_BUFFER);
         for (int index = 0; index < orderedDates.length; index++) {
             results.append(index == 0 ? "" : ",")
                     .append("{\"judicialResultId\":\"jr-").append(index)

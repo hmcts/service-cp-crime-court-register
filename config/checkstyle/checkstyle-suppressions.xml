@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!DOCTYPE suppressions PUBLIC
+    "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
+    "https://checkstyle.org/dtds/suppressions_1_2.dtd">
+
+<!--
+  Test-sourceset-only suppressions. Static analysis is enforced on src/test (see
+  gradle/checkstyle.gradle) identically to src/main, with one deliberate exception.
+
+  MethodName: this project's own documented test-naming convention
+  ({action}_{scenario}_should_{expectation}, see .claude/rules/technical-rules.md) is
+  underscore-separated by design, for readability of long behavioural test names. Google's
+  default MethodName pattern (camelCase, no underscores) is the right rule for production code
+  but actively conflicts with that convention for test methods. Renaming every test method to
+  camelCase to satisfy the linter would make test names harder to read and contradict the team's
+  own stated standard, so the check is suppressed for test sources specifically rather than
+  relaxed project-wide.
+-->
+<suppressions>
+    <suppress checks="MethodName" files="[\\/]src[\\/]test[\\/].*"/>
+</suppressions>

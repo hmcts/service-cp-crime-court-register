@@ -238,7 +238,7 @@ class ProsecutionCaseOrApplicationMapperTest {
         @Test
         @DisplayName("a warning names the case id that could not be found")
         void a_warning_names_the_case_id() {
-            try (CapturedLog log = CapturedLog.of(ProsecutionCaseOrApplicationMapper.class)) {
+            try (CapturedLog log = CapturedLog.capturing(ProsecutionCaseOrApplicationMapper.class)) {
                 mapWithoutMatchingCases();
 
                 assertThat(warnings(log))
@@ -371,7 +371,7 @@ class ProsecutionCaseOrApplicationMapperTest {
         @Test
         @DisplayName("a warning names the application id that could not be found")
         void a_warning_names_the_application_id() {
-            try (CapturedLog log = CapturedLog.of(ProsecutionCaseOrApplicationMapper.class)) {
+            try (CapturedLog log = CapturedLog.capturing(ProsecutionCaseOrApplicationMapper.class)) {
                 map(defendantNaming(List.of(), List.of(APPLICATION_ID)), hearing());
 
                 assertThat(warnings(log)).singleElement()

@@ -50,6 +50,9 @@ class ProcessedOutputRepositoryIT {
 
     private static final Duration LEASE = Duration.ofMinutes(5);
 
+    /** The single row a fixture update is expected to touch. */
+    private static final int ONE_ROW = 1;
+
     private static final UUID COURT_CENTRE = UUID.fromString("2f4a1c66-9d1e-4d3b-9a55-7c1a0f6b8e21");
     private static final String OU_CODE = "B01LY";
     private static final LocalDate REGISTER_DATE = LocalDate.of(2026, 8, 20);
@@ -573,7 +576,7 @@ class ProcessedOutputRepositoryIT {
                 .param("source", run.source())
                 .param("requestId", run.requestId())
                 .update();
-        if (aged != 1) {
+        if (aged != ONE_ROW) {
             throw new IllegalStateException("expected one output row to age, aged " + aged);
         }
     }

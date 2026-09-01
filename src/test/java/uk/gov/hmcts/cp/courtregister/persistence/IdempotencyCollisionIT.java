@@ -1,12 +1,13 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
-
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -21,8 +22,6 @@ import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport.Row;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The same key carrying a different request is a collision, not a duplicate.

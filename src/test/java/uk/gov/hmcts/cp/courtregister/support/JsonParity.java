@@ -46,6 +46,12 @@ public final class JsonParity {
     /** The number of differences to report before truncating. */
     private static final int MAX_REPORTED = 25;
 
+    /** How much of a node is rendered into a failure message before it is elided. */
+    private static final int RENDER_LIMIT = 120;
+
+    /** Room for the preamble of a failure message, before the differences are appended. */
+    private static final int MESSAGE_BUFFER = 256;
+
     private JsonParity() {
     }
 
@@ -91,7 +97,7 @@ public final class JsonParity {
             return;
         }
 
-        final StringBuilder message = new StringBuilder()
+        final StringBuilder message = new StringBuilder(MESSAGE_BUFFER)
                 .append(what)
                 .append(" does not match the golden captured from the legacy function app — ")
                 .append(differences.size())
@@ -124,20 +130,14 @@ public final class JsonParity {
 
         if (expected.isObject() && actual.isObject()) {
             compareObjects(expected, actual, path, differences, register);
-            return;
-        }
-        if (expected.isArray() && actual.isArray()) {
+        } else if (expected.isArray() && actual.isArray()) {
             compareArrays(expected, actual, path, differences, register);
-            return;
-        }
-        if (expected.isNumber() && actual.isNumber()) {
+        } else if (expected.isNumber() && actual.isNumber()) {
             if (expected.decimalValue().compareTo(actual.decimalValue()) != 0) {
-                differences.add(at(path) + ": expected " + expected + " but was " + actual);
+                differences.add(pathLabel(path) + ": expected " + expected + " but was " + actual);
             }
-            return;
-        }
-        if (!expected.equals(actual)) {
-            differences.add(at(path) + ": expected " + describe(expected)
+        } else if (!expected.equals(actual)) {
+            differences.add(pathLabel(path) + ": expected " + describe(expected)
                     + " but was " + describe(actual));
         }
     }
@@ -168,10 +168,10 @@ public final class JsonParity {
             final String childPath = path + "/" + name;
 
             if (expectedValue == null) {
-                differences.add(at(childPath) + ": unexpected field, was "
+                differences.add(pathLabel(childPath) + ": unexpected field, was "
                         + describe(actualValue));
             } else if (actualValue == null) {
-                differences.add(at(childPath) + ": missing field, expected "
+                differences.add(pathLabel(childPath) + ": missing field, expected "
                         + describe(expectedValue));
             } else {
                 final RegisteredDefectFixes.Fix fix = register.apply(name);
@@ -211,7 +211,7 @@ public final class JsonParity {
                 : List.of();
 
         if (permitted.isEmpty()) {
-            differences.add(at(path) + ": registered defect fix " + fix.reference()
+            differences.add(pathLabel(path) + ": registered defect fix " + fix.reference()
                     + " cannot derive the required rendering from the golden value "
                     + describe(expected)
                     + " — the golden is not a value this fix describes, so the component is "
@@ -219,7 +219,7 @@ public final class JsonParity {
             return;
         }
         if (!actual.isString() || !permitted.contains(actual.stringValue())) {
-            differences.add(at(path) + ": registered defect fix " + fix.reference()
+            differences.add(pathLabel(path) + ": registered defect fix " + fix.reference()
                     + " requires the golden " + describe(expected) + " to be re-rendered as "
                     + String.join(" or ", permitted) + " but was " + describe(actual));
         }
@@ -242,7 +242,7 @@ public final class JsonParity {
             final Function<String, RegisteredDefectFixes.Fix> register) {
 
         if (expected.size() != actual.size()) {
-            differences.add(at(path) + ": expected " + expected.size()
+            differences.add(pathLabel(path) + ": expected " + expected.size()
                     + " element(s) but was " + actual.size());
         }
         final int shared = Math.min(expected.size(), actual.size());
@@ -259,11 +259,16 @@ public final class JsonParity {
      * @return a short rendering
      */
     private static String describe(final JsonNode node) {
+        final String described;
         if (node == null) {
-            return "absent";
+            described = "absent";
+        } else {
+            final String rendered = node.toString();
+            described = rendered.length() <= RENDER_LIMIT
+                    ? rendered
+                    : rendered.substring(0, RENDER_LIMIT) + "...";
         }
-        final String rendered = node.toString();
-        return rendered.length() <= 120 ? rendered : rendered.substring(0, 120) + "...";
+        return described;
     }
 
     /**
@@ -272,7 +277,7 @@ public final class JsonParity {
      * @param path the JSON pointer
      * @return the path to show
      */
-    private static String at(final String path) {
+    private static String pathLabel(final String path) {
         return path.isEmpty() ? "(root)" : path;
     }
 }

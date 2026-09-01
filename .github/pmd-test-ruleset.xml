@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ruleset name="Custom Test Ruleset"
+         xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0
+         https://pmd.github.io/pmd-7.17.0/pmd-7.17.0.xsd">
+
+    <description>
+        src/test ruleset. Same base as .github/pmd-ruleset.xml (main), with a small number of
+        additional exclusions for rules that are either inapplicable to test code or produce
+        false positives against this project's own documented test conventions (method naming
+        {action}_{scenario}_should_{expectation}, see .claude/rules/technical-rules.md). Real
+        findings should still be fixed, not excluded here.
+    </description>
+
+    <rule ref="category/java/codestyle.xml/MethodNamingConventions">
+        <properties>
+            <!-- This regex allows underscores in JUnit 5 test method names -->
+            <property name="junit5TestPattern" value="^[a-z][a-zA-Z0-9_]*$"/>
+        </properties>
+    </rule>
+    <rule ref="category/java/bestpractices.xml">
+        <exclude name="GuardLogStatement"/>
+        <exclude name="UnitTestAssertionsShouldIncludeMessage"/>
+        <exclude name="UnitTestContainsTooManyAsserts"/>
+        <exclude name="PreserveStackTrace"/>
+        <exclude name="ImplicitFunctionalInterface"/>
+        <!-- PMD's heuristic for "an assertion was made" recognises only JUnit/Hamcrest-style
+             assert calls; it does not recognise AssertJ's assertThat(...).isX() chains or
+             MockMvc's andExpect(...) chains, both used throughout this suite. Produces false
+             positives on every test that verifies exclusively via those APIs. -->
+        <exclude name="UnitTestShouldIncludeAssert"/>
+    </rule>
+    <rule ref="category/java/codestyle.xml">
+        <exclude name="AtLeastOneConstructor"/>
+        <exclude name="CallSuperInConstructor"/>
+        <exclude name="LongVariable"/>
+        <exclude name="ShortVariable"/>
+        <exclude name="TooManyStaticImports"/>
+        <!-- Requiring every local variable/parameter to be declared final adds heavy noise in
+             test methods, which are short-lived, single-use, and never reassigned by mistake in
+             practice; the main ruleset already values final for production code. -->
+        <exclude name="LocalVariableCouldBeFinal"/>
+        <exclude name="MethodArgumentCouldBeFinal"/>
+        <!-- Package-private test classes/methods (no access modifier) are the idiomatic JUnit 5
+             style used throughout this project; requiring a comment justifying default access on
+             every one of them adds no value. -->
+        <exclude name="CommentDefaultAccessModifier"/>
+        <!-- LinguisticNaming is deliberately NOT excluded. The sibling repo excludes it because a
+             camelCase test named after a getter under test reads to the rule as a JavaBean getter
+             returning void; this suite's names are underscore-separated throughout
+             (is_police_when_held_at_a_police_station), which the rule's prefix matching does not
+             mistake for a getter, and it reports nothing here. Excluding a rule that finds nothing
+             would only hide the day it starts to. -->
+    </rule>
+    <rule ref="category/java/errorprone.xml">
+        <exclude name="InvalidLogMessageFormat"/>
+        <!-- Test fixture literals (short codes, offence/defendant ids, JSON snippets) are
+             deliberately repeated inline at each point of use for test readability, rather than
+             hoisted into shared constants: the opposite tradeoff from production code, where
+             the same rule catches genuine magic-string duplication. -->
+        <exclude name="AvoidDuplicateLiterals"/>
+    </rule>
+    <rule ref="category/java/performance.xml"/>
+    <rule ref="category/java/security.xml"/>
+</ruleset>

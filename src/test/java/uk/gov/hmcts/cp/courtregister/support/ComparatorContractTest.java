@@ -101,13 +101,15 @@ class ComparatorContractTest {
     // ------------------------------------------------------------------------------------------
 
     private static boolean comparatorSaysEqual(final JsonNode left, final JsonNode right) {
+        boolean equal;
         try {
             JsonParity.assertMatches(left, right, "comparator contract vector");
-            return true;
+            equal = true;
         } catch (final AssertionError difference) {
             LOG.debug("comparator reported a difference: {}", difference.getMessage());
-            return false;
+            equal = false;
         }
+        return equal;
     }
 
     // ------------------------------------------------------------------------------------------

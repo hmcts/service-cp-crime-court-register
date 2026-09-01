@@ -1,11 +1,13 @@
 package uk.gov.hmcts.cp.courtregister.e2e;
 
-import java.time.Duration;
-import java.util.Optional;
-import java.util.UUID;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
 import com.azure.messaging.servicebus.models.SubQueue;
+import java.time.Duration;
+import java.util.Optional;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -25,9 +27,6 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport.Row;
 import uk.gov.hmcts.cp.courtregister.support.ServiceBusEmulatorTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 
 /**
  * The <strong>second</strong> line of defence against a repeated request, end to end — defect-fix
@@ -109,8 +108,8 @@ class RequestDedupeIT {
 
     @BeforeEach
     void watchTheDeliveriesAndTheGuard() {
-        deliveryLog = CapturedLog.of(CourtRegisterMessageListener.class);
-        guardLog = CapturedLog.of(IdempotencyGuard.class);
+        deliveryLog = CapturedLog.capturing(CourtRegisterMessageListener.class);
+        guardLog = CapturedLog.capturing(IdempotencyGuard.class);
     }
 
     @AfterEach

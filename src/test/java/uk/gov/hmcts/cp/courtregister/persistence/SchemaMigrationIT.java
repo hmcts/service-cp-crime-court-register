@@ -1,5 +1,9 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -12,7 +16,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
-
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -20,10 +23,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Pins the V1 processed-log schema against {@code data-model.md}.
@@ -67,6 +66,13 @@ class SchemaMigrationIT {
                 PostgresTestSupport.password());
     }
 
+    private static Column columnOf(final ResultSet rows) throws SQLException {
+        return new Column(
+                rows.getString("data_type"),
+                "YES".equals(rows.getString("is_nullable")),
+                rows.getString("column_default"));
+    }
+
     private static Map<String, Column> columnsOf(final String table) throws SQLException {
         final Map<String, Column> columns = new LinkedHashMap<>();
         final String sql = """
@@ -80,10 +86,7 @@ class SchemaMigrationIT {
             statement.setString(1, table);
             try (ResultSet rows = statement.executeQuery()) {
                 while (rows.next()) {
-                    columns.put(rows.getString("column_name"), new Column(
-                            rows.getString("data_type"),
-                            "YES".equals(rows.getString("is_nullable")),
-                            rows.getString("column_default")));
+                    columns.put(rows.getString("column_name"), columnOf(rows));
                 }
             }
         }

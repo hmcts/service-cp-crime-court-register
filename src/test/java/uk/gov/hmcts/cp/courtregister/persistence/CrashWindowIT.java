@@ -1,7 +1,8 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
-import java.time.Duration;
+import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
@@ -13,8 +14,6 @@ import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport.Row;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The accepted crash window: a run finishes, the pod dies before its outcome is written, and the

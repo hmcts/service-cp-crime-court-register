@@ -175,7 +175,7 @@ class GroupProceedingsPolicyTest {
         @Test
         @DisplayName("warns once, naming the field and the type it arrived as")
         void warns_once_naming_the_field_and_the_type() {
-            try (CapturedLog log = CapturedLog.of(GroupProceedingsPolicy.class)) {
+            try (CapturedLog log = CapturedLog.capturing(GroupProceedingsPolicy.class)) {
                 policy.suppresses(command, hearingFlagged("\"false\""));
 
                 assertThat(warnings(log)).hasSize(1);
@@ -186,7 +186,7 @@ class GroupProceedingsPolicyTest {
         @Test
         @DisplayName("carries the request and hearing the anomaly was met on")
         void carries_the_request_and_the_hearing() {
-            try (CapturedLog log = CapturedLog.of(GroupProceedingsPolicy.class)) {
+            try (CapturedLog log = CapturedLog.capturing(GroupProceedingsPolicy.class)) {
                 policy.suppresses(command, hearingFlagged("1"));
 
                 assertThat(warnings(log).get(0))
@@ -202,7 +202,7 @@ class GroupProceedingsPolicyTest {
             // carrying something that is not a flag at all. A log line naming the type says
             // everything an operator needs; a log line naming the value is an unbounded field from
             // the payload in the estate's log index, on a flow whose every defendant is a child.
-            try (CapturedLog log = CapturedLog.of(GroupProceedingsPolicy.class)) {
+            try (CapturedLog log = CapturedLog.capturing(GroupProceedingsPolicy.class)) {
                 policy.suppresses(command, hearingFlagged("\"Regina v the defendants named below\""));
 
                 assertThat(warnings(log)).hasSize(1);
@@ -213,7 +213,7 @@ class GroupProceedingsPolicyTest {
         @Test
         @DisplayName("says nothing at all for a flag the contract allows")
         void says_nothing_for_a_flag_the_contract_allows() {
-            try (CapturedLog log = CapturedLog.of(GroupProceedingsPolicy.class)) {
+            try (CapturedLog log = CapturedLog.capturing(GroupProceedingsPolicy.class)) {
                 policy.suppresses(command, hearingFlagged("true"));
                 policy.suppresses(command, hearingFlagged("false"));
                 policy.suppresses(command, hearingFlagged("null"));

@@ -4,7 +4,6 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
-
 import org.flywaydb.core.Flyway;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
@@ -24,7 +23,7 @@ public final class PostgresTestSupport {
 
     private static final String IMAGE = "postgres:16";
 
-    private static final PostgreSQLContainer CONTAINER = new PostgreSQLContainer(IMAGE)
+    private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer(IMAGE)
             .withDatabaseName("courtregister")
             .withUsername("courtregister")
             .withPassword("courtregister");
@@ -37,20 +36,29 @@ public final class PostgresTestSupport {
      * Returns the shared container, starting it if this is the first call.
      */
     public static PostgreSQLContainer container() {
-        if (!CONTAINER.isRunning()) {
-            CONTAINER.start();
+        if (!POSTGRES.isRunning()) {
+            POSTGRES.start();
         }
-        return CONTAINER;
+        return POSTGRES;
     }
 
+    /**
+     * The shared container's JDBC URL, starting it if it is not already running.
+     */
     public static String jdbcUrl() {
         return container().getJdbcUrl();
     }
 
+    /**
+     * The shared container's username, starting it if it is not already running.
+     */
     public static String username() {
         return container().getUsername();
     }
 
+    /**
+     * The shared container's password, starting it if it is not already running.
+     */
     public static String password() {
         return container().getPassword();
     }

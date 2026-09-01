@@ -66,9 +66,9 @@ class AggregationMapperTest {
 
     private static final String COURT_CENTRE_ID = "853b1ff8-fc2a-44d1-a621-0cd16419f54a";
 
-    private static final String YOUTH = "6647df67-a065-4d07-90ba-a8daa064ecc4";
+    private static final String YOUTH_ID = "6647df67-a065-4d07-90ba-a8daa064ecc4";
 
-    private static final String ADULT = "aeb6328d-19d4-49e8-8426-290f096b81dc";
+    private static final String ADULT_ID = "aeb6328d-19d4-49e8-8426-290f096b81dc";
 
     private final ObjectMapper mapper = JacksonConfig.contractObjectMapper();
 
@@ -200,7 +200,7 @@ class AggregationMapperTest {
 
             assertThat(document.defendants())
                     .extracting(CourtRegisterDefendant::masterDefendantId)
-                    .containsExactly(YOUTH);
+                    .containsExactly(YOUTH_ID);
         }
 
         @Test
@@ -244,7 +244,7 @@ class AggregationMapperTest {
         @Test
         @DisplayName("the subscription outcome says so, in the bounded code it is counted under")
         void the_subscription_outcome_says_so() {
-            try (CapturedLog log = CapturedLog.of(AggregationMapper.class)) {
+            try (CapturedLog log = CapturedLog.capturing(AggregationMapper.class)) {
                 AggregationMapper.map(fragment(), List.of(), hearing(), anomalies::add);
 
                 assertThat(messages(log)).anySatisfy(message ->
@@ -257,7 +257,7 @@ class AggregationMapperTest {
         void the_youth_outcome_says_which_it_was() {
             // The whole of C33 in one assertion: today both return a bare `null` into a handler that
             // reports success, so the flow's two commonest results are one undifferentiated number.
-            try (CapturedLog log = CapturedLog.of(AggregationMapper.class)) {
+            try (CapturedLog log = CapturedLog.capturing(AggregationMapper.class)) {
                 AggregationMapper.map(
                         adultsOnly(),
                         subscriptions(),
@@ -277,7 +277,7 @@ class AggregationMapperTest {
         void subscriptions_are_asked_about_first() {
             // A fragment with neither is one outcome, not two, and it is the one the legacy's own
             // order gives: `index.js:17` before `:22`.
-            try (CapturedLog log = CapturedLog.of(AggregationMapper.class)) {
+            try (CapturedLog log = CapturedLog.capturing(AggregationMapper.class)) {
                 AggregationMapper.map(adultsOnly(), List.of(),
                         hearingOf("hearing-with-adult-first-youth-second.json"), anomalies::add);
 
@@ -292,7 +292,7 @@ class AggregationMapperTest {
         @Test
         @DisplayName("and says it with the hearing it is about and no child's name")
         void it_says_it_without_a_childs_name() {
-            try (CapturedLog log = CapturedLog.of(AggregationMapper.class)) {
+            try (CapturedLog log = CapturedLog.capturing(AggregationMapper.class)) {
                 AggregationMapper.map(fragment(), List.of(), hearing(), anomalies::add);
 
                 assertThat(messages(log)).allSatisfy(message ->
@@ -311,7 +311,7 @@ class AggregationMapperTest {
             // The recorder is handed down: a skip four mappers deep still reaches
             // `processed_output.anomaly_summary`.
             AggregationMapper.map(
-                    withDefendants(youthNamed("no-such-master-defendant"), youthNamed(YOUTH)),
+                    withDefendants(youthNamed("no-such-master-defendant"), youthNamed(YOUTH_ID)),
                     subscriptions(),
                     hearing(),
                     anomalies::add);
@@ -324,7 +324,7 @@ class AggregationMapperTest {
         @DisplayName("and the register is still assembled for the children who resolved")
         void the_register_is_still_assembled() {
             final CourtRegisterDocument document = AggregationMapper.map(
-                    withDefendants(youthNamed("no-such-master-defendant"), youthNamed(YOUTH)),
+                    withDefendants(youthNamed("no-such-master-defendant"), youthNamed(YOUTH_ID)),
                     subscriptions(),
                     hearing(),
                     anomalies::add);
@@ -389,7 +389,7 @@ class AggregationMapperTest {
 
     /** A fragment carrying the adult ahead of the youth, as the adult-first hearing gathers. */
     private RegisterFragment adultAndYouth() {
-        return withDefendants(adult(), youthNamed(YOUTH));
+        return withDefendants(adult(), youthNamed(YOUTH_ID));
     }
 
     /** A fragment carrying the adult alone. */
@@ -454,9 +454,9 @@ class AggregationMapperTest {
     /** The adult who is on the hearing and is not what the register is for. */
     private RegisterDefendant adult() {
         return new RegisterDefendant(
-                List.of(ADULT), List.of(),
+                List.of(ADULT_ID), List.of(),
                 List.of("c10e3b71-6a6d-45ef-9b62-34df4d54971a"), List.of(),
-                ADULT, false, "2020-01-20", null);
+                ADULT_ID, false, "2020-01-20", null);
     }
 
     /**

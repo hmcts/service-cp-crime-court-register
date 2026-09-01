@@ -1,9 +1,14 @@
 package uk.gov.hmcts.cp.courtregister.inbound;
 
-import java.time.OffsetDateTime;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -18,6 +23,10 @@ import com.azure.messaging.servicebus.ServiceBusReceivedMessageContext;
 import com.azure.messaging.servicebus.models.DeadLetterOptions;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -37,16 +46,6 @@ import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 import uk.gov.hmcts.cp.courtregister.support.QueueHealthTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.StoreGateTestSupport;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockingDetails;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 /**
  * What happens when the settlement itself is the thing that fails — spec FR-016.
@@ -107,7 +106,7 @@ class SettlementFailureEdgeTest {
 
     @BeforeEach
     void captureWhatTheListenerReports() {
-        listenerLog = CapturedLog.of(CourtRegisterMessageListener.class);
+        listenerLog = CapturedLog.capturing(CourtRegisterMessageListener.class);
     }
 
     @AfterEach

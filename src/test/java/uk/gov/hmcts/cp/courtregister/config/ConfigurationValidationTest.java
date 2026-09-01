@@ -1,8 +1,9 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.time.Duration;
 import java.util.Map;
-
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -11,8 +12,6 @@ import org.springframework.boot.test.context.ConfigDataApplicationContextInitial
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Holds the configuration surface to the plan's table, and holds startup to the rules that make the

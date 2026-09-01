@@ -1,7 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
-import java.util.List;
-import java.util.stream.Stream;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
@@ -10,6 +9,8 @@ import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -19,8 +20,6 @@ import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * One case per instrument: the name, the type, the label set and the condition that moves it.

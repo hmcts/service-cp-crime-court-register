@@ -1,5 +1,13 @@
 package uk.gov.hmcts.cp.courtregister.support;
 
+import static org.awaitility.Awaitility.await;
+
+import com.azure.messaging.servicebus.ServiceBusClientBuilder;
+import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
+import com.azure.messaging.servicebus.ServiceBusReceiverClient;
+import com.azure.messaging.servicebus.models.SubQueue;
+import eu.rekawek.toxiproxy.Proxy;
+import eu.rekawek.toxiproxy.ToxiproxyClient;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
@@ -9,20 +17,11 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-
-import com.azure.messaging.servicebus.ServiceBusClientBuilder;
-import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
-import com.azure.messaging.servicebus.ServiceBusReceiverClient;
-import com.azure.messaging.servicebus.models.SubQueue;
-import eu.rekawek.toxiproxy.Proxy;
-import eu.rekawek.toxiproxy.ToxiproxyClient;
 import org.testcontainers.azure.ServiceBusEmulatorContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.mssqlserver.MSSQLServerContainer;
 import org.testcontainers.toxiproxy.ToxiproxyContainer;
 import org.testcontainers.utility.MountableFile;
-
-import static org.awaitility.Awaitility.await;
 
 /**
  * Shared Service Bus emulator fixture for the broker and end-to-end suites.

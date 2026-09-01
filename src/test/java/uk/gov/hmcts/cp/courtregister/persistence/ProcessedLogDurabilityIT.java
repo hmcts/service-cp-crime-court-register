@@ -1,14 +1,18 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.time.Duration;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.Ports;
 import com.zaxxer.hikari.HikariDataSource;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.time.Duration;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -27,9 +31,6 @@ import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport.Row;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 
 /**
  * The processed log is durable, not remembered.
@@ -54,7 +55,12 @@ class ProcessedLogDurabilityIT {
     private static final Duration READY_BUDGET = Duration.ofMinutes(1);
 
     private static PostgreSQLContainer container;
-    private static HikariDataSource dataSource;
+
+    /**
+     * The pool the suite reads through, held in a reference so that closing it around a restart
+     * releases the old pool outright rather than leaving a closed one behind to be reused.
+     */
+    private static final AtomicReference<HikariDataSource> POOL = new AtomicReference<>();
 
     private final DistributionCommand command = ProcessedLogTestSupport.command();
 
@@ -83,7 +89,7 @@ class ProcessedLogDurabilityIT {
     @DisplayName("a recorded request survives a restart of the store")
     void a_recorded_request_should_be_read_back_unchanged_after_a_restart() {
         final IdempotencyGuard guard = new IdempotencyGuard(
-                new ProcessedRequestRepository(JdbcClient.create(dataSource), LEASE),
+                new ProcessedRequestRepository(JdbcClient.create(POOL.get()), LEASE),
                 new ProcessingMetrics(new SimpleMeterRegistry()));
         final GuardDecision admission =
                 guard.admit(command, new DeliveryIdentity("msg-1", "runner-1/delivery-1"));
@@ -115,7 +121,7 @@ class ProcessedLogDurabilityIT {
 
         @Test
         void should_answer_yes_while_the_store_is_up() {
-            assertThat(new ProcessedLogProbe(JdbcClient.create(dataSource)).available()).isTrue();
+            assertThat(new ProcessedLogProbe(JdbcClient.create(POOL.get())).available()).isTrue();
         }
 
         @Test
@@ -129,7 +135,7 @@ class ProcessedLogDurabilityIT {
 
     private Row row() {
         return ProcessedLogTestSupport.requireRow(
-                JdbcClient.create(dataSource), command.source(), command.requestId());
+                JdbcClient.create(POOL.get()), command.source(), command.requestId());
     }
 
     /**
@@ -165,19 +171,16 @@ class ProcessedLogDurabilityIT {
     }
 
     private static void openPool() {
-        dataSource = DataSourceBuilder.create()
+        POOL.set(DataSourceBuilder.create()
                 .type(HikariDataSource.class)
                 .url(jdbcUrl())
                 .username(DATABASE)
                 .password(DATABASE)
-                .build();
+                .build());
     }
 
     private static void closePool() {
-        if (dataSource != null) {
-            dataSource.close();
-            dataSource = null;
-        }
+        Optional.ofNullable(POOL.getAndSet(null)).ifPresent(HikariDataSource::close);
     }
 
     /**

@@ -289,7 +289,7 @@ class RecipientMapperTest {
         @Test
         @DisplayName("each drop writes one warning, and is counted under its own reason")
         void every_dropped_recipient_is_logged_and_counted() {
-            try (CapturedLog log = CapturedLog.of(RecipientMapper.class)) {
+            try (CapturedLog log = CapturedLog.capturing(RecipientMapper.class)) {
                 map(letterSubscription("firstClassLetterDelivery"), notForDistribution());
 
                 assertThat(warnings(log)).hasSize(2);
@@ -305,7 +305,7 @@ class RecipientMapperTest {
             // Every recipient here is an organisation, but an email address is contact detail all
             // the same and these lines reach a shared log index. The reason is what an operator
             // needs; the address is what reference data can be asked for.
-            try (CapturedLog log = CapturedLog.of(RecipientMapper.class)) {
+            try (CapturedLog log = CapturedLog.capturing(RecipientMapper.class)) {
                 map(letterSubscription("firstClassLetterDelivery"));
 
                 assertThat(warnings(log)).singleElement().satisfies(message -> assertThat(message)
@@ -317,7 +317,7 @@ class RecipientMapperTest {
         @Test
         @DisplayName("a subscription that survives is not warned about")
         void a_surviving_subscription_is_not_warned_about() {
-            try (CapturedLog log = CapturedLog.of(RecipientMapper.class)) {
+            try (CapturedLog log = CapturedLog.capturing(RecipientMapper.class)) {
                 map(deliverable());
 
                 assertThat(warnings(log)).isEmpty();

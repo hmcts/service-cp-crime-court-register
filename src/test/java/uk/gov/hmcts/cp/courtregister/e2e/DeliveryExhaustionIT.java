@@ -1,11 +1,9 @@
 package uk.gov.hmcts.cp.courtregister.e2e;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 import com.azure.core.util.BinaryData;
 import com.azure.messaging.servicebus.ServiceBusClientBuilder;
@@ -15,6 +13,12 @@ import com.azure.messaging.servicebus.ServiceBusSenderClient;
 import com.azure.messaging.servicebus.models.SubQueue;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -45,11 +49,6 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport.Row;
 import uk.gov.hmcts.cp.courtregister.support.ServiceBusEmulatorTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
 
 /**
  * A request that keeps failing is retried, parked visibly after exactly five deliveries, and then
@@ -151,7 +150,7 @@ class DeliveryExhaustionIT {
     @BeforeEach
     void controlThePayloadPortAndWatchEveryDelivery() {
         when(payloadSource.fetch(any(DistributionCommand.class))).thenAnswer(this::payloadFor);
-        deliveryLog = CapturedLog.of(CourtRegisterMessageListener.class);
+        deliveryLog = CapturedLog.capturing(CourtRegisterMessageListener.class);
     }
 
     @AfterEach
@@ -170,13 +169,12 @@ class DeliveryExhaustionIT {
      */
     private JsonNode payloadFor(final InvocationOnMock invocation) {
         final DistributionCommand command = invocation.getArgument(0);
-        if (!requestId.equals(command.requestId())) {
-            return PLACEHOLDER;
-        }
-        runStartedWith.add(
-                ProcessedLogTestSupport.requireRow(ProcessedLogTestSupport.SOURCE, requestId));
-        if (!payloadAvailable.get()) {
-            throw new PayloadUnavailableException(ReasonCode.PAYLOAD_UNAVAILABLE);
+        if (requestId.equals(command.requestId())) {
+            runStartedWith.add(
+                    ProcessedLogTestSupport.requireRow(ProcessedLogTestSupport.SOURCE, requestId));
+            if (!payloadAvailable.get()) {
+                throw new PayloadUnavailableException(ReasonCode.PAYLOAD_UNAVAILABLE);
+            }
         }
         return PLACEHOLDER;
     }

@@ -1,9 +1,10 @@
 package uk.gov.hmcts.cp.courtregister.e2e;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.UUID;
-import java.util.concurrent.CopyOnWriteArrayList;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.azure.core.util.BinaryData;
 import com.azure.messaging.servicebus.ServiceBusClientBuilder;
@@ -13,6 +14,10 @@ import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
 import com.azure.messaging.servicebus.models.SubQueue;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Duration;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -32,12 +37,6 @@ import uk.gov.hmcts.cp.courtregister.inbound.DistributionCommandParser;
 import uk.gov.hmcts.cp.courtregister.support.QueueHealthTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ServiceBusEmulatorTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.StoreGateTestSupport;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * The settlement contract again, this time with a broker on the other end of it.

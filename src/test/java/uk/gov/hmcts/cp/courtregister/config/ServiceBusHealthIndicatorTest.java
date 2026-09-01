@@ -1,8 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
-import java.io.IOException;
-import java.time.Duration;
-import java.time.Instant;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import com.azure.core.amqp.exception.AmqpErrorCondition;
 import com.azure.core.amqp.exception.AmqpErrorContext;
@@ -10,13 +8,14 @@ import com.azure.core.amqp.exception.AmqpException;
 import com.azure.messaging.servicebus.ServiceBusErrorSource;
 import com.azure.messaging.servicebus.ServiceBusException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.health.contributor.Status;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The reachability rule, exercised at its edges with a clock the test moves.

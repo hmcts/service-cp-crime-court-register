@@ -15,6 +15,7 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterAlias;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterCaseOrApplication;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterCounsel;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDefendant;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterResult;
@@ -75,7 +76,7 @@ import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
 @DisplayName("YouthDefendantMapper")
 class YouthDefendantMapperTest {
 
-    private static final String YOUTH = "6647df67-a065-4d07-90ba-a8daa064ecc4";
+    private static final String YOUTH_ID = "6647df67-a065-4d07-90ba-a8daa064ecc4";
 
     private static final String SECOND_YOUTH = "b21c7e94-3f5a-4d18-9c60-7ea4d3f61b28";
 
@@ -99,7 +100,7 @@ class YouthDefendantMapperTest {
         @DisplayName("one defendant is mapped, under the master id the fragment gathered them by")
         void one_defendant_is_mapped() {
             assertThat(legacyYouth()).hasSize(1);
-            assertThat(legacyYouth().get(0).masterDefendantId()).isEqualTo(YOUTH);
+            assertThat(legacyYouth().get(0).masterDefendantId()).isEqualTo(YOUTH_ID);
         }
 
         @Test
@@ -255,7 +256,7 @@ class YouthDefendantMapperTest {
             final ObjectNode hearing = survivingYouthHearing();
             personDetails(hearing).set("ethnicity", mapper.createObjectNode());
 
-            assertThat(map(hearing, youth(YOUTH)).get(0).ethnicity()).isNull();
+            assertThat(map(hearing, youth(YOUTH_ID)).get(0).ethnicity()).isNull();
         }
 
         @Test
@@ -264,7 +265,7 @@ class YouthDefendantMapperTest {
             final ObjectNode hearing = survivingYouthHearing();
             personDetails(hearing).remove("ethnicity");
 
-            assertThat(map(hearing, youth(YOUTH)).get(0).ethnicity()).isNull();
+            assertThat(map(hearing, youth(YOUTH_ID)).get(0).ethnicity()).isNull();
         }
     }
 
@@ -284,7 +285,7 @@ class YouthDefendantMapperTest {
             final ObjectNode hearing = survivingYouthHearing();
             caseDefendant(hearing).remove("defendantCaseJudicialResults");
 
-            assertThat(map(hearing, youth(YOUTH)).get(0).postHearingCustodyStatus())
+            assertThat(map(hearing, youth(YOUTH_ID)).get(0).postHearingCustodyStatus())
                     .isEqualTo(NOT_APPLICABLE);
         }
 
@@ -329,7 +330,7 @@ class YouthDefendantMapperTest {
             ((ObjectNode) hearing.get("defenceCounsels").get(0))
                     .set("defendants", mapper.createArrayNode().add(SECOND_YOUTH));
 
-            assertThat(map(hearing, youth(YOUTH)).get(0).defenceCounsels()).isNull();
+            assertThat(map(hearing, youth(YOUTH_ID)).get(0).defenceCounsels()).isNull();
         }
 
         @Test
@@ -338,7 +339,7 @@ class YouthDefendantMapperTest {
             final ObjectNode hearing = survivingYouthHearing();
             hearing.remove("defenceCounsels");
 
-            assertThat(map(hearing, youth(YOUTH)).get(0).defenceCounsels()).isNull();
+            assertThat(map(hearing, youth(YOUTH_ID)).get(0).defenceCounsels()).isNull();
         }
     }
 
@@ -363,7 +364,7 @@ class YouthDefendantMapperTest {
             record.set("legalEntityDefendant",
                     mapper.createObjectNode().put("organisationName", "Acme Holdings Ltd"));
 
-            assertThat(map(hearing, youth(YOUTH))).isEmpty();
+            assertThat(map(hearing, youth(YOUTH_ID))).isEmpty();
         }
 
         @Test
@@ -385,7 +386,7 @@ class YouthDefendantMapperTest {
             // The whole argument for the fix: one bad record costs that record, not every child on
             // the hearing.
             final List<CourtRegisterDefendant> mapped = map(
-                    survivingYouthHearing(), youth("no-such-master-defendant"), youth(YOUTH));
+                    survivingYouthHearing(), youth("no-such-master-defendant"), youth(YOUTH_ID));
 
             assertThat(mapped).hasSize(1);
             assertThat(mapped.get(0).name()).isEqualTo("Fred Duncan Smith");
@@ -396,7 +397,7 @@ class YouthDefendantMapperTest {
         void is_warned_about_without_personal_data() {
             // Every defendant on this register is a child, and these lines reach a log index shared
             // across the estate. The bounded reason is what an operator needs.
-            try (CapturedLog log = CapturedLog.of(YouthDefendantMapper.class)) {
+            try (CapturedLog log = CapturedLog.capturing(YouthDefendantMapper.class)) {
                 map(survivingYouthHearing(), youth("no-such-master-defendant"));
 
                 assertThat(warnings(log)).singleElement().satisfies(message ->
@@ -410,8 +411,8 @@ class YouthDefendantMapperTest {
         @Test
         @DisplayName("a resolvable defendant is neither counted nor warned about")
         void a_resolvable_defendant_is_neither() {
-            try (CapturedLog log = CapturedLog.of(YouthDefendantMapper.class)) {
-                map(survivingYouthHearing(), youth(YOUTH));
+            try (CapturedLog log = CapturedLog.capturing(YouthDefendantMapper.class)) {
+                map(survivingYouthHearing(), youth(YOUTH_ID));
 
                 assertThat(anomalies).isEmpty();
                 assertThat(warnings(log)).isEmpty();
@@ -430,7 +431,7 @@ class YouthDefendantMapperTest {
             // document is one the pre-send validator refuses rather than one progression loses.
             final ObjectNode hearing = hearingOf("hearing-with-address-less-youth-and-parent.json");
 
-            assertThat(map(hearing, youth(YOUTH)).get(0).address()).isNull();
+            assertThat(map(hearing, youth(YOUTH_ID)).get(0).address()).isNull();
         }
 
         @Test
@@ -467,7 +468,7 @@ class YouthDefendantMapperTest {
         @DisplayName("the cases and applications are attached")
         void the_cases_and_applications_are_attached() {
             assertThat(survivingYouth().prosecutionCasesOrApplications())
-                    .extracting(entry -> entry.caseOrApplicationReference())
+                    .extracting(CourtRegisterCaseOrApplication::caseOrApplicationReference)
                     .contains("TFL4359536");
         }
 
@@ -475,14 +476,14 @@ class YouthDefendantMapperTest {
         @DisplayName("only the defendant-level results reach the defendant")
         void only_defendant_level_results_reach_the_defendant() {
             final RegisterDefendant gathered = new RegisterDefendant(
-                    List.of(YOUTH),
+                    List.of(YOUTH_ID),
                     List.of(
                             result(ResultLevel.DEFENDANT, "cjsCode - D level"),
                             result(ResultLevel.CASE, "cjsCode - C level"),
                             result(ResultLevel.OFFENCE, "cjsCode - O level")),
                     List.of(CASE_ID),
                     List.of(APPLICATION_ID),
-                    YOUTH,
+                    YOUTH_ID,
                     true,
                     "2020-01-20",
                     null);
@@ -511,9 +512,9 @@ class YouthDefendantMapperTest {
         void defendants_keep_their_order() {
             final ObjectNode hearing = hearingOf("hearing-with-address-less-youth-and-parent.json");
 
-            assertThat(map(hearing, youth(SECOND_YOUTH), youth(YOUTH)))
+            assertThat(map(hearing, youth(SECOND_YOUTH), youth(YOUTH_ID)))
                     .extracting(CourtRegisterDefendant::masterDefendantId)
-                    .containsExactly(SECOND_YOUTH, YOUTH);
+                    .containsExactly(SECOND_YOUTH, YOUTH_ID);
         }
     }
 
@@ -539,7 +540,7 @@ class YouthDefendantMapperTest {
      * @return the mapped defendant
      */
     private CourtRegisterDefendant survivingYouth() {
-        return map(survivingYouthHearing(), youth(YOUTH)).get(0);
+        return map(survivingYouthHearing(), youth(YOUTH_ID)).get(0);
     }
 
     /**
@@ -557,7 +558,7 @@ class YouthDefendantMapperTest {
         ethnicity.put(description, value);
         personDetails(hearing).set("ethnicity", ethnicity);
 
-        return map(hearing, youth(YOUTH)).get(0);
+        return map(hearing, youth(YOUTH_ID)).get(0);
     }
 
     /**
@@ -574,7 +575,7 @@ class YouthDefendantMapperTest {
         }
         caseDefendant(hearing).set("defendantCaseJudicialResults", results);
 
-        return map(hearing, youth(YOUTH)).get(0);
+        return map(hearing, youth(YOUTH_ID)).get(0);
     }
 
     /**
@@ -616,7 +617,7 @@ class YouthDefendantMapperTest {
      */
     private RegisterResult result(final ResultLevel level, final String cjsCode) {
         return new RegisterResult(
-                CASE_ID, YOUTH, null, APPLICATION_ID, level, YOUTH,
+                CASE_ID, YOUTH_ID, null, APPLICATION_ID, level, YOUTH_ID,
                 mapper.createObjectNode().put("cjsCode", cjsCode).put("resultText", "text"),
                 null, null);
     }

@@ -155,7 +155,7 @@ class ResultMapperTest {
      */
     private List<CourtRegisterResult> map(final String... judicialResults) {
         final List<JsonNode> nodes =
-                Stream.of(judicialResults).map(text -> mapper.readTree(text)).toList();
+                Stream.of(judicialResults).map(mapper::readTree).toList();
         return ResultMapper.map(nodes);
     }
 }

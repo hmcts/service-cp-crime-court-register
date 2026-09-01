@@ -1,5 +1,11 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.networknt.schema.Schema;
+import com.networknt.schema.SchemaRegistry;
+import com.networknt.schema.SchemaRegistryConfig;
+import com.networknt.schema.SpecificationVersion;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -9,13 +15,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-
-import com.networknt.schema.Schema;
-import com.networknt.schema.SchemaRegistry;
-import com.networknt.schema.SchemaRegistryConfig;
-import com.networknt.schema.SpecificationVersion;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -25,8 +27,6 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.inbound.DistributionCommandParser;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Holds the production parser and the committed draft-07 schema to each other.
@@ -86,9 +86,9 @@ class DistributionCommandSchemaCorpusTest {
             "source", "requestId", "hearingId", "hearingDay", "sharedTime", "eventType",
             OPTIONAL_FIELD);
 
-    private static String schemaText;
-    private static JsonNode schemaDocument;
-    private static Schema schema;
+    private static String cachedSchemaText;
+    private static JsonNode cachedSchemaDocument;
+    private static Schema cachedSchema;
 
     // --- fixture plumbing ------------------------------------------------------------------
 
@@ -100,30 +100,30 @@ class DistributionCommandSchemaCorpusTest {
      * error that says nothing about which artefact is missing.
      */
     private static String schemaText() {
-        if (schemaText == null) {
-            try (InputStream stream = DistributionCommandSchemaCorpusTest.class
-                    .getClassLoader()
+        if (cachedSchemaText == null) {
+            try (InputStream stream = Thread.currentThread()
+                    .getContextClassLoader()
                     .getResourceAsStream(SCHEMA_RESOURCE)) {
                 assertThat(stream)
                         .as("the inbound contract schema must be committed at %s", SCHEMA_RESOURCE)
                         .isNotNull();
-                schemaText = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+                cachedSchemaText = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
             } catch (IOException unreadable) {
                 throw new UncheckedIOException(unreadable);
             }
         }
-        return schemaText;
+        return cachedSchemaText;
     }
 
     private static JsonNode schemaDocument() {
-        if (schemaDocument == null) {
-            schemaDocument = MAPPER.readTree(schemaText());
+        if (cachedSchemaDocument == null) {
+            cachedSchemaDocument = MAPPER.readTree(schemaText());
         }
-        return schemaDocument;
+        return cachedSchemaDocument;
     }
 
     private static Schema schema() {
-        if (schema == null) {
+        if (cachedSchema == null) {
             final SchemaRegistryConfig config = SchemaRegistryConfig.builder()
                     // Formats are assertions here, not annotations: `uuid`, `date` and `date-time`
                     // must actually be checked or the corpus proves nothing about format drift.
@@ -132,9 +132,9 @@ class DistributionCommandSchemaCorpusTest {
             final SchemaRegistry registry = SchemaRegistry.withDefaultDialect(
                     SpecificationVersion.DRAFT_7,
                     builder -> builder.schemaRegistryConfig(config));
-            schema = registry.getSchema(schemaText());
+            cachedSchema = registry.getSchema(schemaText());
         }
-        return schema;
+        return cachedSchema;
     }
 
     /**
@@ -171,23 +171,25 @@ class DistributionCommandSchemaCorpusTest {
     }
 
     private static boolean parserAccepts(final String body) {
+        boolean accepted;
         try {
             PARSER.parse(body);
-            return true;
+            accepted = true;
         } catch (ContractValidationException rejected) {
-            return false;
+            accepted = false;
         }
+        return accepted;
     }
 
     private static boolean schemaAccepts(final String body) {
-        final JsonNode node;
+        Optional<JsonNode> parsed;
         try {
-            node = MAPPER.readTree(body);
+            parsed = Optional.of(MAPPER.readTree(body));
         } catch (JacksonException malformed) {
             // A body the parser cannot even read is a rejection on both sides.
-            return false;
+            parsed = Optional.empty();
         }
-        return schema().validate(node).isEmpty();
+        return parsed.filter(node -> schema().validate(node).isEmpty()).isPresent();
     }
 
     private static void assertAgreement(final String body, final boolean expectedAccepted) {

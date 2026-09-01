@@ -1,22 +1,21 @@
 package uk.gov.hmcts.cp.courtregister.support;
 
-import java.time.Duration;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.UUID;
+import static org.awaitility.Awaitility.await;
 
 import com.azure.core.util.BinaryData;
 import com.azure.messaging.servicebus.ServiceBusClientBuilder;
 import com.azure.messaging.servicebus.ServiceBusMessage;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
+import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import uk.gov.hmcts.cp.Application;
 import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
-
-import static org.awaitility.Awaitility.await;
 
 /**
  * The whole service, started by a test that needs to control <em>when</em> it starts.

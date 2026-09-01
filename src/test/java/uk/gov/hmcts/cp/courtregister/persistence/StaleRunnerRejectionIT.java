@@ -1,6 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
-import java.time.Duration;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -8,6 +8,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Duration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -25,8 +26,6 @@ import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport.Row;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * A runner whose claim was reclaimed while it was working writes nothing.
@@ -98,9 +97,9 @@ class StaleRunnerRejectionIT {
         return switch (outcome) {
             case COMPLETION -> guard.recordCompletion(claim, CompletionReason.SUBMITTED);
             case TRANSIENT_FAILURE ->
-                    guard.recordTransientFailure(claim, ReasonCode.PIPELINE_TRANSIENT_FAILURE);
+                guard.recordTransientFailure(claim, ReasonCode.PIPELINE_TRANSIENT_FAILURE);
             case EXHAUSTION ->
-                    guard.recordExhaustion(claim, ReasonCode.PIPELINE_TRANSIENT_FAILURE);
+                guard.recordExhaustion(claim, ReasonCode.PIPELINE_TRANSIENT_FAILURE);
         };
     }
 

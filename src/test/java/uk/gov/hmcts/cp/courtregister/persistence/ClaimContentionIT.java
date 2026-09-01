@@ -1,5 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -8,7 +10,6 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,8 +21,6 @@ import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport.Row;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Several deliveries of one request, arriving at the same instant, produce exactly one run.

@@ -1,17 +1,19 @@
 package uk.gov.hmcts.cp.courtregister.e2e;
 
-import java.time.Duration;
-import java.util.Map;
-import java.util.Optional;
-import java.util.UUID;
-
-import javax.sql.DataSource;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
 import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
 import com.azure.messaging.servicebus.models.SubQueue;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Duration;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -31,10 +33,6 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport.Row;
 import uk.gov.hmcts.cp.courtregister.support.ServiceBusEmulatorTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
 /**
  * What a store outage must cost: one abandoned delivery, and nothing else (spec FR-015).
@@ -171,7 +169,7 @@ class StoreOutageIT {
     void should_not_examine_a_contract_invalid_message_during_the_outage() {
         try (ConfigurableApplicationContext context =
                      ServiceTestSupport.startConsuming(Map.of());
-             CapturedLog listenerLog = CapturedLog.of(CourtRegisterMessageListener.class)) {
+             CapturedLog listenerLog = CapturedLog.capturing(CourtRegisterMessageListener.class)) {
             final MeterRegistry registry = meters(context);
             final double parkedBefore = counter(registry, ProcessingMetrics.DEAD_LETTERED,
                     ProcessingMetrics.REASON_TAG, DeadLetterReason.VALIDATION.label());
@@ -218,7 +216,7 @@ class StoreOutageIT {
                 () -> ServiceTestSupport.start(Map.of("spring.datasource.url", jdbcUrl)),
                 "context refresh must complete with the store down: a pod that cannot start "
                         + "cannot report why it is not ready");
-        try (context; CapturedLog listenerLog = CapturedLog.of(CourtRegisterMessageListener.class)) {
+        try (context; CapturedLog listenerLog = CapturedLog.capturing(CourtRegisterMessageListener.class)) {
             final HealthEndpoint health = context.getBean(HealthEndpoint.class);
             assertThat(health.healthForPath("readiness").getStatus())
                     .as("up enough to say it is not ready — which is the only honest thing to say")

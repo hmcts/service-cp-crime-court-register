@@ -1,5 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -11,7 +13,6 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,8 +28,6 @@ import uk.gov.hmcts.cp.courtregister.domain.ProcessedOutputClaim;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The submission half of the processed log is fenced on the request claim, exactly as the request

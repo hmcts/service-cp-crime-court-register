@@ -271,16 +271,17 @@ class CourtExtractFilterTest {
      */
     private static boolean truthy(final JsonNode node, final String field) {
         final JsonNode value = node.get(field);
+        final boolean truthy;
         if (value == null || value.isNull() || value.isMissingNode()) {
-            return false;
+            truthy = false;
+        } else if (value.isBoolean()) {
+            truthy = value.booleanValue();
+        } else if (value.isString()) {
+            truthy = !value.stringValue().isEmpty();
+        } else {
+            truthy = true;
         }
-        if (value.isBoolean()) {
-            return value.booleanValue();
-        }
-        if (value.isString()) {
-            return !value.stringValue().isEmpty();
-        }
-        return true;
+        return truthy;
     }
 
     /**

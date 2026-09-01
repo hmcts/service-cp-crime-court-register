@@ -1,9 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.e2e;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.UUID;
-import java.util.stream.Stream;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -15,6 +13,10 @@ import com.azure.messaging.servicebus.ServiceBusSenderClient;
 import com.azure.messaging.servicebus.models.SubQueue;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Duration;
+import java.util.List;
+import java.util.UUID;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -34,9 +36,6 @@ import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ServiceBusEmulatorTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 
 /**
  * A body that can never be valid is parked at once — spec FR-003, on a real broker.
@@ -115,7 +114,7 @@ class ContractValidationDeadLetterIT {
 
     @BeforeEach
     void watchEveryDelivery() {
-        deliveryLog = CapturedLog.of(CourtRegisterMessageListener.class);
+        deliveryLog = CapturedLog.capturing(CourtRegisterMessageListener.class);
     }
 
     @AfterEach

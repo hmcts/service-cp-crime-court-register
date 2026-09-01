@@ -74,7 +74,7 @@ public final class StoreGateTestSupport {
     public static final class Recording implements StoreGate {
 
         private final boolean available;
-        private int suspensionsRequested;
+        private int suspensions;
 
         private Recording(final boolean available) {
             this.available = available;
@@ -87,7 +87,7 @@ public final class StoreGateTestSupport {
 
         @Override
         public void suspendIntake() {
-            suspensionsRequested++;
+            suspensions++;
         }
 
         /**
@@ -96,7 +96,7 @@ public final class StoreGateTestSupport {
          * @return the number of suspension requests
          */
         public int suspensionsRequested() {
-            return suspensionsRequested;
+            return suspensions;
         }
     }
 

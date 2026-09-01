@@ -1,14 +1,13 @@
 package uk.gov.hmcts.cp.courtregister.support;
 
-import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
-
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.classic.spi.ThrowableProxyUtil;
 import ch.qos.logback.core.AppenderBase;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -60,7 +59,7 @@ public final class CapturedLog implements AutoCloseable {
      * @param type the class whose logger to attach to
      * @return the capture, to be closed when the assertions are done
      */
-    public static CapturedLog of(final Class<?> type) {
+    public static CapturedLog capturing(final Class<?> type) {
         return attachTo((Logger) LoggerFactory.getLogger(type), false, null);
     }
 
@@ -74,7 +73,7 @@ public final class CapturedLog implements AutoCloseable {
      *
      * @param loggerName the logger to attach to, typically a package
      */
-    public static CapturedLog of(final String loggerName) {
+    public static CapturedLog capturing(final String loggerName) {
         return attachTo((Logger) LoggerFactory.getLogger(loggerName), false, null);
     }
 

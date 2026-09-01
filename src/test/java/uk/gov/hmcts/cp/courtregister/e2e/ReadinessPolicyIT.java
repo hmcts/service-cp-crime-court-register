@@ -1,11 +1,9 @@
 package uk.gov.hmcts.cp.courtregister.e2e;
 
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 import com.azure.core.amqp.exception.AmqpErrorCondition;
 import com.azure.core.amqp.exception.AmqpErrorContext;
@@ -13,6 +11,12 @@ import com.azure.core.amqp.exception.AmqpException;
 import com.azure.messaging.servicebus.ServiceBusErrorSource;
 import com.azure.messaging.servicebus.ServiceBusException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.invocation.InvocationOnMock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.health.actuate.endpoint.CompositeHealthDescriptor;
+import org.springframework.boot.health.actuate.endpoint.HealthDescriptor;
 import org.springframework.boot.health.actuate.endpoint.HealthEndpoint;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -37,11 +42,6 @@ import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ServiceBusEmulatorTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
 
 /**
  * The readiness policy, proven against both dependencies going away (spec FR-011).
@@ -173,7 +173,7 @@ class ReadinessPolicyIT {
     }
 
     private Status brokerComponentStatus() {
-        final var component = overall().getComponents().get(BROKER_COMPONENT);
+        final HealthDescriptor component = overall().getComponents().get(BROKER_COMPONENT);
         return component == null ? Status.UNKNOWN : component.getStatus();
     }
 

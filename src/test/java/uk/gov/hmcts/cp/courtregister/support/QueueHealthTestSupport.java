@@ -1,9 +1,8 @@
 package uk.gov.hmcts.cp.courtregister.support;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
-
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.config.ServiceBusHealthIndicator;
 

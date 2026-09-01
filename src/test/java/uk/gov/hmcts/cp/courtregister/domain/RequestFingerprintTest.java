@@ -1,17 +1,16 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Locale;
 import java.util.UUID;
-
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.inbound.DistributionCommandParser;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Pins the fingerprint's canonicalisation.

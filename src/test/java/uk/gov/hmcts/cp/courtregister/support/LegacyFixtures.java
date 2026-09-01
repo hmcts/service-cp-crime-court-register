@@ -57,7 +57,7 @@ public final class LegacyFixtures {
      * @return the parsed tree
      */
     public static JsonNode read(final String name) {
-        return at(ROOT + name);
+        return readResource(ROOT + name);
     }
 
     /**
@@ -75,7 +75,7 @@ public final class LegacyFixtures {
      * @return the parsed tree
      */
     public static JsonNode readCourtRegister(final String path) {
-        return at(COURT_REGISTER_ROOT + path);
+        return readResource(COURT_REGISTER_ROOT + path);
     }
 
     /**
@@ -89,7 +89,7 @@ public final class LegacyFixtures {
      * @return the parsed tree
      */
     public static JsonNode readRebuilt(final String path) {
-        return at(REBUILT_ROOT + path);
+        return readResource(REBUILT_ROOT + path);
     }
 
     /**
@@ -110,7 +110,7 @@ public final class LegacyFixtures {
      * @return the parsed payload
      */
     public static JsonNode readBase(final String path) {
-        return at(BASE_ROOT + path);
+        return readResource(BASE_ROOT + path);
     }
 
     /**
@@ -119,7 +119,7 @@ public final class LegacyFixtures {
      * @param resource the absolute resource path
      * @return the parsed tree
      */
-    private static JsonNode at(final String resource) {
+    private static JsonNode readResource(final String resource) {
         try (InputStream stream = LegacyFixtures.class.getResourceAsStream(resource)) {
             if (stream == null) {
                 throw new IllegalStateException("missing test resource " + resource);

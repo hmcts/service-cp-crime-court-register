@@ -1,15 +1,13 @@
 package uk.gov.hmcts.cp.courtregister.support;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
-
 import javax.sql.DataSource;
-
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.boot.jdbc.DataSourceBuilder;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
@@ -33,7 +31,10 @@ public final class ProcessedLogTestSupport {
     /** The single value {@code source} is permitted to take. */
     public static final String SOURCE = "RESULTS";
 
-    private static DataSource dataSource;
+    /** The single row a fixture update is expected to touch. */
+    private static final int ONE_ROW = 1;
+
+    private static DataSource pooledDataSource;
 
     private ProcessedLogTestSupport() {
         // Static fixture holder.
@@ -43,17 +44,20 @@ public final class ProcessedLogTestSupport {
      * The shared, migrated data source. Started and migrated on first use.
      */
     public static synchronized DataSource dataSource() {
-        if (dataSource == null) {
+        if (pooledDataSource == null) {
             PostgresTestSupport.applyFlyway();
-            dataSource = DataSourceBuilder.create()
+            pooledDataSource = DataSourceBuilder.create()
                     .url(PostgresTestSupport.jdbcUrl())
                     .username(PostgresTestSupport.username())
                     .password(PostgresTestSupport.password())
                     .build();
         }
-        return dataSource;
+        return pooledDataSource;
     }
 
+    /**
+     * A client over the pooled connection, for suites that read rows back directly.
+     */
     public static JdbcClient jdbcClient() {
         return JdbcClient.create(dataSource());
     }
@@ -92,12 +96,15 @@ public final class ProcessedLogTestSupport {
                 .param("source", source)
                 .param("requestId", requestId)
                 .update();
-        if (aged != 1) {
+        if (aged != ONE_ROW) {
             throw new IllegalStateException("expected one live claim to age for " + source + "/"
                     + requestId + ", aged " + aged);
         }
     }
 
+    /**
+     * A guard holding the claim lease a suite wants, instrumented by the given metrics.
+     */
     public static IdempotencyGuard guard(final Duration lease, final ProcessingMetrics metrics) {
         return new IdempotencyGuard(repository(lease), metrics);
     }
@@ -128,7 +135,7 @@ public final class ProcessedLogTestSupport {
                 .param("source", source)
                 .param("requestId", requestId)
                 .update();
-        if (aged != 1) {
+        if (aged != ONE_ROW) {
             throw new IllegalStateException(
                     "expected one row to age for " + source + "/" + requestId + ", aged " + aged);
         }

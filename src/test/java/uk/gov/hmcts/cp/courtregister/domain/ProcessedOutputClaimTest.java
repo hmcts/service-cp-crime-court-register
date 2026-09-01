@@ -1,23 +1,22 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.time.LocalDate;
-import java.util.HashMap;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
-
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * The two invariants the output claim carries, enforced where a record can enforce them.
@@ -195,7 +194,8 @@ class ProcessedOutputClaimTest {
 
         @Test
         void a_count_that_is_not_there_at_all_should_be_refused() {
-            final Map<TransformationAnomaly, Integer> counted = new HashMap<>();
+            final Map<TransformationAnomaly, Integer> counted =
+                    new EnumMap<>(TransformationAnomaly.class);
             counted.put(TransformationAnomaly.LETTER_DELIVERY_DROPPED, null);
 
             assertThatThrownBy(() -> claimWith(DIGEST, counted))

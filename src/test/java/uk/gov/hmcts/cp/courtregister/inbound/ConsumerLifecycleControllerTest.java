@@ -1,8 +1,14 @@
 package uk.gov.hmcts.cp.courtregister.inbound;
 
-import java.time.Clock;
-import java.time.Duration;
-import java.util.List;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -10,6 +16,9 @@ import com.azure.messaging.servicebus.ServiceBusProcessorClient;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Clock;
+import java.time.Duration;
+import java.util.List;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,16 +29,6 @@ import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.config.ServiceBusHealthIndicator;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedLogProbe;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
-import static org.mockito.Mockito.atLeast;
-import static org.mockito.Mockito.doNothing;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 /**
  * Stopping intake, and what the state is allowed to say about it.
@@ -78,7 +77,7 @@ class ConsumerLifecycleControllerTest {
 
     @BeforeEach
     void captureWhatTheControllerReports() {
-        controllerLog = CapturedLog.of(ConsumerLifecycleController.class);
+        controllerLog = CapturedLog.capturing(ConsumerLifecycleController.class);
     }
 
     /**
