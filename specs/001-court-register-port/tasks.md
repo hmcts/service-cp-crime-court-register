@@ -808,6 +808,34 @@ documentation-final states.
       tell the two apart would punish the file for explaining itself.)*
 - [ ] T069 [A] [US1] `e2e/CourtRegisterEndToEndIT` — message → POST(202) → COMPLETED `submitted`,
       `processed_output.status = POSTED`; one case per no-op reason; runs the quickstart sequence.
+- [ ] T069a [A] [US1] The e2e sufficiency matrix: four further suites in `e2e/`, each driving the
+      **real** pipeline over the whole stack — the Service Bus emulator, Postgres, a Redis container
+      and one WireMock server standing in for all three HTTP contexts at once (results-query,
+      reference-data and progression have disjoint paths, so one server is one fixture rather than
+      three). T069 proves the shapes a healthy service produces; these prove the legs it takes when
+      something is wrong, which are the legs no single-adapter suite can hold to a settlement:
+      - `e2e/PayloadSourceEndToEndIT` — the cache answers and the query side is never asked; the
+        cache misses and the query side answers, and the run still completes; **both** miss ⇒
+        TRANSIENT, the delivery handed back, and a redelivery that finds the payload completes it
+        (C32: the legacy stops silently on the pair).
+      - `e2e/SubmissionOutcomeEndToEndIT` — an address-less youth ⇒ FAILED **before any POST**, with
+        WireMock proving zero requests reached progression (C29 with C1); a 400 ⇒ FAILED, parked, and
+        `processed_output.status = FAILED` carrying `response_code`; a 5xx then a 202 ⇒ one POSTED
+        row and no second register (C3); a 200 that is not 202 ⇒ `SUBMISSION_NOT_ACCEPTED`; a refusal
+        every delivery ⇒ parked with `exhausted_message_id`; the same hearing re-shared under a new
+        `sharedTime` ⇒ two requests, two POSTs, two POSTED rows.
+      - `e2e/RegisterAddressingEndToEndIT` — reference data unanswered ⇒ TRANSIENT and a redelivery
+        that succeeds; reference data answering an empty set ⇒ COMPLETED `no-subscriptions` (the CS1
+        split, both halves through the running service); an adult-first, youth-second hearing ⇒ the
+        youth's register is produced and posted through the whole stack (C31).
+      - `e2e/RunDeadlineEndToEndIT` — a response that arrives more slowly than the run's remaining
+        budget ⇒ `PROCESSING_DEADLINE_EXCEEDED`, **abandoned** rather than parked, and a clean
+        redelivery that completes. The suite records what the shape of that injection has to be:
+        `PropertiesValidator` budgets every step's worst case plus a fixed margin against the
+        deadline, so no delay a *timeout* would cut short can reach it — only a response that
+        arrives slowly rather than late.
+      Names are in plan.md's test matrix.
+
 - [ ] T070 [A] [US1] `e2e/MessageAccountingIT`, `e2e/TraceabilityIT`, `e2e/FailureSignalIT` —
       the inherited accounting/tracing/failure-signal proofs.
 - [ ] T071 [A] [US4] Container smoke re-verified with the finished service

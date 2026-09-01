@@ -227,6 +227,10 @@ Layers: **U** unit · **W** WireMock · **PG** Postgres `*IT` · **SB** emulator
 | HTTP surface | `HttpSurfaceTest`, `ActuatorIntegrationTest`, `SharedObjectMapperTest` | U | actuator-only, BigDecimal pin |
 | Privacy | `TelemetryPrivacyTest` | U | no PII at INFO+ (youth-defendant fields named explicitly) |
 | E2E | `CourtRegisterEndToEndIT` | E2E | SC-103 happy path → POSTED; each no-op reason observable |
+| E2E | `PayloadSourceEndToEndIT` | E2E | cache hit (query side untouched); cache miss → query fallback → COMPLETED; both miss → C32 transient → redelivery recovers |
+| E2E | `SubmissionOutcomeEndToEndIT` | E2E | C29 pre-send refusal with zero POSTs; C1 400 → FAILED + parked + `response_code`; C3 5xx-then-202 → one POSTED row; non-202 2xx → `SUBMISSION_NOT_ACCEPTED`; exhaustion → `exhausted_message_id`; re-share → two POSTED rows |
+| E2E | `RegisterAddressingEndToEndIT` | E2E | reference data unanswered → transient → redelivery; empty answer → `no-subscriptions`; C31 adult-first/youth-second hearing produces the youth register |
+| E2E | `RunDeadlineEndToEndIT` | E2E | a slow-arriving response overruns the run budget → `PROCESSING_DEADLINE_EXCEEDED`, abandoned not parked, clean redelivery |
 | E2E | `MessageAccountingIT`, `TraceabilityIT`, `FailureSignalIT` | E2E | SC-104/SC-106 inherited accounting/tracing |
 | Differential | `ComparatorContractTest`, `JsonParityTest` | U | the comparator itself (vendored vectors) |
 | Differential | `DifferentialAuditTest` | U | SC-105: recorded legacy corpus vs Java pipeline; every diff maps to a C-number via `RegisteredDefectFixes` |
