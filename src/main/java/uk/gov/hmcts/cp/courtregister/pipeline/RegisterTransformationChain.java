@@ -120,7 +120,7 @@ public final class RegisterTransformationChain implements RegisterTransformer {
             return nothing(command, assemblyDeclined(fragment));
         }
 
-        validated(document);
+        validated(command, document);
         return new TransformationResult.Register(document, fragment.courtCentreOUCode());
     }
 
@@ -176,13 +176,40 @@ public final class RegisterTransformationChain implements RegisterTransformer {
      * carried across is the bounded violation and the JSON pointer of the field at fault — a path,
      * never a value, and every defendant on this register is a child.
      *
+     * <p><strong>The pointer is written to the log, and only to the log.</strong> Without it C29
+     * reports that a register was refused and never says by which field, which leaves support with
+     * a hearing to re-derive by hand — and the pointer is the whole diagnostic, since the run's
+     * recorded {@code failure_reason} is the bounded {@code OUTBOUND_CONTRACT_VIOLATION} and stays
+     * that way. It is not persisted: this refusal happens in the transformation, before any
+     * submission, so there is no {@code processed_output} row to carry it — the output cardinality
+     * is 0..1 and the row is claimed by the POST that never happens — and {@code failure_reason} is
+     * a bounded code that the dead-letter description, the metrics and the privacy suite all read
+     * as one. Widening either would be schema churn spent on a value a WARN line already carries.
+     *
+     * <p>What makes it safe to write at all is that {@link OutboundContractValidator} builds the
+     * pointer out of the instance location and, for a {@code required} failure, the missing
+     * property's name. Both are schema vocabulary — and the document is serialised from this repo's
+     * own records, so every property name in it is one this repository wrote. No part of it can be
+     * a value, which is the only reason a court register's field path is loggable at all.
+     *
+     * <p>The tokens are {@code violation=} and {@code path=} rather than {@code reason=}: a
+     * {@code reason} in this service's logs is one of the four bounded enumerations the privacy
+     * suite checks against, and a JSON pointer is not one of them. It is bounded in its own way,
+     * and named so that nobody has to decide which.
+     *
+     * @param command  the validated request, for correlation
      * @param document the assembled register
      * @throws TransformationFailedException if progression's contract would refuse it
      */
-    private void validated(final CourtRegisterDocument document) {
+    private void validated(final DistributionCommand command,
+            final CourtRegisterDocument document) {
         try {
             contractValidator.validate(document);
         } catch (ContractValidationException refused) {
+            LOG.warn("The assembled register does not satisfy the progression contract, so it is "
+                            + "not sent. source={} requestId={} hearingId={} violation={} path={}",
+                    command.source(), command.requestId(), command.hearingId(),
+                    refused.violation(), refused.field());
             throw new TransformationFailedException(
                     "the assembled register does not satisfy the progression contract: "
                             + refused.violation() + " at " + refused.field(),

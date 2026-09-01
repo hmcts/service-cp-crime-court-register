@@ -46,6 +46,7 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.application.SubmissionReceipt;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
+import uk.gov.hmcts.cp.courtregister.domain.ContractViolation;
 import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
@@ -282,6 +283,62 @@ class TelemetryPrivacyTest {
                             .as("a reason outside the bounded vocabulary is free text, and free "
                                     + "text from this pipeline is made of somebody's hearing")
                             .allMatch(BOUNDED_REASONS::contains);
+                }
+            });
+        }
+    }
+
+    /**
+     * The one diagnostic this service writes that is derived from the document itself.
+     *
+     * <p>C29 refuses a register the frozen contract would refuse, and the run is recorded FAILED
+     * under the bounded {@code OUTBOUND_CONTRACT_VIOLATION}. That code says a document was refused
+     * and never says by what, which leaves support re-deriving the field by hand from a hearing they
+     * are not allowed to read — so the JSON pointer of the offending field is written to the log,
+     * and written only to the log ({@code doc/API_CONTRACTS.md} §2 says so in those words).
+     *
+     * <p>It is safe because of what a pointer is made of: the instance location, plus the missing
+     * property's name for a {@code required} failure, and both are schema vocabulary. The document
+     * is serialised from this repository's own records, so every property name in it is one this
+     * repository wrote. This suite is where "never a value" stops being a claim in a comment — the
+     * hearing it runs is a child made entirely of markers, and the pointer is written about them.
+     */
+    @Nested
+    @DisplayName("a register the frozen contract refuses")
+    class RefusedByTheContract {
+
+        /** The formatted refusal line, which is the only place the pointer exists. */
+        private static final String REFUSAL =
+                "The assembled register does not satisfy the progression contract";
+
+        @Test
+        @DisplayName("names the field's path, and nothing the field contained")
+        void should_write_the_offending_path_and_nothing_from_the_document() {
+            admitOneRun();
+            // The C29 shape: a youth with no address at all, which the vendored schemas require.
+            when(payloadSource.fetch(any(DistributionCommand.class))).thenReturn(
+                    PersonalDataMarkers.marked(
+                            payload("hearing-with-address-less-youth-and-parent.json")));
+            answerWith(NowSubscriptionFixtures.youthCourtRegisterSubscription(OU_CODE));
+
+            runner.run(context -> {
+                try (CapturedLog log = CapturedLog.everything()) {
+                    listenerOver(context.getBean(DistributionPipeline.class))
+                            .onMessage(deliveryOf(validBody()));
+
+                    assertThat(log.messages().stream().filter(line -> line.startsWith(REFUSAL)))
+                            .as("a refusal that said nothing would leave support with a hearing to "
+                                    + "re-derive by hand")
+                            .singleElement()
+                            .satisfies(refusal -> assertThat(refusal)
+                                    .contains("violation=" + ContractViolation.MISSING_FIELD)
+                                    .containsPattern("path=/\\S+"));
+                    for (final String marker : PersonalDataMarkers.PERSONAL) {
+                        assertThat(log.renderings())
+                                .as("the pointer is a path; the child it points at is not in it: %s",
+                                        marker)
+                                .noneMatch(line -> line.contains(marker));
+                    }
                 }
             });
         }

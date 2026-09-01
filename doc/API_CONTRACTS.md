@@ -107,8 +107,21 @@ nested components compiled from `criminal-court-public-model` **17.103.13**. The
 schemas are **vendored** at `src/main/resources/contracts/progression/` (`additionalProperties:
 false` throughout); every outbound document is validated against them **before** sending
 (`adapter/progression/OutboundContractValidator`, wired unconditionally) — a schema-invalid
-document is an explicit `FAILED` with the violation's JSON pointer, never a swallowed 400
-(defect-fix C29).
+document is an explicit `FAILED`, never a swallowed 400 (defect-fix C29).
+
+The recorded failure is the bounded reason `OUTBOUND_CONTRACT_VIOLATION`, in
+`processed_request.failure_reason` and in the dead-letter description; the **JSON pointer of the
+offending field is a log-only diagnostic**, written once at `WARN` by
+`pipeline/RegisterTransformationChain` alongside `source`/`requestId`/`hearingId` as
+`violation=… path=…`. It is not persisted: this refusal happens in the transformation, before any
+submission, so there is no `processed_output` row to carry it — the row is claimed by the POST that
+never happens — and `failure_reason` is a bounded code the metrics, the dead-letter description and
+the privacy suite all read as one. The pointer is safe to write because it is a **path and never a
+value**: the validator builds it from the instance location plus, for a `required` failure, the
+missing property's name, and the document is serialised from this repo's own records, so every
+property name in it is one this repo wrote (asserted by
+`TelemetryPrivacyTest.RefusedByTheContract`, over a hearing whose child is made entirely of
+markers).
 
 Content notes that differ deliberately from the legacy app are in
 [DEFECT-FIXES.md](DEFECT-FIXES.md) (C11 filename, C23 verdict code, C24 wording newline, and the
