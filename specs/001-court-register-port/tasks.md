@@ -600,10 +600,27 @@ vocabulary and matching semantics.
       **(3)** The mesh headers are configuration because the authorisation scheme is not documented,
       so the suite pins that a configured `Accept` or `CJSCPPUID` *replaces* the contract value
       rather than joining it — two values of either is a 406 or an ambiguous caller.)*
-- [ ] T061 [P] [US1] `adapter/progression/ProgressionCommandGatewayTest` (WireMock) — N34–N45:
+- [x] T061 [P] [US1] `adapter/progression/ProgressionCommandGatewayTest` (WireMock) — N34–N45:
       202-only; 400/401/403/404/422 park; non-202 2xx = `SUBMISSION_NOT_ACCEPTED`; 408/429/5xx/
       connect retry with exponential backoff; `Retry-After` delta-seconds bounded, HTTP-date
       classified not parsed; exhaustion → FAILED + `exhausted_message_id` (C1, C3).
+      *(done — 41 cases red against the `ProgressionCommandGateway` seam and its `SubmissionPause`.
+      Three things the suite settles. **(1)** `SubmissionFailedException` now carries the status
+      progression answered, as an `OptionalInt`. `processed_output.response_code` is half of C1 — the
+      column that turns "the register did not go" into "progression answered 400" — and the throw
+      site is the only participant that knows which; empty is a real answer, because a connect
+      failure has no status and a row carrying an invented one would say an attempt was answered
+      when nothing answered. A status is also all that may cross that boundary: it is bounded and
+      says nothing about a child, where a response body from this command can name one.
+      **(2)** N42 is split between two participants and the suite says so rather than claiming the
+      whole row: this class hands back TRANSIENT with the last status, and the `FAILED` row plus
+      `exhausted_message_id` are the guard's on the last permitted delivery, already pinned by
+      `DeliveryExhaustionIT`. **(3)** N44 (store unavailable ⇒ abandon and suspend intake) is
+      deliberately not here — it is decided before a document is ever assembled, by `StoreGate`, and
+      is pinned by `StoreOutageIT`/`ProlongedStoreOutageIT`; a gateway case for it would assert the
+      pipeline's behaviour through the wrong object. The endpoint and identity startup checks the
+      informant gateway makes are `PropertiesValidator`'s here, so one deployment fault has one
+      home.)*
 - [ ] T062 [P] [US1] `adapter/progression/ProgressionRegisterSubmissionClientTest` — P1 twin fixed
       (URL, media type, real CJSCPPUID, digest written before send, response_code recorded).
 - [ ] T063 [P] [US1] `adapter/payload/LettuceHearingPayloadCacheIT` (Redis container) — live

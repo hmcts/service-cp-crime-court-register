@@ -1,5 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
+import java.util.OptionalInt;
+
 /**
  * Thrown when the {@code add-court-register} POST did not succeed.
  *
@@ -16,6 +18,14 @@ package uk.gov.hmcts.cp.courtregister.domain;
  *
  * <p>A bounded {@link ReasonCode} and never progression's own words: the code reaches
  * {@code failure_reason}, a dead-letter description and the log index.
+ *
+ * <p><strong>The status line travels with the failure, and only the status line.</strong> It is the
+ * other half of C1: {@code processed_output.response_code} is what turns "the register did not go"
+ * into "progression answered 400", and the throw site is the only place that knows which. It is an
+ * {@code OptionalInt} because a connect failure or a timeout has no status to record, and a row
+ * carrying an invented one would say an attempt was answered when it was not. A number is also all
+ * that may cross this boundary: a status is bounded and says nothing about a child, where a response
+ * body from a register command can name one.
  */
 public class SubmissionFailedException extends RuntimeException implements ClassifiedFailure {
 
@@ -23,18 +33,42 @@ public class SubmissionFailedException extends RuntimeException implements Class
 
     private final FailureClassification failureClassification;
     private final ReasonCode reasonCode;
+    private final Integer status;
 
     /**
-     * Creates the failure.
+     * Creates a failure with no status line to record.
      *
      * @param classification whether another delivery could change the answer
      * @param reason         the bounded reason recorded for this failure
      */
     public SubmissionFailedException(
             final FailureClassification classification, final ReasonCode reason) {
+        this(classification, reason, null);
+    }
+
+    /**
+     * Creates a failure carrying the status progression answered with.
+     *
+     * @param classification whether another delivery could change the answer
+     * @param reason         the bounded reason recorded for this failure
+     * @param responseCode   the status line progression answered with, or {@code null} where nothing
+     *                       answered at all
+     */
+    public SubmissionFailedException(final FailureClassification classification,
+            final ReasonCode reason, final Integer responseCode) {
         super(reason.code());
         this.failureClassification = classification;
         this.reasonCode = reason;
+        this.status = responseCode;
+    }
+
+    /**
+     * The status progression answered with, where it answered.
+     *
+     * @return the status line, or empty where the attempt reached no verdict
+     */
+    public OptionalInt responseCode() {
+        return status == null ? OptionalInt.empty() : OptionalInt.of(status);
     }
 
     /**
