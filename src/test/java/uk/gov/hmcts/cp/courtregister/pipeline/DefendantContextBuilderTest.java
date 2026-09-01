@@ -13,6 +13,7 @@ import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterResult;
 import uk.gov.hmcts.cp.courtregister.domain.ResultLevel;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
 
 /**
@@ -325,6 +326,65 @@ class DefendantContextBuilderTest {
                    "isYouth":false,"offences":[],"defendantCaseJudicialResults":[
                     {"judicialResultId":"jr-2","orderedDate":"2020-04-18"}]}]}]}""")
                     .get(0).youthDefendant()).isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("an application case that names no prosecution case")
+    class UnnamedApplicationCases {
+
+        /**
+         * Uncatalogued legacy behaviour, restored. {@code DefendantContextBaseService.js:151-165}
+         * pushes {@code courtApplicationCase.prosecutionCaseId} onto {@code defendantBase.cases}
+         * with no guard at all, so an application case — or a court-order offence — that names no
+         * prosecution case puts a bare {@code undefined} on the list. Nothing there fails on it:
+         * the reference travels as far as
+         * {@code ProsecutionCaseOrApplicationMapper.js:27-33}, finds no prosecution case of that
+         * id, and is <em>warned about and skipped</em> — the SNI-9005 guard ({@code 0781bbc2}),
+         * whose own Jest case (PC3) is written for exactly this shape. The register is filed
+         * without that case.
+         *
+         * <p>The port cannot carry the {@code undefined} the same distance: a {@code null} in the
+         * gathered case list reaches {@code RegisterDefendant}'s {@code List.copyOf} and throws,
+         * which turns a hearing the legacy files into an {@code UNEXPECTED_FAILURE} on the
+         * dead-letter queue. So the skip happens where the reference is gathered instead, and it
+         * is said out loud in the same words the mapper's guard uses.
+         */
+        @ParameterizedTest(name = "[{index}]")
+        @ValueSource(strings = {
+            """
+            {"courtApplications":[{"id":"app-1",
+              "applicant":{"prosecutingAuthority":{"prosecutionAuthorityId":"auth-1"}},
+              "subject":{"masterDefendant":{"masterDefendantId":"master-1","isYouth":true}},
+              "courtApplicationCases":[{"prosecutionCaseId":"case-1"},{"offences":[]}],
+              "judicialResults":[{"judicialResultId":"jr-1","orderedDate":"2020-04-17"}]}]}""",
+            """
+            {"courtApplications":[{"id":"app-1",
+              "applicant":{"prosecutingAuthority":{"prosecutionAuthorityId":"auth-1"}},
+              "subject":{"masterDefendant":{"masterDefendantId":"master-1","isYouth":true}},
+              "courtApplicationCases":[{"prosecutionCaseId":"case-1"}],
+              "courtOrder":{"courtOrderOffences":[{"offence":{"id":"offence-1"}}]},
+              "judicialResults":[{"judicialResultId":"jr-1","orderedDate":"2020-04-17"}]}]}""",
+        })
+        @DisplayName("warns and skips it, where the legacy files the register without it")
+        void warns_and_skips_an_application_case_naming_no_prosecution_case(final String hearing) {
+            try (CapturedLog log = CapturedLog.capturing(DefendantContextBuilder.class)) {
+                final List<DefendantContext> gathered = gatherJson(hearing);
+
+                assertThat(gathered)
+                        .as("the hearing is still gathered, as the legacy gathers it")
+                        .singleElement()
+                        .satisfies(defendant -> assertThat(defendant.cases())
+                                .as("the case the application does name, and nothing standing "
+                                        + "for the one it does not")
+                                .containsExactly("case-1"));
+                assertThat(log.messages())
+                        .as("the skip is not silent — the legacy warns about the same reference "
+                                + "one stage later")
+                        .anySatisfy(message -> assertThat(message)
+                                .contains("Prosecution case not found")
+                                .contains("app-1"));
+            }
         }
     }
 
