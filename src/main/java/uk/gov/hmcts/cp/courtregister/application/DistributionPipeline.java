@@ -6,7 +6,6 @@ import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.MissingNode;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
@@ -30,8 +29,11 @@ import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
  * place that knows the order the ports are called in. The transport adapter above it decides how a
  * delivery is settled; this decides what the delivery is worth settling as.
  *
- * <p><strong>The five stages, in order</strong>: admit, fetch the hearing payload, ask whether the
- * group-proceedings flag suppresses the register, transform, submit — then record. The shape the
+ * <p><strong>The stages, in order</strong>: admit, fetch the hearing payload, ask whether the
+ * group-proceedings flag suppresses the register, read the subscriptions in force on the register's
+ * day, transform, submit — then record. The two reads are the core's because the ports are; the
+ * transformation between them is pure, and is handed everything it needs (constitution Principle V).
+ * The shape the
  * transport suites drive it through is unchanged: a request and the delivery it arrived on go in,
  * and exactly one {@link GuardDecision} comes out, so the listener has something to settle on every
  * path (constitution Principle VI). What the legacy orchestrator has instead is four silent guards
@@ -85,6 +87,9 @@ public class DistributionPipeline {
 
     /** The field of the claim-check payload the hearing itself sits under. */
     private static final String HEARING = "hearing";
+
+    /** The field of the claim-check payload the results' share instant sits under. */
+    private static final String SHARED_TIME = "sharedTime";
 
     private final IdempotencyGuard guard;
     private final HearingPayloadSource payloadSource;
@@ -245,7 +250,16 @@ public class DistributionPipeline {
 
     /**
      * The stages between the payload and the outcome: the group-proceedings decision, the
-     * transformation, and the submission of whatever it produced.
+     * reference-data read, the transformation, and the submission of whatever it produced.
+     *
+     * <p><strong>The read sits here rather than inside the transformation</strong> because the
+     * transformation is pure by contract (constitution Principle V). The legacy's
+     * {@code CourtRegisterSubscriptions} activity reads reference data and matches against it in one
+     * step; the port behind it is the core's, so the core makes the call and the matching stage is
+     * handed the answer. It is made after the suppression decision and before the transformation,
+     * which is where the legacy makes it too — the orchestrator skips the activity entirely for a
+     * group-proceedings hearing ({@code index.js:23}) and calls it for every other one, including the
+     * hearing that gathered no defendants.
      *
      * <p>The policy is asked about the <em>hearing</em> and the transformation is handed the whole
      * claim-check envelope, which is the split the legacy has: {@code index.js:21} reads the flag
@@ -271,9 +285,9 @@ public class DistributionPipeline {
         if (groupProceedings.suppresses(command, hearingOf(payload))) {
             outcome = completed(claim, CompletionReason.GROUP_PROCEEDINGS);
         } else {
-            // Seam: the reference-data read the core is about to own is not wired yet, so the
-            // transformation is handed an answer nobody made.
-            outcome = switch (transformer.transform(command, payload, MissingNode.getInstance())) {
+            final JsonNode subscriptions = subscriptionsSource.subscriptionsOn(
+                    dates.subscriptionDay(sharedTimeOf(payload)), CallerIdentity.of(command));
+            outcome = switch (transformer.transform(command, payload, subscriptions)) {
                 case TransformationResult.NoRegister nothing -> completed(claim, nothing.reason());
                 case TransformationResult.Register register -> submit(command, register, claim);
             };
@@ -300,6 +314,26 @@ public class DistributionPipeline {
             throw new TransformationFailedException("claim-check payload carries no hearing");
         }
         return hearing;
+    }
+
+    /**
+     * The instant the results were shared, as the claim-check envelope records it.
+     *
+     * <p>The same value the fragment's {@code registerDate} is built from, read from the same place
+     * ({@code CourtRegisterOrchestrator/index.js:28}), so the day a register is addressed on and the
+     * day it is dated can never come apart. The legacy derives the {@code on=} day from the fragment
+     * — one step later, from the same field.
+     *
+     * @param payload the claim-check payload
+     * @return the shared time it carries
+     * @throws TransformationFailedException if the envelope carries no shared time
+     */
+    private static String sharedTimeOf(final JsonNode payload) {
+        final JsonNode sharedTime = payload.get(SHARED_TIME);
+        if (sharedTime == null || sharedTime.isNull()) {
+            throw new TransformationFailedException("claim-check payload carries no shared time");
+        }
+        return sharedTime.stringValue();
     }
 
     /**

@@ -1,24 +1,17 @@
 package uk.gov.hmcts.cp.courtregister.pipeline;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
-import uk.gov.hmcts.cp.courtregister.application.NowSubscriptionsSource;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
-import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
-import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterDefendant;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterFragment;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterResult;
@@ -49,6 +42,11 @@ import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
  *       reports a reference-data outage as this flow's commonest legitimate result.</li>
  * </ul>
  *
+ * <p>Only the first of those two is asserted here. The stage is pure — reference data's answer is an
+ * argument, not something it fetches (constitution Principle V) — so the read, the day it is made
+ * for, the identity it is made as and its refusal to answer are asserted in
+ * {@code DistributionPipelineTest}, at the seam that makes them.
+ *
  * @see <a href="file:../../../../../../../../doc/DEFECT-FIXES.md">doc/DEFECT-FIXES.md</a> row C31
  */
 @DisplayName("SubscriptionMatcher")
@@ -61,41 +59,6 @@ class SubscriptionMatcherTest {
     private static final String REGISTER_DATE = "2020-06-01T10:00:00Z";
 
     private final ObjectMapper mapper = JacksonConfig.contractObjectMapper();
-
-    private final CallerIdentity caller =
-            new CallerIdentity(Optional.of(UUID.randomUUID()));
-
-    /**
-     * The read this stage makes before it decides anything — and the two facts about it that decide
-     * whether the answer is the right one.
-     */
-    @Nested
-    @DisplayName("the reference-data read")
-    class ReferenceDataRead {
-
-        @Test
-        @DisplayName("asks for the subscriptions in force on the day the results were shared")
-        void asks_for_the_day_the_results_were_shared() {
-            // The `on=` day comes from the register date, which is now the share instant rather than
-            // a London wall clock relabelled `Z` — so an evening share reads the set in force on the
-            // day it was shared and not the next day's (C12, fixed in Dates and consumed here).
-            final RecordingSource source = answering("{\"nowSubscriptions\":[]}");
-
-            matcherOver(source).match(fragmentFor(youth()), caller);
-
-            assertThat(source.day).isEqualTo(LocalDate.parse("2020-06-01"));
-        }
-
-        @Test
-        @DisplayName("makes the read as the user who shared the results")
-        void makes_the_read_as_the_user_who_shared_the_results() {
-            final RecordingSource source = answering("{\"nowSubscriptions\":[]}");
-
-            matcherOver(source).match(fragmentFor(youth()), caller);
-
-            assertThat(source.caller).isEqualTo(caller);
-        }
-    }
 
     /**
      * The twins of the legacy {@code CourtRegisterSubscriptions} Jest suite, driven through the real
@@ -189,20 +152,6 @@ class SubscriptionMatcherTest {
 
             assertThat(match(answering(subscriptions(nowsSubscription)), fragmentFor(youth())))
                     .isEmpty();
-        }
-
-        @Test
-        @DisplayName("refuses to answer at all when reference data did not")
-        void refuses_to_answer_when_reference_data_did_not() {
-            // The half of the legacy's single case that has to stop being a completion. A register
-            // whose recipients are unknown must be retried, not published to nobody and recorded as
-            // this flow's commonest legitimate outcome.
-            final SubscriptionMatcher matcher = matcherOver((day, identity) -> {
-                throw new ReferenceDataUnavailableException("subscriptions-read-failed");
-            });
-
-            assertThatThrownBy(() -> matcher.match(fragmentFor(youth()), caller))
-                    .isInstanceOf(ReferenceDataUnavailableException.class);
         }
 
         @Test
@@ -347,13 +296,13 @@ class SubscriptionMatcherTest {
     }
 
     /**
-     * A source that answers with the given document and remembers what it was asked.
+     * Reference data's answer, as this stage receives it.
      *
      * @param answer the answer, as JSON text
-     * @return the source
+     * @return the answer, parsed
      */
-    private RecordingSource answering(final String answer) {
-        return new RecordingSource(mapper.readTree(answer));
+    private JsonNode answering(final String answer) {
+        return mapper.readTree(answer);
     }
 
     /**
@@ -442,43 +391,13 @@ class SubscriptionMatcherTest {
     }
 
     /**
-     * The matcher over a source, the real rules and the real dates.
+     * Matches a fragment against reference data's answer.
      *
-     * @param source the reference-data source
-     * @return the matcher
-     */
-    private SubscriptionMatcher matcherOver(final NowSubscriptionsSource source) {
-        return new SubscriptionMatcher(source, new SubscriptionRules(), new Dates());
-    }
-
-    /**
-     * Matches a fragment against a source's answer.
-     *
-     * @param source   the reference-data source
+     * @param answer   reference data's now-subscriptions answer
      * @param fragment the built register
      * @return the matched subscriptions
      */
-    private List<JsonNode> match(
-            final NowSubscriptionsSource source, final RegisterFragment fragment) {
-        return matcherOver(source).match(fragment, caller);
-    }
-
-    /** A reference-data source that answers with a fixed document and remembers the question. */
-    private static final class RecordingSource implements NowSubscriptionsSource {
-
-        private final JsonNode answer;
-        private LocalDate day;
-        private CallerIdentity caller;
-
-        RecordingSource(final JsonNode answer) {
-            this.answer = answer;
-        }
-
-        @Override
-        public JsonNode subscriptionsOn(final LocalDate registerDay, final CallerIdentity identity) {
-            this.day = registerDay;
-            this.caller = identity;
-            return answer;
-        }
+    private List<JsonNode> match(final JsonNode answer, final RegisterFragment fragment) {
+        return new SubscriptionMatcher(new SubscriptionRules()).match(fragment, answer);
     }
 }

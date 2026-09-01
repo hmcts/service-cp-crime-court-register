@@ -3,19 +3,22 @@ package uk.gov.hmcts.cp.courtregister.pipeline;
 import java.util.List;
 import java.util.Objects;
 import tools.jackson.databind.JsonNode;
-import uk.gov.hmcts.cp.courtregister.application.NowSubscriptionsSource;
-import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
-import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterFragment;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterResult;
 
 /**
  * Who a built register is addressed to.
  *
- * <p>Ports {@code CourtRegisterSubscriptions/index.js}: read the subscriptions in force on the
- * register's day, keep the court-register ones, and ask {@link SubscriptionRules} about each. It is
- * the one class in this package that reaches a port, because the activity it ports is the one that
- * reads reference data; the rules it asks stay pure.
+ * <p>Ports the deciding half of {@code CourtRegisterSubscriptions/index.js}: given the subscriptions
+ * in force on the register's day, keep the court-register ones and ask {@link SubscriptionRules}
+ * about each.
+ *
+ * <p><strong>The read that produces them is not made here.</strong> The legacy activity both reads
+ * reference data and matches against it; this class does only the second half, and the answer
+ * arrives as an argument. The constitution requires the whole fragment/matching/mapping chain to be
+ * pure — no I/O, no clock, no randomness (Principle V) — and a stage that reaches a port of its own
+ * cannot be tested against fixtures alone. {@code DistributionPipeline} makes the read, between this
+ * stage and the one before it, and hands the answer in.
  *
  * <p><strong>Defect C31 is fixed here.</strong> {@code index.js:49} builds the matcher's input with
  * {@code subscriptionObj.vocabulary = registerDefendants[0].vocabulary} — one vocabulary, taken from
@@ -33,43 +36,31 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterResult;
  */
 public final class SubscriptionMatcher {
 
-    private final NowSubscriptionsSource subscriptions;
     private final SubscriptionRules rules;
-    private final Dates dates;
 
     /**
-     * Creates the matcher over the reference-data port and the rules it asks.
+     * Creates the matcher over the rules it asks.
      *
-     * @param subscriptions where the now-subscriptions come from
-     * @param rules         whether one subscription wants one defendant's register
-     * @param dates         the register's date handling, for the day the subscriptions are read on
+     * @param rules whether one subscription wants one defendant's register
      */
-    public SubscriptionMatcher(
-            final NowSubscriptionsSource subscriptions,
-            final SubscriptionRules rules,
-            final Dates dates) {
-        this.subscriptions = subscriptions;
+    public SubscriptionMatcher(final SubscriptionRules rules) {
         this.rules = rules;
-        this.dates = dates;
     }
 
     /**
      * The subscriptions this register is addressed to.
      *
      * @param fragment the built register
-     * @param caller   the identity the reference-data read is made as
+     * @param answer   reference data's now-subscriptions answer for the register's own day, already
+     *                 read by the core
      * @return the matched subscriptions, in the order reference data returned them; empty where
      *     nothing matched, which is an answer and not a failure
-     * @throws ReferenceDataUnavailableException if reference data could not be read
      */
-    public List<JsonNode> match(final RegisterFragment fragment, final CallerIdentity caller) {
-        final JsonNode answer =
-                subscriptions.subscriptionsOn(dates.subscriptionDay(fragment.registerDate()), caller);
-
+    public List<JsonNode> match(final RegisterFragment fragment, final JsonNode answer) {
         // `index.js:22` — reference data answering with no `nowSubscriptions` is still an answer,
         // and the register completes addressed to nobody. Not answering at all throws out of the
-        // port above and never reaches here, which is the half of the legacy's single case that
-        // stops being a completion.
+        // port the core reads through and never reaches here, which is the half of the legacy's
+        // single case that stops being a completion.
         final List<JsonNode> inForce = Json.array(answer, "nowSubscriptions");
         final String ouCode = fragment.courtCentreOUCode();
         final List<JsonNode> judicialResults = judicialResultsOf(fragment);
