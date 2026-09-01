@@ -29,8 +29,6 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
  *
  * <p>Two legacy methods are dead — {@code getApplicationReference} and
  * {@code getRespondentCounsels}, called from nowhere (C26). They are not reproduced.
- *
- * <p><strong>A seam.</strong> The behaviour lands in T054, against the assertions T047 writes.
  */
 final class ProsecutionCaseOrApplicationMapper {
 

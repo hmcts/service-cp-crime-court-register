@@ -16,8 +16,6 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterHearingVenue;
  * legacy suite and {@code courtHouse} — the contract's required field — comes out absent. The legacy
  * constructor also reads {@code courtCentre.address} eagerly, so a hearing with no court centre at
  * all throws before {@code build()} is entered.
- *
- * <p><strong>A seam.</strong> The behaviour lands in T054, against the assertions T044 writes.
  */
 final class HearingVenueMapper {
 

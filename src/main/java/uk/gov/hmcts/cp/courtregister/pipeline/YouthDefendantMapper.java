@@ -27,8 +27,6 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
  * first, middle and last while the one legacy case asserts first-plus-last against a fixture with no
  * middle name, and it reads a real {@code postHearingCustodyStatus} only when the defendant carries
  * case judicial results — which the fixture's empty list means it never has.
- *
- * <p><strong>A seam.</strong> The behaviour lands in T054, against the assertions T050 writes.
  */
 final class YouthDefendantMapper {
 

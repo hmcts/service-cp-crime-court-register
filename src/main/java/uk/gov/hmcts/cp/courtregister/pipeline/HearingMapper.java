@@ -29,8 +29,6 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterDefendant;
  * matches the day against the defendant's latest ordered date — which is why this takes the register
  * defendant rather than the fragment: the ordered day and the defendant ids are both on it, and the
  * fragment's {@code registerDate} is no longer part of the answer.
- *
- * <p><strong>A seam.</strong> The behaviour lands in T054, against the assertions T043 writes.
  */
 final class HearingMapper {
 

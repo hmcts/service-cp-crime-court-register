@@ -22,8 +22,6 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterDefendant;
  *       legacy offence fixture's context has an empty result list, so this scoping — the court
  *       register's one correctness advantage over its informant sibling — has never executed.</li>
  * </ul>
- *
- * <p><strong>A seam.</strong> The behaviour lands in T054, against the assertions T045 writes.
  */
 final class OffenceMapper {
 

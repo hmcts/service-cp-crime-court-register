@@ -19,8 +19,6 @@ import tools.jackson.databind.JsonNode;
  * <p>The empty answer is where defect C19 begins: the youth mapper takes {@code defendants[0]} with
  * no length check, so an unmatched master defendant id throws, the throw is swallowed, and the whole
  * hearing's register is lost.
- *
- * <p><strong>A seam.</strong> The behaviour lands in T054, against the assertions T042 writes.
  */
 final class DefendantMapper {
 

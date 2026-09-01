@@ -25,8 +25,6 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
  * where the legacy reads "Center" off an object carrying "Centre" and sends {@code undefined}. C11:
  * the file name is the register day, the court centre code and the hearing id, with no colons in it
  * and no collision between two hearings at one centre in the same second.
- *
- * <p><strong>A seam.</strong> The behaviour lands in T056, against the assertions T051 writes.
  */
 public final class AggregationMapper {
 

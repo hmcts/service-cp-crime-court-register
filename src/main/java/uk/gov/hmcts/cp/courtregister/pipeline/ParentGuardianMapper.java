@@ -16,8 +16,6 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterDefendant;
  * the case that matters most — a parent or guardian with no address. The schema requires
  * {@code address} on this component, so that document is rejected with a 400, and the legacy
  * swallows the rejection and loses the whole hearing's register (defect C29).
- *
- * <p><strong>A seam.</strong> The behaviour lands in T054, against the assertions T046 writes.
  */
 final class ParentGuardianMapper {
 

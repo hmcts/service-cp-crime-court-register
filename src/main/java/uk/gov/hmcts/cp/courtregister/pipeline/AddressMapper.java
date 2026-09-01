@@ -14,9 +14,11 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterAddress;
  * turns on, and it is also the one the legacy's own test file gets wrong — that file has never run,
  * because its name misses Jest's pattern (defect C28), so nobody has noticed that it asserts
  * {@code []} where the mapper answers {@code undefined}.
- *
- * <p><strong>A seam.</strong> The behaviour lands in T054, against the assertions T040 writes.
  */
+// PMD.OnlyOneReturn: the absent branch is the legacy's own early return, and it is the branch
+// defect C29 turns on — an address that is absent rather than empty. Funnelling it through a single
+// exit would hide the one decision this mapper makes.
+@SuppressWarnings("PMD.OnlyOneReturn")
 final class AddressMapper {
 
     private AddressMapper() {
@@ -29,6 +31,17 @@ final class AddressMapper {
      * @return the mapped address, or {@code null} where there was no address to map
      */
     /* default */ static CourtRegisterAddress map(final JsonNode addressInfo) {
-        throw new UnsupportedOperationException("AddressMapper.map is implemented by T054");
+        if (!Json.truthy(addressInfo)) {
+            return null;
+        }
+        return new CourtRegisterAddress(
+                Json.text(addressInfo, "address1"),
+                Json.text(addressInfo, "address2"),
+                Json.text(addressInfo, "address3"),
+                Json.text(addressInfo, "address4"),
+                Json.text(addressInfo, "address5"),
+                // The payload spells it `postcode` and the wire spells it `postCode`. This one case
+                // change is the whole of what this mapper transforms.
+                Json.text(addressInfo, "postcode"));
     }
 }

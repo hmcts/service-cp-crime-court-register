@@ -21,8 +21,6 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
  * be served. What the legacy does not do is say so — not a log line, not a count, where even its
  * informant sibling logs. Every drop is counted here through {@code anomalies}, which is what
  * reaches {@code processed_output.anomaly_summary} and the anomaly metric.
- *
- * <p><strong>A seam.</strong> The behaviour lands in T054, against the assertions T048 writes.
  */
 final class RecipientMapper {
 

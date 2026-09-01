@@ -14,9 +14,11 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterCounsel;
  * <p>Guards on {@code counsels && counsels.length}, so <strong>absent and empty both answer with
  * nothing</strong> — the opposite of {@link AliasMapper}, which answers with an empty list for an
  * empty array. Both halves of that asymmetry are pinned.
- *
- * <p><strong>A seam.</strong> The behaviour lands in T054, against the assertions T041 writes.
  */
+// PMD.OnlyOneReturn: the guard is the legacy's own early return. PMD.ReturnEmptyCollectionRather
+// ThanNull: an empty counsel list is `undefined` on the wire and `[]` is a document progression
+// refuses (`minItems: 1`), so the null is the answer rather than an omission.
+@SuppressWarnings({"PMD.OnlyOneReturn", "PMD.ReturnEmptyCollectionRatherThanNull"})
 final class CounselMapper {
 
     private CounselMapper() {
@@ -33,6 +35,22 @@ final class CounselMapper {
      * @return the mapped counsels, or {@code null} where there were none — empty included
      */
     /* default */ static List<CourtRegisterCounsel> map(final List<JsonNode> counsels) {
-        throw new UnsupportedOperationException("CounselMapper.map is implemented by T054");
+        if (counsels == null || counsels.isEmpty()) {
+            // `if (this.counsels && this.counsels.length)` — absent and empty answer alike, where
+            // the alias mapper answers an empty array with an empty list.
+            return null;
+        }
+        return counsels.stream().map(CounselMapper::counsel).toList();
+    }
+
+    /**
+     * Maps one counsel — a composed name and a copied status.
+     *
+     * @param counselInfo the payload's counsel record
+     * @return the mapped counsel
+     */
+    private static CourtRegisterCounsel counsel(final JsonNode counselInfo) {
+        return new CourtRegisterCounsel(
+                JsStrings.composedName(counselInfo), Json.text(counselInfo, "status"));
     }
 }

@@ -121,7 +121,24 @@ final class Json {
      * @throws TransformationFailedException if the field holds a truthy value that is not an array
      */
     /* default */ static List<JsonNode> array(final JsonNode node, final String field) {
-        final JsonNode value = at(node, field);
+        return elements(at(node, field), field);
+    }
+
+    /**
+     * The elements of a value the caller already holds, on the same terms as {@link #array}.
+     *
+     * <p>The mappers that are handed an array rather than the object it hangs off — the alias list
+     * is the one that matters, because its own truthiness decides between an empty answer and no
+     * answer at all — need the iteration rule without the field lookup. The field name is still
+     * taken, because it is what the refusal names, and naming the shape that was wrong is the whole
+     * value of the refusal.
+     *
+     * @param value the value to iterate; may be {@code null}
+     * @param field the field the value came from, for the failure message
+     * @return the elements, never {@code null}
+     * @throws TransformationFailedException if the value is truthy and is not an array
+     */
+    /* default */ static List<JsonNode> elements(final JsonNode value, final String field) {
         if (!truthy(value)) {
             return Collections.emptyList();
         }
