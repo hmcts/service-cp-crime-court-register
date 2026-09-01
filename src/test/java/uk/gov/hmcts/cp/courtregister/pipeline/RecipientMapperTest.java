@@ -232,6 +232,20 @@ class RecipientMapperTest {
         }
 
         @Test
+        @DisplayName("but a subscription asking for both post and email is still emailed")
+        void a_mixed_channel_subscription_is_still_emailed() {
+            // `subscription.emailDelivery && subscription.forDistribution && subscription.recipient`
+            // (`:13`) — the letter flags are never read. A subscriber who wants the register by post
+            // as well as by email is a subscriber this channel can serve, and reading the letter
+            // flag first would take them off a register the legacy sends them.
+            final ObjectNode both = deliverable();
+            both.put("firstClassLetterDelivery", true);
+
+            assertThat(map(both)).hasSize(1);
+            assertThat(anomalies).isEmpty();
+        }
+
+        @Test
         @DisplayName("and the drop is counted under its own reason, where the legacy says nothing")
         void the_drop_is_counted_under_its_own_reason() {
             // The sharpest C27 case: a court centre whose only subscriber asks for post produces a
