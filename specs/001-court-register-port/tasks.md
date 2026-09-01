@@ -521,7 +521,12 @@ vocabulary and matching semantics.
       and into an NPE on the ports that are still null, and declaring the transformation beans
       without wiring them is the dead wiring T039 refused for the same reason. The e2e ITs start the
       real context (they carry no `test` profile), so this is not hypothetical. The final wiring is
-      T068a's task; this note is here so the omission is visible rather than silent.)*
+      T068a's task; this note is here so the omission is visible rather than silent.
+      **Overturned under review (2026-09-01)**: leaving it undone left the deployed graph as the
+      walking skeleton, which settles every message having produced nothing, and no suite could
+      say so. The wiring landed early — see T068a — with the two absent ports served by stubs
+      chosen and refused at startup, and `config/PipelineCompositionTest` as the test that fails
+      whenever the assembled service stops producing a register.)*
 
 **Checkpoint**: fragment → validated outbound document, all mapper fixes pinned.
 
@@ -577,6 +582,18 @@ documentation-final states.
       (red; the privacy test red on a seeded violation) — actuator-only surface; no PII at INFO+.
 - [ ] T068a [US4] Implement `config/PipelineConfig` + the final `application.yaml`
       (green for T068; the logging swept against the privacy test).
+      *(partly done, ahead of its phase — 2026-09-01 review. `PipelineConfig` now builds the real
+      bean graph: dates, the group-proceedings policy, the fragment builder, the subscription
+      matcher, the contract validator and `RegisterTransformationChain` behind
+      `RegisterTransformer`, with the pipeline over all five ports and the cumulative deadline
+      unchanged. `config/PipelineCompositionTest` drives that graph out of a Spring context over
+      doubles for the four outward ports only — schema-invalid ⇒ FAILED with no submission,
+      every-recipient-dropped ⇒ COMPLETED no-subscriptions with no submission, happy path ⇒ one
+      submission. The two ports whose live adapters land at T066/T067 are served meanwhile by
+      `adapter/stub/StubNowSubscriptionsSource` (an empty answer, refused at startup beside a LIVE
+      payload source) and `adapter/stub/StubRegisterSubmissionClient` (a refusal, chosen by the
+      payload mode). What remains for this task: the final `application.yaml` and the privacy
+      sweep against T068's tests.)*
 - [ ] T069 [A] [US1] `e2e/CourtRegisterEndToEndIT` — message → POST(202) → COMPLETED `submitted`,
       `processed_output.status = POSTED`; one case per no-op reason; runs the quickstart sequence.
 - [ ] T070 [A] [US1] `e2e/MessageAccountingIT`, `e2e/TraceabilityIT`, `e2e/FailureSignalIT` —
