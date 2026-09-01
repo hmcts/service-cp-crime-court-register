@@ -570,8 +570,20 @@ vocabulary and matching semantics.
       `retry_taxonomy_matches_the_submission_client` is a parameterised case over 408/429/5xx, with
       its counterpart over 400/401/403/422 — the fixed C3 taxonomy, and the one T061 will hold the
       progression gateway to.)*
-- [ ] T059 [P] [US1] `config/LivePayloadConfigTest` — **C15**: TLS verification on
+- [x] T059 [P] [US1] `config/LivePayloadConfigTest` — **C15**: TLS verification on
       (`TransportSecurity`); C14 retirement asserted (no legacy retry env vars bound).
+      *(done — 11 cases, 4 red against the `LivePayloadConfig.cacheUri` seam. The seam is the
+      configuration class carrying that one static method and no `@Bean` yet: the payload beans
+      belong to T065, and declaring them here would put a throwing bean in the default-selected
+      configuration every context test boots. **The two halves are not the same kind of test, and
+      the difference is worth stating.** C15 is a fix, so it goes red and then green. C14 is a
+      *retirement* — a claim that four settings which do nothing have nowhere to bind — and a claim
+      about an absence cannot go red without first adding the thing it denies; those three cases
+      pass on arrival and are characterisation, pinning the shape so the knobs cannot creep back.
+      They are written two ways for that reason: the settings record's components are named exactly,
+      and an environment still exporting `max-retries`, `total-retry-time-in-ms`,
+      `number-of-attempts` and `reject-unauthorized` is shown to bind to a record indistinguishable
+      from one that never saw them.)*
 - [ ] T060 [P] [US1] `adapter/refdata/ReferenceDataNowSubscriptionsClientTest` (WireMock) —
       `on=` day derived from the fixed registerDate (C12); unanswered/5xx ⇒ transient; empty set
       returned as empty (matcher decides `no-subscriptions`).
