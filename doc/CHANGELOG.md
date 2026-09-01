@@ -16,6 +16,30 @@ released, so everything sits under Unreleased.
 
 ### Changed
 
+- 2026-09-01 — **One time budget for a whole run, and shorter read timeouts to fit inside it.**
+  The processing deadline used to be read once, after the payload fetch; the now-subscriptions read,
+  the transformation and the `add-court-register` POST that follow it were bounded only by their own
+  timeouts. A run could therefore start its POST after its claim had become reclaimable, and
+  progression's `add-court-register` appends a register rather than replacing one — so a second
+  runner taking the same request adds a second register for the hearing rather than overwriting the
+  first. The run now reads what is left of its budget before the transformation, before the send and
+  before every outcome write, and records an overrun as a TRANSIENT
+  `PROCESSING_DEADLINE_EXCEEDED` so the delivery is redelivered with a whole fresh budget. The one
+  write never withheld is the completion of a register that *was* sent.
+
+  Startup gained the matching rule: the payload fetch, the now-subscriptions read and the submission
+  worst cases plus a fixed 30s margin for the guard's writes and the transformation must be strictly
+  shorter than `courtregister.claim.processing-deadline`. The three per-step rules stay — they name
+  the offending step precisely — but they could each pass while the run as a whole could not, which
+  is what the shipped numbers did.
+
+  **Operator-visible:** `courtregister.payload.fallback.read-timeout`,
+  `courtregister.referencedata.read-timeout` and `courtregister.progression.read-timeout` drop from
+  **30s to 10s**, which is what makes the shipped configuration satisfy the new rule
+  (67s + 47s + 63.5s + 30s against a four-minute deadline). An environment that overrides any of
+  them — or lengthens an attempt count, a retry interval or a back-off — must keep the sum inside
+  the deadline or the pod will refuse to start, with a message naming each step's contribution.
+
 - 2026-08-31 — **Inbound schema narrowed: `sharedTime` and `hearingDay` state their RFC 3339
   grammar.** Both fields now carry a `pattern` alongside their `format`. `sharedTime` admits the
   `T`/`t` separator only (not the space form of RFC 3339 §5.6's readability note), never a seconds
