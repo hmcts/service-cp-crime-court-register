@@ -70,32 +70,33 @@ public final class RegisterTransformationChain implements RegisterTransformer {
     private final RegisterBuilder registerBuilder;
     private final SubscriptionMatcher subscriptionMatcher;
     private final OutboundContractValidator contractValidator;
-    private final Consumer<TransformationAnomaly> anomalyRecorder;
 
     /**
      * Creates the chain over its four stages.
      *
-     * @param builder           the fragment stage
-     * @param matcher           the addressing stage
-     * @param validator         the stage that refuses a document progression would
-     * @param anomalyRecorder   where every guarded skip beneath the chain is counted
+     * <p>No anomaly sink is held here. One is handed to each call, because it belongs to the run
+     * being made and not to the chain making it: this object is a singleton in the running service,
+     * and a counter it held would accumulate every hearing the pod has ever transformed.
+     *
+     * @param builder   the fragment stage
+     * @param matcher   the addressing stage
+     * @param validator the stage that refuses a document progression would
      */
     public RegisterTransformationChain(
             final RegisterBuilder builder,
             final SubscriptionMatcher matcher,
-            final OutboundContractValidator validator,
-            final Consumer<TransformationAnomaly> anomalyRecorder) {
+            final OutboundContractValidator validator) {
         this.registerBuilder = builder;
         this.subscriptionMatcher = matcher;
         this.contractValidator = validator;
-        this.anomalyRecorder = anomalyRecorder;
     }
 
     @Override
     public TransformationResult transform(
             final DistributionCommand command,
             final JsonNode hearingPayload,
-            final JsonNode subscriptions) {
+            final JsonNode subscriptions,
+            final Consumer<TransformationAnomaly> anomalies) {
 
         final JsonNode hearing = hearingOf(hearingPayload);
         final RegisterFragment fragment =
@@ -114,7 +115,7 @@ public final class RegisterTransformationChain implements RegisterTransformer {
         }
 
         final CourtRegisterDocument document =
-                AggregationMapper.map(fragment, matched, hearing, anomalyRecorder);
+                AggregationMapper.map(fragment, matched, hearing, anomalies);
         if (document == null) {
             return nothing(command, assemblyDeclined(fragment));
         }

@@ -9,6 +9,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
@@ -16,7 +18,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -43,9 +48,11 @@ import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
+import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
 import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
 /**
  * One request, from the payload fetch to the recorded outcome — the orchestration the legacy has no
@@ -148,9 +155,9 @@ class DistributionPipelineTest {
         when(subscriptionsSource.subscriptionsOn(any(LocalDate.class), any(CallerIdentity.class)))
                 .thenReturn(subscriptions);
         when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
-                    any(JsonNode.class)))
+                    any(JsonNode.class), any()))
                 .thenReturn(new TransformationResult.Register(document));
-        when(submissionClient.submit(any(CourtRegisterDocument.class), any(CallerIdentity.class)))
+        when(submissionClient.submit(any(CourtRegisterDocument.class), any(CallerIdentity.class), any()))
                 .thenReturn(new SubmissionReceipt(202));
     }
 
@@ -172,9 +179,9 @@ class DistributionPipelineTest {
             stages.verify(subscriptionsSource).subscriptionsOn(any(LocalDate.class),
                     any(CallerIdentity.class));
             stages.verify(transformer).transform(eqCommand(), any(JsonNode.class),
-                    any(JsonNode.class));
+                    any(JsonNode.class), any());
             stages.verify(submissionClient).submit(any(CourtRegisterDocument.class),
-                    any(CallerIdentity.class));
+                    any(CallerIdentity.class), any());
             stages.verify(guard).recordCompletion(claim, CompletionReason.SUBMITTED);
 
             assertThat(decision).isInstanceOf(GuardDecision.Complete.class);
@@ -192,7 +199,7 @@ class DistributionPipelineTest {
 
             run();
 
-            verify(transformer).transform(eqCommand(), handedOn.capture(), any(JsonNode.class));
+            verify(transformer).transform(eqCommand(), handedOn.capture(), any(JsonNode.class), any());
             assertThat(handedOn.getValue()).isEqualTo(pristine);
             assertThat(payload)
                     .as("the fetched tree belongs to the producer, not to this service")
@@ -223,7 +230,7 @@ class DistributionPipelineTest {
 
             run();
 
-            verify(submissionClient).submit(submitted.capture(), caller.capture());
+            verify(submissionClient).submit(submitted.capture(), caller.capture(), any());
             assertThat(submitted.getValue()).isEqualTo(document);
             assertThat(caller.getValue()).isEqualTo(CallerIdentity.of(command));
         }
@@ -236,7 +243,7 @@ class DistributionPipelineTest {
             run();
 
             verify(submissionClient, times(1)).submit(any(CourtRegisterDocument.class),
-                    any(CallerIdentity.class));
+                    any(CallerIdentity.class), any());
         }
 
         @Test
@@ -301,7 +308,7 @@ class DistributionPipelineTest {
 
             run();
 
-            verify(transformer).transform(eqCommand(), any(JsonNode.class), handedOn.capture());
+            verify(transformer).transform(eqCommand(), any(JsonNode.class), handedOn.capture(), any());
             assertThat(handedOn.getValue()).isEqualTo(subscriptions);
         }
 
@@ -329,7 +336,7 @@ class DistributionPipelineTest {
             assertThat(decision).isEqualTo(
                     new GuardDecision.Abandon(ReasonCode.REFERENCE_DATA_UNAVAILABLE));
             verify(transformer, never()).transform(any(DistributionCommand.class),
-                    any(JsonNode.class), any(JsonNode.class));
+                    any(JsonNode.class), any(JsonNode.class), any());
             verify(guard, never()).recordCompletion(any(RunClaim.class),
                     any(CompletionReason.class));
         }
@@ -403,7 +410,7 @@ class DistributionPipelineTest {
             assertThat(decision).isEqualTo(
                     new GuardDecision.Abandon(ReasonCode.PROCESSING_DEADLINE_EXCEEDED));
             verify(transformer, never()).transform(any(DistributionCommand.class),
-                    any(JsonNode.class), any(JsonNode.class));
+                    any(JsonNode.class), any(JsonNode.class), any());
         }
 
         @Test
@@ -414,7 +421,7 @@ class DistributionPipelineTest {
             // hearing acquires two registers.
             final AdjustableClock clock = movingClock();
             when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
-                    any(JsonNode.class))).thenAnswer(call -> {
+                    any(JsonNode.class), any())).thenAnswer(call -> {
                         clock.advance(OVER_BUDGET);
                         return new TransformationResult.Register(document);
                     });
@@ -424,7 +431,7 @@ class DistributionPipelineTest {
             assertThat(decision).isEqualTo(
                     new GuardDecision.Abandon(ReasonCode.PROCESSING_DEADLINE_EXCEEDED));
             verify(submissionClient, never()).submit(any(CourtRegisterDocument.class),
-                    any(CallerIdentity.class));
+                    any(CallerIdentity.class), any());
             verify(guard, never()).recordCompletion(any(RunClaim.class),
                     any(CompletionReason.class));
         }
@@ -434,7 +441,7 @@ class DistributionPipelineTest {
         void does_not_write_a_completion_after_the_deadline() {
             final AdjustableClock clock = movingClock();
             when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
-                    any(JsonNode.class))).thenAnswer(call -> {
+                    any(JsonNode.class), any())).thenAnswer(call -> {
                         clock.advance(OVER_BUDGET);
                         return new TransformationResult.NoRegister(
                                 NoRegisterReason.NO_SUBSCRIPTIONS);
@@ -455,7 +462,7 @@ class DistributionPipelineTest {
             // declined to record it would be redelivered and would send the register a second time.
             final AdjustableClock clock = movingClock();
             when(submissionClient.submit(any(CourtRegisterDocument.class),
-                    any(CallerIdentity.class))).thenAnswer(call -> {
+                    any(CallerIdentity.class), any())).thenAnswer(call -> {
                         clock.advance(OVER_BUDGET);
                         return new SubmissionReceipt(202);
                     });
@@ -471,7 +478,7 @@ class DistributionPipelineTest {
         void parks_an_overrun_on_the_last_permitted_delivery() {
             final AdjustableClock clock = movingClock();
             when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
-                    any(JsonNode.class))).thenAnswer(call -> {
+                    any(JsonNode.class), any())).thenAnswer(call -> {
                         clock.advance(OVER_BUDGET);
                         return new TransformationResult.Register(document);
                     });
@@ -497,7 +504,7 @@ class DistributionPipelineTest {
         @DisplayName("no op outcomes are distinguishable")
         void no_op_outcomes_are_distinguishable(final NoRegisterReason reason) {
             when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
-                    any(JsonNode.class)))
+                    any(JsonNode.class), any()))
                     .thenReturn(new TransformationResult.NoRegister(reason));
 
             final GuardDecision decision = run();
@@ -513,26 +520,145 @@ class DistributionPipelineTest {
         @DisplayName("sends nothing at all when there is nothing to send")
         void sends_nothing_when_there_is_nothing_to_send(final NoRegisterReason reason) {
             when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
-                    any(JsonNode.class)))
+                    any(JsonNode.class), any()))
                     .thenReturn(new TransformationResult.NoRegister(reason));
 
             run();
 
             verify(submissionClient, never()).submit(any(CourtRegisterDocument.class),
-                    any(CallerIdentity.class));
+                    any(CallerIdentity.class), any());
         }
 
         @Test
         @DisplayName("records a hearing that gathered nobody as no-defendants (C6)")
         void records_a_hearing_that_gathered_nobody_as_no_defendants() {
             when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
-                    any(JsonNode.class)))
+                    any(JsonNode.class), any()))
                     .thenReturn(new TransformationResult.NoRegister(
                             NoRegisterReason.NO_DEFENDANTS));
 
             run();
 
             verify(guard).recordCompletion(claim, CompletionReason.NO_DEFENDANTS);
+        }
+    }
+
+    /**
+     * What a run skipped on its way to an answer — the counting half of fixes C19, C20 and C27.
+     *
+     * <p>Each of those three fixes keeps a register the legacy loses, and each of them says, in its
+     * own row, that the skip is counted rather than silent. The mappers have counted through an
+     * injected consumer since they were written; nothing in the running service was holding one, so
+     * in a deployed pod the count went nowhere and the fixes were as quiet as the defects.
+     *
+     * <p>What a run does with what it counted depends on how it ended, and the difference is not a
+     * detail: a submitted register has a {@code processed_output} row to carry the counts into, and
+     * a run that produced no register has no row at all — there is nothing to write against. Both
+     * move the metric, and the run that has nowhere to persist them says so once, in bounded codes.
+     */
+    @Nested
+    @DisplayName("what a run skipped (C19, C20, C27)")
+    class WhatARunSkipped {
+
+        @Test
+        @DisplayName("the counts a sent register survived travel with it, to be written before it "
+                + "is sent")
+        void the_counts_travel_with_the_register() {
+            transformCounting(new TransformationResult.Register(document),
+                    TransformationAnomaly.LETTER_DELIVERY_DROPPED,
+                    TransformationAnomaly.LETTER_DELIVERY_DROPPED,
+                    TransformationAnomaly.UNRESOLVABLE_YOUTH_DEFENDANT);
+
+            run();
+
+            final ArgumentCaptor<Map<TransformationAnomaly, Integer>> counted =
+                    ArgumentCaptor.captor();
+            verify(submissionClient).submit(
+                    org.mockito.ArgumentMatchers.eq(document), any(CallerIdentity.class),
+                    counted.capture());
+            assertThat(counted.getValue()).containsExactlyInAnyOrderEntriesOf(Map.of(
+                    TransformationAnomaly.LETTER_DELIVERY_DROPPED, 2,
+                    TransformationAnomaly.UNRESOLVABLE_YOUTH_DEFENDANT, 1));
+        }
+
+        @Test
+        @DisplayName("and are counted on the anomaly metric, once per occurrence")
+        void the_counts_reach_the_metric() {
+            transformCounting(new TransformationResult.Register(document),
+                    TransformationAnomaly.LETTER_DELIVERY_DROPPED,
+                    TransformationAnomaly.LETTER_DELIVERY_DROPPED,
+                    TransformationAnomaly.UNRESOLVABLE_YOUTH_DEFENDANT);
+
+            run();
+
+            assertThat(anomalies("letter-delivery-dropped")).isEqualTo(2);
+            assertThat(anomalies("unresolvable-youth-defendant")).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("a run that produced no register counts them and says so once, in codes")
+        void a_declining_run_counts_them_and_says_so_once() {
+            transformCounting(new TransformationResult.NoRegister(
+                            NoRegisterReason.NO_SUBSCRIPTIONS),
+                    TransformationAnomaly.LETTER_DELIVERY_DROPPED,
+                    TransformationAnomaly.LETTER_DELIVERY_DROPPED);
+
+            try (CapturedLog log = CapturedLog.capturing(DistributionPipeline.class)) {
+                run();
+
+                assertThat(anomalies("letter-delivery-dropped")).isEqualTo(2);
+                assertThat(warnings(log)).singleElement().satisfies(warning -> assertThat(warning)
+                        .contains("letter-delivery-dropped:2")
+                        .contains(command.hearingId().toString())
+                        .doesNotContain("recipient"));
+            }
+        }
+
+        @Test
+        @DisplayName("and nothing is submitted for it, so nothing is written against a row that "
+                + "does not exist")
+        void a_declining_run_submits_nothing() {
+            transformCounting(new TransformationResult.NoRegister(
+                            NoRegisterReason.NO_SUBSCRIPTIONS),
+                    TransformationAnomaly.LETTER_DELIVERY_DROPPED);
+
+            run();
+
+            verify(submissionClient, never()).submit(any(CourtRegisterDocument.class),
+                    any(CallerIdentity.class), any());
+        }
+
+        @Test
+        @DisplayName("a run that skipped nothing carries nothing and warns about nothing")
+        void a_run_that_skipped_nothing_says_nothing() {
+            try (CapturedLog log = CapturedLog.capturing(DistributionPipeline.class)) {
+                run();
+
+                verify(submissionClient).submit(
+                        org.mockito.ArgumentMatchers.eq(document), any(CallerIdentity.class),
+                        org.mockito.ArgumentMatchers.eq(Map.of()));
+                assertThat(warnings(log)).isEmpty();
+                assertThat(anomalies("letter-delivery-dropped")).isEqualTo(ABSENT);
+            }
+        }
+
+        @Test
+        @DisplayName("each run counts its own, and never the run before it")
+        void each_run_counts_its_own() {
+            transformCounting(new TransformationResult.Register(document),
+                    TransformationAnomaly.LETTER_DELIVERY_DROPPED);
+
+            run();
+            run();
+
+            final ArgumentCaptor<Map<TransformationAnomaly, Integer>> counted =
+                    ArgumentCaptor.captor();
+            verify(submissionClient, times(2)).submit(
+                    org.mockito.ArgumentMatchers.eq(document), any(CallerIdentity.class),
+                    counted.capture());
+            assertThat(counted.getAllValues()).allSatisfy(counts -> assertThat(counts)
+                    .containsExactlyInAnyOrderEntriesOf(
+                            Map.of(TransformationAnomaly.LETTER_DELIVERY_DROPPED, 1)));
         }
     }
 
@@ -561,9 +687,9 @@ class DistributionPipelineTest {
             verify(guard).recordCompletion(claim, CompletionReason.GROUP_PROCEEDINGS);
             assertThat(completions("group-proceedings")).isEqualTo(1);
             verify(transformer, never()).transform(any(DistributionCommand.class),
-                    any(JsonNode.class), any(JsonNode.class));
+                    any(JsonNode.class), any(JsonNode.class), any());
             verify(submissionClient, never()).submit(any(CourtRegisterDocument.class),
-                    any(CallerIdentity.class));
+                    any(CallerIdentity.class), any());
         }
 
         @Test
@@ -578,7 +704,9 @@ class DistributionPipelineTest {
             pipelineOverTheRealPolicy().process(command, delivery());
 
             verify(guard).recordCompletion(claim, CompletionReason.SUBMITTED);
-            verify(submissionClient).submit(document, CallerIdentity.of(command));
+            verify(submissionClient).submit(
+                    org.mockito.ArgumentMatchers.eq(document),
+                    org.mockito.ArgumentMatchers.eq(CallerIdentity.of(command)), any());
         }
     }
 
@@ -602,7 +730,7 @@ class DistributionPipelineTest {
 
             for (final RuntimeException failure : everyWayARunCanFail()) {
                 when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
-                    any(JsonNode.class)))
+                    any(JsonNode.class), any()))
                         .thenThrow(failure);
 
                 final GuardDecision decision = run();
@@ -651,7 +779,7 @@ class DistributionPipelineTest {
             run();
 
             verify(transformer, never()).transform(any(DistributionCommand.class),
-                    any(JsonNode.class), any(JsonNode.class));
+                    any(JsonNode.class), any(JsonNode.class), any());
         }
 
         @Test
@@ -662,7 +790,7 @@ class DistributionPipelineTest {
             // rest, and the orchestration returns `Success: true`. Here it is a dead-letter with a
             // bounded reason.
             when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
-                    any(JsonNode.class)))
+                    any(JsonNode.class), any()))
                     .thenThrow(new TransformationFailedException("ordered-date-unreadable"));
 
             final GuardDecision decision = run();
@@ -677,7 +805,7 @@ class DistributionPipelineTest {
         @DisplayName("retries a submission that may succeed next time")
         void retries_a_submission_that_may_succeed_next_time() {
             when(submissionClient.submit(any(CourtRegisterDocument.class),
-                    any(CallerIdentity.class)))
+                    any(CallerIdentity.class), any()))
                     .thenThrow(new SubmissionFailedException(
                             FailureClassification.TRANSIENT, ReasonCode.SUBMISSION_TRANSIENT));
 
@@ -689,7 +817,7 @@ class DistributionPipelineTest {
         @DisplayName("parks a submission progression refused, without spending the deliveries")
         void parks_a_submission_progression_refused() {
             when(submissionClient.submit(any(CourtRegisterDocument.class),
-                    any(CallerIdentity.class)))
+                    any(CallerIdentity.class), any()))
                     .thenThrow(new SubmissionFailedException(
                             FailureClassification.NON_TRANSIENT, ReasonCode.SUBMISSION_REJECTED));
 
@@ -701,7 +829,7 @@ class DistributionPipelineTest {
         @DisplayName("parks a transient submission failure on the last permitted delivery")
         void parks_a_transient_submission_failure_on_the_last_delivery() {
             when(submissionClient.submit(any(CourtRegisterDocument.class),
-                    any(CallerIdentity.class)))
+                    any(CallerIdentity.class), any()))
                     .thenThrow(new SubmissionFailedException(
                             FailureClassification.TRANSIENT, ReasonCode.SUBMISSION_TRANSIENT));
 
@@ -717,7 +845,7 @@ class DistributionPipelineTest {
             // The exact shape of C1: the POST failed and the legacy reports the run as a success,
             // so a lost register and a delivered one are the same row.
             when(submissionClient.submit(any(CourtRegisterDocument.class),
-                    any(CallerIdentity.class)))
+                    any(CallerIdentity.class), any()))
                     .thenThrow(new SubmissionFailedException(
                             FailureClassification.NON_TRANSIENT, ReasonCode.SUBMISSION_REJECTED));
 
@@ -843,6 +971,56 @@ class DistributionPipelineTest {
      */
     private DistributionCommand eqCommand() {
         return org.mockito.ArgumentMatchers.eq(command);
+    }
+
+    /**
+     * A transformation that counts the given anomalies on the sink it is handed, then answers.
+     *
+     * <p>Which is what the real chain does: the mappers beneath it count as they walk the hearing,
+     * and the answer comes back afterwards. A stub that only answered could not tell whether the
+     * pipeline gave the stages anywhere to count.
+     *
+     * @param result  what the transformation answers
+     * @param counted what it counts on the way there
+     */
+    private void transformCounting(
+            final TransformationResult result, final TransformationAnomaly... counted) {
+
+        when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                any(JsonNode.class), any()))
+                .thenAnswer(call -> {
+                    final Consumer<TransformationAnomaly> sink = call.getArgument(3);
+                    for (final TransformationAnomaly anomaly : counted) {
+                        sink.accept(anomaly);
+                    }
+                    return result;
+                });
+    }
+
+    /**
+     * Every warning the pipeline wrote.
+     *
+     * @param log the captured log
+     * @return the formatted warnings
+     */
+    private static List<String> warnings(final CapturedLog log) {
+        return log.events().stream()
+                .filter(event -> event.getLevel() == Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+    }
+
+    /**
+     * How many anomalies have been counted under a reason.
+     *
+     * @param reason the bounded reason code
+     * @return the count, or {@link #ABSENT} where the series does not exist
+     */
+    private double anomalies(final String reason) {
+        final Counter counter = registry.find(ProcessingMetrics.TRANSFORMATION_ANOMALIES)
+                .tag(ProcessingMetrics.REASON_TAG, reason)
+                .counter();
+        return counter == null ? ABSENT : counter.count();
     }
 
     /**

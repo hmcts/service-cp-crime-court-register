@@ -88,8 +88,7 @@ class RegisterTransformationChainTest {
     private final RegisterTransformationChain chain = new RegisterTransformationChain(
             new RegisterBuilder(new Dates()),
             new SubscriptionMatcher(new SubscriptionRules()),
-            new OutboundContractValidator(JacksonConfig.contractObjectMapper()),
-            anomalies::add);
+            new OutboundContractValidator(JacksonConfig.contractObjectMapper()));
 
     @Nested
     @DisplayName("a hearing that becomes a register")
@@ -355,7 +354,7 @@ class RegisterTransformationChainTest {
      * @return what the transformation produced
      */
     private TransformationResult transform(final JsonNode payload, final JsonNode subscriptions) {
-        return chain.transform(command(), payload, subscriptions);
+        return chain.transform(command(), payload, subscriptions, anomalies::add);
     }
 
     /**

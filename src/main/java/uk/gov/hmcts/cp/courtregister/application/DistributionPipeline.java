@@ -364,7 +364,10 @@ public class DistributionPipeline {
             final RunClaim claim,
             final RunBudget budget) {
 
-        return switch (transformer.transform(command, payload, subscriptions)) {
+        // Seam: the run-scoped accumulator lands with the anomaly path, and counts nothing yet.
+        final java.util.function.Consumer<uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly>
+                anomalies = anomaly -> { };
+        return switch (transformer.transform(command, payload, subscriptions, anomalies)) {
             case TransformationResult.NoRegister nothing -> spent(budget)
                     ? overran(claim, budget)
                     : completed(claim, nothing.reason().completion());
@@ -449,7 +452,8 @@ public class DistributionPipeline {
             outcome = overran(claim, budget);
         } else {
             final SubmissionReceipt receipt =
-                    submissionClient.submit(register.document(), CallerIdentity.of(command));
+                    submissionClient.submit(register.document(), CallerIdentity.of(command),
+                            java.util.Map.of());
             LOG.info("Register submitted. source={} requestId={} hearingId={} status={}",
                     command.source(), command.requestId(), command.hearingId(),
                     receipt.responseCode());
