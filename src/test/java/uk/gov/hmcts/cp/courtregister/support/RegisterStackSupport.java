@@ -193,6 +193,31 @@ public final class RegisterStackSupport implements AutoCloseable {
     }
 
     /**
+     * The query side does not hold the hearing the first time it is asked, and holds it afterwards.
+     *
+     * <p>One 404 per delivery, deliberately: the query client treats a {@code 404} as "not held"
+     * rather than as a failure, so it never asks twice inside one run. The first delivery therefore
+     * meets a cold cache and an empty query side and is handed back; the second finds the payload.
+     * That is the C32 pair and its recovery, made deterministic — a suite that seeded the cache
+     * partway through would be racing the broker's redelivery.
+     *
+     * @param hearingId the hearing
+     * @param payload   the envelope the query side holds from the second ask onwards
+     */
+    public void queryHoldsNothingThenHolds(final UUID hearingId, final JsonNode payload) {
+        final String scenario = "query-" + hearingId;
+        contexts.stubFor(queryFor(hearingId)
+                .inScenario(scenario)
+                .whenScenarioStateIs(Scenario.STARTED)
+                .willReturn(aResponse().withStatus(404))
+                .willSetStateTo("held"));
+        contexts.stubFor(queryFor(hearingId)
+                .inScenario(scenario)
+                .whenScenarioStateIs("held")
+                .willReturn(okJson(payload.toString())));
+    }
+
+    /**
      * The number of times the query side was asked for a hearing.
      *
      * @param hearingId the hearing
@@ -236,17 +261,58 @@ public final class RegisterStackSupport implements AutoCloseable {
     }
 
     /**
-     * Reference data answers the now-subscriptions read slowly rather than late.
+     * Reference data refuses the read a number of times, and answers properly afterwards.
      *
-     * @param subscriptions the subscriptions in force
+     * <p>The refusal count is the suite's, because the client retries inside one run: a scenario
+     * that recovered after a single refusal would prove the retry and never reach a redelivery.
+     *
+     * @param status        the status it refuses with
+     * @param refusals      how many answers are refusals
+     * @param subscriptions what it answers with once the refusals are spent
+     */
+    public void subscriptionsRefuseThenAnswer(
+            final int status, final int refusals, final JsonNode... subscriptions) {
+        final String scenario = "referencedata-" + UUID.randomUUID();
+        for (int refusal = 0; refusal < refusals; refusal++) {
+            contexts.stubFor(subscriptionsRead()
+                    .inScenario(scenario)
+                    .whenScenarioStateIs(refusal == 0 ? Scenario.STARTED : "refused-" + refusal)
+                    .willReturn(aResponse().withStatus(status))
+                    .willSetStateTo("refused-" + (refusal + 1)));
+        }
+        contexts.stubFor(subscriptionsRead()
+                .inScenario(scenario)
+                .whenScenarioStateIs("refused-" + refusals)
+                .willReturn(okJson(NowSubscriptionFixtures.answerOf(subscriptions).toString())));
+    }
+
+    /**
+     * Reference data answers slowly the first time, and at once afterwards.
+     *
+     * <p>Slowly rather than late, and the difference is the whole of what a deadline suite can
+     * inject. {@code PropertiesValidator} budgets every step's connect and read timeouts, plus a
+     * fixed margin, against the processing deadline, so on any configuration the service will start
+     * on, a delay long enough to reach the deadline is a delay the read timeout cuts short first —
+     * which is a payload failure, not an overrun. A body that arrives in pieces trips no timeout at
+     * all, because each individual read returns promptly; only the run's own budget notices.
+     *
      * @param chunks        how many pieces the body arrives in
      * @param overMillis    how long the whole body takes to arrive
+     * @param subscriptions the subscriptions in force, answered slowly and then at once
      */
-    public void subscriptionsDribble(
-            final JsonNode[] subscriptions, final int chunks, final int overMillis) {
-        contexts.stubFor(subscriptionsRead().willReturn(
-                okJson(NowSubscriptionFixtures.answerOf(subscriptions).toString())
-                        .withChunkedDribbleDelay(chunks, overMillis)));
+    public void subscriptionsDribbleThenAnswer(
+            final int chunks, final int overMillis, final JsonNode... subscriptions) {
+        final String answer = NowSubscriptionFixtures.answerOf(subscriptions).toString();
+        final String scenario = "referencedata-slow-" + UUID.randomUUID();
+        contexts.stubFor(subscriptionsRead()
+                .inScenario(scenario)
+                .whenScenarioStateIs(Scenario.STARTED)
+                .willReturn(okJson(answer).withChunkedDribbleDelay(chunks, overMillis))
+                .willSetStateTo("prompt"));
+        contexts.stubFor(subscriptionsRead()
+                .inScenario(scenario)
+                .whenScenarioStateIs("prompt")
+                .willReturn(okJson(answer)));
     }
 
     private static MappingBuilder subscriptionsRead() {

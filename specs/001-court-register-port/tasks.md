@@ -833,7 +833,7 @@ documentation-final states.
       a different reason and a different fault to diagnose. `NowSubscriptionFixtures.forAnyDefendant`
       exists for that, and the four no-op runs are told apart by `completion_reason` alone — which is
       the whole of C33.)*
-- [ ] T069a [A] [US1] The e2e sufficiency matrix: four further suites in `e2e/`, each driving the
+- [x] T069a [A] [US1] The e2e sufficiency matrix: four further suites in `e2e/`, each driving the
       **real** pipeline over the whole stack — the Service Bus emulator, Postgres, a Redis container
       and one WireMock server standing in for all three HTTP contexts at once (results-query,
       reference-data and progression have disjoint paths, so one server is one fixture rather than
@@ -860,6 +860,37 @@ documentation-final states.
         deadline, so no delay a *timeout* would cut short can reach it — only a response that
         arrives slowly rather than late.
       Names are in plan.md's test matrix.
+      *(done — 13 further cases across the four suites, all green on introduction and recorded as the
+      observed result. Four things this task settled.
+      **(1) The C32 pair is reported twice, by design, and the suite now says so.** The first draft
+      asserted one ERROR for a cache miss beside a query miss and found two: the payload adapter
+      reports that neither source held the hearing — the state C32's legacy has no word for — and the
+      pipeline reports what it decided that is worth. They are different facts from different layers,
+      both bounded, both correlated, and the assertion names each rather than counting them.
+      **(2) A deadline overrun cannot be injected with a delay.** `PropertiesValidator` budgets every
+      step's connect and read timeouts plus every wait its retry policy can take plus a fixed 30s
+      margin, and refuses to start unless that total is strictly shorter than the processing
+      deadline — so on any startable configuration a delay long enough to reach the deadline is one
+      the read timeout cuts short first, which is a payload or reference-data failure and a different
+      scenario. What overruns a run is a response that arrives *slowly*: a body delivered in pieces
+      trips no read timeout, since each individual read returns promptly, and only the run's own
+      budget notices. `RunDeadlineEndToEndIT` injects exactly that (42 chunks a second apart against
+      a two-second read timeout) at the floor the fixed margin leaves — a 40s deadline, every timeout
+      in hundreds of milliseconds — and takes 44s, which is the fastest honest version there is.
+      **(3) The transient-then-recover cases are made deterministic by the stub, not by the suite.**
+      Seeding a cache or fixing a stub partway through races the broker's redelivery, and the broker
+      wins in well under a second. Each such case therefore uses a WireMock scenario that fails
+      exactly one delivery's worth of attempts and succeeds afterwards — one 404 for the payload pair
+      (a 404 is "not held" and is never retried inside a run), two 503s for the reference-data read
+      (which retries twice inside one run), one dribble for the deadline.
+      **(4) Six submission outcomes, and the one no adapter suite can assert.** A register the frozen
+      contract refuses reaches no socket at all — provable only against the single server that would
+      have received it — and beside it: a 400 parked with `response_code` recorded, a 500-then-202
+      accepted after one retry, a 200 refused as `SUBMISSION_NOT_ACCEPTED`, a permanent outage parked
+      after exactly five deliveries and ten POST attempts carrying `exhausted_message_id`, and a
+      re-share producing two requests, two POSTs and two POSTED rows — which is the honest guarantee
+      this service makes rather than a defect: the duplicate is absorbed by progression's own
+      `max(register_time)` sweep.)*
 
 - [ ] T070 [A] [US1] `e2e/MessageAccountingIT`, `e2e/TraceabilityIT`, `e2e/FailureSignalIT` —
       the inherited accounting/tracing/failure-signal proofs.
