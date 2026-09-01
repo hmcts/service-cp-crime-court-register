@@ -584,9 +584,22 @@ vocabulary and matching semantics.
       and an environment still exporting `max-retries`, `total-retry-time-in-ms`,
       `number-of-attempts` and `reject-unauthorized` is shown to bind to a record indistinguishable
       from one that never saw them.)*
-- [ ] T060 [P] [US1] `adapter/refdata/ReferenceDataNowSubscriptionsClientTest` (WireMock) —
+- [x] T060 [P] [US1] `adapter/refdata/ReferenceDataNowSubscriptionsClientTest` (WireMock) —
       `on=` day derived from the fixed registerDate (C12); unanswered/5xx ⇒ transient; empty set
       returned as empty (matcher decides `no-subscriptions`).
+      *(done — 28 cases red against the `ReferenceDataNowSubscriptionsClient` seam. Three notes.
+      **(1)** C12's derivation is `Dates.subscriptionDay`'s and is pinned by
+      `DatesTest.bst_evening_share_uses_the_share_day`; what this suite owes the fix is that the
+      client derives nothing of its own, so the cases build the day with the real `Dates` from a
+      23:30 BST share and assert the parameter carries `2020-06-01` and never `2020-06-02`. A second
+      derivation appearing in the adapter is what these would catch and nothing else would.
+      **(2)** A `404` is a refusal here, where it is an empty answer in the payload client. The
+      now-subscriptions resource always exists; a 404 on it is a misconfigured path, and reading
+      that as "nobody is subscribed" is precisely the substitution this fix ends. The two clients
+      differ on that one status and agree on the rest of the C3 taxonomy.
+      **(3)** The mesh headers are configuration because the authorisation scheme is not documented,
+      so the suite pins that a configured `Accept` or `CJSCPPUID` *replaces* the contract value
+      rather than joining it — two values of either is a 406 or an ambiguous caller.)*
 - [ ] T061 [P] [US1] `adapter/progression/ProgressionCommandGatewayTest` (WireMock) — N34–N45:
       202-only; 400/401/403/404/422 park; non-202 2xx = `SUBMISSION_NOT_ACCEPTED`; 408/429/5xx/
       connect retry with exponential backoff; `Retry-After` delta-seconds bounded, HTTP-date
