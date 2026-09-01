@@ -28,7 +28,11 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
  * <p>The single legacy {@code if} is divided here by the <em>reason</em> a subscription failed it,
  * which is the only division an operator can act on: a subscription asking for the post, which this
  * channel does not have; a subscription reference data is not offering us; and a subscription that
- * is for us and carries no address to send to, which is reference data that is incomplete. An
+ * is for us and carries no address to send to, which is reference data that is incomplete.
+ * <strong>The division names the drop; it never makes one.</strong> The email predicate is asked
+ * first and asked alone, exactly as {@code :13} asks it, and the letter flags are read only to
+ * label a subscription that has already failed it — so a subscriber who asked for both post and
+ * email is emailed here as they are there, and no recipient set moves. An
  * address that is absent, an explicit JSON {@code null} or whitespace-only is one rule and one
  * count — the legacy's {@code !== undefined} check keeps the second of those, producing a recipient
  * the frozen contract refuses and so losing the whole register (C29).
@@ -96,13 +100,11 @@ final class RecipientMapper {
      * @return the recipient, or {@code null} where the subscription was dropped
      */
     private CourtRegisterRecipient recipient(final JsonNode subscription) {
-        if (Json.truthy(subscription, "firstClassLetterDelivery")
-                || Json.truthy(subscription, "secondClassLetterDelivery")) {
-            return dropped(TransformationAnomaly.LETTER_DELIVERY_DROPPED);
-        }
         if (!Json.truthy(subscription, "emailDelivery")
                 || !Json.truthy(subscription, "forDistribution")) {
-            return dropped(TransformationAnomaly.RECIPIENT_NOT_FOR_DISTRIBUTION);
+            // The legacy's whole predicate, asked first and asked alone. The letter flags decide
+            // nothing here; they only say which of the two reasons this subscription failed it.
+            return dropped(whyNotForEmail(subscription));
         }
 
         final JsonNode recipient = Json.at(subscription, "recipient");
@@ -120,6 +122,28 @@ final class RecipientMapper {
                 Json.truthy(subscription, EMAIL_TEMPLATE_NAME)
                         ? Json.text(subscription, EMAIL_TEMPLATE_NAME)
                         : DEFAULT_TEMPLATE);
+    }
+
+    /**
+     * Which of the two reasons a subscription this channel cannot serve failed the email predicate.
+     *
+     * <p>Reference data saying "not this one", or reference data saying "by post" — an operator acts
+     * on those differently, which is why C27 counts them apart. The letter flags are read
+     * <strong>only</strong> here, on a subscription that has already failed
+     * {@code emailDelivery && forDistribution}: reading them first would drop a subscriber who asked
+     * for the register by post <em>as well as</em> by email, and
+     * {@code RecipientMapper.js:13} never reads them at all, so that subscriber is on every register
+     * the legacy sends. Losing them would be a recipient-set change, which is precisely what C27's
+     * row says this fix does not make.
+     *
+     * @param subscription the matched subscription, already known not to be for email distribution
+     * @return the bounded reason it is dropped under
+     */
+    private static TransformationAnomaly whyNotForEmail(final JsonNode subscription) {
+        return Json.truthy(subscription, "firstClassLetterDelivery")
+                || Json.truthy(subscription, "secondClassLetterDelivery")
+                ? TransformationAnomaly.LETTER_DELIVERY_DROPPED
+                : TransformationAnomaly.RECIPIENT_NOT_FOR_DISTRIBUTION;
     }
 
     /**
