@@ -19,7 +19,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterVocabulary;
 import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
 
 /**
- * Addressing a built register: which subscriptions it goes to, and what happens when nobody answers.
+ * Addressing a built register: which of the subscriptions in force it goes to.
  *
  * <p>The legacy {@code CourtRegisterSubscriptions} suite has four cases, and all four mock the
  * matcher out entirely — so what they pin is the plumbing around it: reference data answered, the
@@ -121,12 +121,13 @@ class SubscriptionMatcherTest {
     }
 
     /**
-     * The CS1 split. One legacy case, two outcomes: reference data answering "none in force"
-     * completes the run, and reference data not answering is a failure the delivery comes back for.
+     * The CS1 split, this half of it: reference data answering "none in force" is an answer, and the
+     * register completes addressed to nobody. The other half — reference data not answering at all,
+     * which is a failure the delivery comes back for — is asserted where the read is made.
      */
     @Nested
-    @DisplayName("when nothing matches, and when nothing answers")
-    class EmptyAndUnanswered {
+    @DisplayName("when nothing matches")
+    class NothingMatches {
 
         @Test
         @DisplayName("Should NOT set matchedSubscriptions property when there is NO subscription")
