@@ -1054,6 +1054,88 @@ class ConfigurationValidationTest {
     }
 
     /**
+     * The whole run's budget, not three budgets that each look reasonable on their own.
+     *
+     * <p>Every per-step rule above asks the same question of one step: can this one outlast the
+     * processing deadline? Answering "no" three times does not answer the question that matters,
+     * because the three steps are spent inside <strong>one</strong> run and one claim. A payload
+     * fetch, a now-subscriptions read and a submission that each fit comfortably can add up to more
+     * than twice the deadline, and the run that spends them is a runner still holding a socket while
+     * its claim is reclaimed and a second delivery starts the same request — which, for a flow whose
+     * POST progression <em>appends</em> rather than replaces, is a second register for the hearing.
+     *
+     * <p>The margin is the rest of the run: the guard's admission and outcome writes, and the
+     * transformation between the reads. It is fixed rather than configured because nothing about it
+     * is an environment's choice.
+     */
+    @Nested
+    @DisplayName("every step together must fit inside the run")
+    class CumulativeRunBudget {
+
+        /**
+         * The case the per-step rules cannot see. 127s of payload fetch, 107s of now-subscriptions
+         * read and 143.5s of submission are each inside a four-minute deadline; together they are
+         * 377.5s, and the run that spends them outlives its claim by more than a minute.
+         */
+        @Test
+        void three_steps_that_each_fit_but_do_not_fit_together_should_fail_startup() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.claim.lease=5m",
+                    "courtregister.claim.processing-deadline=4m",
+                    "courtregister.payload.fallback.read-timeout=30s",
+                    "courtregister.referencedata.read-timeout=30s",
+                    "courtregister.progression.read-timeout=30s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.payload")
+                                .hasMessageContaining("courtregister.referencedata")
+                                .hasMessageContaining("courtregister.progression")
+                                .hasMessageContaining("courtregister.claim.processing-deadline");
+                    });
+        }
+
+        /**
+         * The margin counts. These three steps sum to 177.5s, comfortably inside a 200s deadline —
+         * and leave the guard's two writes and the whole transformation twenty-two seconds, which is
+         * the shape of budget that overruns in production and looks correct in review.
+         */
+        @Test
+        void a_budget_with_no_room_for_the_rest_of_the_run_should_fail_startup() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.claim.processing-deadline=200s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.claim.processing-deadline");
+                    });
+        }
+
+        /**
+         * The shipped numbers have to satisfy the rule they are shipped under, or the service ships
+         * unable to start.
+         */
+        @Test
+        void the_shipped_settings_should_leave_room_for_every_step_and_the_margin() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY)
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /**
+         * A step no adapter makes costs the run nothing, which is the same reason the per-step rules
+         * are asked only of the source actually selected.
+         */
+        @Test
+        void a_step_the_deployment_stubs_out_should_not_be_counted() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.claim.processing-deadline=2m",
+                    "courtregister.payload.mode=STUB",
+                    "courtregister.referencedata.mode=STUB",
+                    "courtregister.payload.fallback.read-timeout=5m",
+                    "courtregister.referencedata.read-timeout=5m")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+    }
+
+    /**
      * What the shipped {@code application.yaml} actually binds.
      *
      * <p>Asserted against the real file rather than against property values a test invents, because

@@ -44,6 +44,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
 import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
+import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 
 /**
  * One request, from the payload fetch to the recorded outcome — the orchestration the legacy has no
@@ -342,6 +343,142 @@ class DistributionPipelineTest {
 
             verify(subscriptionsSource, never()).subscriptionsOn(any(LocalDate.class),
                     any(CallerIdentity.class));
+        }
+    }
+
+    /**
+     * The run's own time budget, spent across every stage rather than checked once.
+     *
+     * <p>A claim is a lease, and the processing deadline is the promise a runner makes to stop
+     * before that lease can be reclaimed. Checking it only after the payload fetch keeps the promise
+     * for one stage and breaks it for the three that follow: a reference-data read, a transformation
+     * and a POST can each take minutes, and a run that starts its POST after the deadline is a run
+     * whose claim another delivery may already hold — and progression's {@code add-court-register}
+     * <em>appends</em> a register rather than replacing one, so the second runner's POST is a second
+     * register for the hearing, not an overwrite of the first.
+     *
+     * <p>So the budget is remaining time, read before every send and before every outcome write. A
+     * run that has spent it stops, records the overrun as TRANSIENT, and hands the delivery back —
+     * the redelivery has a whole fresh budget and nothing has been sent twice. The one write that is
+     * never withheld is the completion of a register that <em>was</em> sent: the POST happened, and
+     * a run that failed to record it would send it again.
+     */
+    @Nested
+    @DisplayName("the run's time budget")
+    class TimeBudget {
+
+        /** Past the five-minute deadline every case in this file is built around. */
+        private static final Duration OVER_BUDGET = Duration.ofMinutes(6);
+
+        @Test
+        @DisplayName("asks reference data nothing once the payload fetch has spent the budget")
+        void asks_reference_data_nothing_once_the_fetch_has_spent_the_budget() {
+            final AdjustableClock clock = movingClock();
+            when(payloadSource.fetch(any(DistributionCommand.class))).thenAnswer(call -> {
+                clock.advance(OVER_BUDGET);
+                return payload;
+            });
+
+            final GuardDecision decision = pipelineOn(clock).process(command, delivery());
+
+            assertThat(decision).isEqualTo(
+                    new GuardDecision.Abandon(ReasonCode.PROCESSING_DEADLINE_EXCEEDED));
+            verify(subscriptionsSource, never()).subscriptionsOn(any(LocalDate.class),
+                    any(CallerIdentity.class));
+        }
+
+        @Test
+        @DisplayName("transforms nothing once the reference-data read has spent the budget")
+        void transforms_nothing_once_the_reference_data_read_has_spent_the_budget() {
+            final AdjustableClock clock = movingClock();
+            when(subscriptionsSource.subscriptionsOn(any(LocalDate.class),
+                    any(CallerIdentity.class))).thenAnswer(call -> {
+                        clock.advance(OVER_BUDGET);
+                        return subscriptions;
+                    });
+
+            final GuardDecision decision = pipelineOn(clock).process(command, delivery());
+
+            assertThat(decision).isEqualTo(
+                    new GuardDecision.Abandon(ReasonCode.PROCESSING_DEADLINE_EXCEEDED));
+            verify(transformer, never()).transform(any(DistributionCommand.class),
+                    any(JsonNode.class), any(JsonNode.class));
+        }
+
+        @Test
+        @DisplayName("does not start a submission after the safe deadline has passed")
+        void does_not_start_a_submission_after_the_deadline() {
+            // The send is the stage the budget exists for: progression appends a register per POST,
+            // so a run that starts one while a second runner may already hold its claim is how one
+            // hearing acquires two registers.
+            final AdjustableClock clock = movingClock();
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                    any(JsonNode.class))).thenAnswer(call -> {
+                        clock.advance(OVER_BUDGET);
+                        return new TransformationResult.Register(document);
+                    });
+
+            final GuardDecision decision = pipelineOn(clock).process(command, delivery());
+
+            assertThat(decision).isEqualTo(
+                    new GuardDecision.Abandon(ReasonCode.PROCESSING_DEADLINE_EXCEEDED));
+            verify(submissionClient, never()).submit(any(CourtRegisterDocument.class),
+                    any(CallerIdentity.class));
+            verify(guard, never()).recordCompletion(any(RunClaim.class),
+                    any(CompletionReason.class));
+        }
+
+        @Test
+        @DisplayName("does not write a completion after the safe deadline has passed")
+        void does_not_write_a_completion_after_the_deadline() {
+            final AdjustableClock clock = movingClock();
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                    any(JsonNode.class))).thenAnswer(call -> {
+                        clock.advance(OVER_BUDGET);
+                        return new TransformationResult.NoRegister(
+                                CompletionReason.NO_SUBSCRIPTIONS);
+                    });
+
+            final GuardDecision decision = pipelineOn(clock).process(command, delivery());
+
+            assertThat(decision).isEqualTo(
+                    new GuardDecision.Abandon(ReasonCode.PROCESSING_DEADLINE_EXCEEDED));
+            verify(guard, never()).recordCompletion(any(RunClaim.class),
+                    any(CompletionReason.class));
+        }
+
+        @Test
+        @DisplayName("records the register it did send, even where the send ran past the deadline")
+        void records_a_register_whose_send_ran_past_the_deadline() {
+            // The one write the budget must never withhold. The POST has happened; a run that
+            // declined to record it would be redelivered and would send the register a second time.
+            final AdjustableClock clock = movingClock();
+            when(submissionClient.submit(any(CourtRegisterDocument.class),
+                    any(CallerIdentity.class))).thenAnswer(call -> {
+                        clock.advance(OVER_BUDGET);
+                        return new SubmissionReceipt(202);
+                    });
+
+            final GuardDecision decision = pipelineOn(clock).process(command, delivery());
+
+            assertThat(decision).isInstanceOf(GuardDecision.Complete.class);
+            verify(guard).recordCompletion(claim, CompletionReason.SUBMITTED);
+        }
+
+        @Test
+        @DisplayName("parks an overrun on the last permitted delivery rather than losing it")
+        void parks_an_overrun_on_the_last_permitted_delivery() {
+            final AdjustableClock clock = movingClock();
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                    any(JsonNode.class))).thenAnswer(call -> {
+                        clock.advance(OVER_BUDGET);
+                        return new TransformationResult.Register(document);
+                    });
+
+            final GuardDecision decision = pipelineOn(clock).process(command, lastDelivery());
+
+            assertThat(decision).isEqualTo(new GuardDecision.DeadLetter(
+                    DeadLetterReason.EXHAUSTED, ReasonCode.PROCESSING_DEADLINE_EXCEEDED));
         }
     }
 
@@ -677,6 +814,27 @@ class DistributionPipelineTest {
      */
     private Clock fixedClock() {
         return Clock.fixed(Instant.parse("2020-06-01T10:00:05Z"), ZoneOffset.UTC);
+    }
+
+    /**
+     * A clock a stage moves by hand, so a run can be made to overrun exactly where a case wants it
+     * to. Real waiting would make the boundary untestable and the suite slow.
+     *
+     * @return the clock
+     */
+    private AdjustableClock movingClock() {
+        return AdjustableClock.startingAt(Instant.parse("2020-06-01T10:00:05Z"));
+    }
+
+    /**
+     * The pipeline over its ports and a clock a case can move.
+     *
+     * @param clock the clock
+     * @return the pipeline
+     */
+    private DistributionPipeline pipelineOn(final Clock clock) {
+        return new DistributionPipeline(guard, payloadSource, groupProceedings, subscriptionsSource,
+                new Dates(), transformer, submissionClient, metrics, clock, RUN_DEADLINE);
     }
 
     /**
