@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.pipeline;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -11,7 +12,10 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterParentGuardian;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterDefendant;
+import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
 import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
 
 /**
@@ -34,9 +38,10 @@ import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
  *       role but carrying no {@code person} block is not chosen, and the search continues.</li>
  *   <li><strong>{@code role.toLowerCase()}</strong> ({@code :28}) — the role is read as a string with
  *       no check that it is one. A payload carrying a coded role — a number, an object — throws a
- *       {@code TypeError} that the whole hearing's register is then lost to. Here a role that is not
- *       a string simply is not the role being looked for: the search moves on, and the register
- *       survives.</li>
+ *       {@code TypeError} that the whole hearing's register is then lost to. No C-number covers it,
+ *       so the register is not kept: a role the port cannot read is a classified, non-transient
+ *       refusal, which loses exactly the register the legacy loses and loses it where support can
+ *       see it. Passing the entry over would send a register the legacy never sends.</li>
  * </ul>
  *
  * <p>Two vacuities in the legacy case are named rather than inherited. Its
@@ -183,27 +188,53 @@ class ParentGuardianMapperTest {
     class RoleThatIsNotAString {
 
         @Test
-        @DisplayName("is not the role being looked for, and the search moves on")
-        void is_not_the_role_being_looked_for() {
-            // Fails against the legacy: `role.toLowerCase()` on a number throws a TypeError, the
-            // exception is swallowed at `OutboundCourtRegister/index.js:62-64`, and every child on
-            // the hearing loses their register. Here it is simply not a match.
+        @DisplayName("is a classified refusal, not a skip: the legacy loses the register here")
+        void a_coded_role_is_refused() {
+            // `role.toLowerCase()` on a number is a TypeError, the exception is swallowed at
+            // `OutboundCourtRegister/index.js:62-64`, and every child on the hearing loses their
+            // register. Passing over the entry would produce a register the legacy never sends, for
+            // a defendant it never sends one for — an uncatalogued content change. The port refuses
+            // the payload instead, out loud and with somewhere to replay it from.
             final ObjectNode coded = mapper.createObjectNode();
             coded.put("role", 42);
             coded.set("person", person("Coded"));
 
-            assertThat(mapPersons(coded, associatedPerson("parent", person("Parent"))).name())
-                    .isEqualTo("Parent Person");
+            assertThatThrownBy(
+                    () -> mapPersons(coded, associatedPerson("parent", person("Parent"))))
+                    .isInstanceOf(TransformationFailedException.class)
+                    .satisfies(refused -> {
+                        assertThat(((TransformationFailedException) refused).classification())
+                                .isEqualTo(FailureClassification.NON_TRANSIENT);
+                        assertThat(((TransformationFailedException) refused).reason())
+                                .isEqualTo(ReasonCode.TRANSFORMATION_FAILED);
+                    });
         }
 
         @Test
-        @DisplayName("leaves a defendant whose only associated person carries one with no parent")
-        void leaves_a_defendant_with_no_parent() {
+        @DisplayName("says which field was the wrong shape and nothing about the person")
+        void names_the_field_and_not_the_person() {
             final ObjectNode coded = mapper.createObjectNode();
             coded.set("role", mapper.createObjectNode().put("code", "PARENT"));
             coded.set("person", person("Coded"));
 
-            assertThat(mapPersons(coded)).isNull();
+            assertThatThrownBy(() -> mapPersons(coded))
+                    .isInstanceOf(TransformationFailedException.class)
+                    .hasMessageContaining("role")
+                    .hasMessageNotContaining("PARENT")
+                    .hasMessageNotContaining("Coded");
+        }
+
+        @Test
+        @DisplayName("is never reached where a parent was already found ahead of it")
+        void is_never_reached_where_a_parent_came_first() {
+            // `find` stops at the first match, so a coded role behind one is never read — and a
+            // register the legacy sends is still sent.
+            final ObjectNode coded = mapper.createObjectNode();
+            coded.put("role", 42);
+            coded.set("person", person("Coded"));
+
+            assertThat(mapPersons(associatedPerson("parent", person("Parent")), coded).name())
+                    .isEqualTo("Parent Person");
         }
     }
 
