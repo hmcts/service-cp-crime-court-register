@@ -5,6 +5,7 @@ import java.util.Locale;
 import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterParentGuardian;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterDefendant;
+import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
 
 /**
  * Maps a youth defendant's parent or guardian.
@@ -21,12 +22,15 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterDefendant;
  * to let that absence arrive at the pre-send validator as an absence; refusing the document is the
  * validator's.
  *
- * <p><strong>A role that is not a string is not the role being looked for.</strong>
+ * <p><strong>A role that is not a string is refused, not passed over.</strong>
  * {@code associatedPerson.role.toLowerCase()} ({@code :28}) reads the role with no check that it is
  * one, so a payload carrying a coded role — a number, an object — throws a {@code TypeError} the
- * whole hearing's register is lost to. Here the search simply moves on. It is the same class as C19
- * and C20 and is not separately catalogued, because the register the legacy loses to it is a
- * register it also loses to them.
+ * whole hearing's register is lost to. No C-number covers that shape, so the register does not
+ * survive it here either: it is a classified, non-transient {@link TransformationFailedException},
+ * which loses the same register the legacy loses and loses it visibly, on a row support can replay.
+ * Skipping the entry would send progression a register the legacy never sends, for a child it never
+ * sends one for — an uncatalogued behaviour change, which is what the register's own rule refuses.
+ * C19 and C20 look similar and are not: each of those has a row saying the register is kept.
  */
 // PMD.OnlyOneReturn: the parent search, the guardian fallback and the no-such-person answer are
 // three legacy expressions, and each answers where the legacy's own `find` answers.
@@ -92,15 +96,34 @@ final class ParentGuardianMapper {
      */
     private static JsonNode inRole(final List<JsonNode> associatedPersons, final String role) {
         for (final JsonNode associatedPerson : associatedPersons) {
-            final JsonNode recorded = Json.at(associatedPerson, "role");
-            // `role.toLowerCase()` on a value that is not a string is a TypeError. A coded role is
-            // not the role being looked for, and the search carries on.
-            if (recorded != null && recorded.isString()
-                    && role.equals(recorded.stringValue().toLowerCase(Locale.ROOT))
+            // `role.toLowerCase()` on a value that is not a string is a TypeError, and the legacy
+            // loses the whole hearing's register to it. Refused here for the same register, so that
+            // nothing is sent the legacy would not have sent — and refused where the legacy reads
+            // it, so an entry behind a match is never read, exactly as `find` never reaches it.
+            if (role.equals(readableRole(associatedPerson))
                     && Json.truthy(associatedPerson, PERSON)) {
                 return Json.at(associatedPerson, PERSON);
             }
         }
         return null;
+    }
+
+    /**
+     * The role, lower-cased, as {@code associatedPerson.role.toLowerCase()} reads it.
+     *
+     * @param associatedPerson the entry being read
+     * @return the role in lower case
+     * @throws TransformationFailedException if the entry carries no role, or one that is not a
+     *     string — the shapes the legacy's own dereference throws on
+     */
+    private static String readableRole(final JsonNode associatedPerson) {
+        final JsonNode recorded = Json.at(associatedPerson, "role");
+        if (recorded == null || !recorded.isString()) {
+            // The field name is this service's vocabulary and is safe to name; the value is the
+            // producer's, and belongs to a child's family (constitution Principle VII).
+            throw new TransformationFailedException(
+                    "associated person field 'role' is not a string");
+        }
+        return recorded.stringValue().toLowerCase(Locale.ROOT);
     }
 }
