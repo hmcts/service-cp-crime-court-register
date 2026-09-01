@@ -132,13 +132,18 @@ public final class AggregationMapper {
     /**
      * The name progression stores the rendered register under — defect fix C11.
      *
+     * <p>The day is the <em>UTC</em> day of the register instant, which is the day the register was
+     * addressed on (C12) and the day its own {@code registerDate} falls on. Reading it as a London
+     * calendar day instead files a 23:00 BST share under tomorrow, which is the legacy's answer and
+     * is what C10's row says must move.
+     *
      * @param fragment the hearing's register fragment
      * @param hearing  the hearing payload, which carries the court centre's code
      * @return the file name
      */
     private static String fileName(final RegisterFragment fragment, final JsonNode hearing) {
         return "court-register_"
-                + DATES.localDate(fragment.registerDate())
+                + DATES.registerDay(fragment.registerDate())
                 + '_' + Json.text(Json.at(hearing, "courtCentre"), "code")
                 + '_' + fragment.hearingId()
                 + ".pdf";

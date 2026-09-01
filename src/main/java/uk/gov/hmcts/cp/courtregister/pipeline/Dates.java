@@ -105,6 +105,30 @@ public final class Dates {
     }
 
     /**
+     * The day a register is dated by, as {@code yyyy-MM-dd} — the UTC day of the register instant.
+     *
+     * <p>The day component of C11's file name, and the same day {@link #subscriptionDay} answers for
+     * the same value: a register is filed under the day it was shared and addressed on, and those
+     * are one day rather than two. Rendered rather than returned as a {@link LocalDate} because the
+     * file name is a string and a caller that formatted it itself would be a second place this
+     * rendering is decided.
+     *
+     * <p><strong>Not {@link #localDate}, and the difference is a whole day for half the year.</strong>
+     * A hearing shared at 23:00 UTC on 1 June is 2 June in London, so the London reading files the
+     * register under a day its own {@code registerDate} contradicts and its own subscription set
+     * disagrees with. C10's row names the file-name day among the three things a BST evening share
+     * moves; this is the one that moves it.
+     *
+     * @param registerDate the instant the register is dated by
+     * @return the UTC day it falls on
+     * @throws uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException if the value cannot
+     *     be read as a date
+     */
+    public String registerDay(final String registerDate) {
+        return asUtc(read(registerDate)).format(DAY);
+    }
+
+    /**
      * The London calendar day of a value, as {@code yyyy-MM-dd}.
      *
      * <p>Ports {@code DateService.getLocalDate} unchanged. Its one court-register call site matches a

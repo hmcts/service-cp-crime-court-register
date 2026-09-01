@@ -276,6 +276,42 @@ class DatesTest {
     }
 
     @Nested
+    @DisplayName("registerDay — the day the register is filed under (C10, C11, C12)")
+    class RegisterDay {
+
+        @Test
+        @DisplayName("gives the UTC day of the register instant")
+        void gives_the_utc_day_of_the_register_instant() {
+            assertThat(dates.registerDay("2020-06-01T10:00:00Z")).isEqualTo("2020-06-01");
+        }
+
+        @Test
+        @DisplayName("files an evening share under the day it was shared, not London's next one")
+        void files_an_evening_share_under_the_day_it_was_shared() {
+            // The three values C10's row says move together for a BST evening share: the register
+            // date, the file-name day and the subscription day. Reading the file-name day as a
+            // London calendar day — which localDate does, correctly, for the sitting-day match it
+            // exists for — leaves the register filed under a day the other two disagree with.
+            assertThat(dates.registerDay("2020-06-01T23:30:00Z")).isEqualTo("2020-06-01");
+            assertThat(dates.localDate("2020-06-01T23:30:00Z")).isEqualTo("2020-06-02");
+        }
+
+        @Test
+        @DisplayName("answers the same day the subscription set was read for")
+        void answers_the_same_day_the_subscription_set_was_read_for() {
+            assertThat(dates.registerDay("2020-06-01T23:30:00Z"))
+                    .isEqualTo(dates.subscriptionDay("2020-06-01T23:30:00Z").toString());
+        }
+
+        @Test
+        @DisplayName("refuses a register date it cannot read")
+        void refuses_a_register_date_it_cannot_read() {
+            assertThatThrownBy(() -> dates.registerDay("not a date"))
+                    .isInstanceOf(TransformationFailedException.class);
+        }
+    }
+
+    @Nested
     @DisplayName("isGreater — the ordered-date comparison the sorts perform")
     class IsGreater {
 
