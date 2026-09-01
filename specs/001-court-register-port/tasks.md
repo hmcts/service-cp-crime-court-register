@@ -536,10 +536,22 @@ vocabulary and matching semantics.
 
 ### Tests first ⚠️
 
-- [ ] T057 [P] [US1] `adapter/payload/HearingPayloadCacheKeyTest` +
+- [x] T057 [P] [US1] `adapter/payload/HearingPayloadCacheKeyTest` +
       `adapter/payload/CachedHearingPayloadAdapterTest` — dated key first then undated twin,
       cache-then-query order, RedisException-scoped absorb (a cache outage still asks the query
       side), query asked exactly once on cache hit = never.
+      *(done — 22 cases red against four seams: `HearingPayloadCacheKey`, the `HearingPayloadCache`
+      and `HearingPayloadQuery` ports, and `CachedHearingPayloadAdapter`. Two decisions the seams
+      settle. **(1)** `HearingPayloadQuery.fetch` answers `Optional`, and empty means the query side
+      answered and held none — a 404 or the empty-bodied 200 the results context serves for a
+      hearing it does not have. A read that could not be made raises instead, so the one participant
+      that knows *both* sources missed is the one that classifies it, which is what makes C32's
+      named test `a_double_miss_is_transient_never_silent` a test of this adapter rather than of the
+      client underneath it. **(2)** The RedisException-scoped absorb is the cache adapter's, not
+      this one's: from here a cache that is down and a key that is absent are the same empty read,
+      and the suite pins both halves — the query side is still asked, and a failure that is not the
+      cache's own is not absorbed even when it happens to be a `RedisException` that escaped its own
+      handler.)*
 - [ ] T058 [P] [US1] `adapter/payload/ResultsQueryHearingPayloadClientTest` (WireMock) — K1/K4/K6
       twins repaired (real base URI, media type, CJSCPPUID); K2 repointed to the retry policy;
       K3 repaired (absent cjscppuid outcome asserted); **C32**: empty body / 404 ⇒
