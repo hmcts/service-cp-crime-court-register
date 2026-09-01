@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.pipeline;
 
+import java.util.List;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -17,12 +18,20 @@ import tools.jackson.databind.JsonNode;
  * {@code SetCourtRegister} fixture has exactly that. Reading "empty" as "absent" would take the
  * other branch and give the register no date at all.
  *
- * <p><strong>Two places the legacy stamps the wall clock, and this does not.</strong>
+ * <p><strong>Two places the legacy stamps the wall clock, and this does not — defect fix C35.</strong>
  * {@code moment.tz(undefined, zone)} is the current time, so the legacy answers a hearing with no
- * ordered dates — and a sitting day recorded without a {@code sittingDay} — with whenever the
- * function happened to run. Neither is reproduced: the transformation is pure and has no clock
- * (constitution Principle V), so a hearing with nothing to date by has no hearing date, and a
- * sitting day that names no day matches nothing.
+ * ordered dates — and a sitting record carrying no {@code sittingDay}, whose absent day formats as
+ * today and therefore matches an ordered date of today — with whenever the function happened to run.
+ * Neither is reproduced: the transformation is pure and has no clock (constitution Principle V), so
+ * a hearing with nothing to date by has no hearing date, and a sitting record that names no day
+ * matches nothing.
+ *
+ * <p><strong>Where the legacy throws, this refuses.</strong> {@code hearingObj.hearingDays.find} is
+ * not a function for a truthy value that is not an array, and {@code hearingDay.sittingDay} on a
+ * {@code null} member is a {@code TypeError}; both kill the hearing, and the swallowed exception is
+ * reported as success. Both are classified transformation failures here rather than iterated safely,
+ * because a safe iteration would emit a register the legacy loses — a difference in the one
+ * direction a port must not drift in.
  */
 // PMD.OnlyOneReturn: the two absences below are distinct legacy branches — no sitting days at all,
 // and nothing to match them against — and collapsing them into one exit would lose which of the
@@ -56,30 +65,50 @@ final class HearingDates {
         if (!Json.truthy(hearing, HEARING_DAYS)) {
             return null;
         }
+        // `hearingObj.hearingDays.find(...)`: a truthy value that is not an array has no `find`, so
+        // the legacy throws and the hearing produces no register at all. Answering "no sitting days"
+        // here would date the register by the ordered date and send one the legacy loses.
+        final String sittingDay =
+                sittingDayFalling(Json.array(hearing, HEARING_DAYS), orderedDate, dates);
+        if (sittingDay != null) {
+            return dates.dateTime(sittingDay);
+        }
         if (orderedDate == null) {
             // Nothing was ordered, so there is no day for the sittings to be matched against and
-            // nothing to fall back to. The legacy formats `undefined` here, which is the clock.
+            // nothing to fall back to. The legacy formats `undefined` here, which is the wall clock
+            // — the first leg of defect fix C35.
             return null;
         }
-        final String sittingDay =
-                sittingDayFalling(Json.at(hearing, HEARING_DAYS), orderedDate, dates);
-        return dates.dateTime(sittingDay == null ? orderedDate : sittingDay);
+        return dates.dateTime(orderedDate);
     }
 
     /**
      * The first sitting day whose London day is the ordered date, as {@code find} answers it.
      *
+     * <p>The ordered date is tested first, and the sitting day is only read against it when there is
+     * one: with nothing ordered, {@code getLocalDate(sittingDay) === undefined} is false for every
+     * record the legacy looks at, so no record can match and none is compared. That includes the
+     * record carrying no {@code sittingDay} at all, whose absent day the legacy formats as
+     * <em>today</em> and can therefore match an ordered date of today — the second leg of defect fix
+     * C35, and the second place the legacy's hearing date is a clock reading.
+     *
      * @param hearingDays the hearing's sitting days
-     * @param orderedDate the ordered date to match against
+     * @param orderedDate the ordered date to match against; may be {@code null}
      * @param dates       the register's date handling
      * @return that sitting day, or {@code null} where none falls on the ordered date
      */
     private static String sittingDayFalling(
-            final JsonNode hearingDays, final String orderedDate, final Dates dates) {
+            final List<JsonNode> hearingDays, final String orderedDate, final Dates dates) {
 
         for (final JsonNode hearingDay : hearingDays) {
-            final String sittingDay = Json.text(hearingDay, SITTING_DAY);
-            if (sittingDay != null && orderedDate.equals(dates.localDate(sittingDay))) {
+            // `hearingDay.sittingDay` — reading a property off a null member is a TypeError in the
+            // legacy and the hearing is lost with it. Reading the member as "no day set" would emit
+            // a register the legacy never sent. An object that simply does not carry the field is a
+            // different thing and is read, exactly as JavaScript reads it.
+            final String sittingDay =
+                    Json.text(Json.dereferencedElement(hearingDay, HEARING_DAYS), SITTING_DAY);
+            if (orderedDate != null && sittingDay != null
+                    && orderedDate.equals(dates.localDate(sittingDay))) {
                 return sittingDay;
             }
         }

@@ -197,3 +197,22 @@ closedness; the queue already identifies the flow).
 **Rationale**: design risk register — one schema per queue with its own `$id`. **Alternatives**:
 shared `distribution-command` schema with a `flow` member — a breaking change to a sibling's
 frozen contract for zero information gain.
+
+## 16. C35 — the hearing date's two wall-clock legs
+
+**Decision**: `getHearingDate`'s two `moment.tz(undefined, zone)` legs are replaced by deterministic
+answers and registered as **C35** in `doc/DEFECT-FIXES.md`: a hearing with no ordered date carries no
+`hearingDate`, and a sitting record naming no `sittingDay` matches nothing so the ordered date is
+carried. In the opposite direction, the two shapes the legacy's own dereference throws on — a truthy
+`hearingDays` that is not an array, and a `null` sitting record — are classified transformation
+failures rather than iterated safely.
+
+**Rationale**: the transformation is pure and has no clock (Principle V), so neither wall-clock leg
+is portable at all; leaving them undocumented would have been an uncatalogued deviation, which
+Principle I forbids as firmly as it forbids reproducing a catalogued defect. The reach half is the
+mirror image: answering "no sitting days" where the legacy throws would emit a register the legacy
+loses, and a port must never differ in that direction without a C-number.
+**Alternatives**: inject a clock into the transformation to reproduce the legacy answer — rejected,
+it makes the whole chain untestable against fixtures and produces a register that differs on every
+replay; classify both legs as transformation failures — rejected, the legacy produces a register for
+both and refusing them would lose registers it sends.
