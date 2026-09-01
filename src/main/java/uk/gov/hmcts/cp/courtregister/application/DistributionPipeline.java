@@ -91,10 +91,15 @@ import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
  * parked. The transport adapter reads that fact from the delivery and carries it in, because the
  * processed log cannot know it — the budget belongs to the message, not to the request.
  *
- * <p>Payload unavailability is transient by construction — a cache miss <em>and</em> a fallback miss
- * is a reason to come back rather than a silent stop, which is defect fix C32 — and a deadline is not
- * a fault at all, so neither is ever parked for being unretryable. A failure nothing anticipated is
- * treated as transient, because "unknown" is not the same as "hopeless".
+ * <p><strong>Every port answers the first question for itself, and two of them answer it both
+ * ways.</strong> A cache miss <em>and</em> a fallback miss is a reason to come back rather than a
+ * silent stop (defect fix C32), and a reference-data context that could not be reached may answer
+ * next time — both transient. A read the query side or reference data <em>understood and
+ * declined</em> is not: the same request is refused identically on every delivery, so it is parked
+ * here and now under the code the adapter named rather than carried to exhaustion and parked under a
+ * reason that describes the retry budget instead of the fault. A deadline is not a fault at all and
+ * is never parked for being unretryable, and a failure nothing anticipated is treated as transient,
+ * because "unknown" is not the same as "hopeless".
  */
 public class DistributionPipeline {
 

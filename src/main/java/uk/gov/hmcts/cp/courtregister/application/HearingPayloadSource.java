@@ -22,7 +22,9 @@ public interface HearingPayloadSource {
      *
      * @param command the validated request
      * @return the payload, as a canonical tree
-     * @throws PayloadUnavailableException if the payload cannot be obtained — always transient
+     * @throws PayloadUnavailableException if the payload cannot be obtained; transient where another
+     *     delivery could answer, and non-transient where the query side understood the read and
+     *     declined it
      */
     JsonNode fetch(DistributionCommand command) throws PayloadUnavailableException;
 }

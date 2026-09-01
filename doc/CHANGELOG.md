@@ -16,6 +16,26 @@ released, so everything sits under Unreleased.
 
 ### Changed
 
+- 2026-09-01 — **A read the other side refused is parked, not redelivered to exhaustion.** The
+  payload query and the reference-data clients already knew which statuses were worth asking again —
+  the C3 taxonomy — but threw the same always-TRANSIENT failure whichever way the answer went. A
+  4xx the other side understood and declined is refused identically on every redelivery, so the
+  delivery budget was spent re-reading it and the request parked at the end under
+  `DELIVERY_LIMIT_EXHAUSTED`, which tells support the service ran out of tries rather than that its
+  credential or its route is wrong. Both exceptions now carry the classification the throw site
+  chose, as the submission failure already did, and the pipeline parks a refusal immediately.
+
+  **Operator-visible:** two new bounded reason codes, `PAYLOAD_READ_REFUSED` and
+  `REFERENCE_DATA_REFUSED`, appear on `processed_request.failure_reason` and on dead-letter
+  descriptions; a request in either state is dead-lettered on its first delivery rather than its
+  fifth. A rise in them is a credential or a route to look at, where a rise in
+  `PAYLOAD_UNAVAILABLE` is a producer or a cache, and a rise in `REFERENCE_DATA_UNAVAILABLE` is
+  reference data's own health. **The payload query's 404 is unchanged** — the resource is
+  per-hearing, so its absence stays the empty answer that becomes a transient `PAYLOAD_UNAVAILABLE`
+  only once the cache has missed too (C32). Reference data's 404 is a refusal, because that resource
+  always exists and a 404 on it is a misconfigured path. `doc/DEFECT-FIXES.md` rows C3 and C32 are
+  amended to record both.
+
 - 2026-09-01 — **A claimed submission row is always settled, and a settlement the log refuses hands
   the delivery back.** Two holes on the same path. A failure nothing anticipated — anything other
   than the classified `SubmissionFailedException` — escaped the submission leg after the

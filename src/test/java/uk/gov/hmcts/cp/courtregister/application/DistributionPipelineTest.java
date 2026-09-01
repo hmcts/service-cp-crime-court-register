@@ -774,6 +774,44 @@ class DistributionPipelineTest {
                     any(CompletionReason.class));
         }
 
+        /**
+         * The other half of the payload classification, and the one the adapter boundary used to
+         * lose. A query side that <em>understood</em> the read and declined it — a wrong credential,
+         * a route that does not authorise this caller — answers identically on every delivery. Handed
+         * back as transient it would spend the whole delivery budget re-reading it and park at the
+         * end under {@code DELIVERY_LIMIT_EXHAUSTED}, which tells support the service ran out of
+         * tries rather than that the read is refused. It is parked here and now, under the code the
+         * adapter named.
+         */
+        @Test
+        @DisplayName("parks a payload read the query side refused, without spending the deliveries")
+        void parks_a_payload_read_the_query_side_refused() {
+            when(payloadSource.fetch(any(DistributionCommand.class)))
+                    .thenThrow(new PayloadUnavailableException(
+                            FailureClassification.NON_TRANSIENT, ReasonCode.PAYLOAD_READ_REFUSED));
+
+            final GuardDecision decision = run();
+
+            assertThat(decision).isEqualTo(new GuardDecision.DeadLetter(
+                    DeadLetterReason.NON_TRANSIENT, ReasonCode.PAYLOAD_READ_REFUSED));
+            verify(guard, never()).recordTransientFailure(any(RunClaim.class), any(ReasonCode.class));
+        }
+
+        @Test
+        @DisplayName("parks a now-subscriptions read reference data refused, without spending them")
+        void parks_a_subscriptions_read_reference_data_refused() {
+            when(subscriptionsSource.subscriptionsOn(any(LocalDate.class), any(CallerIdentity.class)))
+                    .thenThrow(new ReferenceDataUnavailableException(
+                            FailureClassification.NON_TRANSIENT,
+                            ReasonCode.REFERENCE_DATA_REFUSED));
+
+            final GuardDecision decision = run();
+
+            assertThat(decision).isEqualTo(new GuardDecision.DeadLetter(
+                    DeadLetterReason.NON_TRANSIENT, ReasonCode.REFERENCE_DATA_REFUSED));
+            verify(guard, never()).recordTransientFailure(any(RunClaim.class), any(ReasonCode.class));
+        }
+
         @Test
         @DisplayName("does not transform a hearing it could not read")
         void does_not_transform_a_hearing_it_could_not_read() {

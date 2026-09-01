@@ -15,6 +15,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 
@@ -29,6 +30,13 @@ import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
  * header. The internal variant returns the untransformed hearing, which is what the cache holds, and
  * it takes <strong>no</strong> {@code hearingDate} parameter: the {@code ?hearingDate=} form K8
  * asserts belongs to the {@code EXT_} endpoint, which this flow does not use.
+ *
+ * <p><strong>What the taxonomy decides, it decides twice.</strong> A status this client will not ask
+ * again is one the query side understood and declined, so the failure it raises is
+ * {@code NON_TRANSIENT} under {@link uk.gov.hmcts.cp.courtregister.domain.ReasonCode#PAYLOAD_READ_REFUSED}
+ * and the pipeline parks it where support can see it, rather than spending four more deliveries on
+ * an answer that will not change and parking it under an exhausted retry budget instead. Everything
+ * the taxonomy <em>does</em> retry stays transient.
  *
  * <p><strong>The retry taxonomy is the corrected one — defect fix C3.</strong>
  * {@code CommonUtility/AxiosRetryWrapper.js:19,34} abandons the moment a response arrives carrying a
@@ -159,12 +167,27 @@ public class ResultsQueryHearingPayloadClient implements HearingPayloadQuery {
      * Everything else is a failure, and the fixed C3 taxonomy decides only whether asking again can
      * change it: connect and read failures, 5xx, 429 and 408 can, and no other 4xx ever will.
      *
+     * <p><strong>And the taxonomy decides the classification, not only the attempt count.</strong> A
+     * status this client will not ask again is one the query side understood and declined, and it
+     * will be declined identically on every redelivery: reported transient it would be handed back,
+     * refused four more times, and parked at the end under {@code DELIVERY_LIMIT_EXHAUSTED} — a
+     * reason that says the service ran out of tries rather than that its credential is wrong. So a
+     * refusal comes out {@link FailureClassification#NON_TRANSIENT} under
+     * {@link ReasonCode#PAYLOAD_READ_REFUSED}, and a retryable status that ran out of attempts stays
+     * transient under {@link ReasonCode#PAYLOAD_UNAVAILABLE}.
+     *
      * @return {@code true} when the query side answered and held nothing
      */
     private boolean heldNothing(final DistributionCommand command, final int status,
             final boolean lastAttempt) {
         final boolean notHeld = status == HttpStatus.NOT_FOUND.value();
-        if (!notHeld && (lastAttempt || !retryable(status))) {
+        if (!notHeld && !retryable(status)) {
+            LOG.warn("The results query API refused the payload read, and no redelivery can change "
+                    + "that. requestId={} hearingId={} status={}",
+                    command.requestId(), command.hearingId(), status);
+            throw refused();
+        }
+        if (!notHeld && lastAttempt) {
             LOG.warn("The results query API refused the payload read. requestId={} hearingId={} "
                     + "status={}", command.requestId(), command.hearingId(), status);
             throw unavailable();
@@ -254,5 +277,17 @@ public class ResultsQueryHearingPayloadClient implements HearingPayloadQuery {
      */
     private static PayloadUnavailableException unavailable() {
         return new PayloadUnavailableException(ReasonCode.PAYLOAD_UNAVAILABLE);
+    }
+
+    /**
+     * A read the query side understood and declined, which no redelivery can change.
+     *
+     * <p>Its own bounded code as well as its own classification, because the two reach different
+     * people: a rise in {@code PAYLOAD_UNAVAILABLE} is a producer or a cache to look at, and a rise
+     * in this one is a credential or a route.
+     */
+    private static PayloadUnavailableException refused() {
+        return new PayloadUnavailableException(
+                FailureClassification.NON_TRANSIENT, ReasonCode.PAYLOAD_READ_REFUSED);
     }
 }

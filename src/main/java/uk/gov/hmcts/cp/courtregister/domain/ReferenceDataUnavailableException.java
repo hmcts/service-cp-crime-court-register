@@ -3,9 +3,13 @@ package uk.gov.hmcts.cp.courtregister.domain;
 /**
  * Thrown when the now-subscriptions a register is addressed with cannot be obtained.
  *
- * <p>Transient by construction, for the same reason a payload failure is: reference data that
- * cannot be read now is a network, a gateway or a context-side problem, and every one of those is
- * worth a redelivery.
+ * <p><strong>Transient unless reference data declined the read.</strong> Reference data that cannot
+ * be read now is a network, a gateway or a context-side problem, and every one of those is worth a
+ * redelivery. A read reference data <em>understood and refused</em> is not: a 4xx other than 408 and
+ * 429 — a 404 on this resource included, because the now-subscriptions resource always exists and a
+ * 404 on it is a misconfigured path — answers the same way on every delivery, so carrying it to
+ * exhaustion buys nothing and parks it under a reason that describes the retry budget rather than
+ * the fault.
  *
  * <p><strong>It exists because the legacy cannot tell "nobody subscribes" from "nobody
  * answered".</strong> {@code CourtRegisterSubscriptions/index.js:20-24} tests
@@ -22,23 +26,41 @@ public class ReferenceDataUnavailableException extends RuntimeException implemen
 
     private static final long serialVersionUID = 1L;
 
+    private final FailureClassification failureClassification;
+    private final ReasonCode reasonCode;
+
     /**
-     * Creates the failure.
+     * Creates a transient failure.
      *
      * @param detail a bounded description of what could not be read; never response content
      */
     public ReferenceDataUnavailableException(final String detail) {
         super(detail);
+        this.failureClassification = FailureClassification.TRANSIENT;
+        this.reasonCode = ReasonCode.REFERENCE_DATA_UNAVAILABLE;
     }
 
     /**
-     * Always {@link FailureClassification#TRANSIENT} — see the class comment.
+     * Creates the failure under the classification the read earned.
      *
-     * @return the fixed transient classification
+     * @param classification whether another delivery could change the answer
+     * @param reason         the bounded reason recorded for this failure
+     */
+    public ReferenceDataUnavailableException(
+            final FailureClassification classification, final ReasonCode reason) {
+        super(reason.code());
+        this.failureClassification = classification;
+        this.reasonCode = reason;
+    }
+
+    /**
+     * Whether another delivery could change the answer.
+     *
+     * @return the classification the throw site chose
      */
     @Override
     public FailureClassification classification() {
-        return FailureClassification.TRANSIENT;
+        return failureClassification;
     }
 
     /**
@@ -48,6 +70,6 @@ public class ReferenceDataUnavailableException extends RuntimeException implemen
      */
     @Override
     public ReasonCode reason() {
-        return ReasonCode.REFERENCE_DATA_UNAVAILABLE;
+        return reasonCode;
     }
 }

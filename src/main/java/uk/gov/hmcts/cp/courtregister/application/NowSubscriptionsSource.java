@@ -30,8 +30,9 @@ public interface NowSubscriptionsSource {
      * @param caller      the identity the read is made as
      * @return reference data's answer, as a canonical tree; an answer carrying no subscriptions is
      *     still an answer
-     * @throws ReferenceDataUnavailableException if reference data could not be read — always
-     *     transient
+     * @throws ReferenceDataUnavailableException if reference data could not be read; transient where
+     *     another delivery could answer, and non-transient where reference data understood the read
+     *     and declined it
      */
     JsonNode subscriptionsOn(LocalDate registerDay, CallerIdentity caller)
             throws ReferenceDataUnavailableException;

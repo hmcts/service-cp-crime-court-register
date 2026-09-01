@@ -15,6 +15,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.application.NowSubscriptionsSource;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 
@@ -39,7 +40,11 @@ import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
  *
  * <p><strong>The retry taxonomy is the corrected one — defect fix C3</strong>, and it is the same
  * taxonomy the progression submission client applies: connect and read failures, 5xx, 429 and 408
- * are retried; any other 4xx is a refusal no redelivery can change.
+ * are retried; any other 4xx is a refusal no redelivery can change — and it comes out
+ * {@code NON_TRANSIENT} under
+ * {@link uk.gov.hmcts.cp.courtregister.domain.ReasonCode#REFERENCE_DATA_REFUSED}, so the pipeline
+ * parks it rather than spending the whole delivery budget on an answer that will not change and
+ * parking it under an exhausted retry budget instead.
  *
  * <p><strong>An empty answer and no answer are different things.</strong> The legacy catches
  * everything and returns {@code null} ({@code :50-53}), which
@@ -165,9 +170,15 @@ public class ReferenceDataNowSubscriptionsClient implements NowSubscriptionsSour
      * (defect fix C3).
      */
     private void refused(final LocalDate registerDay, final int status, final boolean lastAttempt) {
-        if (lastAttempt || !retryable(status)) {
-            // The status is reference data's own answer and is bounded by HTTP; the body is text
-            // somebody else wrote and this line reaches the log index.
+        // The status is reference data's own answer and is bounded by HTTP; the body is text
+        // somebody else wrote and this line reaches the log index.
+        if (!retryable(status)) {
+            LOG.warn("Reference data refused the now-subscriptions read and no redelivery can "
+                    + "change that, so the register cannot be addressed. queryDate={} status={}",
+                    registerDay, status);
+            throw declined();
+        }
+        if (lastAttempt) {
             LOG.warn("Reference data refused the now-subscriptions read, so the register cannot be "
                     + "addressed. queryDate={} status={}", registerDay, status);
             throw unavailable();
@@ -245,5 +256,18 @@ public class ReferenceDataNowSubscriptionsClient implements NowSubscriptionsSour
      */
     private static ReferenceDataUnavailableException unavailable() {
         return new ReferenceDataUnavailableException(ReasonCode.REFERENCE_DATA_UNAVAILABLE.code());
+    }
+
+    /**
+     * A read reference data understood and declined, which no redelivery can change.
+     *
+     * <p>Its own bounded code as well as its own classification, because the two reach different
+     * people: a rise in {@code REFERENCE_DATA_UNAVAILABLE} is reference data's health, and a rise in
+     * this one is this service's route or credential. The list includes {@code 404}: the
+     * now-subscriptions resource always exists, so a 404 on it is a misconfigured path.
+     */
+    private static ReferenceDataUnavailableException declined() {
+        return new ReferenceDataUnavailableException(
+                FailureClassification.NON_TRANSIENT, ReasonCode.REFERENCE_DATA_REFUSED);
     }
 }

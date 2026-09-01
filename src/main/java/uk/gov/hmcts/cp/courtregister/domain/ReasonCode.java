@@ -71,6 +71,24 @@ public enum ReasonCode {
     PAYLOAD_UNAVAILABLE("PAYLOAD_UNAVAILABLE"),
 
     /**
+     * The results query API understood the payload read and declined it.
+     *
+     * <p>A 4xx other than 404, 408 and 429 — a malformed request, an unauthenticated one, a
+     * forbidden one. Non-transient, and a code of its own rather than
+     * {@link #PAYLOAD_UNAVAILABLE}: the same request will be declined identically on every
+     * redelivery, so spending the delivery budget on it only delays the dead-letter by four
+     * back-offs and then parks it under {@code DELIVERY_LIMIT_EXHAUSTED}, which tells support the
+     * service ran out of tries rather than that the read is refused. A rise in this code is a
+     * credential or a route to look at, where a rise in {@code PAYLOAD_UNAVAILABLE} is a producer or
+     * a cache.
+     *
+     * <p>A {@code 404} is deliberately <em>not</em> this: the resource is per-hearing, so its
+     * absence is the query side saying it does not hold this hearing — an empty answer, which
+     * becomes a transient {@code PAYLOAD_UNAVAILABLE} only once the cache has missed too (C32).
+     */
+    PAYLOAD_READ_REFUSED("PAYLOAD_READ_REFUSED"),
+
+    /**
      * The now-subscriptions reference data a register is addressed with could not be obtained.
      *
      * <p>Transient, and a code of its own rather than a payload failure: the hearing was read
@@ -79,6 +97,17 @@ public enum ReasonCode {
      * {@code no-subscriptions} for a court centre that has subscribers.
      */
     REFERENCE_DATA_UNAVAILABLE("REFERENCE_DATA_UNAVAILABLE"),
+
+    /**
+     * Reference data understood the now-subscriptions read and declined it.
+     *
+     * <p>The now-subscriptions counterpart of {@link #PAYLOAD_READ_REFUSED}, and it covers one more
+     * status: the resource always exists, so a {@code 404} on it is a misconfigured path rather than
+     * an absence, and no redelivery mends a path. Non-transient for the same reason — the delivery
+     * budget buys nothing against an answer that will not change, and a request parked under this
+     * code sends support to the route and the credential rather than to reference data's health.
+     */
+    REFERENCE_DATA_REFUSED("REFERENCE_DATA_REFUSED"),
 
     /**
      * The hearing payload could not be transformed into a court register at all.

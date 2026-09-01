@@ -10,9 +10,11 @@ package uk.gov.hmcts.cp.courtregister.domain;
  * exception, so the core branches on a classification the throw site chose rather than on the
  * exception's Java type.
  *
- * <p>Every implementation fixes its classification in its own constructor except
- * {@link SubmissionFailedException}, which is the one place where the same call can fail both ways
- * and so takes it from the caller.
+ * <p>{@link TransformationFailedException} fixes its classification — every way a transformation can
+ * fail reads the same on every delivery. The other three take it from the throw site, because the
+ * same call can fail both ways: a query side, a reference-data context or a progression endpoint
+ * that could not be reached may answer next time, and one that understood the request and declined
+ * it will not.
  *
  * <p><strong>The reason is a bounded code</strong>, never free text and never a fragment of a
  * payload: it travels into {@code processed_request.failure_reason}, a dead-letter description and

@@ -308,6 +308,14 @@ class ResultsQueryHearingPayloadClientTest {
          * The other half of the same taxonomy. A malformed request, an unauthenticated one or a
          * forbidden one is not made truer by repetition, and retrying it spends the run's deadline
          * on an answer that will not change.
+         *
+         * <p><strong>And the answer travels with the failure.</strong> Attempting it once is only
+         * half the fix: a refusal reported as transient is handed back to the broker, redelivered
+         * four more times to be refused four more times, and parked at the end under
+         * {@code DELIVERY_LIMIT_EXHAUSTED} — a reason that tells support the service ran out of
+         * tries rather than that its credential is wrong. The classification the client chose is
+         * what the pipeline settles on, so it is asserted here rather than inferred from the
+         * attempt count.
          */
         @ParameterizedTest(name = "{0} is not retried")
         @ValueSource(ints = {400, 401, 403, 422})
@@ -316,9 +324,52 @@ class ResultsQueryHearingPayloadClientTest {
             answering(status, "");
 
             assertThatThrownBy(() -> client.fetch(command()))
-                    .isInstanceOf(PayloadUnavailableException.class);
+                    .asInstanceOf(InstanceOfAssertFactories.type(PayloadUnavailableException.class))
+                    .satisfies(failure -> {
+                        assertThat(failure.classification())
+                                .as("a redelivery cannot make a refused read succeed")
+                                .isEqualTo(FailureClassification.NON_TRANSIENT);
+                        assertThat(failure.reason())
+                                .as("support is sent to the credential and the route, not to the "
+                                        + "producer")
+                                .isEqualTo(ReasonCode.PAYLOAD_READ_REFUSED);
+                    });
 
             server.verify(1, getRequestedFor(urlPathEqualTo(PATH)));
+        }
+
+        /**
+         * The one 4xx that is not a refusal, held apart from them explicitly. The resource is
+         * per-hearing, so a {@code 404} is the query side saying it does not hold this hearing —
+         * an empty answer, and only the composite adapter, which alone knows the cache missed too,
+         * turns the pair into the transient failure of C32.
+         */
+        @Test
+        @DisplayName("a 404 is not a refusal: it is the empty answer C32 classifies")
+        void a_not_found_is_not_a_refusal() {
+            answering(404, "");
+
+            assertThat(client.fetch(command()))
+                    .as("nothing is raised at all, so no classification is chosen here")
+                    .isEmpty();
+        }
+
+        /**
+         * A retryable status that ran out of attempts stays transient. It is the pairing that makes
+         * the classification mean something: the same client, the same exception type, two answers.
+         */
+        @Test
+        @DisplayName("an exhausted retryable read stays transient")
+        void an_exhausted_retryable_read_stays_transient() {
+            answering(503, "");
+
+            assertThatThrownBy(() -> client.fetch(command()))
+                    .asInstanceOf(InstanceOfAssertFactories.type(PayloadUnavailableException.class))
+                    .satisfies(failure -> {
+                        assertThat(failure.classification())
+                                .isEqualTo(FailureClassification.TRANSIENT);
+                        assertThat(failure.reason()).isEqualTo(ReasonCode.PAYLOAD_UNAVAILABLE);
+                    });
         }
 
         @Test

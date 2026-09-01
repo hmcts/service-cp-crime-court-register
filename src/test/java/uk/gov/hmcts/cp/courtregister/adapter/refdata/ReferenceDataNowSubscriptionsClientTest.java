@@ -326,6 +326,15 @@ class ReferenceDataNowSubscriptionsClientTest {
             server.verify(MAX_ATTEMPTS, getRequestedFor(urlPathEqualTo(PATH)));
         }
 
+        /**
+         * <strong>The answer travels with the failure.</strong> Attempting it once is only half
+         * the fix: a refusal reported as transient is handed back to the broker, redelivered four
+         * more times to be refused four more times, and parked at the end under
+         * {@code DELIVERY_LIMIT_EXHAUSTED} — a reason that sends support to reference data's health
+         * rather than to the route and the credential that are actually wrong. The {@code 404}
+         * belongs in this list and not in the payload read's: the now-subscriptions resource always
+         * exists, so a 404 on it is a misconfigured path and no redelivery mends a path.
+         */
         @ParameterizedTest(name = "{0} is not retried")
         @ValueSource(ints = {400, 401, 403, 404, 422})
         @DisplayName("a refusal no redelivery can change is attempted once")
@@ -333,7 +342,15 @@ class ReferenceDataNowSubscriptionsClientTest {
             answering(status, "");
 
             assertThatThrownBy(() -> client.subscriptionsOn(shareDay(), caller()))
-                    .isInstanceOf(ReferenceDataUnavailableException.class);
+                    .asInstanceOf(InstanceOfAssertFactories.type(
+                            ReferenceDataUnavailableException.class))
+                    .satisfies(failure -> {
+                        assertThat(failure.classification())
+                                .as("a redelivery cannot make a refused read succeed")
+                                .isEqualTo(FailureClassification.NON_TRANSIENT);
+                        assertThat(failure.reason())
+                                .isEqualTo(ReasonCode.REFERENCE_DATA_REFUSED);
+                    });
 
             server.verify(1, getRequestedFor(urlPathEqualTo(PATH)));
         }
