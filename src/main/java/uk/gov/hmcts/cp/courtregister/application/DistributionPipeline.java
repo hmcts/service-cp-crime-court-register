@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.application;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
@@ -19,6 +20,7 @@ import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
+import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
 import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
 
@@ -364,15 +366,63 @@ public class DistributionPipeline {
             final RunClaim claim,
             final RunBudget budget) {
 
-        // Seam: the run-scoped accumulator lands with the anomaly path, and counts nothing yet.
-        final java.util.function.Consumer<uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly>
-                anomalies = anomaly -> { };
-        return switch (transformer.transform(command, payload, subscriptions, anomalies)) {
-            case TransformationResult.NoRegister nothing -> spent(budget)
-                    ? overran(claim, budget)
-                    : completed(claim, nothing.reason().completion());
-            case TransformationResult.Register register -> submit(command, register, claim, budget);
+        final RunAnomalies anomalies = new RunAnomalies();
+        final TransformationResult result =
+                transformer.transform(command, payload, subscriptions, anomalies);
+        counted(anomalies);
+
+        return switch (result) {
+            case TransformationResult.NoRegister nothing -> {
+                reported(command, anomalies);
+                yield spent(budget)
+                        ? overran(claim, budget)
+                        : completed(claim, nothing.reason().completion());
+            }
+            case TransformationResult.Register register ->
+                submit(command, register, anomalies.counts(), claim, budget);
         };
+    }
+
+    /**
+     * Counts every guarded skip the transformation met, once per occurrence.
+     *
+     * <p>Whichever way the run ended: a register that was sent missing a part and a register that
+     * was never built are both worth knowing about, and the metric is the only surface that carries
+     * both. The counter series is what an alert on "this court centre's subscriptions have gone
+     * wrong" would fire on, and a defect fix whose visibility never left the transformation is the
+     * defect again (C19, C20, C27).
+     *
+     * @param anomalies what the run skipped
+     */
+    private void counted(final RunAnomalies anomalies) {
+        anomalies.counts().forEach((anomaly, occurrences) -> {
+            for (int counted = 0; counted < occurrences; counted++) {
+                metrics.transformationAnomaly(anomaly);
+            }
+        });
+    }
+
+    /**
+     * Says out loud what a run that produced no register skipped on the way to that answer.
+     *
+     * <p>Only for that outcome, and it is the outcome that needs it. A register that is sent carries
+     * its counts into {@code processed_output.anomaly_summary}, written with the digest before the
+     * POST; a run that produced no register has no output row to write anything against — the
+     * cardinality is 0..1 and this is the 0 — so the codes would otherwise exist for the length of
+     * the run and then stop existing. One line, the bounded codes and their counts, the permitted
+     * correlation identifiers, and nothing from inside the payload (constitution Principle VII).
+     *
+     * @param command   the validated request, for correlation
+     * @param anomalies what the run skipped
+     */
+    private static void reported(final DistributionCommand command, final RunAnomalies anomalies) {
+        if (!anomalies.isEmpty()) {
+            LOG.warn("The transformation skipped parts of a register it then did not produce, so "
+                            + "there is no output row to record them on. source={} requestId={} "
+                            + "hearingId={} anomalies={}",
+                    command.source(), command.requestId(), command.hearingId(),
+                    anomalies.summary());
+        }
     }
 
     /**
@@ -444,6 +494,7 @@ public class DistributionPipeline {
     private GuardDecision submit(
             final DistributionCommand command,
             final TransformationResult.Register register,
+            final Map<TransformationAnomaly, Integer> anomalies,
             final RunClaim claim,
             final RunBudget budget) {
 
@@ -451,9 +502,8 @@ public class DistributionPipeline {
         if (spent(budget)) {
             outcome = overran(claim, budget);
         } else {
-            final SubmissionReceipt receipt =
-                    submissionClient.submit(register.document(), CallerIdentity.of(command),
-                            java.util.Map.of());
+            final SubmissionReceipt receipt = submissionClient.submit(
+                    register.document(), CallerIdentity.of(command), anomalies);
             LOG.info("Register submitted. source={} requestId={} hearingId={} status={}",
                     command.source(), command.requestId(), command.hearingId(),
                     receipt.responseCode());
