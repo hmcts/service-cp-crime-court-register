@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -137,8 +139,24 @@ class DifferentialAuditTest {
     /** The recorded reason a legacy run gave for finding no youth. */
     private static final String NO_YOUTH_DEFENDANT = "no youth defendant";
 
-    /** What each row was found to explain, tallied across the whole corpus for the T075 report. */
-    private static final Map<String, Integer> EXPLAINED = new LinkedHashMap<>();
+    /**
+     * What each row was found to explain — components the two runs actually rendered differently.
+     *
+     * <p>A difference and not an evaluation. A claim is only ever consulted about something that
+     * already differs, but a derivation is asked about every component it covers, and for half of
+     * them it is the identity: C10 relabels nothing in winter, and counting those as differences
+     * would report the fix as reaching a hundred and thirty-one places the corpus never made it
+     * change anything.
+     */
+    private static final Map<String, Integer> DIFFERED = new LinkedHashMap<>();
+
+    /**
+     * How many components each derivation was asked about, whether or not the two runs differed.
+     *
+     * <p>The other half of the same reading, and the one that answers "was this fix reached at
+     * all". Only derivations appear here: a claim has no evaluated population to speak of.
+     */
+    private static final Map<String, Integer> EVALUATED = new LinkedHashMap<>();
 
     /** Cases the corpus itself disqualifies as oracles, listed in the summary. */
     private static final List<String> NOT_AN_ORACLE = new ArrayList<>();
@@ -251,12 +269,20 @@ class DifferentialAuditTest {
     @AfterAll
     static void report() {
         final StringBuilder summary = new StringBuilder(512)
-                .append("\nDifferential audit — differences claimed, by defect-fix row:");
-        EXPLAINED.entrySet().stream()
-                .sorted(Map.Entry.comparingByKey())
-                .forEach(row -> summary.append("\n  ").append(row.getValue())
-                        .append(" × ").append(row.getKey())
-                        .append("\n      e.g. ").append(EXAMPLES.get(row.getKey())));
+                .append("\nDifferential audit — components evaluated and actual differences, by "
+                        + "defect-fix row:");
+        final Set<String> rows = new TreeSet<>(EVALUATED.keySet());
+        rows.addAll(DIFFERED.keySet());
+        for (final String row : rows) {
+            summary.append("\n  ").append(row).append(" — ");
+            if (EVALUATED.containsKey(row)) {
+                summary.append(EVALUATED.get(row)).append(" component(s) evaluated, ");
+            }
+            summary.append(DIFFERED.getOrDefault(row, 0))
+                    .append(" actual difference(s)\n      e.g. ")
+                    .append(EXAMPLES.getOrDefault(row,
+                            "nothing in this corpus is rendered differently here"));
+        }
         summary.append("\n  ").append(NOT_AN_ORACLE.size())
                 .append(" × case(s) the corpus marks clock-dependent, held to a refusal instead: ")
                 .append(NOT_AN_ORACLE);
@@ -474,7 +500,7 @@ class DifferentialAuditTest {
                         + "saying which fix produced what", caseId, where(divergence))
                 .hasSize(1);
 
-        EXPLAINED.merge(claims.get(0).reference(), 1, Integer::sum);
+        DIFFERED.merge(claims.get(0).reference(), 1, Integer::sum);
         EXAMPLES.putIfAbsent(claims.get(0).reference(), caseId + " — " + where(divergence));
     }
 
@@ -574,6 +600,13 @@ class DifferentialAuditTest {
      * produces no difference is evidence the corpus misses its shape, and these two produce a great
      * many.
      *
+     * <p><strong>Two counts, because they answer two questions.</strong> A component a derivation
+     * covers has been <em>evaluated</em> whether or not the two runs rendered it differently, and
+     * for C10 the derivation is the identity for half the year — every GMT share leaves the value
+     * exactly where the legacy wrote it. Counting those as differences would report the fix as
+     * changing something at every place it was consulted, which is a claim the corpus does not
+     * support and the one the reconciliation in T075's report turns on.
+     *
      * @param recorded the recorded case
      * @param port     what the port did
      */
@@ -581,30 +614,77 @@ class DifferentialAuditTest {
         if (!recorded.producedDocument() || port.document() == null) {
             return;
         }
-        countReconciled(recorded.caseId(), recorded.expected());
+        countReconciled(recorded.caseId(), recorded.expected(), port.document());
     }
 
     /**
-     * Walks a recorded document, counting every component a derivation covers.
+     * Walks the two documents together, counting every component a derivation covers and, of those,
+     * the ones the two runs actually rendered differently.
      *
      * @param caseId the case being walked, for the report's example
-     * @param node   the node to walk
+     * @param oracle the node the recording carries
+     * @param port   the node the port wrote there, or {@code null} where it wrote nothing
      */
-    private static void countReconciled(final String caseId, final JsonNode node) {
-        if (node.isArray()) {
-            node.forEach(entry -> countReconciled(caseId, entry));
-        } else if (node.isObject()) {
-            node.propertyNames().forEach(name -> {
-                final RegisteredDefectFixes.Fix fix = RegisteredDefectFixes.forProperty(name);
-                if (fix != null) {
-                    EXPLAINED.merge(fix.reference(), 1, Integer::sum);
-                    EXAMPLES.putIfAbsent(fix.reference(),
-                            caseId + " — the derived component " + name);
-                }
-            });
-            node.propertyStream().forEach(property ->
-                    countReconciled(caseId, property.getValue()));
+    private static void countReconciled(
+            final String caseId, final JsonNode oracle, final JsonNode port) {
+
+        if (oracle.isArray()) {
+            for (int index = 0; index < oracle.size(); index++) {
+                countReconciled(caseId, oracle.get(index), element(port, index));
+            }
+        } else if (oracle.isObject()) {
+            for (final String name : propertyNames(oracle)) {
+                final JsonNode oracleValue = oracle.get(name);
+                final JsonNode portValue = port == null ? null : port.get(name);
+                count(caseId, name, oracleValue, portValue);
+                countReconciled(caseId, oracleValue, portValue);
+            }
         }
+    }
+
+    /**
+     * Counts one component against the derivation registered for it, if any.
+     *
+     * @param caseId      the case being walked, for the report's example
+     * @param name        the property name the component reaches the wire under
+     * @param oracleValue what the recording carries there
+     * @param portValue   what the port wrote there, or {@code null} where it wrote nothing
+     */
+    private static void count(final String caseId, final String name,
+            final JsonNode oracleValue, final JsonNode portValue) {
+
+        final RegisteredDefectFixes.Fix fix = RegisteredDefectFixes.forProperty(name);
+        if (fix == null) {
+            return;
+        }
+        EVALUATED.merge(fix.reference(), 1, Integer::sum);
+        if (!oracleValue.equals(portValue)) {
+            DIFFERED.merge(fix.reference(), 1, Integer::sum);
+            EXAMPLES.putIfAbsent(fix.reference(), caseId + " — the derived component " + name);
+        }
+    }
+
+    /**
+     * An array's element, where there is one to compare against.
+     *
+     * @param node  the node; may be {@code null}
+     * @param index the index
+     * @return the element, or {@code null}
+     */
+    private static JsonNode element(final JsonNode node, final int index) {
+        return node == null || !node.isArray() || index >= node.size() ? null : node.get(index);
+    }
+
+    /**
+     * An object's property names, as a list the walk can iterate twice over.
+     *
+     * @param node the object
+     * @return the names, in the order it holds them
+     */
+    private static List<String> propertyNames(final JsonNode node) {
+        final List<String> names = new ArrayList<>();
+        node.propertyNames().forEach(names::add);
+        return List.copyOf(names);
     }
 
     /**
