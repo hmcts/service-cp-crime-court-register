@@ -132,7 +132,7 @@ class ConfigurationValidationTest {
                 assertThat(properties.payload().fallback().connectTimeout())
                         .isEqualTo(Duration.ofSeconds(5));
                 assertThat(properties.payload().fallback().readTimeout())
-                        .isEqualTo(Duration.ofSeconds(30));
+                        .isEqualTo(Duration.ofSeconds(10));
 
                 assertThat(properties.referencedata().mode())
                         .isEqualTo(SubscriptionsSourceMode.LIVE);
@@ -143,7 +143,7 @@ class ConfigurationValidationTest {
                 assertThat(properties.referencedata().connectTimeout())
                         .isEqualTo(Duration.ofSeconds(5));
                 assertThat(properties.referencedata().readTimeout())
-                        .isEqualTo(Duration.ofSeconds(30));
+                        .isEqualTo(Duration.ofSeconds(10));
 
                 assertThat(properties.progression().headers()).isEmpty();
                 assertThat(properties.progression().maxAttempts()).isEqualTo(4);
@@ -153,7 +153,7 @@ class ConfigurationValidationTest {
                 assertThat(properties.progression().connectTimeout())
                         .isEqualTo(Duration.ofSeconds(5));
                 assertThat(properties.progression().readTimeout())
-                        .isEqualTo(Duration.ofSeconds(30));
+                        .isEqualTo(Duration.ofSeconds(10));
 
                 assertThat(properties.submission().validateOutbound())
                         .as("the C29 pre-send validator is on unless something turns it off")
@@ -580,13 +580,14 @@ class ConfigurationValidationTest {
 
         /**
          * The waits between attempts count too: they are spent inside the same run as the reads.
-         * The shipped three attempts of 5s + 30s is 105s, comfortably inside the 4m deadline — until
+         * The shipped three attempts of 5s + 10s is 45s, comfortably inside the 4m deadline — until
          * the two waits between them are lengthened, which no other rule looks at.
          */
         @Test
         void the_waits_between_attempts_should_count_towards_the_deadline() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
-                    // 105s of reads, and two 70s waits between the three attempts, is 245s.
+                    // 45s of reads, and two 70s waits between the three attempts, is 185s — inside
+                    // the deadline on its own, and not inside the run it shares.
                     "courtregister.referencedata.retry-interval=70s").run(context -> {
                         assertThat(context).hasFailed();
                         assertThat(context.getStartupFailure())
@@ -615,13 +616,24 @@ class ConfigurationValidationTest {
                     });
         }
 
+        /**
+         * A read that finishes half a second inside the deadline satisfies the rule above and is
+         * refused anyway, by the budget the whole run shares: a step that leaves nothing for the
+         * payload fetch, the submission and the guard's writes has not finished inside the run, it
+         * has finished inside the deadline and taken the rest of the run's time with it. Which is
+         * why there are two rules and not one.
+         */
         @Test
-        void a_read_that_finishes_one_second_inside_the_deadline_should_start() {
+        void a_read_that_leaves_the_rest_of_the_run_nothing_should_fail_startup() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
                     "courtregister.referencedata.max-attempts=2",
                     "courtregister.referencedata.retry-interval=10s",
-                    "courtregister.referencedata.read-timeout=PT109.5S")
-                    .run(context -> assertThat(context).hasNotFailed());
+                    "courtregister.referencedata.read-timeout=PT109.5S").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.referencedata")
+                                .hasMessageContaining("courtregister.claim.processing-deadline");
+                    });
         }
 
         /**
@@ -776,14 +788,13 @@ class ConfigurationValidationTest {
         }
 
         /**
-         * The submission is shortened alongside the deadline so this case tests one rule only. Its
-         * own worst case — four attempts of 35s with the back-off between them — does not fit inside
-         * a two-minute deadline either, and it has its own cases in {@link SubmissionPolicy}; left
-         * at its default it would refuse this configuration on the submission's message rather than
-         * let the payload budget be the subject.
+         * The same relationship the reference-data cases show, on the fetch: 119s of payload fetch
+         * is one second inside a two-minute deadline by the per-step rule, and leaves the
+         * now-subscriptions read, the submission and the guard's writes one second between them.
+         * The run's shared budget is what refuses it.
          */
         @Test
-        void a_fetch_that_finishes_one_second_inside_the_deadline_should_start() {
+        void a_fetch_that_leaves_the_rest_of_the_run_nothing_should_fail_startup() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
                     "courtregister.claim.processing-deadline=2m",
                     "courtregister.payload.redis.connect-timeout=5s",
@@ -791,8 +802,12 @@ class ConfigurationValidationTest {
                     "courtregister.payload.fallback.max-attempts=1",
                     "courtregister.payload.fallback.connect-timeout=5s",
                     "courtregister.payload.fallback.read-timeout=94s",
-                    "courtregister.progression.max-attempts=1")
-                    .run(context -> assertThat(context).hasNotFailed());
+                    "courtregister.progression.max-attempts=1").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.payload")
+                                .hasMessageContaining("courtregister.claim.processing-deadline");
+                    });
         }
 
         /**
@@ -947,13 +962,13 @@ class ConfigurationValidationTest {
 
         /**
          * The back-off waits are spent inside the run as surely as the reads are, and nothing else
-         * bounds them: four attempts of 35s is 140s and comfortably inside the 4m deadline until the
-         * three waits between them are lengthened.
+         * bounds them: four attempts of 5s + 10s is 60s and comfortably inside the 4m deadline until
+         * the three waits between them are lengthened.
          */
         @Test
         void the_back_off_waits_should_count_towards_the_deadline() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
-                    // 140s of attempts, and three 90s waits between them, is 410s.
+                    // 60s of attempts, and three 90s waits between them, is 330s.
                     "courtregister.progression.initial-backoff=90s",
                     "courtregister.progression.max-backoff=90s").run(context -> {
                         assertThat(context).hasFailed();
@@ -981,15 +996,23 @@ class ConfigurationValidationTest {
                     });
         }
 
+        /**
+         * And the same again on the POST. Half a second inside the deadline by the rule above, and
+         * refused by the budget it shares with the two reads that precede it.
+         */
         @Test
-        void a_submission_that_finishes_one_second_inside_the_deadline_should_start() {
+        void a_submission_that_leaves_the_rest_of_the_run_nothing_should_fail_startup() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
                     "courtregister.progression.max-attempts=2",
                     "courtregister.progression.initial-backoff=10s",
                     "courtregister.progression.max-backoff=20s",
                     "courtregister.progression.connect-timeout=5s",
-                    "courtregister.progression.read-timeout=PT109.5S")
-                    .run(context -> assertThat(context).hasNotFailed());
+                    "courtregister.progression.read-timeout=PT109.5S").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.progression")
+                                .hasMessageContaining("courtregister.claim.processing-deadline");
+                    });
         }
 
         @Test

@@ -92,7 +92,12 @@ courtregister:
     # claim is reclaimed.
     max-backoff: 20s
     connect-timeout: 5s
-    read-timeout: 30s
+    # Bounded so the whole run fits: the payload fetch, the now-subscriptions read and this
+    # submission are spent inside ONE claim, and startup refuses a set of timeouts whose sum plus a
+    # fixed 30s margin for the guard's writes and the transformation reaches
+    # courtregister.claim.processing-deadline. Four attempts of 5s + 10s with the back-off between
+    # them is 63.5s of the four-minute budget.
+    read-timeout: 10s
     # headers: an optional map of extra static headers for the POST, bound but empty by default.
 
   submission:
@@ -143,8 +148,10 @@ courtregister:
     retry-interval: 1s
     connect-timeout: 5s
     # Shorter than the processing deadline on purpose, for the reason the payload read's is: a read
-    # that outlives the deadline outlives the claim behind it.
-    read-timeout: 30s
+    # that outlives the deadline outlives the claim behind it — and shorter again so that this read,
+    # the payload fetch and the submission TOGETHER fit inside one run's budget, which is what
+    # startup now checks. Three attempts of 5s + 10s with the intervals between them is 47s.
+    read-timeout: 10s
 
   stub:
     # NONE | TRANSIENT. Test and local profiles only: it is deliberately not a field in the message
@@ -182,8 +189,10 @@ courtregister:
       retry-interval: 1s
       connect-timeout: 5s
       # Shorter than the processing deadline on purpose: a read that outlives the deadline outlives
-      # the claim behind it, and then two runners believe they own the same request.
-      read-timeout: 30s
+      # the claim behind it, and then two runners believe they own the same request. Shorter again so
+      # the fetch leaves room for the now-subscriptions read and the submission spent in the same
+      # run: 20s of cache reads and three attempts of 5s + 10s is 67s of the four-minute budget.
+      read-timeout: 10s
 
 # Application Insights is configured by the Java agent (lib/applicationinsights.json).
 # The per-environment connection string is supplied as APPLICATIONINSIGHTS_CONNECTION_STRING,

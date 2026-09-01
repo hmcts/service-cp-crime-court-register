@@ -35,6 +35,16 @@ public class PropertiesValidator implements InitializingBean {
     public static final Duration RENEWAL_MARGIN = Duration.ofSeconds(30);
 
     /**
+     * What the run needs on top of its three network steps: the guard's admission and outcome
+     * writes, and the transformation between the two reads.
+     *
+     * <p>Fixed rather than configured, because none of it is an environment's choice. A budget that
+     * leaves the rest of the run nothing is the shape that overruns in production and looks correct
+     * in review.
+     */
+    public static final Duration RUN_OVERHEAD_MARGIN = Duration.ofSeconds(30);
+
+    /**
      * How many cache reads one payload fetch makes, and therefore how many of them the run's time
      * budget has to cover.
      *
@@ -50,12 +60,13 @@ public class PropertiesValidator implements InitializingBean {
             "courtregister.servicebus.max-auto-lock-renew-duration";
     private static final String CONNECTION_STRING = "courtregister.servicebus.connection-string";
     private static final String NAMESPACE = "courtregister.servicebus.namespace";
-    private static final String PAYLOAD_MODE = "courtregister.payload.mode";
+    private static final String PAYLOAD = "courtregister.payload";
+    private static final String PAYLOAD_MODE = PAYLOAD + ".mode";
     private static final String SYSTEM_USER_ID = "courtregister.results.system-user-id";
-    private static final String FALLBACK = "courtregister.payload.fallback";
+    private static final String FALLBACK = PAYLOAD + ".fallback";
     private static final String FALLBACK_MAX_ATTEMPTS = FALLBACK + ".max-attempts";
     private static final String RETRY_INTERVAL = FALLBACK + ".retry-interval";
-    private static final String REDIS = "courtregister.payload.redis";
+    private static final String REDIS = PAYLOAD + ".redis";
     private static final String CONNECT_TIMEOUT_SUFFIX = ".connect-timeout";
     private static final String REFDATA = "courtregister.referencedata";
     private static final String SUBSCRIPTIONS_MODE = REFDATA + ".mode";
@@ -110,6 +121,7 @@ public class PropertiesValidator implements InitializingBean {
         validateThePayloadSourceCanFetch(properties);
         validateTheSubscriptionsSourceCanFetch(properties);
         validateTheSubmissionCanPost(properties);
+        validateEveryStepTogetherFinishesInsideTheRun(properties);
         validateTheOutboundValidatorIsOnWhereItIsDeployed(properties);
     }
 
@@ -250,12 +262,8 @@ public class PropertiesValidator implements InitializingBean {
         final CourtRegisterProperties.Redis redis = properties.payload().redis();
         final CourtRegisterProperties.Fallback fallback = properties.payload().fallback();
         final Duration deadline = properties.claim().processingDeadline();
-        final Duration cacheReads = redis.connectTimeout()
-                .plus(redis.commandTimeout())
-                .multipliedBy(CACHE_READS_PER_FETCH);
-        final Duration queryReads = attemptsWorstCase(fallback.connectTimeout(),
-                fallback.readTimeout(), fallback.maxAttempts())
-                .plus(fallback.retryInterval().multipliedBy(fallback.maxAttempts() - 1L));
+        final Duration cacheReads = cacheReadsWorstCase(redis);
+        final Duration queryReads = queryReadsWorstCase(fallback);
         final Duration worstCase = cacheReads.plus(queryReads);
         if (worstCase.compareTo(deadline) >= 0) {
             throw new IllegalStateException(
@@ -264,6 +272,29 @@ public class PropertiesValidator implements InitializingBean {
                             + queryReads + " — which is not strictly shorter than "
                             + PROCESSING_DEADLINE + " (" + deadline + INSIDE_ITS_OWN_CLAIM);
         }
+    }
+
+    /** The two cache reads a fetch makes, each spending both of its timeouts. */
+    private static Duration cacheReadsWorstCase(final CourtRegisterProperties.Redis redis) {
+        return redis.connectTimeout()
+                .plus(redis.commandTimeout())
+                .multipliedBy(CACHE_READS_PER_FETCH);
+    }
+
+    /** Every query-side attempt spending both timeouts, with the intervals between them. */
+    private static Duration queryReadsWorstCase(
+            final CourtRegisterProperties.Fallback fallback) {
+        return attemptsWorstCase(fallback.connectTimeout(), fallback.readTimeout(),
+                fallback.maxAttempts())
+                .plus(fallback.retryInterval().multipliedBy(fallback.maxAttempts() - 1L));
+    }
+
+    /** The whole payload fetch, or nothing at all where the stub is the selected source. */
+    private static Duration payloadFetchWorstCase(final CourtRegisterProperties properties) {
+        return properties.payload().mode() == PayloadSourceMode.STUB
+                ? Duration.ZERO
+                : cacheReadsWorstCase(properties.payload().redis())
+                        .plus(queryReadsWorstCase(properties.payload().fallback()));
     }
 
     /**
@@ -350,26 +381,33 @@ public class PropertiesValidator implements InitializingBean {
      * that succeeds and a run that is still waiting on a socket ten minutes later — long after its
      * claim became reclaimable and another delivery began processing the same request.
      *
-     * <p>The bound is per-step, exactly as the payload one is: this rule refuses a reference-data
-     * read that cannot finish inside a run, not a run whose three network steps together cannot. A
-     * combined budget is a wider decision than the hole being closed here — it would refuse the
-     * shipped defaults — and belongs with the design authority rather than with a validator rule
-     * added in passing.
+     * <p>The bound here is per-step: it refuses a reference-data read that cannot finish inside a
+     * run at all. Whether this step and the two around it fit inside one run <em>together</em> is a
+     * different question, and it is asked by
+     * {@link #validateEveryStepTogetherFinishesInsideTheRun}.
      */
     private static void validateTheSubscriptionsReadFinishesInsideTheRun(
             final CourtRegisterProperties properties) {
-        final CourtRegisterProperties.Referencedata referencedata = properties.referencedata();
         final Duration deadline = properties.claim().processingDeadline();
-        final Duration worstCase = attemptsWorstCase(referencedata.connectTimeout(),
-                referencedata.readTimeout(), referencedata.maxAttempts())
-                .plus(referencedata.retryInterval()
-                        .multipliedBy(referencedata.maxAttempts() - 1L));
+        final Duration worstCase = subscriptionsReadWorstCase(properties);
         if (worstCase.compareTo(deadline) >= 0) {
             throw new IllegalStateException(
                     "The " + REFDATA + " settings allow a now-subscriptions read of up to "
                             + worstCase + ", which is not strictly shorter than "
                             + PROCESSING_DEADLINE + " (" + deadline + INSIDE_ITS_OWN_CLAIM);
         }
+    }
+
+    /** The whole now-subscriptions read, or nothing where the refusing stub is selected. */
+    private static Duration subscriptionsReadWorstCase(
+            final CourtRegisterProperties properties) {
+        final CourtRegisterProperties.Referencedata referencedata = properties.referencedata();
+        return referencedata.mode() == SubscriptionsSourceMode.STUB
+                ? Duration.ZERO
+                : attemptsWorstCase(referencedata.connectTimeout(), referencedata.readTimeout(),
+                        referencedata.maxAttempts())
+                        .plus(referencedata.retryInterval()
+                                .multipliedBy(referencedata.maxAttempts() - 1L));
     }
 
     /**
@@ -451,13 +489,56 @@ public class PropertiesValidator implements InitializingBean {
         final Duration attempts = attemptsWorstCase(progression.connectTimeout(),
                 progression.readTimeout(), progression.maxAttempts());
         final Duration waits = backOffWorstCase(progression);
-        final Duration worstCase = attempts.plus(waits);
+        final Duration worstCase = submissionWorstCase(properties);
         if (worstCase.compareTo(deadline) >= 0) {
             throw new IllegalStateException(
                     "The " + PROGRESSION + " settings allow a submission of up to " + worstCase
                             + " — attempts of " + attempts + " and back-off waits of " + waits
                             + " — which is not strictly shorter than " + PROCESSING_DEADLINE + " ("
                             + deadline + INSIDE_ITS_OWN_CLAIM);
+        }
+    }
+
+    /** Every POST attempt spending both timeouts, with the back-off waits between them. */
+    private static Duration submissionWorstCase(final CourtRegisterProperties properties) {
+        final CourtRegisterProperties.Progression progression = properties.progression();
+        return attemptsWorstCase(progression.connectTimeout(), progression.readTimeout(),
+                progression.maxAttempts())
+                .plus(backOffWorstCase(progression));
+    }
+
+    /**
+     * One run, one budget: the three network steps and the rest of the run, against the deadline.
+     *
+     * <p>Every rule above asks whether <em>one</em> step can outlast the deadline, and three
+     * separate "no"s do not answer the question that matters. The steps are spent inside one run
+     * holding one claim, so what has to fit inside the processing deadline is their sum plus the
+     * margin the guard's writes and the transformation need. A configuration where it does not is
+     * a runner still waiting on a socket while its claim is reclaimed and a second delivery starts
+     * the same request — and for this flow that is not a wasted retry: progression's
+     * {@code add-court-register} appends a register per POST, so the second runner's send is a
+     * second register for the hearing.
+     *
+     * <p>A step no adapter makes costs the run nothing, which is why the two stubbed sources
+     * contribute zero — the same reading the per-step rules take.
+     */
+    private static void validateEveryStepTogetherFinishesInsideTheRun(
+            final CourtRegisterProperties properties) {
+        final Duration deadline = properties.claim().processingDeadline();
+        final Duration payload = payloadFetchWorstCase(properties);
+        final Duration subscriptions = subscriptionsReadWorstCase(properties);
+        final Duration submission = submissionWorstCase(properties);
+        final Duration worstCase =
+                payload.plus(subscriptions).plus(submission).plus(RUN_OVERHEAD_MARGIN);
+        if (worstCase.compareTo(deadline) >= 0) {
+            throw new IllegalStateException(
+                    "One run spends every step in turn, and together they allow up to " + worstCase
+                            + " — a " + PAYLOAD + " fetch of " + payload + ", a " + REFDATA
+                            + " read of " + subscriptions + ", a " + PROGRESSION + " submission of "
+                            + submission + " and the fixed " + RUN_OVERHEAD_MARGIN
+                            + " the guard's writes and the transformation need — which is not"
+                            + " strictly shorter than " + PROCESSING_DEADLINE + " (" + deadline
+                            + INSIDE_ITS_OWN_CLAIM);
         }
     }
 

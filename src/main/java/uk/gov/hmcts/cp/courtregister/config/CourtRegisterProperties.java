@@ -150,7 +150,7 @@ public record CourtRegisterProperties(
             @DefaultValue("3") int maxAttempts,
             @DefaultValue("1s") Duration retryInterval,
             @DefaultValue("5s") Duration connectTimeout,
-            @DefaultValue("30s") Duration readTimeout) {
+            @DefaultValue("10s") Duration readTimeout) {
     }
 
     /**
@@ -201,7 +201,7 @@ public record CourtRegisterProperties(
             @DefaultValue("3") int maxAttempts,
             @DefaultValue("1s") Duration retryInterval,
             @DefaultValue("5s") Duration connectTimeout,
-            @DefaultValue("30s") Duration readTimeout) {
+            @DefaultValue("10s") Duration readTimeout) {
 
         /** Freezes the header map, and treats an unconfigured one as none rather than as absent. */
         public Referencedata {
@@ -237,7 +237,7 @@ public record CourtRegisterProperties(
             @DefaultValue("500ms") Duration initialBackoff,
             @DefaultValue("20s") Duration maxBackoff,
             @DefaultValue("5s") Duration connectTimeout,
-            @DefaultValue("30s") Duration readTimeout) {
+            @DefaultValue("10s") Duration readTimeout) {
 
         /** Freezes the header map, and treats an unconfigured one as none rather than as absent. */
         public Progression {

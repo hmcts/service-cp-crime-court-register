@@ -54,14 +54,26 @@ import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
  * {@code no-defendants}, which is the outcome a payload with no register in it earns anyway. The
  * chain behind that port arrives with the mapper phase; nothing above it changes when it does.
  *
- * <p><strong>The run bounds itself.</strong> Before the ports are touched the deadline is fixed at
- * {@code courtregister.claim.processing-deadline} from now, and the run checks it before writing an
- * outcome. The deadline is strictly shorter than the claim lease, so a slow run stops itself while
- * its claim is still unambiguously its own; the alternative is a runner that discovers it has been
+ * <p><strong>The run bounds itself, across every stage.</strong> Before the ports are touched the
+ * deadline is fixed at {@code courtregister.claim.processing-deadline} from now, and what is left of
+ * it is read again before the transformation, before the send and before any outcome is written.
+ * <strong>One budget, not one check</strong>: three network steps that each fit inside the deadline
+ * can spend more than twice it between them, and the stage that matters is the last one — a POST
+ * started after the deadline is a POST started while the claim behind it may already have been
+ * reclaimed, and progression's {@code add-court-register} <em>appends</em> a register rather than
+ * replacing one, so the second runner's send is a second register for the hearing. An overrun is
+ * TRANSIENT: the delivery is handed back, and the redelivery gets the whole deadline again with
+ * nothing sent twice. The single exception is the completion of a register that <em>was</em> sent,
+ * which is written whatever the clock says — the alternative is a redelivery that sends it again.
+ *
+ * <p>The deadline is strictly shorter than the claim lease, so a slow run stops itself while its
+ * claim is still unambiguously its own; the alternative is a runner that discovers it has been
  * superseded only when its outcome write affects no rows — which is safe, but leaves the request
  * waiting for a redelivery it could have asked for a minute earlier. The check is against elapsed
  * local time only: nothing here compares a JVM reading with a stored timestamp, which is the
- * multi-node skew the data model's single-time-authority rule exists to rule out.
+ * multi-node skew the data model's single-time-authority rule exists to rule out. That the whole
+ * run's worst case actually fits inside the deadline is checked at startup, in
+ * {@code PropertiesValidator}.
  *
  * <p><strong>A failure is read twice: is it worth retrying, and is there a retry left?</strong> The
  * first question is the ports' to answer, and they answer it in the exception. A non-transient
@@ -225,7 +237,8 @@ public class DistributionPipeline {
 
     private GuardDecision runToOutcome(
             final DistributionCommand command, final RunClaim claim, final boolean lastChance) {
-        final Instant deadline = clock.instant().plus(processingDeadline);
+        final RunBudget budget =
+                new RunBudget(clock.instant().plus(processingDeadline), lastChance);
 
         final JsonNode payload = payloadSource.fetch(command);
         // The payload's size and nothing from inside it: every defendant on a court register is a
@@ -234,18 +247,50 @@ public class DistributionPipeline {
                 command.source(), command.requestId(), command.hearingId(), payload.size());
 
         final GuardDecision outcome;
-        // Strictly before, so the deadline is a bound that is *reached* rather than passed: a run
-        // standing exactly on it has already used the time its claim guarantees and may not write a
-        // completion. `isAfter` on the other side of this branch would let that one instant through.
-        if (clock.instant().isBefore(deadline)) {
-            outcome = transformer == null
-                    ? completed(claim, CompletionReason.NO_DEFENDANTS)
-                    : distribute(command, payload, claim);
+        if (spent(budget)) {
+            outcome = overran(claim, budget);
+        } else if (transformer == null) {
+            outcome = completed(claim, CompletionReason.NO_DEFENDANTS);
         } else {
-            outcome = failed(claim, FailureClassification.TRANSIENT,
-                    ReasonCode.PROCESSING_DEADLINE_EXCEEDED, lastChance);
+            outcome = distribute(command, payload, claim, budget);
         }
         return outcome;
+    }
+
+    /**
+     * What is left of the run's time, and what a delivery that runs out of it is worth.
+     *
+     * @param deadline   the instant the run promised to have stopped by
+     * @param lastChance whether the queue will deliver this message again
+     */
+    private record RunBudget(Instant deadline, boolean lastChance) {
+    }
+
+    /**
+     * Whether the run has used the time its claim guarantees it.
+     *
+     * <p>Strictly before, so the deadline is a bound that is <em>reached</em> rather than passed: a
+     * run standing exactly on it has already spent its budget and may not start another call or
+     * write another outcome. Reading it the other way would let that one instant through.
+     *
+     * @param budget the run's budget
+     * @return whether the budget is gone
+     */
+    private boolean spent(final RunBudget budget) {
+        return !clock.instant().isBefore(budget.deadline());
+    }
+
+    /**
+     * The outcome of a run that ran out of budget: transient, because the redelivery gets a whole
+     * fresh one and nothing has been sent.
+     *
+     * @param claim  the claim this run holds
+     * @param budget the run's budget
+     * @return the settlement the overrun calls for
+     */
+    private GuardDecision overran(final RunClaim claim, final RunBudget budget) {
+        return failed(claim, FailureClassification.TRANSIENT,
+                ReasonCode.PROCESSING_DEADLINE_EXCEEDED, budget.lastChance());
     }
 
     /**
@@ -276,10 +321,14 @@ public class DistributionPipeline {
      * @param command the validated request
      * @param payload the hearing payload the fetch returned
      * @param claim   the claim this run holds
+     * @param budget  what is left of the run's time
      * @return the settlement the outcome calls for
      */
     private GuardDecision distribute(
-            final DistributionCommand command, final JsonNode payload, final RunClaim claim) {
+            final DistributionCommand command,
+            final JsonNode payload,
+            final RunClaim claim,
+            final RunBudget budget) {
 
         final GuardDecision outcome;
         if (groupProceedings.suppresses(command, hearingOf(payload))) {
@@ -287,12 +336,40 @@ public class DistributionPipeline {
         } else {
             final JsonNode subscriptions = subscriptionsSource.subscriptionsOn(
                     dates.subscriptionDay(sharedTimeOf(payload)), CallerIdentity.of(command));
-            outcome = switch (transformer.transform(command, payload, subscriptions)) {
-                case TransformationResult.NoRegister nothing -> completed(claim, nothing.reason());
-                case TransformationResult.Register register -> submit(command, register, claim);
-            };
+            outcome = spent(budget)
+                    ? overran(claim, budget)
+                    : transformed(command, payload, subscriptions, claim, budget);
         }
         return outcome;
+    }
+
+    /**
+     * The transformation, and what its answer is worth once the budget has been read again.
+     *
+     * <p>The transformation itself is pure and bounded, but it is not free, and the budget is what
+     * says whether the outcome it produced may still be written. A completion recorded after the
+     * deadline is a completion recorded while another delivery may already hold the claim.
+     *
+     * @param command       the validated request
+     * @param payload       the hearing payload the fetch returned
+     * @param subscriptions reference data's answer for the register's day
+     * @param claim         the claim this run holds
+     * @param budget        what is left of the run's time
+     * @return the settlement the outcome calls for
+     */
+    private GuardDecision transformed(
+            final DistributionCommand command,
+            final JsonNode payload,
+            final JsonNode subscriptions,
+            final RunClaim claim,
+            final RunBudget budget) {
+
+        return switch (transformer.transform(command, payload, subscriptions)) {
+            case TransformationResult.NoRegister nothing -> spent(budget)
+                    ? overran(claim, budget)
+                    : completed(claim, nothing.reason());
+            case TransformationResult.Register register -> submit(command, register, claim, budget);
+        };
     }
 
     /**
@@ -345,21 +422,40 @@ public class DistributionPipeline {
      * C1, where the POST's errors are swallowed and a lost register and a delivered one become the
      * same row.
      *
+     * <p><strong>The send is the stage the budget exists for.</strong> A POST started after the
+     * deadline is a POST started while the claim behind it may already have been reclaimed, and a
+     * second runner's POST does not overwrite the first — it appends a second register for the same
+     * hearing. So the budget is read once more here and an overrun is handed back before anything
+     * leaves the service; the redelivery has the whole deadline again.
+     *
+     * <p>The completion that follows a successful send is <strong>not</strong> withheld for the
+     * budget. The register has gone; a run that declined to record it would be redelivered and would
+     * send it a second time, which is the one outcome the budget exists to prevent.
+     *
      * @param command  the validated request
      * @param register the register the transformation produced
      * @param claim    the claim this run holds
+     * @param budget   what is left of the run's time
      * @return the settlement the outcome calls for
      */
     private GuardDecision submit(
             final DistributionCommand command,
             final TransformationResult.Register register,
-            final RunClaim claim) {
+            final RunClaim claim,
+            final RunBudget budget) {
 
-        final SubmissionReceipt receipt =
-                submissionClient.submit(register.document(), CallerIdentity.of(command));
-        LOG.info("Register submitted. source={} requestId={} hearingId={} status={}",
-                command.source(), command.requestId(), command.hearingId(), receipt.responseCode());
-        return completed(claim, CompletionReason.SUBMITTED);
+        final GuardDecision outcome;
+        if (spent(budget)) {
+            outcome = overran(claim, budget);
+        } else {
+            final SubmissionReceipt receipt =
+                    submissionClient.submit(register.document(), CallerIdentity.of(command));
+            LOG.info("Register submitted. source={} requestId={} hearingId={} status={}",
+                    command.source(), command.requestId(), command.hearingId(),
+                    receipt.responseCode());
+            outcome = completed(claim, CompletionReason.SUBMITTED);
+        }
+        return outcome;
     }
 
     /**
