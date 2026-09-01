@@ -453,7 +453,23 @@
           "notificationRequired": true,
           "summonsRequired": false
         },
-        "applicationStatus": "FINALISED"
+        "applicationStatus": "FINALISED",
+        "courtApplicationCases": [
+          {
+            "id": "b2f0e4c8-3a1d-4f52-9c77-8ad2f1c60e19",
+            "prosecutionCaseId": "c10e3b71-6a6d-45ef-9b62-34df4d54971a",
+            "offences": [
+              {
+                "id": "d7c1a92e-58b4-4f0a-9a63-2c5b7e41f8d3",
+                "offenceCode": "TH68001",
+                "offenceTitle": "Theft from a shop",
+                "offenceLegislation": "Contrary to section 1(1) and section 7 of the Theft Act 1968.",
+                "wording": "On 02/07/2018 at Bond street stole one bicycle to the value of 200 pounds belonging to another.",
+                "orderIndex": 1
+              }
+            ]
+          }
+        ]
       }
     ],
     "defendantAttendance": [

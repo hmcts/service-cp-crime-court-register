@@ -74,6 +74,16 @@ named changes:
 `sharedTime` is `2020-06-01T10:00:00Z` throughout — the instant the C10 fix is pinned on, and the one
 a British Summer Time relabelling turns into `11:00:00Z`.
 
+**Repair, 2026-09-01 — the court application gains an offence.** As authored, the court application
+carried by all six hearings had neither `courtApplicationCases` nor a `courtOrder`, so it gathered
+no offence. That was invisible while `OffenceMapper` answered an absent list for an empty gather;
+once the mapper was repointed at the legacy's own `[]` (see the C29 row), `offences`' `minItems: 1`
+made every register assembled from these hearings a contract refusal, which is a hearing the legacy
+loses to a swallowed 400 and not the shape any of these fixtures exists to describe. Each
+application now carries one `courtApplicationCase` — the case the hearing already has, one offence,
+**no judicial results** — so nothing else about what these hearings gather moves: the register
+defendants, results, cases and applications below are unchanged.
+
 | File | What it is for | Built from the spine by |
 |---|---|---|
 | `hearing-with-complete-court-centre.json` | The venue: name, code and a real address, so `HearingVenueMapper.address()` runs and the file name carries a court-centre code | the spine alone — its one defendant is not youth-flagged, so it is also the `no-youth-defendants` hearing |

@@ -430,7 +430,11 @@ vocabulary and matching semantics.
       **(1)** `OffenceMapper` answers `null` rather than `[]` for an application that gathered no
       offence, which `ProsecutionCaseOrApplicationMapperTest.an_application_with_neither_carries_no_offences`
       requires and which `CourtRegisterCaseOrApplication`'s own `minItems: 1` note already
-      specified — the legacy sends `[]`, a document progression rejects.
+      specified — the legacy sends `[]`, a document progression rejects. **Reversed under review
+      (2026-09-01)**: that was an uncatalogued content change no register row authorised. The
+      mapper keeps the legacy's `[]` and the pre-send validator refuses it as an `INVALID_FORMAT`
+      — the register is lost either way, and losing it loudly is C29's whole point. See the C29
+      row and `OutboundContractValidationTest.an_empty_offence_list_on_a_case`.
       **(2)** An application that is *ineligible* (non-prosecuting applicant, or another
       defendant's subject) is skipped **in silence**; only a **dangling** reference is counted as
       `unresolvable-application`. Nothing is wrong with an ineligible application's payload.

@@ -31,11 +31,6 @@ import uk.gov.hmcts.cp.courtregister.domain.ResultLevel;
  *       register's one correctness advantage over its informant sibling — has never executed.</li>
  * </ul>
  */
-// PMD.OnlyOneReturn: the empty-list guard is an answer of its own — see the null on `map`.
-// PMD.ReturnEmptyCollectionRatherThanNull: `courtRegisterCaseOrApplication.offences` carries
-// `minItems: 1`, so an application that gathered no offence has none rather than an empty array,
-// which is a document progression rejects.
-@SuppressWarnings({"PMD.OnlyOneReturn", "PMD.ReturnEmptyCollectionRatherThanNull"})
 final class OffenceMapper {
 
     /** The offence's own identity, which its results are scoped by. */
@@ -50,18 +45,26 @@ final class OffenceMapper {
     /**
      * Maps a list of offences.
      *
+     * <p><strong>An empty gather maps to an empty list</strong>, which is what
+     * {@code this.offences.map(...)} answers and what the legacy posts. It is a document
+     * progression's {@code minItems: 1} refuses — so the register is lost either way, and the
+     * choice is only ever about how. The legacy loses it to a 400 nobody sees (C29 with C1); this
+     * loses it to an explicit, classified FAILED with the offending pointer named, and adds no
+     * content of its own on the way. Inventing an absence here would send progression a register
+     * the legacy never sends, which is an uncatalogued behaviour change; refusing it is
+     * {@link uk.gov.hmcts.cp.courtregister.adapter.progression.OutboundContractValidator}'s.
+     *
      * @param offences          the payload offences, gathered by the caller from a prosecution case
      *                          or from an application's cases and court order
      * @param registerDefendant the gathered defendant, whose results are scoped onto each offence
-     * @return the mapped offences, or {@code null} where the caller gathered none
+     * @return the mapped offences, empty where the caller gathered none
      */
     /* default */ static List<CourtRegisterOffence> map(
             final List<JsonNode> offences, final RegisterDefendant registerDefendant) {
 
-        if (offences == null || offences.isEmpty()) {
-            return null;
-        }
-        return offences.stream().map(offence -> offence(offence, registerDefendant)).toList();
+        return offences == null
+                ? List.of()
+                : offences.stream().map(offence -> offence(offence, registerDefendant)).toList();
     }
 
     /**
