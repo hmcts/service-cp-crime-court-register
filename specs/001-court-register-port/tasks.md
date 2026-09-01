@@ -447,8 +447,25 @@ vocabulary and matching semantics.
       (`CourtRegisterProperties` duplicate `@DefaultValue` literal, `NoRegisterReason` field/method
       name) took narrow inline suppressions with reasons. `OutboundContractValidator`'s unused
       `json` field carries a suppression that says it comes off with T055's body.)*
-- [ ] T055 [US3] Implement `adapter/progression/OutboundContractValidator` (green T052) — updates
+- [x] T055 [US3] Implement `adapter/progression/OutboundContractValidator` (green T052) — updates
       C29 (validation half) and C26 (schema authority).
+      *(done — 16 red cases green, and both rows move to FIXED. Four decisions the schemas forced:
+      **(1)** the root is `progression.add-court-register.json`, not `courtRegisterDocumentRequest`
+      — the command is what this service POSTs, and the two differ (the request declares
+      `defendantType` and `courtApplicationId`, which no register carries). **(2)** Every
+      `http://justice.gov.uk/…` identity the contract `$ref`s is mapped explicitly to its vendored
+      copy under `classpath:contracts/progression/`, with `preloadSchema` on: an unmapped identity
+      fails when the validator is constructed, because a validator that silently degraded to "could
+      not fetch the schema, so nothing was checked" would reinstate the exact blind spot C29 exists
+      to close, and one that reached the network on the hot path would be worse. **(3)** The dialect
+      is DRAFT_4 — the vendored schemas declare draft-04 and spell their identity `id`, not `$id`,
+      so reading them as draft-07 would leave every reference unresolvable. Format assertions are
+      **on**, which is draft-04's own reading and progression's. **(4)** Where a document breaks more
+      than one rule the reason is chosen by sorted pointer rather than by the validator's traversal
+      order, so one document always yields one reason, and the shorter pointer of a nested pair —
+      the outer failure — wins. The `minItems ⇒ INVALID_FORMAT` classification T052 specified is
+      written down where the mapping lives, with its reason. The seam's `PMD.UnusedPrivateField`
+      suppression came off with the body, as it said it would.)*
 - [ ] T055a [US3] Write `pipeline/RegisterTransformationChainTest` (red; seam:
       `RegisterTransformationChain`) — fragment → matched subscriptions → validated document
       through the chained stages; a no-op at each stage surfaces its distinct reason; stage
