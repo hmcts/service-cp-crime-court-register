@@ -38,6 +38,9 @@ tasks.named('jacocoTestReport') {
 // them as coverage improves.
 tasks.named('jacocoTestCoverageVerification') {
   dependsOn tasks.named('test')
+  // The report is written before the gate is asked its question, so a failing gate still leaves a
+  // report behind saying which lines were missed. Ordering only: nothing here asks for the report.
+  mustRunAfter tasks.named('jacocoTestReport')
   executionData fileTree(
     dir: layout.buildDirectory.dir("jacoco").get().asFile,
     include: ["*.exec"]

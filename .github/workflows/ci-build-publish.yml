@@ -139,13 +139,14 @@ jobs:
         with:
           gradle-version: current
 
-      # pmdMain is named explicitly: gradle/pmd.gradle keeps PMD out of `check` unless asked for.
+      # jacocoTestReport is named first so the coverage report is written before the gate runs; a
+      # failing gate then still leaves a report behind saying which lines were missed.
       - name: Gradle Check (unit + integration tests, checkstyle, PMD, coverage gate)
         env:
           ARTEFACT_VERSION: ${{ needs.Artefact-Version.outputs.artefact_version }}
         run: |
           echo "Running checks with ARTEFACT_VERSION=$ARTEFACT_VERSION"
-          ./gradlew check pmdMain jacocoTestReport -DARTEFACT_VERSION=$ARTEFACT_VERSION
+          ./gradlew jacocoTestReport check -DARTEFACT_VERSION=$ARTEFACT_VERSION
 
       - name: Upload unit and integration test reports
         if: always()
@@ -155,6 +156,38 @@ jobs:
           path: |
             build/reports/tests/test/
             build/test-results/test/
+            build/reports/jacoco/test/
+
+      # The coverage thresholds in gradle/test.gradle are a ratchet (constitution Principle VIII):
+      # they may be raised, never lowered in passing. A PR that lowers one is failed here with the
+      # before/after values named, so the loosening has to be argued rather than merged quietly.
+      - name: Coverage ratchet guard
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          # Thresholds are read off the diff in file order, so the n-th removed value is compared
+          # with the n-th added one: LINE against LINE, BRANCH against BRANCH.
+          git diff "origin/$BASE_REF" -- gradle/test.gradle | awk '
+            /^-[[:space:]]*minimum = 0\.[0-9]+/ { was[++removed] = $NF }
+            /^\+[[:space:]]*minimum = 0\.[0-9]+/ { now[++added] = $NF }
+            END {
+              for (i = 1; i <= removed && i <= added; i++) {
+                if (now[i] + 0 < was[i] + 0) {
+                  printf "::error::coverage threshold lowered from %s to %s in gradle/test.gradle\n", was[i], now[i]
+                  lowered = 1
+                }
+              }
+              if (removed > added) {
+                print "::error::a coverage threshold was deleted from gradle/test.gradle"
+                lowered = 1
+              }
+              if (lowered) {
+                print "Coverage thresholds are a ratchet: raise them, or leave them — never lower one in passing."
+                exit 1
+              }
+            }'
 
   # This service has no REST API, so there is no `api` docker-compose test task; the container
   # smoke run is the packaged-artefact gate instead. It builds its own bootJar, so it only needs
