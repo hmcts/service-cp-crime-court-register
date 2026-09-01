@@ -172,6 +172,59 @@ class AggregationMapperTest {
         }
 
         @Test
+        @DisplayName("an evening share is filed under the day it was shared, not London's next one")
+        void an_evening_share_is_filed_under_the_day_it_was_shared() {
+            // The differential audit found this at
+            // mut__surviving-youth-defendant__shared-time__bst-2300-utc. C10's row says in as many
+            // words what a BST evening share moves: "stored values, the filename day and the
+            // refdata lookup day (C12) all move". The register date moved and the file-name day did
+            // not, because the name was built through Dates.localDate — the London calendar day,
+            // which is the right answer for the sitting-day match it was written for and the wrong
+            // one here. So a register whose own registerDate says 1 June was filed under 2 June,
+            // and under a different day from the subscription set it was addressed by.
+            assertThat(fileNameOfShareAt("2020-06-01T23:00:00Z"))
+                    .isEqualTo("court-register_2020-06-01_B01LY00_" + HEARING_ID + ".pdf");
+        }
+
+        @Test
+        @DisplayName("and the day it is filed under is the day it was addressed on")
+        void the_day_it_is_filed_under_is_the_day_it_was_addressed_on() {
+            // The claim behind the case above, made directly: C12 keys the subscription set to the
+            // UTC day of the share, so a file name keyed to any other day names a register by a day
+            // nothing else about it agrees with.
+            final String sharedTime = "2020-06-01T23:00:00Z";
+
+            assertThat(fileNameOfShareAt(sharedTime))
+                    .contains("_" + new Dates().subscriptionDay(sharedTime) + "_");
+        }
+
+        @Test
+        @DisplayName("a share on the far side of midnight UTC is filed under its own day")
+        void a_share_on_the_far_side_of_midnight_is_filed_under_its_own_day() {
+            // The other direction, which the current reading gets right and which must stay right:
+            // 00:00Z in BST is 01:00 in London on the same date, so both readings answer 1 June.
+            assertThat(fileNameOfShareAt("2020-06-01T00:00:00Z"))
+                    .isEqualTo("court-register_2020-06-01_B01LY00_" + HEARING_ID + ".pdf");
+        }
+
+        /**
+         * The file name of a register shared at an instant.
+         *
+         * @param sharedTime the instant the results were shared, as the fragment carries it
+         * @return the file name
+         */
+        private String fileNameOfShareAt(final String sharedTime) {
+            final RegisterFragment original = fragment();
+            final RegisterFragment shared = new RegisterFragment(
+                    original.courtCentreId(), sharedTime, original.hearingDate(),
+                    original.hearingId(), original.registerDefendants(),
+                    original.courtCentreOUCode());
+
+            return AggregationMapper.map(shared, subscriptions(), hearing(), anomalies::add)
+                    .fileName();
+        }
+
+        @Test
         @DisplayName("the court centre code is the hearing's, not the fragment's OU code")
         void the_code_is_the_hearings() {
             // The legacy reads `hearingObj.courtCentre.code`; the fragment carries its own
