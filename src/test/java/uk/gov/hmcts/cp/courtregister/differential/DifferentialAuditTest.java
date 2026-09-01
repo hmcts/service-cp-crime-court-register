@@ -77,8 +77,12 @@ import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.PortResult;
  *       {@link RegisteredDefectFixes}, and an unclaimed one fails naming its path.</li>
  *   <li><strong>{@code SCHEMA_INVALID}</strong> — progression answers 400 and C1 swallows it, so the
  *       register is lost with no trace. The port must classify rather than reproduce: refuse the
- *       document at the contract (C29), or produce a repaired one whose every difference is claimed
- *       by the row that authorises the repair.</li>
+ *       document at the contract at a field the recorder's own validator named (C29), or produce a
+ *       repaired one that differs at such a field, every difference claimed by the row that
+ *       authorises the repair. {@link #classifiedOrRepaired} asserts that on the axis itself rather
+ *       than leaving the attribution machinery to imply it — a document reproduced unchanged meets
+ *       the agreement question as {@code document} against {@code REGISTER}, which is agreement, so
+ *       nothing would differ and nothing would be asked.</li>
  *   <li><strong>{@code NO_DOCUMENT}</strong> — the legacy produced nothing, and its recorded reason
  *       carries the obligation instead. The port's outcome must be the one its row governs: the same
  *       no-op where no row applies, and the row's own answer where one does.</li>
@@ -201,10 +205,12 @@ class DifferentialAuditTest {
             return;
         }
 
+        final List<Divergence> divergences = divergences(recorded, port);
         tallyDerivations(recorded, port);
-        for (final Divergence divergence : divergences(recorded, port)) {
+        for (final Divergence divergence : divergences) {
             tally(caseId, divergence);
         }
+        classifiedOrRepaired(caseId, recorded, port, divergences);
     }
 
     @Test
@@ -470,6 +476,93 @@ class DifferentialAuditTest {
 
         EXPLAINED.merge(claims.get(0).reference(), 1, Integer::sum);
         EXAMPLES.putIfAbsent(claims.get(0).reference(), caseId + " — " + where(divergence));
+    }
+
+    /**
+     * Requires a document the frozen contract refuses to be classified or repaired, never reproduced.
+     *
+     * <p>The obligation the output-contract axis carries, asserted rather than left to the
+     * attribution machinery to imply. Agreement is the wrong question for a {@code SCHEMA_INVALID}
+     * case: progression answers 400 and C1 swallows it, so reproducing the legacy's document exactly
+     * is reproducing a register that is lost with no trace — and it would reach
+     * {@link #agrees(RecordedCase, PortOutcome)} as {@code document} against {@code REGISTER}, which
+     * is agreement, which is no divergence, which is a green build for the one behaviour the port
+     * exists to stop.
+     *
+     * <p>So the axis decides, and there are three endings the row allows:
+     *
+     * <ul>
+     *   <li>the port <strong>refuses</strong> the document at the contract, naming a field the
+     *       recorder's own validator named — C29's obligation, stated here as the obligation rather
+     *       than inferred from that row's predicate having fired;</li>
+     *   <li>the port <strong>repairs</strong> it: the document it produced passed this port's own
+     *       validator on the way out of the chain, and differs from the recorded one at a field the
+     *       recorder's validator refused. Every such difference has already been required to name
+     *       exactly one row, so a repair is an attributed repair or the case has already failed;</li>
+     *   <li>the port <strong>does not produce that document at all</strong> — it matched nobody, was
+     *       suppressed, or never ran — an ending that is itself a divergence and has already been
+     *       required to name its row.</li>
+     * </ul>
+     *
+     * <p>An unchanged invalid output is none of the three and fails here.
+     *
+     * @param caseId      the case being audited
+     * @param recorded    the recorded case
+     * @param port        what the port did
+     * @param divergences everything about the run that differed
+     */
+    private static void classifiedOrRepaired(
+            final String caseId,
+            final RecordedCase recorded,
+            final PortOutcome port,
+            final List<Divergence> divergences) {
+
+        if (!RecordedCase.SCHEMA_INVALID.equals(recorded.contractStatus())) {
+            return;
+        }
+        if (port.refusedByTheContract()) {
+            assertThat(recorded.violationPointers())
+                    .describedAs("%s: the legacy's document was refused by the frozen contract and "
+                            + "the port refuses it too, but at %s — a field the recorder's own "
+                            + "validator never named, so the port is refusing the right document "
+                            + "for the wrong reason", caseId, port.failurePointer())
+                    .anyMatch(pointer -> port.failurePointer().startsWith(pointer));
+            return;
+        }
+        if (port.result() != PortResult.REGISTER) {
+            return;
+        }
+        assertThat(repairedFields(recorded, divergences))
+                .describedAs("%s: progression answers 400 to the document the legacy produced "
+                        + "(refused at %s) and C1 swallows it, so the register is lost with no "
+                        + "trace. The port assembled a register that repairs nothing the contract "
+                        + "refused, which is that same lost register reproduced — it must refuse "
+                        + "the document at the contract instead, or repair the field the contract "
+                        + "named", caseId, recorded.violationPointers())
+                .isNotEmpty();
+    }
+
+    /**
+     * The refused fields the port's own document no longer carries as the legacy wrote them.
+     *
+     * <p>A difference at a refused pointer, or anywhere inside or above one: {@code ajv} reports a
+     * required failure against the object and the repair may be the property, and the other way
+     * about for a value the port omitted from a subtree the contract refused whole.
+     *
+     * @param recorded    the recorded case
+     * @param divergences everything about the run that differed
+     * @return the pointers of the repairs, empty where the port repaired nothing the contract named
+     */
+    private static List<String> repairedFields(
+            final RecordedCase recorded, final List<Divergence> divergences) {
+
+        final List<String> refused = recorded.violationPointers();
+        return divergences.stream()
+                .filter(divergence -> divergence instanceof Divergence.Field)
+                .map(divergence -> ((Divergence.Field) divergence).path())
+                .filter(path -> refused.stream().anyMatch(
+                        pointer -> path.startsWith(pointer) || pointer.startsWith(path)))
+                .toList();
     }
 
     /**
