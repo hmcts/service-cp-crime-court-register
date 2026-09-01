@@ -240,6 +240,76 @@ public final class ProcessedLogTestSupport {
                 "no processed_request row for " + source + "/" + requestId));
     }
 
+    /**
+     * The submission half of the processed log: what was sent for a request, and how it went.
+     *
+     * @param outputId          the row's own identity, fixed the first time it is written
+     * @param courtCentreId     the court centre the register covers
+     * @param courtCentreOuCode the court centre's OU code
+     * @param registerDate      the day the register's recipients were read for
+     * @param fileName          the name progression renders the PDF under
+     * @param status            PENDING, POSTED or FAILED
+     * @param responseCode      what progression answered, where anything did
+     * @param requestDigest     the digest of exactly the bytes that were sent
+     * @param anomalySummary    the bounded counts of what the register was assembled without
+     */
+    public record OutputRow(
+            UUID outputId,
+            UUID courtCentreId,
+            String courtCentreOuCode,
+            LocalDate registerDate,
+            String fileName,
+            String status,
+            Integer responseCode,
+            String requestDigest,
+            String anomalySummary) {
+    }
+
+    /**
+     * Reads the output row for a request, or reports its absence.
+     *
+     * <p>Absence is a real answer here and the one four of the five completion reasons produce: the
+     * output cardinality is 0..1, and a run that sent nothing has nothing to say about a submission.
+     *
+     * @param source    the producing context
+     * @param requestId the request
+     * @return the row, if one was ever claimed
+     */
+    public static Optional<OutputRow> outputRow(final String source, final UUID requestId) {
+        return jdbcClient()
+                .sql("""
+                        SELECT output_id, court_centre_id, court_centre_ou_code, register_date,
+                               file_name, status, response_code, request_digest, anomaly_summary
+                          FROM processed_output
+                         WHERE source = :source AND request_id = :requestId
+                        """)
+                .param("source", source)
+                .param("requestId", requestId)
+                .query((rs, rowNumber) -> new OutputRow(
+                        rs.getObject("output_id", UUID.class),
+                        rs.getObject("court_centre_id", UUID.class),
+                        rs.getString("court_centre_ou_code"),
+                        rs.getObject("register_date", LocalDate.class),
+                        rs.getString("file_name"),
+                        rs.getString("status"),
+                        rs.getObject("response_code", Integer.class),
+                        rs.getString("request_digest"),
+                        rs.getString("anomaly_summary")))
+                .optional();
+    }
+
+    /**
+     * The output row, insisting it exists.
+     *
+     * @param source    the producing context
+     * @param requestId the request
+     * @return the row
+     */
+    public static OutputRow requireOutputRow(final String source, final UUID requestId) {
+        return outputRow(source, requestId).orElseThrow(() -> new IllegalStateException(
+                "no processed_output row for " + source + "/" + requestId));
+    }
+
     private static Instant instant(final OffsetDateTime value) {
         return value == null ? null : value.toInstant();
     }

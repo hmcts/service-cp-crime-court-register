@@ -7,6 +7,8 @@ import com.azure.messaging.servicebus.ServiceBusClientBuilder;
 import com.azure.messaging.servicebus.ServiceBusMessage;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -193,19 +195,53 @@ public final class ServiceTestSupport {
     }
 
     /**
+     * The hearing day every body published here carries.
+     *
+     * <p>Named because the payload cache is keyed on it: a suite that seeds a hearing into Redis has
+     * to build the same key the service will read, and a second copy of the literal is how the two
+     * come to disagree — which reads as a cold cache rather than as a mistake.
+     */
+    public static final LocalDate HEARING_DAY = LocalDate.parse("2026-08-31");
+
+    /** The share instant every body published here carries, unless a suite names its own. */
+    public static final Instant SHARED_TIME = Instant.parse("2026-08-31T08:00:00Z");
+
+    /**
      * A valid request body for the given identifiers.
+     *
+     * @param requestId the request
+     * @param hearingId the hearing it is about
+     * @return the body
      */
     public static String validBody(final UUID requestId, final UUID hearingId) {
+        return validBody(requestId, hearingId, SHARED_TIME);
+    }
+
+    /**
+     * A valid request body for a named share instant — a re-share of a hearing already processed.
+     *
+     * <p>The producer publishes one message per share, so a hearing shared twice arrives as two
+     * requests with two request ids and two share instants. The processed log is keyed on the
+     * request, so both are runs of their own; what stops the second becoming a duplicate register is
+     * progression's own read-side sweep, not anything here.
+     *
+     * @param requestId  the request
+     * @param hearingId  the hearing it is about
+     * @param sharedTime the instant the results were shared
+     * @return the body
+     */
+    public static String validBody(
+            final UUID requestId, final UUID hearingId, final Instant sharedTime) {
         return """
                 {
                   "source": "RESULTS",
                   "requestId": "%s",
                   "hearingId": "%s",
-                  "hearingDay": "2026-08-31",
-                  "sharedTime": "2026-08-31T08:00:00Z",
+                  "hearingDay": "%s",
+                  "sharedTime": "%s",
                   "eventType": "Hearing_Resulted"
                 }
-                """.formatted(requestId, hearingId);
+                """.formatted(requestId, hearingId, HEARING_DAY, sharedTime);
     }
 
     /**

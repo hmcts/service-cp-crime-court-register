@@ -806,8 +806,33 @@ documentation-final states.
       assertion now drops comment lines before matching, because a block that documents why nothing
       here may be set to DEBUG is the opposite of the block it refuses, and a matcher that could not
       tell the two apart would punish the file for explaining itself.)*
-- [ ] T069 [A] [US1] `e2e/CourtRegisterEndToEndIT` — message → POST(202) → COMPLETED `submitted`,
+- [x] T069 [A] [US1] `e2e/CourtRegisterEndToEndIT` — message → POST(202) → COMPLETED `submitted`,
       `processed_output.status = POSTED`; one case per no-op reason; runs the quickstart sequence.
+      *(done — five cases, all green on introduction and recorded as the observed result rather than
+      claimed as a red run. Four things this task settled.
+      **(1) Nothing between the queue and the socket is doubled.** The context is the shipped one, the
+      payload is read out of a Redis container under the key `HearingPayloadCacheKey` builds, the
+      subscriptions arrive over HTTP, and the register is serialised, validated against the vendored
+      schemas and POSTed. `PipelineCompositionTest` proves the same bean graph with its four outward
+      ports doubled; what it cannot see is whether the adapters behind those ports agree with it, and
+      that is the only part of this that fails in a deployment.
+      **(2) One WireMock server is all three contexts.** results-query, reference-data and progression
+      have disjoint paths, so `support/RegisterStackSupport` runs one server, one lifecycle and one
+      reset — and that is what makes "no POST was made" assertable at all, since it is a claim about
+      the single server that would have received it. Every context answers politely by default (an
+      empty hearing, nobody subscribed, 202) because the emulator queue is shared with every other
+      `*IT`: a neighbouring suite's message reaching this consumer completes `no-defendants` and
+      leaves, rather than being retried to the dead-letter queue by a suite it has nothing to do with.
+      **(3) The happy path is asserted as far as the digest.** `processed_output` is POSTED carrying
+      `response_code = 202`, the court centre, `register_date = 2020-06-01` (the day the recipients
+      were read for, C12) and a `request_digest` equal to the SHA-256 of exactly the bytes WireMock
+      received — which is the fact reconciliation needs and the one C1's legacy has no way to record.
+      **(4) `no-youth-defendants` is only reachable through a subscription that matches.** The youth
+      filter runs a stage after the addressing, so an adult-only hearing has to be addressed first and
+      found empty afterwards; a youth-keyed subscription answers `no-subscriptions` instead, which is
+      a different reason and a different fault to diagnose. `NowSubscriptionFixtures.forAnyDefendant`
+      exists for that, and the four no-op runs are told apart by `completion_reason` alone — which is
+      the whole of C33.)*
 - [ ] T069a [A] [US1] The e2e sufficiency matrix: four further suites in `e2e/`, each driving the
       **real** pipeline over the whole stack — the Service Bus emulator, Postgres, a Redis container
       and one WireMock server standing in for all three HTTP contexts at once (results-query,

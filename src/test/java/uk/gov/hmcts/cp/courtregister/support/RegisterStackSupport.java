@@ -1,0 +1,408 @@
+package uk.gov.hmcts.cp.courtregister.support;
+
+import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.get;
+import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
+import static com.github.tomakehurst.wiremock.client.WireMock.post;
+import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
+import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
+
+import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.client.MappingBuilder;
+import com.github.tomakehurst.wiremock.client.ResponseDefinitionBuilder;
+import com.github.tomakehurst.wiremock.stubbing.Scenario;
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisURI;
+import io.lettuce.core.api.StatefulRedisConnection;
+import java.time.LocalDate;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
+import uk.gov.hmcts.cp.courtregister.adapter.payload.HearingPayloadCacheKey;
+import uk.gov.hmcts.cp.courtregister.adapter.payload.ResultsQueryHearingPayloadClient;
+import uk.gov.hmcts.cp.courtregister.adapter.progression.ProgressionCommandGateway;
+import uk.gov.hmcts.cp.courtregister.adapter.refdata.ReferenceDataNowSubscriptionsClient;
+import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
+
+/**
+ * Everything outside the pod, for a suite that wants the pipeline as it really runs.
+ *
+ * <p>{@link ServiceTestSupport} starts the service against the store and the broker with the payload,
+ * reference-data and submission ports stubbed out, because the suites it was written for are about
+ * settlement and the processed log. That leaves the whole middle of this service — the cache, the
+ * query fallback, the now-subscriptions read, the twelve mappers, the contract validator and the POST
+ * — proven only against mocks of whatever sits either side of it. This fixture supplies the other
+ * three dependencies for real, so a suite can drive a hearing from the queue to a socket.
+ *
+ * <p><strong>One WireMock server, three contexts.</strong> The results-query, reference-data and
+ * progression paths are disjoint, so one server can be all three at once; three would be three ports,
+ * three lifecycles and three chances to reset the wrong one. What a suite gains from it is the
+ * assertion no per-adapter suite can make — that a register refused before it is sent reaches
+ * <em>no</em> socket at all — because "nothing was posted" is a claim about the one server that would
+ * have received it.
+ *
+ * <p><strong>Every context answers politely by default.</strong> The emulator queue is shared with
+ * every other {@code *IT} in the build, so a neighbouring suite's message can reach a consumer this
+ * fixture is behind. Unstubbed hearings are therefore answered with an empty envelope, unstubbed
+ * days with nobody subscribed, and any POST with a 202: a stranger's message completes
+ * {@code no-defendants} and leaves, instead of being retried to the dead-letter queue by a suite it
+ * has nothing to do with. A case that wants a specific answer stubs over the default, which WireMock
+ * resolves in the more specific stub's favour ({@link #DEFAULT_PRIORITY} against the default).
+ */
+public final class RegisterStackSupport implements AutoCloseable {
+
+    /** The catch-all stubs' priority: any stub a case adds is more specific and wins. */
+    private static final int CATCH_ALL_PRIORITY = 10;
+
+    /** The priority a case's own stub carries, which beats the catch-all. */
+    private static final int DEFAULT_PRIORITY = 5;
+
+    private static final int ACCEPTED = 202;
+
+    private static final ObjectMapper MAPPER = JacksonConfig.contractObjectMapper();
+
+    /**
+     * An envelope with nothing in it: a hearing that gathers nobody, so a stranger's request
+     * completes {@code no-defendants} rather than failing inside this suite's scenario.
+     *
+     * <p>Nothing in it resembles hearing content. Every defendant on a court register is a child, and
+     * a placeholder shaped like a payload invites an assertion to depend on it.
+     */
+    private static final String EMPTY_ENVELOPE =
+            "{\"hearing\":{\"courtCentre\":{}},\"sharedTime\":\"1970-01-01T00:00:00Z\"}";
+
+    /** Reference data's answer when nobody is subscribed, which is a legitimate business outcome. */
+    private static final String NOBODY_SUBSCRIBED = "{\"nowSubscriptions\":[]}";
+
+    private final WireMockServer contexts;
+    private final RedisClient cacheClient;
+    private final StatefulRedisConnection<String, String> cache;
+
+    private RegisterStackSupport(final WireMockServer contexts, final RedisClient cacheClient,
+            final StatefulRedisConnection<String, String> cache) {
+        this.contexts = contexts;
+        this.cacheClient = cacheClient;
+        this.cache = cache;
+    }
+
+    /**
+     * Starts the three HTTP contexts and connects to the shared payload cache.
+     *
+     * @return the running stack, to be closed by the caller
+     */
+    public static RegisterStackSupport start() {
+        final WireMockServer contexts = new WireMockServer(wireMockConfig().dynamicPort());
+        contexts.start();
+        final RedisClient client = RedisClient.create(RedisURI.create(RedisTestSupport.uri()));
+        final RegisterStackSupport stack =
+                new RegisterStackSupport(contexts, client, client.connect());
+        stack.answerPolitely();
+        return stack;
+    }
+
+    /**
+     * The settings that point the service at this stack, on top of
+     * {@link ServiceTestSupport#start(Map)}'s own defaults.
+     *
+     * <p>The two modes are the whole point: {@code LIVE} selects the cache-and-fallback payload
+     * adapter, the reference-data client and — because the submission configuration is chosen by the
+     * payload mode — the real progression gateway. The retry policies are shortened rather than
+     * removed: what a suite here needs is that a retryable answer <em>is</em> retried, not how long
+     * the deployed configuration waits between attempts, and a suite that spent the shipped
+     * back-offs would spend most of its runtime asleep.
+     *
+     * @return the settings
+     */
+    public Map<String, String> settings() {
+        final Map<String, String> settings = new LinkedHashMap<>();
+        settings.put("courtregister.payload.mode", "LIVE");
+        settings.put("courtregister.referencedata.mode", "LIVE");
+        settings.put("courtregister.payload.redis.host", RedisTestSupport.host());
+        settings.put("courtregister.payload.redis.port", String.valueOf(RedisTestSupport.port()));
+        settings.put("courtregister.results.base-url", contexts.baseUrl());
+        settings.put("courtregister.referencedata.base-url", contexts.baseUrl());
+        settings.put("courtregister.progression.base-url", contexts.baseUrl());
+        settings.put("courtregister.referencedata.system-user-id", ServiceTestSupport.SYSTEM_USER_ID);
+        settings.put("courtregister.payload.fallback.max-attempts", "2");
+        settings.put("courtregister.payload.fallback.initial-backoff", "50ms");
+        settings.put("courtregister.payload.fallback.max-backoff", "100ms");
+        settings.put("courtregister.referencedata.max-attempts", "2");
+        settings.put("courtregister.referencedata.initial-backoff", "50ms");
+        settings.put("courtregister.referencedata.max-backoff", "100ms");
+        settings.put("courtregister.progression.max-attempts", "2");
+        settings.put("courtregister.progression.initial-backoff", "50ms");
+        settings.put("courtregister.progression.max-backoff", "100ms");
+        return settings;
+    }
+
+    // --- the payload cache -----------------------------------------------------------------------
+
+    /**
+     * Publishes a hearing into the cache under the dated key, as the producer does.
+     *
+     * <p>The key is built by the service's own {@link HearingPayloadCacheKey}, not by a copy of its
+     * rule: a key that is nearly right reads nothing, and a cache miss is indistinguishable from a
+     * hearing nobody cached.
+     *
+     * @param hearingId  the hearing the payload belongs to
+     * @param hearingDay the day the request names
+     * @param payload    the claim-check envelope
+     */
+    public void cached(final UUID hearingId, final LocalDate hearingDay, final JsonNode payload) {
+        cache.sync().set(HearingPayloadCacheKey.cacheKey("INT_", hearingId, hearingDay),
+                payload.toString());
+    }
+
+    /**
+     * Forgets whatever was cached for a hearing, under both key forms.
+     *
+     * @param hearingId  the hearing
+     * @param hearingDay the day the request names
+     */
+    public void notCached(final UUID hearingId, final LocalDate hearingDay) {
+        cache.sync().del(HearingPayloadCacheKey.cacheKey("INT_", hearingId, hearingDay),
+                HearingPayloadCacheKey.cacheKey("INT_", hearingId, null));
+    }
+
+    // --- the results-query context ----------------------------------------------------------------
+
+    /**
+     * The query side holds this hearing.
+     *
+     * @param hearingId the hearing
+     * @param payload   the claim-check envelope it answers with
+     */
+    public void queryHolds(final UUID hearingId, final JsonNode payload) {
+        contexts.stubFor(queryFor(hearingId).willReturn(okJson(payload.toString())));
+    }
+
+    /**
+     * The query side answers, and holds nothing — the same answer a {@code 404} gives.
+     *
+     * @param hearingId the hearing
+     */
+    public void queryHoldsNothing(final UUID hearingId) {
+        contexts.stubFor(queryFor(hearingId).willReturn(aResponse().withStatus(404)));
+    }
+
+    /**
+     * The number of times the query side was asked for a hearing.
+     *
+     * @param hearingId the hearing
+     * @return the count
+     */
+    public int queriesFor(final UUID hearingId) {
+        return contexts.findAll(getRequestedFor(urlEqualTo(queryPath(hearingId)))).size();
+    }
+
+    private static MappingBuilder queryFor(final UUID hearingId) {
+        return get(urlEqualTo(queryPath(hearingId))).atPriority(DEFAULT_PRIORITY);
+    }
+
+    private static String queryPath(final UUID hearingId) {
+        return ResultsQueryHearingPayloadClient.PATH.replace("{hearingId}", hearingId.toString());
+    }
+
+    // --- the reference-data context ----------------------------------------------------------------
+
+    /**
+     * Reference data's answer for every day this suite asks about.
+     *
+     * <p>Keyed on the path rather than on the {@code on=} day: which day a register is read for is
+     * derived from the payload's own share instant, and a suite that restated that derivation in a
+     * stub would be asserting its own arithmetic rather than the service's.
+     *
+     * @param subscriptions the subscriptions in force
+     */
+    public void subscriptionsInForce(final JsonNode... subscriptions) {
+        contexts.stubFor(subscriptionsRead()
+                .willReturn(okJson(NowSubscriptionFixtures.answerOf(subscriptions).toString())));
+    }
+
+    /**
+     * Reference data answers the now-subscriptions read with a status.
+     *
+     * @param status the status it answers with
+     */
+    public void subscriptionsAnswer(final int status) {
+        contexts.stubFor(subscriptionsRead().willReturn(aResponse().withStatus(status)));
+    }
+
+    /**
+     * Reference data answers the now-subscriptions read slowly rather than late.
+     *
+     * @param subscriptions the subscriptions in force
+     * @param chunks        how many pieces the body arrives in
+     * @param overMillis    how long the whole body takes to arrive
+     */
+    public void subscriptionsDribble(
+            final JsonNode[] subscriptions, final int chunks, final int overMillis) {
+        contexts.stubFor(subscriptionsRead().willReturn(
+                okJson(NowSubscriptionFixtures.answerOf(subscriptions).toString())
+                        .withChunkedDribbleDelay(chunks, overMillis)));
+    }
+
+    private static MappingBuilder subscriptionsRead() {
+        return get(urlPathEqualTo(ReferenceDataNowSubscriptionsClient.PATH))
+                .atPriority(DEFAULT_PRIORITY);
+    }
+
+    // --- the progression context ------------------------------------------------------------------
+
+    /**
+     * Progression's answer to the {@code add-court-register} command.
+     *
+     * @param status the status it answers with
+     */
+    public void progressionAnswers(final int status) {
+        contexts.stubFor(addCourtRegister().willReturn(aResponse().withStatus(status)));
+    }
+
+    /**
+     * Progression's answers, in order: the first status once, then the second for ever.
+     *
+     * <p>A scenario rather than two stubs, because what is under test is that the retry happens at
+     * all — the client has to be answered differently on its second attempt than on its first.
+     *
+     * @param first the first answer
+     * @param then  every answer after it
+     */
+    public void progressionAnswers(final int first, final int then) {
+        final String scenario = "progression-" + UUID.randomUUID();
+        contexts.stubFor(addCourtRegister()
+                .inScenario(scenario)
+                .whenScenarioStateIs(Scenario.STARTED)
+                .willReturn(aResponse().withStatus(first))
+                .willSetStateTo("answered"));
+        contexts.stubFor(addCourtRegister()
+                .inScenario(scenario)
+                .whenScenarioStateIs("answered")
+                .willReturn(aResponse().withStatus(then)));
+    }
+
+    /**
+     * Every {@code add-court-register} command this stack has received.
+     *
+     * @return the count
+     */
+    public int registersPosted() {
+        return contexts.findAll(postRequestedFor(
+                urlEqualTo(ProgressionCommandGateway.PATH))).size();
+    }
+
+    /**
+     * The body of one received command, exactly as it arrived.
+     *
+     * <p>The bytes rather than a re-serialisation of them: {@code processed_output.request_digest}
+     * is taken over what was sent, so a suite checking the digest has to hash what the socket
+     * carried and not a tree that happens to be equal to it.
+     *
+     * @param index which command, in arrival order
+     * @return the body progression was sent
+     */
+    public String postedBody(final int index) {
+        return contexts.findAll(postRequestedFor(
+                urlEqualTo(ProgressionCommandGateway.PATH))).get(index).getBodyAsString();
+    }
+
+    /**
+     * The body of one received command, parsed.
+     *
+     * @param index which command, in arrival order
+     * @return the document progression was sent
+     */
+    public JsonNode postedRegister(final int index) {
+        return MAPPER.readTree(postedBody(index));
+    }
+
+    private static MappingBuilder addCourtRegister() {
+        return post(urlEqualTo(ProgressionCommandGateway.PATH)).atPriority(DEFAULT_PRIORITY);
+    }
+
+    // --- lifecycle -------------------------------------------------------------------------------
+
+    /**
+     * Forgets every stub and every recorded request, and restores the polite defaults.
+     *
+     * <p>Called between cases so a count means "this case", and so a scenario left mid-state by the
+     * previous case cannot answer this one's first attempt.
+     */
+    public void reset() {
+        contexts.resetAll();
+        answerPolitely();
+    }
+
+    /**
+     * The catch-alls: an empty hearing, nobody subscribed, and a 202 for anything posted.
+     *
+     * <p>See this class's own note. These exist for the messages this suite did not publish.
+     */
+    private void answerPolitely() {
+        contexts.stubFor(get(urlPathMatching(
+                ResultsQueryHearingPayloadClient.PATH.replace("{hearingId}", ".*")))
+                .atPriority(CATCH_ALL_PRIORITY)
+                .willReturn(okJson(EMPTY_ENVELOPE)));
+        contexts.stubFor(get(urlPathEqualTo(ReferenceDataNowSubscriptionsClient.PATH))
+                .atPriority(CATCH_ALL_PRIORITY)
+                .willReturn(okJson(NOBODY_SUBSCRIBED)));
+        contexts.stubFor(post(urlEqualTo(ProgressionCommandGateway.PATH))
+                .atPriority(CATCH_ALL_PRIORITY)
+                .willReturn(accepted()));
+    }
+
+    private static ResponseDefinitionBuilder accepted() {
+        return aResponse().withStatus(ACCEPTED);
+    }
+
+    /**
+     * A hearing payload from the base fixtures, re-identified as the given hearing.
+     *
+     * <p>The six base hearings all carry the same hearing id, and a suite that published messages
+     * naming it would have every case in the build competing for one processed-log key. The envelope
+     * is deep-copied and its hearing id replaced, so a case owns its hearing outright.
+     *
+     * @param fixture   the file name below {@code fixtures/base/}
+     * @param hearingId the hearing the request will name
+     * @return the claim-check envelope
+     */
+    public static JsonNode payload(final String fixture, final UUID hearingId) {
+        final JsonNode envelope = LegacyFixtures.readBase(fixture).deepCopy();
+        ((ObjectNode) envelope.get("hearing")).put("id", hearingId.toString());
+        return envelope;
+    }
+
+    /**
+     * A hearing that gathers nobody: the same envelope with its cases and applications emptied.
+     *
+     * <p>Derived rather than authored, because the point of the case it serves is that a real
+     * hearing shape with nothing to gather completes {@code no-defendants} — and a hand-built
+     * envelope would be asserting that the guard fires on a shape no producer sends. The
+     * defendant-level results go with the cases: they name master defendants no case then carries,
+     * which the port classifies as a transformation failure rather than an empty gather.
+     *
+     * @param hearingId the hearing the request will name
+     * @return the claim-check envelope
+     */
+    public static JsonNode payloadWithNothingToGather(final UUID hearingId) {
+        final JsonNode envelope = payload("hearing-with-surviving-youth-defendant.json", hearingId);
+        final ObjectNode hearing = (ObjectNode) envelope.get("hearing");
+        hearing.putArray("prosecutionCases");
+        hearing.putArray("courtApplications");
+        hearing.putArray("defendantJudicialResults");
+        return envelope;
+    }
+
+    @Override
+    public void close() {
+        cache.close();
+        cacheClient.shutdown();
+        contexts.stop();
+    }
+}

@@ -65,6 +65,26 @@ public final class NowSubscriptionFixtures {
     }
 
     /**
+     * The same subscriber, keyed on any defendant rather than on a youth.
+     *
+     * <p>What it is for is the {@code no-youth-defendants} outcome, which is only reachable through a
+     * subscription that matches: the youth filter runs a stage after the matching, so a hearing whose
+     * defendants are all adults must first be <em>addressed</em> and then found to have nobody on it.
+     * A youth-keyed subscription would answer {@code no-subscriptions} instead, which is a different
+     * completion reason and a different fault to diagnose.
+     *
+     * @param ouCode the court house's OU code
+     * @return the subscription
+     */
+    public static ObjectNode forAnyDefendant(final String ouCode) {
+        final ObjectNode subscription = youthCourtRegisterSubscription(ouCode);
+        final ObjectNode vocabulary = (ObjectNode) subscription.get("subscriptionVocabulary");
+        vocabulary.put("youthDefendant", false);
+        vocabulary.put("adultOrYouthDefendant", true);
+        return subscription;
+    }
+
+    /**
      * The same subscriber, asking for the post instead of email — a channel this service cannot
      * serve, so the subscription is dropped before the register is addressed (C36).
      *
