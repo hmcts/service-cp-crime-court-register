@@ -892,8 +892,33 @@ documentation-final states.
       this service makes rather than a defect: the duplicate is absorbed by progression's own
       `max(register_time)` sweep.)*
 
-- [ ] T070 [A] [US1] `e2e/MessageAccountingIT`, `e2e/TraceabilityIT`, `e2e/FailureSignalIT` —
+- [x] T070 [A] [US1] `e2e/MessageAccountingIT`, `e2e/TraceabilityIT`, `e2e/FailureSignalIT` —
       the inherited accounting/tracing/failure-signal proofs.
+      *(done — 11 cases, all green on introduction. Three things worth stating.
+      **(1) The accounting rule is ported whole, and the burst is this repo's addition.** The mixed
+      batch proves the five outcomes are reachable and mutually exclusive, and the six pure cases
+      beside it prove the exclusivity by handing the rule evidence that contradicts itself — a
+      completed request with a copy on the dead-letter queue, a parked one still on the queue it
+      arrived on, a claimed run whose message has vanished — each of which must be accounted for by
+      *nothing*. What the informant's batch cannot see is concurrency: its messages never overlap. A
+      burst of six published at once and consumed two at a time (the `maxConcurrentCalls` this
+      service ships) is added, and each request is asserted to have run exactly once and released its
+      claim — which is the failure the claim exists to prevent and the one a sequential batch cannot
+      provoke.
+      **(2) The traces are this service's own lines, not the informant's.** The completed trace reads
+      Delivery received → Request recorded and claimed → Hearing payload obtained → Request completed
+      → Run finished → Delivery acknowledged, and the failing one adds Pipeline run failed, Run
+      failed transiently, Request parked after its final permitted delivery, and Delivery parked on
+      the dead-letter queue. Both are read through the MDC rather than by matching text, because the
+      MDC is what the encoder ships and therefore what a reviewer can actually search; every line in
+      both traces carries `requestId`, `hearingId` and `hearingDay`.
+      **(3) `FailureSignalIT` records one honest exception to "exactly one ERROR".** A payload
+      neither source holds is reported twice — by the adapter that knows both missed, and by the
+      pipeline that decided what that is worth — and the suite says so in its own note rather than
+      quietly weakening the rule. What it enforces is one line per failed run from the layer that
+      settles: five failed runs, five ERRORs, five transient counts and one exhaustion. The
+      contract-validation line is deliberately uncorrelated (there is no readable request id to
+      correlate by) and is found by its opening words instead.)*
 - [ ] T071 [A] [US4] Container smoke re-verified with the finished service
       (`scripts/container-smoke.sh` locally + the CI step); compose stack documented in README.
 - [ ] T072 [US3] Documentation finalisation: DEFECT-FIXES all 31 fixable rows → FIXED with pinning
