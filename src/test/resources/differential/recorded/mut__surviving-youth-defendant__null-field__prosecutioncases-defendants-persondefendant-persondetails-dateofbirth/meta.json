@@ -1,0 +1,132 @@
+{
+  "caseId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-dateofbirth",
+  "recordedAt": null,
+  "oracle": {
+    "entryPoint": "CourtRegisterOrchestrator guard -> SetCourtRegister -> CourtRegisterSubscriptions -> OutboundCourtRegister",
+    "orchestrator": "CourtRegisterOrchestrator/index.js:21-49",
+    "activityBoundary": "every callActivity argument and return value crosses oracle/lib/boundary.js, as the Durable Task extension serialises them; OutboundCourtRegister therefore receives the ORCHESTRATOR's hearing, not the copy SetCourtRegister mutated",
+    "runner": "oracle/build-corpus.js",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "timezone": "Europe/London, pinned in oracle/lib/stubs.js installEnvironment()"
+  },
+  "sourcePinning": {
+    "nodeAppCommit": "0d63f3ae6bd0f4929e182de8d8ad9429160dd07f",
+    "nodeAppWorkingTreeClean": true,
+    "oracleDigest": "b304078d4f8f1a519e6ef1c9811d1ca54a281f0440be0720ecd44b1ded2f69e4",
+    "contractBundleDigest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
+    "nodeVersion": "v24.18.1",
+    "full": "recorded/provenance.json"
+  },
+  "params": {
+    "sharedTime": "2020-06-01T10:00:00Z",
+    "cjscppuid": "00000000-0000-0000-0000-000000000000",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "subscriptionsFixture": "subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsInline": false
+  },
+  "observed": {
+    "outcome": "document",
+    "stage": "complete",
+    "noDocumentReason": null,
+    "matchedSubscriptionCount": 1,
+    "registerDefendantCount": 1,
+    "defendantCount": 1,
+    "recipientCount": 1,
+    "subscriptionsReturnedUndefined": false,
+    "swallowedErrors": [],
+    "refdataCallCount": 1,
+    "refdataCalls": [
+      {
+        "verb": "GET",
+        "url": "http://reference-data.oracle.invalid/referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on=2020-06-01",
+        "on": "2020-06-01",
+        "headers": {
+          "CJSCPPUID": "00000000-0000-0000-0000-000000000000",
+          "Accept": "application/vnd.referencedata.query.get-now-subscriptions+json"
+        },
+        "attempt": 1,
+        "answered": "resolve status=200"
+      }
+    ]
+  },
+  "contract": {
+    "status": "SCHEMA_INVALID",
+    "basis": "the document the legacy produced violates the frozen add-court-register contract, so progression answers 400 and ProcessOutboundCourtRegister swallows it (defect C1). The port must NOT reproduce this document: assert a classified, dead-lettered contract failure naming the rule below, never golden equality",
+    "violations": [
+      {
+        "pointer": "/defendants/0/dateOfBirth",
+        "keyword": "type",
+        "schemaPointer": "#/properties/dateOfBirth/type",
+        "params": {
+          "type": "string"
+        },
+        "message": "should be string"
+      }
+    ],
+    "validatedAgainst": {
+      "bundle": "src/main/resources/contracts/progression/ (vendored, frozen)",
+      "commandSchema": "http://moj.gov.uk/cpp/progression/command/add-court-register.json",
+      "schemaCount": 15,
+      "validator": "ajv 6.14.0, schemaId:\"id\", format:\"full\", allErrors",
+      "portValidator": "networknt SpecificationVersion.DRAFT_4, formatAssertionsEnabled(true) (OutboundContractValidator)",
+      "keywordSurfaceAudited": [
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "definitions",
+        "description",
+        "enum",
+        "format",
+        "id",
+        "items",
+        "maxLength",
+        "minItems",
+        "minLength",
+        "minimum",
+        "pattern",
+        "properties",
+        "required",
+        "title",
+        "type"
+      ]
+    }
+  },
+  "deterministic": true,
+  "clockDependent": false,
+  "clockProbe": null,
+  "digests": {
+    "hearing": "a40b77e0b2f1c3b6820eb8bec63d12afb0d2cae6e15eec398d7b7b57d04fb46c",
+    "subscriptions": "a63ab8f911082e2e2aa7d41c28f6df8c12f2f6bb95a469f9530c640804053f5e",
+    "params": "da206d6a34845aa77c90e1567679130fa350e942d0da4b877172e177fc6171bc",
+    "expected": "234f86323b21d00bebc39163290c9df502da2c0ed405aae7ded152e6849120d2"
+  },
+  "inputContract": {
+    "status": "SCHEMA_INVALID",
+    "basis": "Every field in this catalogue is declared with a concrete type and no null union — courtCentre.{name,code,roomName}, person.{middleName,nationalityDescription}, offence.offenceTitle and prosecutionCaseIdentifier.{caseURN,prosecutionAuthorityName} are \"type\":\"string\"; the rest are $refs to object, array, date or enum schemas (address, lja, ethnicity, plea, verdict, allocationDecision, personTitle, datePattern, gender, positiveInteger, associatedDefenceOrganisation, prosecutingAuthority, masterDefendant). Verified against cpp-platform-core-domain/criminal-court-public-model/src/main/resources/json/schema/global/. In this model \"optional\" means ABSENT, never present-with-null, so a null here is a contract violation and not a producible input.",
+    "note": "The producer cannot emit this. The recording is what the legacy DOES with the input, and is evidence about robustness; it is NOT a parity obligation. The port's behaviour here is a design decision — the message-contract gate dead-letters it."
+  },
+  "evidence": "CONSTRUCTED — the field is nulled in a base hearing by this harness",
+  "provenance": {
+    "kind": "mutation",
+    "baseCase": "surviving-youth-defendant",
+    "baseRole": "spine",
+    "baseFixture": "fixtures/hearings/hearing-with-surviving-youth-defendant.json",
+    "baseFixtureOrigin": "service-cp-crime-court-register/src/test/resources/fixtures/base/hearing-with-surviving-youth-defendant.json (AUTHORED for the port — see BASE_FIXTURE_CAVEAT)",
+    "subscriptionsInput": "fixtures/subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsOrigin": "cpp-context-azure-legalaidagency/azure-functions/durable-functions/NowsVariantsSubscriptions/test/subscriptions.json (five court-register entries, verbatim, including the one entry in the whole capture that covers court house B01LY00)",
+    "sharedTimeSource": "the payload's own sharedTime (2020-06-01T10:00:00Z)",
+    "operator": "null-field",
+    "operatorVariant": "prosecutioncases-defendants-persondefendant-persondetails-dateofbirth",
+    "note": "A child who survives every filter to the outbound document: youth-flagged, a youth date of birth, a middle name, both ethnicity descriptions, two defendantCaseJudicialResults so postHearingCustodyStatus reaches a real value, an associated defence organisation, a two-entry defendantAttendance with the youth's record SECOND (defect C8), and a prosecuting-authority court application.",
+    "operatorScope": "hearing",
+    "operatorBaseScope": "spine",
+    "operatorDescription": "Sets one optional field to JSON null (the key is present, the value is null).",
+    "operatorRationale": "EVERY variant of this operator is SCHEMA_INVALID on the input axis and is recorded as such: the model types these fields concretely with no null union, so \"optional\" means absent, never present-with-null. The operator is kept because the recordings are the evidence for what the legacy does with a null — it does not guard against one, and copies it into the outbound body, where the OUTPUT axis then shows whether progression would accept it. Absent and null are different inputs and JavaScript treats them almost — but not exactly — alike (`x && x.y` is falsy for both; `hasOwnProperty` is not), which is how a null survives to the wire. Do not put these under golden equality.",
+    "operatorDetail": {
+      "field": "prosecutionCases[*].defendants[*].personDefendant.personDetails.dateOfBirth",
+      "occurrences": 1,
+      "reader": "YouthDefendantMapper.js:40 — youthDefendant.dateOfBirth, a required field of courtRegisterDefendant.json",
+      "mode": "all-occurrences"
+    }
+  }
+}

@@ -1,0 +1,121 @@
+{
+  "caseId": "mut__surviving-youth-defendant__shared-time__dst-spring-forward",
+  "recordedAt": null,
+  "oracle": {
+    "entryPoint": "CourtRegisterOrchestrator guard -> SetCourtRegister -> CourtRegisterSubscriptions -> OutboundCourtRegister",
+    "orchestrator": "CourtRegisterOrchestrator/index.js:21-49",
+    "activityBoundary": "every callActivity argument and return value crosses oracle/lib/boundary.js, as the Durable Task extension serialises them; OutboundCourtRegister therefore receives the ORCHESTRATOR's hearing, not the copy SetCourtRegister mutated",
+    "runner": "oracle/build-corpus.js",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "timezone": "Europe/London, pinned in oracle/lib/stubs.js installEnvironment()"
+  },
+  "sourcePinning": {
+    "nodeAppCommit": "0d63f3ae6bd0f4929e182de8d8ad9429160dd07f",
+    "nodeAppWorkingTreeClean": true,
+    "oracleDigest": "b304078d4f8f1a519e6ef1c9811d1ca54a281f0440be0720ecd44b1ded2f69e4",
+    "contractBundleDigest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
+    "nodeVersion": "v24.18.1",
+    "full": "recorded/provenance.json"
+  },
+  "params": {
+    "sharedTime": "2020-03-29T01:30:00Z",
+    "cjscppuid": "00000000-0000-0000-0000-000000000000",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "subscriptionsFixture": "subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsInline": false
+  },
+  "observed": {
+    "outcome": "document",
+    "stage": "complete",
+    "noDocumentReason": null,
+    "matchedSubscriptionCount": 1,
+    "registerDefendantCount": 1,
+    "defendantCount": 1,
+    "recipientCount": 1,
+    "subscriptionsReturnedUndefined": false,
+    "swallowedErrors": [],
+    "refdataCallCount": 1,
+    "refdataCalls": [
+      {
+        "verb": "GET",
+        "url": "http://reference-data.oracle.invalid/referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on=2020-03-29",
+        "on": "2020-03-29",
+        "headers": {
+          "CJSCPPUID": "00000000-0000-0000-0000-000000000000",
+          "Accept": "application/vnd.referencedata.query.get-now-subscriptions+json"
+        },
+        "attempt": 1,
+        "answered": "resolve status=200"
+      }
+    ]
+  },
+  "contract": {
+    "status": "IN_CONTRACT",
+    "basis": "the document the legacy produced satisfies the frozen add-court-register contract; progression accepts it, so the port must produce the same document",
+    "violations": null,
+    "validatedAgainst": {
+      "bundle": "src/main/resources/contracts/progression/ (vendored, frozen)",
+      "commandSchema": "http://moj.gov.uk/cpp/progression/command/add-court-register.json",
+      "schemaCount": 15,
+      "validator": "ajv 6.14.0, schemaId:\"id\", format:\"full\", allErrors",
+      "portValidator": "networknt SpecificationVersion.DRAFT_4, formatAssertionsEnabled(true) (OutboundContractValidator)",
+      "keywordSurfaceAudited": [
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "definitions",
+        "description",
+        "enum",
+        "format",
+        "id",
+        "items",
+        "maxLength",
+        "minItems",
+        "minLength",
+        "minimum",
+        "pattern",
+        "properties",
+        "required",
+        "title",
+        "type"
+      ]
+    }
+  },
+  "deterministic": true,
+  "clockDependent": false,
+  "clockProbe": null,
+  "digests": {
+    "hearing": "b47c0c6164bea0deb4b41f77ee92c9f5aeda7ba07408d946abc90345de2e3cee",
+    "subscriptions": "a63ab8f911082e2e2aa7d41c28f6df8c12f2f6bb95a469f9530c640804053f5e",
+    "params": "c5b5a02e090517e277050b04a9290f470d4d32456cda8f2e05a71646a8d87360",
+    "expected": "4e4a603124dbfc94e74fd94b5ad946d917176b3addfef8f8819c1709f35b286d"
+  },
+  "inputContract": {
+    "status": "IN_CONTRACT",
+    "basis": "cpp-context-results/results-event/results-event-processor/src/yaml/json/schema/public.hearing-resulted.json — sharedTime is required with format date-time; an RFC 3339 instant satisfies it",
+    "note": "The producer can send this. Whatever the legacy did with it is a parity obligation, subject to the OUTPUT axis (contractStatus) saying how it may be asserted."
+  },
+  "evidence": "CONSTRUCTED — the instant is chosen by this harness to sit on a named boundary",
+  "provenance": {
+    "kind": "mutation",
+    "baseCase": "surviving-youth-defendant",
+    "baseRole": "spine",
+    "baseFixture": "fixtures/hearings/hearing-with-surviving-youth-defendant.json",
+    "baseFixtureOrigin": "service-cp-crime-court-register/src/test/resources/fixtures/base/hearing-with-surviving-youth-defendant.json (AUTHORED for the port — see BASE_FIXTURE_CAVEAT)",
+    "subscriptionsInput": "fixtures/subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsOrigin": "cpp-context-azure-legalaidagency/azure-functions/durable-functions/NowsVariantsSubscriptions/test/subscriptions.json (five court-register entries, verbatim, including the one entry in the whole capture that covers court house B01LY00)",
+    "sharedTimeSource": "the payload's own sharedTime (2020-06-01T10:00:00Z)",
+    "operator": "shared-time",
+    "operatorVariant": "dst-spring-forward",
+    "note": "A child who survives every filter to the outbound document: youth-flagged, a youth date of birth, a middle name, both ethnicity descriptions, two defendantCaseJudicialResults so postHearingCustodyStatus reaches a real value, an associated defence organisation, a two-entry defendantAttendance with the youth's record SECOND (defect C8), and a prosecuting-authority court application.",
+    "operatorScope": "params",
+    "operatorBaseScope": "primary",
+    "operatorDescription": "Replaces the sharedTime the orchestrator passes in.",
+    "operatorRationale": "sharedTime is the sole source of registerDate (SetCourtRegister/index.js:54 -> DateService.getLocalDateTime) and therefore of fileName (OutboundCourtRegister/index.js:34), of the `on` date the now-subscriptions query is made for (CourtRegisterSubscriptions/index.js:19 -> ReferenceDataService.js:35), and it is what defect C10 is about: getLocalDateTime formats the instant in Europe/London and then appends a literal \"Z\", so a British Summer Time instant is relabelled as UTC an hour out. The BST/GMT and midnight boundaries are exactly where a java.time port diverges by an hour or a day, and those variants are IN_CONTRACT parity obligations. The last five are not: cpp-context-results/results-event/results-event-processor/src/yaml/json/schema/public.hearing-resulted.json makes sharedTime required with format date-time, and the results context dereferences it unguarded, so an absent, null or unparseable sharedTime fails upstream of this service. Those recordings stand as robustness evidence, not obligations.",
+    "operatorDetail": {
+      "sharedTime": "2020-03-29T01:30:00Z",
+      "why": "inside the hour that does not exist in London local time",
+      "reader": "SetCourtRegister/index.js:54"
+    }
+  }
+}

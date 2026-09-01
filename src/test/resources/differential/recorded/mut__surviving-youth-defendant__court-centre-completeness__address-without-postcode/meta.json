@@ -1,0 +1,121 @@
+{
+  "caseId": "mut__surviving-youth-defendant__court-centre-completeness__address-without-postcode",
+  "recordedAt": null,
+  "oracle": {
+    "entryPoint": "CourtRegisterOrchestrator guard -> SetCourtRegister -> CourtRegisterSubscriptions -> OutboundCourtRegister",
+    "orchestrator": "CourtRegisterOrchestrator/index.js:21-49",
+    "activityBoundary": "every callActivity argument and return value crosses oracle/lib/boundary.js, as the Durable Task extension serialises them; OutboundCourtRegister therefore receives the ORCHESTRATOR's hearing, not the copy SetCourtRegister mutated",
+    "runner": "oracle/build-corpus.js",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "timezone": "Europe/London, pinned in oracle/lib/stubs.js installEnvironment()"
+  },
+  "sourcePinning": {
+    "nodeAppCommit": "0d63f3ae6bd0f4929e182de8d8ad9429160dd07f",
+    "nodeAppWorkingTreeClean": true,
+    "oracleDigest": "b304078d4f8f1a519e6ef1c9811d1ca54a281f0440be0720ecd44b1ded2f69e4",
+    "contractBundleDigest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
+    "nodeVersion": "v24.18.1",
+    "full": "recorded/provenance.json"
+  },
+  "params": {
+    "sharedTime": "2020-06-01T10:00:00Z",
+    "cjscppuid": "00000000-0000-0000-0000-000000000000",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "subscriptionsFixture": "subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsInline": false
+  },
+  "observed": {
+    "outcome": "document",
+    "stage": "complete",
+    "noDocumentReason": null,
+    "matchedSubscriptionCount": 1,
+    "registerDefendantCount": 1,
+    "defendantCount": 1,
+    "recipientCount": 1,
+    "subscriptionsReturnedUndefined": false,
+    "swallowedErrors": [],
+    "refdataCallCount": 1,
+    "refdataCalls": [
+      {
+        "verb": "GET",
+        "url": "http://reference-data.oracle.invalid/referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on=2020-06-01",
+        "on": "2020-06-01",
+        "headers": {
+          "CJSCPPUID": "00000000-0000-0000-0000-000000000000",
+          "Accept": "application/vnd.referencedata.query.get-now-subscriptions+json"
+        },
+        "attempt": 1,
+        "answered": "resolve status=200"
+      }
+    ]
+  },
+  "contract": {
+    "status": "IN_CONTRACT",
+    "basis": "the document the legacy produced satisfies the frozen add-court-register contract; progression accepts it, so the port must produce the same document",
+    "violations": null,
+    "validatedAgainst": {
+      "bundle": "src/main/resources/contracts/progression/ (vendored, frozen)",
+      "commandSchema": "http://moj.gov.uk/cpp/progression/command/add-court-register.json",
+      "schemaCount": 15,
+      "validator": "ajv 6.14.0, schemaId:\"id\", format:\"full\", allErrors",
+      "portValidator": "networknt SpecificationVersion.DRAFT_4, formatAssertionsEnabled(true) (OutboundContractValidator)",
+      "keywordSurfaceAudited": [
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "definitions",
+        "description",
+        "enum",
+        "format",
+        "id",
+        "items",
+        "maxLength",
+        "minItems",
+        "minLength",
+        "minimum",
+        "pattern",
+        "properties",
+        "required",
+        "title",
+        "type"
+      ]
+    }
+  },
+  "deterministic": true,
+  "clockDependent": false,
+  "clockProbe": null,
+  "digests": {
+    "hearing": "4ad681e4b230770465ac0988c04d62b68ae519c68b1f6ceee45bacb9433aceca",
+    "subscriptions": "a63ab8f911082e2e2aa7d41c28f6df8c12f2f6bb95a469f9530c640804053f5e",
+    "params": "da206d6a34845aa77c90e1567679130fa350e942d0da4b877172e177fc6171bc",
+    "expected": "288801d2ffc303a31e1d9811c27c34963d272666a2bd447a423ffb151ec26b94"
+  },
+  "inputContract": {
+    "status": "IN_CONTRACT",
+    "basis": "cpp-platform-core-domain/criminal-court-public-model/src/main/resources/json/schema/global/courtCentre.json required is [\"id\",\"name\"] — every field this variant drops is optional",
+    "note": "The producer can send this. Whatever the legacy did with it is a parity obligation, subject to the OUTPUT axis (contractStatus) saying how it may be asserted."
+  },
+  "evidence": "CONSTRUCTED shape, OBSERVED precedent — id-and-lja-only is the shape 11 of the 12 byte-identical court-register fixtures in $DF are in",
+  "provenance": {
+    "kind": "mutation",
+    "baseCase": "surviving-youth-defendant",
+    "baseRole": "spine",
+    "baseFixture": "fixtures/hearings/hearing-with-surviving-youth-defendant.json",
+    "baseFixtureOrigin": "service-cp-crime-court-register/src/test/resources/fixtures/base/hearing-with-surviving-youth-defendant.json (AUTHORED for the port — see BASE_FIXTURE_CAVEAT)",
+    "subscriptionsInput": "fixtures/subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsOrigin": "cpp-context-azure-legalaidagency/azure-functions/durable-functions/NowsVariantsSubscriptions/test/subscriptions.json (five court-register entries, verbatim, including the one entry in the whole capture that covers court house B01LY00)",
+    "sharedTimeSource": "the payload's own sharedTime (2020-06-01T10:00:00Z)",
+    "operator": "court-centre-completeness",
+    "operatorVariant": "address-without-postcode",
+    "note": "A child who survives every filter to the outbound document: youth-flagged, a youth date of birth, a middle name, both ethnicity descriptions, two defendantCaseJudicialResults so postHearingCustodyStatus reaches a real value, an associated defence organisation, a two-entry defendantAttendance with the youth's record SECOND (defect C8), and a prosecuting-authority court application.",
+    "operatorScope": "hearing",
+    "operatorBaseScope": "primary+owner:complete-court-centre",
+    "operatorDescription": "Removes court-centre fields in the combinations the legacy fixtures actually exhibit, plus the complete one.",
+    "operatorRationale": "The court centre is read by three different consumers and each fails differently: `code` is the ONLY subscription match key (SubscriptionsService.matchCourtHouse) AND the tail of the file name, `name` is hearingVenue.courtHouse which the frozen contract REQUIRES, and `address` is the venue address block whose absence the mapper answers with undefined. Every court-register fixture in `$DF` except one carries an id and an LJA and nothing else, which is why courtHouse has never once been populated in a legacy test and why the venue address mapper has never executed. This operator makes that state of affairs a case rather than a footnote. Dropping `name` is SCHEMA_INVALID because courtCentre.json requires it — and it is nevertheless the shape most of the legacy fixtures are in.",
+    "operatorDetail": {
+      "dropped": [],
+      "why": "a venue address whose postcode is absent — courtRegisterAddress requires address1 and nothing else, so this probes the OUTPUT contract's actual floor rather than an assumed one",
+      "reader": "HearingVenueMapper.js:12-21; SubscriptionsService.js:52; OutboundCourtRegister/index.js:34"
+    }
+  }
+}

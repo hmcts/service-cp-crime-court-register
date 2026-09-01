@@ -1,0 +1,119 @@
+{
+  "caseId": "mut__surviving-youth-defendant__subscriptions-shape__null-body",
+  "recordedAt": null,
+  "oracle": {
+    "entryPoint": "CourtRegisterOrchestrator guard -> SetCourtRegister -> CourtRegisterSubscriptions -> OutboundCourtRegister",
+    "orchestrator": "CourtRegisterOrchestrator/index.js:21-49",
+    "activityBoundary": "every callActivity argument and return value crosses oracle/lib/boundary.js, as the Durable Task extension serialises them; OutboundCourtRegister therefore receives the ORCHESTRATOR's hearing, not the copy SetCourtRegister mutated",
+    "runner": "oracle/build-corpus.js",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "timezone": "Europe/London, pinned in oracle/lib/stubs.js installEnvironment()"
+  },
+  "sourcePinning": {
+    "nodeAppCommit": "0d63f3ae6bd0f4929e182de8d8ad9429160dd07f",
+    "nodeAppWorkingTreeClean": true,
+    "oracleDigest": "b304078d4f8f1a519e6ef1c9811d1ca54a281f0440be0720ecd44b1ded2f69e4",
+    "contractBundleDigest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
+    "nodeVersion": "v24.18.1",
+    "full": "recorded/provenance.json"
+  },
+  "params": {
+    "sharedTime": "2020-06-01T10:00:00Z",
+    "cjscppuid": "00000000-0000-0000-0000-000000000000",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "subscriptionsInline": true
+  },
+  "observed": {
+    "outcome": "no-document",
+    "stage": "complete",
+    "noDocumentReason": "OutboundCourtRegister/index.js:18-20 — no matched subscriptions",
+    "matchedSubscriptionCount": 0,
+    "registerDefendantCount": 1,
+    "defendantCount": null,
+    "recipientCount": null,
+    "subscriptionsReturnedUndefined": false,
+    "swallowedErrors": [],
+    "refdataCallCount": 1,
+    "refdataCalls": [
+      {
+        "verb": "GET",
+        "url": "http://reference-data.oracle.invalid/referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on=2020-06-01",
+        "on": "2020-06-01",
+        "headers": {
+          "CJSCPPUID": "00000000-0000-0000-0000-000000000000",
+          "Accept": "application/vnd.referencedata.query.get-now-subscriptions+json"
+        },
+        "attempt": 1,
+        "answered": "resolve status=200"
+      }
+    ]
+  },
+  "contract": {
+    "status": "NO_DOCUMENT",
+    "basis": "the legacy produced no document, so the frozen contract has nothing to judge; observed.outcome and observed.noDocumentReason carry this case's obligation",
+    "violations": null,
+    "validatedAgainst": {
+      "bundle": "src/main/resources/contracts/progression/ (vendored, frozen)",
+      "commandSchema": "http://moj.gov.uk/cpp/progression/command/add-court-register.json",
+      "schemaCount": 15,
+      "validator": "ajv 6.14.0, schemaId:\"id\", format:\"full\", allErrors",
+      "portValidator": "networknt SpecificationVersion.DRAFT_4, formatAssertionsEnabled(true) (OutboundContractValidator)",
+      "keywordSurfaceAudited": [
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "definitions",
+        "description",
+        "enum",
+        "format",
+        "id",
+        "items",
+        "maxLength",
+        "minItems",
+        "minLength",
+        "minimum",
+        "pattern",
+        "properties",
+        "required",
+        "title",
+        "type"
+      ]
+    }
+  },
+  "deterministic": true,
+  "clockDependent": false,
+  "clockProbe": null,
+  "digests": {
+    "hearing": "b47c0c6164bea0deb4b41f77ee92c9f5aeda7ba07408d946abc90345de2e3cee",
+    "subscriptions": "38e0b9de817f645c4bec37c0d4a3e58baecccb040f5718dc069a72c7385a0bed",
+    "params": "3f53a13a913e4cb8ecef27cc2678964edab7e1fefbdb4a57cd0f05b37a1de251",
+    "expected": "38e0b9de817f645c4bec37c0d4a3e58baecccb040f5718dc069a72c7385a0bed"
+  },
+  "inputContract": {
+    "status": "SCHEMA_INVALID",
+    "basis": "cpp-context-reference-data/referencedata-query/referencedata-query-api/src/raml/json/schema/referencedata.query.get-now-subscriptions.json required is [\"nowSubscriptions\"]; a null body is not a get-now-subscriptions response, but reference data can produce it by swallowing a transport failure",
+    "note": "The producer cannot emit this. The recording is what the legacy DOES with the input, and is evidence about robustness; it is NOT a parity obligation. The port's behaviour here is a design decision — the message-contract gate dead-letters it."
+  },
+  "evidence": "CONSTRUCTED — the degenerate body is built by this harness from the real capture",
+  "provenance": {
+    "kind": "mutation",
+    "baseCase": "surviving-youth-defendant",
+    "baseRole": "spine",
+    "baseFixture": "fixtures/hearings/hearing-with-surviving-youth-defendant.json",
+    "baseFixtureOrigin": "service-cp-crime-court-register/src/test/resources/fixtures/base/hearing-with-surviving-youth-defendant.json (AUTHORED for the port — see BASE_FIXTURE_CAVEAT)",
+    "subscriptionsInput": "fixtures/subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsOrigin": "cpp-context-azure-legalaidagency/azure-functions/durable-functions/NowsVariantsSubscriptions/test/subscriptions.json (five court-register entries, verbatim, including the one entry in the whole capture that covers court house B01LY00)",
+    "sharedTimeSource": "the payload's own sharedTime (2020-06-01T10:00:00Z)",
+    "operator": "subscriptions-shape",
+    "operatorVariant": "null-body",
+    "note": "A child who survives every filter to the outbound document: youth-flagged, a youth date of birth, a middle name, both ethnicity descriptions, two defendantCaseJudicialResults so postHearingCustodyStatus reaches a real value, an associated defence organisation, a two-entry defendantAttendance with the youth's record SECOND (defect C8), and a prosecuting-authority court application.",
+    "operatorScope": "subscriptions",
+    "operatorBaseScope": "primary+owner:complete-court-centre",
+    "operatorDescription": "Replaces the reference-data now-subscriptions response with each of its degenerate shapes.",
+    "operatorRationale": "CourtRegisterSubscriptions/index.js:21-34 has four early exits — a falsy body, no `nowSubscriptions` key, no register defendants, and no court-register subscriptions — and every one of them returns the fragment UNCHANGED, with `matchedSubscriptions` still the empty array the constructor gave it. OutboundCourtRegister/index.js:17 then returns null and the hearing produces no register at all. Each exit must be reachable, and the port must be able to tell \"reference data said there are none\" from \"reference data did not answer\" — which the legacy cannot, because ReferenceDataService swallows the failure and returns null (defect C3's territory).",
+    "operatorDetail": {
+      "why": "refdata returned nothing — index.js:23 first clause. ReferenceDataService.js:52 returns null on ANY failure, so this models a real runtime condition arriving through a code path",
+      "reader": "CourtRegisterSubscriptions/index.js:21-42; RecipientMapper.js:11-24"
+    }
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "caseId": "mut__address-less-youth-and-parent__group-proceedings__true",
+  "recordedAt": null,
+  "oracle": {
+    "entryPoint": "CourtRegisterOrchestrator guard -> SetCourtRegister -> CourtRegisterSubscriptions -> OutboundCourtRegister",
+    "orchestrator": "CourtRegisterOrchestrator/index.js:21-49",
+    "activityBoundary": "every callActivity argument and return value crosses oracle/lib/boundary.js, as the Durable Task extension serialises them; OutboundCourtRegister therefore receives the ORCHESTRATOR's hearing, not the copy SetCourtRegister mutated",
+    "runner": "oracle/build-corpus.js",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "timezone": "Europe/London, pinned in oracle/lib/stubs.js installEnvironment()"
+  },
+  "sourcePinning": {
+    "nodeAppCommit": "0d63f3ae6bd0f4929e182de8d8ad9429160dd07f",
+    "nodeAppWorkingTreeClean": true,
+    "oracleDigest": "b304078d4f8f1a519e6ef1c9811d1ca54a281f0440be0720ecd44b1ded2f69e4",
+    "contractBundleDigest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
+    "nodeVersion": "v24.18.1",
+    "full": "recorded/provenance.json"
+  },
+  "params": {
+    "sharedTime": "2020-06-01T10:00:00Z",
+    "cjscppuid": "00000000-0000-0000-0000-000000000000",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "subscriptionsFixture": "subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsInline": false
+  },
+  "observed": {
+    "outcome": "skipped-group-proceedings",
+    "stage": "CourtRegisterOrchestrator",
+    "noDocumentReason": "CourtRegisterOrchestrator/index.js:22 — isGroupProceedings is neither null nor false, so SetCourtRegister is never called",
+    "matchedSubscriptionCount": null,
+    "registerDefendantCount": null,
+    "defendantCount": null,
+    "recipientCount": null,
+    "subscriptionsReturnedUndefined": false,
+    "swallowedErrors": [],
+    "refdataCallCount": 0,
+    "refdataCalls": []
+  },
+  "contract": {
+    "status": "NO_DOCUMENT",
+    "basis": "the legacy produced no document, so the frozen contract has nothing to judge; observed.outcome and observed.noDocumentReason carry this case's obligation",
+    "violations": null,
+    "validatedAgainst": {
+      "bundle": "src/main/resources/contracts/progression/ (vendored, frozen)",
+      "commandSchema": "http://moj.gov.uk/cpp/progression/command/add-court-register.json",
+      "schemaCount": 15,
+      "validator": "ajv 6.14.0, schemaId:\"id\", format:\"full\", allErrors",
+      "portValidator": "networknt SpecificationVersion.DRAFT_4, formatAssertionsEnabled(true) (OutboundContractValidator)",
+      "keywordSurfaceAudited": [
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "definitions",
+        "description",
+        "enum",
+        "format",
+        "id",
+        "items",
+        "maxLength",
+        "minItems",
+        "minLength",
+        "minimum",
+        "pattern",
+        "properties",
+        "required",
+        "title",
+        "type"
+      ]
+    }
+  },
+  "deterministic": true,
+  "clockDependent": false,
+  "clockProbe": null,
+  "digests": {
+    "hearing": "c9914cac8b4d9fa3313d47f6580515c1a937033efedbb72b851772eeffb7454b",
+    "subscriptions": "a63ab8f911082e2e2aa7d41c28f6df8c12f2f6bb95a469f9530c640804053f5e",
+    "params": "da206d6a34845aa77c90e1567679130fa350e942d0da4b877172e177fc6171bc",
+    "expected": "38e0b9de817f645c4bec37c0d4a3e58baecccb040f5718dc069a72c7385a0bed"
+  },
+  "inputContract": {
+    "status": "IN_CONTRACT",
+    "basis": "cpp-platform-core-domain/criminal-court-public-model/src/main/resources/json/schema/global/hearing.json types isGroupProceedings as \"boolean\"",
+    "note": "The producer can send this. Whatever the legacy did with it is a parity obligation, subject to the OUTPUT axis (contractStatus) saying how it may be asserted."
+  },
+  "evidence": "CONSTRUCTED — the flag is set by this harness",
+  "provenance": {
+    "kind": "mutation",
+    "baseCase": "address-less-youth-and-parent",
+    "baseRole": "primary",
+    "baseFixture": "fixtures/hearings/hearing-with-address-less-youth-and-parent.json",
+    "baseFixtureOrigin": "service-cp-crime-court-register/src/test/resources/fixtures/base/hearing-with-address-less-youth-and-parent.json (AUTHORED for the port — see BASE_FIXTURE_CAVEAT)",
+    "subscriptionsInput": "fixtures/subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsOrigin": "cpp-context-azure-legalaidagency/azure-functions/durable-functions/NowsVariantsSubscriptions/test/subscriptions.json (five court-register entries, verbatim, including the one entry in the whole capture that covers court house B01LY00)",
+    "sharedTimeSource": "the payload's own sharedTime (2020-06-01T10:00:00Z)",
+    "operator": "group-proceedings",
+    "operatorVariant": "true",
+    "note": "Defect C29, both halves separably: a youth with no address, and a second youth who has one but whose parent does not.",
+    "operatorScope": "hearing",
+    "operatorBaseScope": "primary+owner:group-proceedings",
+    "operatorDescription": "Varies hearing.isGroupProceedings across the values the orchestrator's loose equality distinguishes.",
+    "operatorRationale": "CourtRegisterOrchestrator/index.js:22 gates the WHOLE chain on `isGroupProceedings == null || isGroupProceedings == false` — two loose equalities, which is a JavaScript idiom with no direct Java equivalent and therefore exactly the kind of thing a port re-derives wrongly. `== null` is true for null AND undefined; `== false` is true for false, 0, \"\" and []. So a hearing carrying `isGroupProceedings: 0` runs the chain and one carrying `\"false\"` does not. Defect C7 is about this gate. The variants that stay inside the declared boolean type are IN_CONTRACT; the coercion probes are SCHEMA_INVALID and are recorded as robustness evidence for what the loose equality actually admits.",
+    "operatorDetail": {
+      "isGroupProceedings": true,
+      "why": "the chain is skipped entirely — no activity runs, nothing is logged past the orchestrator entry line, and the orchestration returns Success",
+      "reader": "CourtRegisterOrchestrator/index.js:22"
+    }
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "purpose": "What produced this corpus. Every meta.json carries nodeAppCommit + oracleDigest + contractBundleDigest; the full block lives here. A rebuild that changes an expected.json without changing any field below is a genuine non-determinism and must be investigated, not re-recorded.",
+  "sourcePinning": {
+    "nodeAppDir": "/home/sachin/moj/cpp-context-azure-legalaidagency/azure-functions/durable-functions",
+    "nodeAppDirSource": "oracle/lib/paths.js DEFAULT_NODE_APP",
+    "nodeAppCommit": "0d63f3ae6bd0f4929e182de8d8ad9429160dd07f",
+    "nodeAppWorkingTreeClean": true,
+    "nodeAppDirtyPaths": null,
+    "packageLockSha256": "d7d9a9323992384615871d4732b848d2590e80919000ec800a83022f26c7d859",
+    "packageJsonSha256": "3d930ba3ae030352cf55264931e14c19d0d638518522312a5bd8efb70939d45f",
+    "nodeVersion": "v24.18.1",
+    "oracleDigest": "b304078d4f8f1a519e6ef1c9811d1ca54a281f0440be0720ecd44b1ded2f69e4",
+    "contractBundle": {
+      "dir": "/home/sachin/moj/service-cp-crime-court-register/src/main/resources/contracts/progression",
+      "digest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
+      "files": {
+        "courtRegisterAddress.json": "36a49eb09fb0c95752a5e8662cdf6f8e1368968aa64dc31a490290f7faf37677",
+        "courtRegisterCaseOrApplication.json": "e03d510e25eb62bc05eeb9012caac8c1628c9b3c84a27a2c83bb78a09589d43c",
+        "courtRegisterCounsel.json": "b92aa16cc40365b87702d45cff68745a5c9dac63de995ec6c9ea7db30286d2e9",
+        "courtRegisterDefendant.json": "7d1b9b5d620160264106b6e737c5cd7229cc25a7bd446dfb02bd4c92a87352d6",
+        "courtRegisterDefendantAlias.json": "38c3267783ad2f0539267fc26257bf66825dcaedc32e42acd28f806f8f182f88",
+        "courtRegisterDocumentRequest.json": "749ca524b2d76705fc1ec4ea7dbafd9348a218ca418aa8b70e8c955cfb7d83fb",
+        "courtRegisterHearing.json": "ad406920193aa6614d22965c3720aa44d3fb10f367374052efa2aeb6983f1eb5",
+        "courtRegisterHearingVenue.json": "18253a7b5a67b0ca6cafca5c8462c0a9954c315bb528a5f4726044e170df226d",
+        "courtRegisterOffence.json": "0eef9e615c5de1e361b1ac50b8358f5062321eccf9d29ee1db9aea422854d8df",
+        "courtRegisterParentGuardian.json": "9e58848d88730931abc07a6a53c297b368346eb774ccea82430967df04f53df6",
+        "courtRegisterRecipient.json": "6ebe3c50bee5a4d56e281d5d00ebf7ad5abf5a468afe161b2aa806b5be8a4724",
+        "courtRegisterResult.json": "2432089862d9b9d66a4e0639395ad1343cac4e79bb0068170f59e1a01eacb46d",
+        "courtsDefinitions.json": "90fce4556b8d9dad654a6eba1e05bd9e4216e84e821f02eba2a8a2aeb8c0aa97",
+        "definitions.json": "369dc7e53eda495508c3914650ad627b7201a33d36161c36fa27c36a3e29a104",
+        "progression.add-court-register.json": "4d9b73797ea62d0b18753428f6793a97ecc41f58f50821751ad21361c9f0272f"
+      },
+      "note": "The frozen progression contract every case's contractStatus is judged against. A re-vendoring changes this digest; a classification that changes without it is a harness defect."
+    },
+    "note": "nodeAppCommit + packageLockSha256 identify the transform under test; oracleDigest identifies the harness; contractBundle.digest identifies the schemas the outputs were classified against. A regeneration that changes any expected.json without changing one of these is a genuine non-determinism and must be investigated, not re-recorded."
+  },
+  "clock": {
+    "canonical": "2026-08-21T09:15:00.000Z",
+    "alternate": "2026-12-04T23:40:00.000Z"
+  },
+  "timezone": {
+    "pinned": "Europe/London",
+    "where": "oracle/lib/stubs.js installEnvironment()",
+    "probe": "TZ=Asia/Tokyo CR_ORACLE_NO_TZ_PIN=1 node oracle/build-corpus.js — the flag is not optional; without it the pin overwrites the outer TZ and the run proves only that the pin works."
+  },
+  "contractClassification": {
+    "outputAxis": {
+      "field": "contractStatus",
+      "authority": "the vendored, frozen progression contract in service-cp-crime-court-register/src/main/resources/contracts/progression/",
+      "note": "IN_CONTRACT means the document the legacy produced satisfies the frozen add-court-register contract, so the port must reproduce it under golden equality. SCHEMA_INVALID means progression answers 400 and the legacy swallows it (defect C1): the port must NOT reproduce the document but reach a classified, dead-lettered contract failure naming the recorded violation. NO_DOCUMENT means the legacy produced nothing, and observed.noDocumentReason carries the obligation instead.",
+      "counts": {
+        "IN_CONTRACT": 123,
+        "SCHEMA_INVALID": 66,
+        "NO_DOCUMENT": 162
+      }
+    },
+    "inputAxis": {
+      "field": "inputContractStatus",
+      "authority": "the published hearing model in cpp-platform-core-domain and the event schema public.hearing-resulted.json",
+      "note": "IN_CONTRACT means the producer can send the payload, so whatever the legacy did with it is a parity obligation. SCHEMA_INVALID and PRODUCER_IMPLAUSIBLE mean it cannot: the recording is robustness evidence, and the port dead-letters as a message-contract violation. A case is a FULL parity obligation only when both axes say so.",
+      "counts": {
+        "IN_CONTRACT": 220,
+        "SCHEMA_INVALID": 99,
+        "PRODUCER_IMPLAUSIBLE": 32
+      },
+      "report": "node oracle/mutate.js --contract-report"
+    }
+  },
+  "operatorScope": {
+    "note": "Which operators ran on which base, and therefore where the corpus deliberately does not look. See OPERATOR_SCOPE in oracle/build-corpus.js for the reasoning.",
+    "scopes": {
+      "youth-presence": "all",
+      "legal-entity": "all",
+      "address-less": "all",
+      "multi-defendant": "all",
+      "shared-time": "primary",
+      "subscriptions-shape": "primary+owner:complete-court-centre",
+      "subscriptions-cardinality": "primary",
+      "refdata-unavailable": "primary",
+      "re-share-duplicate": "primary",
+      "court-centre-completeness": "primary+owner:complete-court-centre",
+      "group-proceedings": "primary+owner:group-proceedings",
+      "empty-array": "arrays",
+      "duplicate-array-entry": "arrays",
+      "reorder-array": "arrays",
+      "unicode-name": "arrays",
+      "drop-optional-field": "spine",
+      "null-field": "spine"
+    },
+    "primaryBases": [
+      "surviving-youth-defendant",
+      "adult-first-youth-second",
+      "address-less-youth-and-parent"
+    ],
+    "arrayBases": [
+      "surviving-youth-defendant",
+      "adult-first-youth-second"
+    ],
+    "spineBases": [
+      "surviving-youth-defendant"
+    ],
+    "shortCircuitedBases": {
+      "group-proceedings": "group-proceedings"
+    }
+  },
+  "subscriptionSharing": {
+    "note": "Cases that did not change the reference-data body carry params.subscriptionsFixture naming a file under recorded/subscriptions/ rather than a per-case copy. Cases that did carry params.subscriptionsInline: true and their own inputs/subscriptions.json. Cases with params.subscriptionsAbsent: true made the reference-data call fail and have no body at all.",
+    "sharedFiles": [
+      "subscriptions/now-subscriptions-cr-sample.json",
+      "subscriptions/now-subscriptions-cr-only.json",
+      "subscriptions/now-subscriptions-full.json"
+    ]
+  },
+  "baseFixtureCaveat": "The six base hearings are AUTHORED payloads, copied byte-identical from the port repo's src/test/resources/fixtures/base/. They are not captured production data and they are not legacy Jest fixtures: the legacy has no court-register fixture carrying a complete court centre, a surviving youth defendant, group proceedings, an adult ahead of a youth, a non-prosecuting-authority application or an address-less child. All six share one spine — $DF/OutboundCourtRegister/.../YouthDefendant/test/hearing-resulted.json with a complete court centre, ISO ordered dates and one ungatherable defendant-level result removed. A variant's inputContract classifies THE MUTATION, not the base it is applied to.",
+  "subscriptionSchemaCaveat": "cpp-context-reference-data/referencedata-query/referencedata-query-api/src/raml/json/schema/referencedata.query.get-now-subscriptions.json is internally inconsistent (additionalProperties:false alongside required entries that are not declared as properties); classifications use only its unambiguous parts."
+}

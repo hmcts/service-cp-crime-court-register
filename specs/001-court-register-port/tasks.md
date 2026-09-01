@@ -976,7 +976,7 @@ documentation-final states.
 
 ## Phase 8: Differential audit (US5)
 
-- [ ] T073 [US5] Build the legacy oracle: adapt the informant parity-pack CLI to the three
+- [x] T073 [US5] Build the legacy oracle: adapt the informant parity-pack CLI to the three
       court-register activities (`SetCourtRegister`, `CourtRegisterSubscriptions`,
       `OutboundCourtRegister`) with clock + `TZ=Europe/London` pinned and provenance recorded;
       record the corpus from the six base hearings × the transferable operators (shared-time,
@@ -984,6 +984,27 @@ documentation-final states.
       reorder-array, subscriptions-shape/cardinality, re-share-duplicate) + the new operators
       (group-proceedings, youth-presence, court-centre completeness, multi-defendant,
       legal-entity, address-less) under `src/test/resources/differential/recorded/`.
+      *(Done — 351 cases at `src/test/resources/differential/recorded/`, from the analysis-side pack
+      `analysis/results-distribution/CourtRegister/differential-pack/`, which is not in this repo.
+      The oracle runs the three real activities behind the orchestrator's own group-proceedings
+      guard, crossing every `callActivity` with the serialise-step boundary; clock pinned to
+      `2026-08-21T09:15:00.000Z`, `TZ=Europe/London` pinned and skippable so the timezone claim is
+      testable. Provenance records legacy HEAD `0d63f3ae`, a clean tree, the package-lock digest,
+      Node v24.18.1, the oracle digest and — new for this pack — the vendored contract-bundle
+      digest, because `contractStatus` is a statement about those schemas. Sixteen operators; the
+      six base payloads copied byte-identical; subscriptions a verbatim subset of the real 274-entry
+      capture carrying the one entry that covers `B01LY00`. Two contract axes per case: the OUTPUT
+      axis classifies the legacy's document against the vendored
+      `contracts/progression/` bundle (IN_CONTRACT 123 / SCHEMA_INVALID 66 / NO_DOCUMENT 162), the
+      INPUT axis against the published hearing model (220 / 99 / 32); both say IN_CONTRACT on 70
+      cases, which are the full parity obligations. Outcomes: 189 documents, 142 no-document, 11
+      swallowed exceptions, 9 orchestrator skips. Checked, not claimed: 351/351 deterministic at a
+      fixed clock, 2 clock-dependent cases identified and given alternate-clock goldens, 351/351
+      byte-identical under `TZ=Asia/Tokyo` and `TZ=America/Los_Angeles` with the pin skipped, and
+      `verify-boundary.js` reports 0 cases where the activity boundary changes the output. The
+      corpus reproduces C1, C7, C8, C10, C13, C22, C29 and C31 as evidence for T075, and surfaces
+      one uncatalogued in-contract loss — a legal-entity defendant throws in `YouthDefendantMapper`
+      and the register vanishes — which needs a C-number with review or the legacy stands.)*
 - [ ] T074 [US5] Write `support/RegisteredDefectFixes` + `DifferentialAuditTest` (red only in the
       sense that unattributed diffs fail) — every legacy-vs-port difference derives from a
       C-number; `SCHEMA_INVALID` corpus cases asserted as classified failures.

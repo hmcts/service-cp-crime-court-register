@@ -1,0 +1,120 @@
+{
+  "caseId": "mut__adult-first-youth-second__address-less__both",
+  "recordedAt": null,
+  "oracle": {
+    "entryPoint": "CourtRegisterOrchestrator guard -> SetCourtRegister -> CourtRegisterSubscriptions -> OutboundCourtRegister",
+    "orchestrator": "CourtRegisterOrchestrator/index.js:21-49",
+    "activityBoundary": "every callActivity argument and return value crosses oracle/lib/boundary.js, as the Durable Task extension serialises them; OutboundCourtRegister therefore receives the ORCHESTRATOR's hearing, not the copy SetCourtRegister mutated",
+    "runner": "oracle/build-corpus.js",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "timezone": "Europe/London, pinned in oracle/lib/stubs.js installEnvironment()"
+  },
+  "sourcePinning": {
+    "nodeAppCommit": "0d63f3ae6bd0f4929e182de8d8ad9429160dd07f",
+    "nodeAppWorkingTreeClean": true,
+    "oracleDigest": "b304078d4f8f1a519e6ef1c9811d1ca54a281f0440be0720ecd44b1ded2f69e4",
+    "contractBundleDigest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
+    "nodeVersion": "v24.18.1",
+    "full": "recorded/provenance.json"
+  },
+  "params": {
+    "sharedTime": "2020-06-01T10:00:00Z",
+    "cjscppuid": "00000000-0000-0000-0000-000000000000",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "subscriptionsFixture": "subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsInline": false
+  },
+  "observed": {
+    "outcome": "no-document",
+    "stage": "complete",
+    "noDocumentReason": "OutboundCourtRegister/index.js:18-20 — no matched subscriptions",
+    "matchedSubscriptionCount": 0,
+    "registerDefendantCount": 2,
+    "defendantCount": null,
+    "recipientCount": null,
+    "subscriptionsReturnedUndefined": false,
+    "swallowedErrors": [],
+    "refdataCallCount": 1,
+    "refdataCalls": [
+      {
+        "verb": "GET",
+        "url": "http://reference-data.oracle.invalid/referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on=2020-06-01",
+        "on": "2020-06-01",
+        "headers": {
+          "CJSCPPUID": "00000000-0000-0000-0000-000000000000",
+          "Accept": "application/vnd.referencedata.query.get-now-subscriptions+json"
+        },
+        "attempt": 1,
+        "answered": "resolve status=200"
+      }
+    ]
+  },
+  "contract": {
+    "status": "NO_DOCUMENT",
+    "basis": "the legacy produced no document, so the frozen contract has nothing to judge; observed.outcome and observed.noDocumentReason carry this case's obligation",
+    "violations": null,
+    "validatedAgainst": {
+      "bundle": "src/main/resources/contracts/progression/ (vendored, frozen)",
+      "commandSchema": "http://moj.gov.uk/cpp/progression/command/add-court-register.json",
+      "schemaCount": 15,
+      "validator": "ajv 6.14.0, schemaId:\"id\", format:\"full\", allErrors",
+      "portValidator": "networknt SpecificationVersion.DRAFT_4, formatAssertionsEnabled(true) (OutboundContractValidator)",
+      "keywordSurfaceAudited": [
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "definitions",
+        "description",
+        "enum",
+        "format",
+        "id",
+        "items",
+        "maxLength",
+        "minItems",
+        "minLength",
+        "minimum",
+        "pattern",
+        "properties",
+        "required",
+        "title",
+        "type"
+      ]
+    }
+  },
+  "deterministic": true,
+  "clockDependent": false,
+  "clockProbe": null,
+  "digests": {
+    "hearing": "ae96001c821d6a46d58036b9081fd863c2a93657129c87a7232f3ba2740cb623",
+    "subscriptions": "a63ab8f911082e2e2aa7d41c28f6df8c12f2f6bb95a469f9530c640804053f5e",
+    "params": "da206d6a34845aa77c90e1567679130fa350e942d0da4b877172e177fc6171bc",
+    "expected": "38e0b9de817f645c4bec37c0d4a3e58baecccb040f5718dc069a72c7385a0bed"
+  },
+  "inputContract": {
+    "status": "IN_CONTRACT",
+    "basis": "cpp-platform-core-domain/criminal-court-public-model/src/main/resources/json/schema/global/person.json required is [\"lastName\",\"gender\"] — address is optional, so a payload without one is legal producer output. The frozen OUTPUT contract nevertheless requires it, which is defect C29",
+    "note": "The producer can send this. Whatever the legacy did with it is a parity obligation, subject to the OUTPUT axis (contractStatus) saying how it may be asserted."
+  },
+  "evidence": "CONSTRUCTED — the address is removed from a base hearing by this harness. The shape itself is OBSERVED: hearing-with-address-less-youth-and-parent.json exists in the port repo because this is a real production shape",
+  "provenance": {
+    "kind": "mutation",
+    "baseCase": "adult-first-youth-second",
+    "baseRole": "primary",
+    "baseFixture": "fixtures/hearings/hearing-with-adult-first-youth-second.json",
+    "baseFixtureOrigin": "service-cp-crime-court-register/src/test/resources/fixtures/base/hearing-with-adult-first-youth-second.json (AUTHORED for the port — see BASE_FIXTURE_CAVEAT)",
+    "subscriptionsInput": "fixtures/subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsOrigin": "cpp-context-azure-legalaidagency/azure-functions/durable-functions/NowsVariantsSubscriptions/test/subscriptions.json (five court-register entries, verbatim, including the one entry in the whole capture that covers court house B01LY00)",
+    "sharedTimeSource": "the payload's own sharedTime (2020-06-01T10:00:00Z)",
+    "operator": "address-less",
+    "operatorVariant": "both",
+    "note": "Defect C31 — the subscription match runs on registerDefendants[0], and defendant[0] is the ADULT. Two defendants in different roles, which is what makes the array-shape operators mean anything.",
+    "operatorScope": "hearing",
+    "operatorBaseScope": "all",
+    "operatorDescription": "Removes the address from the youth, from the parent/guardian, or from both.",
+    "operatorRationale": "Defect C29, separably. `courtRegisterDefendant.json` requires `address` and `courtRegisterAddress.json` requires `address1`; `courtRegisterParentGuardian.json` requires an address too. The legacy address mapper answers nothing for an absent address, so a child with no address on the payload produces a document progression answers 400 to — and ProcessOutboundCourtRegister swallows that 400 (defect C1), so the whole hearing's register is lost with no trace anywhere. An address is genuinely optional on cpp-platform-core-domain/criminal-court-public-model/src/main/resources/json/schema/global/person.json, so every variant here is an IN_CONTRACT INPUT that produces an out-of-contract OUTPUT: the pair of axes is the finding.",
+    "operatorDetail": {
+      "why": "neither has an address; the validator must name ONE bounded reason, and which one it names has to be decided rather than left to the validator's walk order",
+      "reader": "AddressMapper; OutboundContractValidator (C29)"
+    }
+  }
+}

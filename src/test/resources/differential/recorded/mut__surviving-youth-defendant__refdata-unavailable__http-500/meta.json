@@ -1,0 +1,140 @@
+{
+  "caseId": "mut__surviving-youth-defendant__refdata-unavailable__http-500",
+  "recordedAt": null,
+  "oracle": {
+    "entryPoint": "CourtRegisterOrchestrator guard -> SetCourtRegister -> CourtRegisterSubscriptions -> OutboundCourtRegister",
+    "orchestrator": "CourtRegisterOrchestrator/index.js:21-49",
+    "activityBoundary": "every callActivity argument and return value crosses oracle/lib/boundary.js, as the Durable Task extension serialises them; OutboundCourtRegister therefore receives the ORCHESTRATOR's hearing, not the copy SetCourtRegister mutated",
+    "runner": "oracle/build-corpus.js",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "timezone": "Europe/London, pinned in oracle/lib/stubs.js installEnvironment()"
+  },
+  "sourcePinning": {
+    "nodeAppCommit": "0d63f3ae6bd0f4929e182de8d8ad9429160dd07f",
+    "nodeAppWorkingTreeClean": true,
+    "oracleDigest": "b304078d4f8f1a519e6ef1c9811d1ca54a281f0440be0720ecd44b1ded2f69e4",
+    "contractBundleDigest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
+    "nodeVersion": "v24.18.1",
+    "full": "recorded/provenance.json"
+  },
+  "params": {
+    "sharedTime": "2020-06-01T10:00:00Z",
+    "cjscppuid": "00000000-0000-0000-0000-000000000000",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "refdata": {
+      "kind": "reject",
+      "status": 500,
+      "message": "Request failed with status code 500"
+    },
+    "subscriptionsInline": false,
+    "subscriptionsAbsent": true
+  },
+  "observed": {
+    "outcome": "no-document",
+    "stage": "complete",
+    "noDocumentReason": "OutboundCourtRegister/index.js:18-20 — no matched subscriptions",
+    "matchedSubscriptionCount": 0,
+    "registerDefendantCount": 1,
+    "defendantCount": null,
+    "recipientCount": null,
+    "subscriptionsReturnedUndefined": false,
+    "swallowedErrors": [
+      "[Hearing ID: e100d08a-ed4e-43a2-aae2-e9c5735713b0] - All retries failed for GET http://reference-data.oracle.invalid/referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on=2020-06-01: Request failed with status code 500",
+      "[Hearing ID: e100d08a-ed4e-43a2-aae2-e9c5735713b0] - getWrapper- Request to GET http://reference-data.oracle.invalid/referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on=2020-06-01 failed: Request failed with status code 500",
+      "[Hearing ID: e100d08a-ed4e-43a2-aae2-e9c5735713b0] - ReferenceDataService: Error retrieving nows subscription metadata -->> Error: Request failed with status code 500"
+    ],
+    "refdataCallCount": 2,
+    "refdataCalls": [
+      {
+        "verb": "GET",
+        "url": "http://reference-data.oracle.invalid/referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on=2020-06-01",
+        "on": "2020-06-01",
+        "headers": {
+          "CJSCPPUID": "00000000-0000-0000-0000-000000000000",
+          "Accept": "application/vnd.referencedata.query.get-now-subscriptions+json"
+        },
+        "attempt": 1,
+        "answered": "reject status=500"
+      },
+      {
+        "verb": "GET",
+        "url": "http://reference-data.oracle.invalid/referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on=2020-06-01",
+        "on": "2020-06-01",
+        "headers": {
+          "CJSCPPUID": "00000000-0000-0000-0000-000000000000",
+          "Accept": "application/vnd.referencedata.query.get-now-subscriptions+json"
+        },
+        "attempt": 2,
+        "answered": "reject status=500"
+      }
+    ]
+  },
+  "contract": {
+    "status": "NO_DOCUMENT",
+    "basis": "the legacy produced no document, so the frozen contract has nothing to judge; observed.outcome and observed.noDocumentReason carry this case's obligation",
+    "violations": null,
+    "validatedAgainst": {
+      "bundle": "src/main/resources/contracts/progression/ (vendored, frozen)",
+      "commandSchema": "http://moj.gov.uk/cpp/progression/command/add-court-register.json",
+      "schemaCount": 15,
+      "validator": "ajv 6.14.0, schemaId:\"id\", format:\"full\", allErrors",
+      "portValidator": "networknt SpecificationVersion.DRAFT_4, formatAssertionsEnabled(true) (OutboundContractValidator)",
+      "keywordSurfaceAudited": [
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "definitions",
+        "description",
+        "enum",
+        "format",
+        "id",
+        "items",
+        "maxLength",
+        "minItems",
+        "minLength",
+        "minimum",
+        "pattern",
+        "properties",
+        "required",
+        "title",
+        "type"
+      ]
+    }
+  },
+  "deterministic": true,
+  "clockDependent": false,
+  "clockProbe": null,
+  "digests": {
+    "hearing": "b47c0c6164bea0deb4b41f77ee92c9f5aeda7ba07408d946abc90345de2e3cee",
+    "subscriptions": null,
+    "params": "c3522f31cb5a0aaf2650f4cad39aef48670d74f2b6bf1ee2436b804539a02b4e",
+    "expected": "38e0b9de817f645c4bec37c0d4a3e58baecccb040f5718dc069a72c7385a0bed"
+  },
+  "inputContract": {
+    "status": "IN_CONTRACT",
+    "basis": "a reference-data outage or a transient 5xx is an operational condition, not a payload; nothing in any schema forbids it",
+    "note": "The producer can send this. Whatever the legacy did with it is a parity obligation, subject to the OUTPUT axis (contractStatus) saying how it may be asserted."
+  },
+  "evidence": "CONSTRUCTED — the failure is injected at the axios boundary by this harness",
+  "provenance": {
+    "kind": "mutation",
+    "baseCase": "surviving-youth-defendant",
+    "baseRole": "spine",
+    "baseFixture": "fixtures/hearings/hearing-with-surviving-youth-defendant.json",
+    "baseFixtureOrigin": "service-cp-crime-court-register/src/test/resources/fixtures/base/hearing-with-surviving-youth-defendant.json (AUTHORED for the port — see BASE_FIXTURE_CAVEAT)",
+    "subscriptionsInput": "fixtures/subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsOrigin": "cpp-context-azure-legalaidagency/azure-functions/durable-functions/NowsVariantsSubscriptions/test/subscriptions.json (five court-register entries, verbatim, including the one entry in the whole capture that covers court house B01LY00)",
+    "sharedTimeSource": "the payload's own sharedTime (2020-06-01T10:00:00Z)",
+    "operator": "refdata-unavailable",
+    "operatorVariant": "http-500",
+    "note": "A child who survives every filter to the outbound document: youth-flagged, a youth date of birth, a middle name, both ethnicity descriptions, two defendantCaseJudicialResults so postHearingCustodyStatus reaches a real value, an associated defence organisation, a two-entry defendantAttendance with the youth's record SECOND (defect C8), and a prosecuting-authority court application.",
+    "operatorScope": "refdata-transport",
+    "operatorBaseScope": "primary",
+    "operatorDescription": "Makes the now-subscriptions GET fail instead of answering.",
+    "operatorRationale": "ReferenceDataService.js:53-56 SWALLOWS the failure and returns null, so CourtRegisterSubscriptions/index.js:23 takes the \"No Subscriptions found\" exit, the fragment keeps its empty matchedSubscriptions, and OutboundCourtRegister returns null. A reference-data outage silently produces NO REGISTER AT ALL for a child, and nothing anywhere records that it happened. The port must be able to tell this apart from \"there genuinely are no subscriptions\" — the two are indistinguishable in the legacy, and that is the finding.",
+    "operatorDetail": {
+      "why": "AxiosRetryWrapper retries to exhaustion, then ReferenceDataService swallows",
+      "reader": "ReferenceDataService.js:50-56; CommonUtility/AxiosRetryWrapper.js"
+    }
+  }
+}

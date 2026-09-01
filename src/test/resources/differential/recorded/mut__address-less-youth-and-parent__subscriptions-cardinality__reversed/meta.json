@@ -1,0 +1,138 @@
+{
+  "caseId": "mut__address-less-youth-and-parent__subscriptions-cardinality__reversed",
+  "recordedAt": null,
+  "oracle": {
+    "entryPoint": "CourtRegisterOrchestrator guard -> SetCourtRegister -> CourtRegisterSubscriptions -> OutboundCourtRegister",
+    "orchestrator": "CourtRegisterOrchestrator/index.js:21-49",
+    "activityBoundary": "every callActivity argument and return value crosses oracle/lib/boundary.js, as the Durable Task extension serialises them; OutboundCourtRegister therefore receives the ORCHESTRATOR's hearing, not the copy SetCourtRegister mutated",
+    "runner": "oracle/build-corpus.js",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "timezone": "Europe/London, pinned in oracle/lib/stubs.js installEnvironment()"
+  },
+  "sourcePinning": {
+    "nodeAppCommit": "0d63f3ae6bd0f4929e182de8d8ad9429160dd07f",
+    "nodeAppWorkingTreeClean": true,
+    "oracleDigest": "b304078d4f8f1a519e6ef1c9811d1ca54a281f0440be0720ecd44b1ded2f69e4",
+    "contractBundleDigest": "ff19dfcb2e8299a6440c7f0faeb5708d2b2875660fc2187a3c715801c74ffadc",
+    "nodeVersion": "v24.18.1",
+    "full": "recorded/provenance.json"
+  },
+  "params": {
+    "sharedTime": "2020-06-01T10:00:00Z",
+    "cjscppuid": "00000000-0000-0000-0000-000000000000",
+    "clockPinIso": "2026-08-21T09:15:00.000Z",
+    "subscriptionsInline": true
+  },
+  "observed": {
+    "outcome": "document",
+    "stage": "complete",
+    "noDocumentReason": null,
+    "matchedSubscriptionCount": 1,
+    "registerDefendantCount": 2,
+    "defendantCount": 2,
+    "recipientCount": 1,
+    "subscriptionsReturnedUndefined": false,
+    "swallowedErrors": [],
+    "refdataCallCount": 1,
+    "refdataCalls": [
+      {
+        "verb": "GET",
+        "url": "http://reference-data.oracle.invalid/referencedata-query-api/query/api/rest/referencedata/now-subscriptions?on=2020-06-01",
+        "on": "2020-06-01",
+        "headers": {
+          "CJSCPPUID": "00000000-0000-0000-0000-000000000000",
+          "Accept": "application/vnd.referencedata.query.get-now-subscriptions+json"
+        },
+        "attempt": 1,
+        "answered": "resolve status=200"
+      }
+    ]
+  },
+  "contract": {
+    "status": "SCHEMA_INVALID",
+    "basis": "the document the legacy produced violates the frozen add-court-register contract, so progression answers 400 and ProcessOutboundCourtRegister swallows it (defect C1). The port must NOT reproduce this document: assert a classified, dead-lettered contract failure naming the rule below, never golden equality",
+    "violations": [
+      {
+        "pointer": "/defendants/0",
+        "keyword": "required",
+        "schemaPointer": "#/required",
+        "params": {
+          "missingProperty": "address"
+        },
+        "message": "should have required property 'address'"
+      },
+      {
+        "pointer": "/defendants/1/parentGuardian",
+        "keyword": "required",
+        "schemaPointer": "#/required",
+        "params": {
+          "missingProperty": "address"
+        },
+        "message": "should have required property 'address'"
+      }
+    ],
+    "validatedAgainst": {
+      "bundle": "src/main/resources/contracts/progression/ (vendored, frozen)",
+      "commandSchema": "http://moj.gov.uk/cpp/progression/command/add-court-register.json",
+      "schemaCount": 15,
+      "validator": "ajv 6.14.0, schemaId:\"id\", format:\"full\", allErrors",
+      "portValidator": "networknt SpecificationVersion.DRAFT_4, formatAssertionsEnabled(true) (OutboundContractValidator)",
+      "keywordSurfaceAudited": [
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "definitions",
+        "description",
+        "enum",
+        "format",
+        "id",
+        "items",
+        "maxLength",
+        "minItems",
+        "minLength",
+        "minimum",
+        "pattern",
+        "properties",
+        "required",
+        "title",
+        "type"
+      ]
+    }
+  },
+  "deterministic": true,
+  "clockDependent": false,
+  "clockProbe": null,
+  "digests": {
+    "hearing": "a1d3495180efb6e5d8736d1e1800704ee508828f94aa2327a2d55ebbe5e666ee",
+    "subscriptions": "d74c6a1186be29e3bf2b086249607a2448a4f7d888900214751277018e2b7d80",
+    "params": "3f53a13a913e4cb8ecef27cc2678964edab7e1fefbdb4a57cd0f05b37a1de251",
+    "expected": "4148aa8499a34d548e98bef847e3ada57064dbe6428ccd25c72d910f75c11c43"
+  },
+  "inputContract": {
+    "status": "IN_CONTRACT",
+    "basis": "cpp-context-reference-data/referencedata-query/referencedata-query-api/src/raml/json/schema/referencedata.query.get-now-subscriptions.json places no ordering constraint on nowSubscriptions",
+    "note": "The producer can send this. Whatever the legacy did with it is a parity obligation, subject to the OUTPUT axis (contractStatus) saying how it may be asserted."
+  },
+  "evidence": "CONSTRUCTED — the captured list is reversed by this harness",
+  "provenance": {
+    "kind": "mutation",
+    "baseCase": "address-less-youth-and-parent",
+    "baseRole": "primary",
+    "baseFixture": "fixtures/hearings/hearing-with-address-less-youth-and-parent.json",
+    "baseFixtureOrigin": "service-cp-crime-court-register/src/test/resources/fixtures/base/hearing-with-address-less-youth-and-parent.json (AUTHORED for the port — see BASE_FIXTURE_CAVEAT)",
+    "subscriptionsInput": "fixtures/subscriptions/now-subscriptions-cr-sample.json",
+    "subscriptionsOrigin": "cpp-context-azure-legalaidagency/azure-functions/durable-functions/NowsVariantsSubscriptions/test/subscriptions.json (five court-register entries, verbatim, including the one entry in the whole capture that covers court house B01LY00)",
+    "sharedTimeSource": "the payload's own sharedTime (2020-06-01T10:00:00Z)",
+    "operator": "subscriptions-cardinality",
+    "operatorVariant": "reversed",
+    "note": "Defect C29, both halves separably: a youth with no address, and a second youth who has one but whose parent does not.",
+    "operatorScope": "subscriptions",
+    "operatorBaseScope": "primary",
+    "operatorDescription": "Duplicates or reorders the court-register subscriptions.",
+    "operatorRationale": "SubscriptionsService.getSubscriptions pushes matches in input order and de-duplicates nothing, so RecipientMapper emits one recipient per match, in order. Duplicate and reversed inputs pin both facts, and `recipients` is an ordered array in the frozen contract.",
+    "operatorDetail": {
+      "why": "recipient order follows subscription order",
+      "reader": "SubscriptionsService.getSubscriptions"
+    }
+  }
+}

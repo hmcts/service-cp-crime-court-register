@@ -1,0 +1,120 @@
+{
+  "registerDate": "2020-06-01T11:00:00Z",
+  "courtCentreId": "853b1ff8-fc2a-44d1-a621-0cd16419f54a",
+  "fileName": "court-register_2020-06-01T11:00:00Z_B01LY00.pdf",
+  "recipients": [
+    {
+      "recipientName": "Wandsworth YOT",
+      "emailAddress1": "grp.wandsworthyot@wandsworth.cjsm.net",
+      "emailTemplateName": "cr_standard"
+    }
+  ],
+  "defendants": [
+    {
+      "name": "Fred Duncan Smith",
+      "dateOfBirth": "2008-04-17",
+      "address": {
+        "address1": "Flat 1",
+        "address2": "1 Old Road",
+        "address3": "London",
+        "address4": "Merton",
+        "postCode": "SW99 1AA"
+      },
+      "gender": "MALE",
+      "nationality": "British",
+      "postHearingCustodyStatus": "REMANDED_IN_CUSTODY",
+      "masterDefendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+      "parentGuardian": {
+        "name": "Father - Fred Father - Smith",
+        "address": {
+          "address1": "Father - Flat 1",
+          "address2": "Father - 1 Old Road",
+          "address3": "Father - London",
+          "address4": "Father - Merton",
+          "postCode": "Father - SW99 1AA"
+        }
+      },
+      "hearing": {
+        "defendantPresent": false,
+        "attendingSolicitorName": "Harold Benjamin Solicitors",
+        "jurisdiction": "MAGISTRATES",
+        "hearingType": "Sentence"
+      },
+      "prosecutionCasesOrApplications": [
+        {
+          "caseOrApplicationReference": "TFL4359536",
+          "offences": [
+            {
+              "offenceCode": "PS90010",
+              "orderIndex": 1,
+              "offenceTitle": "Public service vehicle - passenger use altered / defaced   ticket",
+              "pleaValue": "NOT_GUILTY",
+              "convictionDate": "2019-11-14",
+              "pleaDate": "2019-11-14",
+              "results": [
+                {
+                  "resultText": "Pay by date"
+                }
+              ],
+              "wording": "On 02/07/2018 at Bond street, being a passenger on a vehicle, namely Volvo B9TL 30x, used for the carriage of passengers at separate fares, used a ticket which had been altered or defaced.####Contrary to regulation 7(1)(a) of the Public Service Vehicles (Conduct of Drivers, Inspectors, Conductors and Passengers) Regulations 1990 and section 25 of the Public Passenger Vehicles Act 1981."
+            }
+          ],
+          "results": [
+            {
+              "resultText": "Adjourned to a later hearing"
+            },
+            {
+              "resultText": "Remanded in custody"
+            }
+          ]
+        },
+        {
+          "caseOrApplicationReference": "APR35890458",
+          "applicationType": "sample type",
+          "offences": [
+            {
+              "offenceCode": "TH68001",
+              "orderIndex": 1,
+              "offenceTitle": "Theft from a shop",
+              "wording": "On 02/07/2018 at Bond street stole one bicycle to the value of 200 pounds belonging to another.####Contrary to section 1(1) and section 7 of the Theft Act 1968."
+            }
+          ],
+          "prosecutionCounsels": [
+            {
+              "name": "David Kieran Walsh",
+              "status": "Leading QC"
+            }
+          ],
+          "arrestSummonsNumber": "TFL1",
+          "courtApplicationId": "6984d5b6-5c5d-472b-9ead-dff7a49c9600"
+        }
+      ],
+      "defenceCounsels": [
+        {
+          "name": "James Benjamin Simpson",
+          "status": "Junior QC"
+        }
+      ],
+      "defendantResults": [
+        {
+          "resultText": "collection order"
+        }
+      ],
+      "ethnicity": "White - British"
+    }
+  ],
+  "hearingVenue": {
+    "ljaName": "South West London Magistrates' Court",
+    "courtHouse": "Lavender Hill Magistrates' Court",
+    "address": {
+      "address1": "176A Lavender Hill",
+      "address2": "London",
+      "address3": "",
+      "address4": "",
+      "address5": "",
+      "postCode": "SW11 1JU"
+    }
+  },
+  "hearingDate": "2020-01-20T00:00:00Z",
+  "hearingId": "1828f356-f746-4f2d-932b-79ef2df95c80"
+}
