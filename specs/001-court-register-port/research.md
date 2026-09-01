@@ -216,3 +216,43 @@ loses, and a port must never differ in that direction without a C-number.
 it makes the whole chain untestable against fixtures and produces a register that differs on every
 replay; classify both legs as transformation failures — rejected, the legacy produces a register for
 both and refusing them would lose registers it sends.
+
+## 17. CI alignment with the sibling service — what was adopted and what was not
+
+**Decision**: adopt from `service-cp-crime-hearing-results-validator` only the parts of its CI and
+quality configuration that are gates this repo lacked, and record the rest as deliberate
+non-adoptions rather than leaving them as unexplained divergence.
+
+**Adopted**: PMD pinned (`toolVersion = "7.22.0"`); `pmdMain` loses its `onlyIf` and joins `check`;
+`pmdTest` enabled against a copied `.github/pmd-test-ruleset.xml`; `checkstyleTest` enabled with
+`config/checkstyle/checkstyle-suppressions.xml` wired in through `configProperties`;
+`jacocoTestCoverageVerification` ordered after `jacocoTestReport`, with the report uploaded; and a
+pull-request coverage ratchet guard in the Test job. The two rationale comments the test ruleset
+carries about test naming were checked against this repo rather than copied on trust: the
+convention is documented here in `.claude/rules/technical-rules.md`, not `CLAUDE.md`, and the
+`LinguisticNaming` exclusion was **dropped** — this suite's names are underscore-separated, which
+that rule does not mistake for a getter, and it reports nothing here.
+
+**Deliberately not adopted**:
+
+1. **`renovate.json`** — the sibling has none either (verified: no renovate configuration exists in
+   `service-cp-crime-hearing-results-validator`). `.github/dependabot.yml` is the estate line for
+   this repo and stays.
+2. **The API-Test job and `validate-api-spec-version`** — both are about an API-spec artefact.
+   This service publishes none (Principle III: actuator only, `doc/openapi.yaml` describes no
+   business endpoints), so the job would have nothing to validate.
+3. **Entity and persistence coverage exclusions** — the sibling excludes those packages from the
+   JaCoCo gate. Here that would be a loosening wearing a configuration's clothes: the persistence
+   layer is where the idempotency guard and the processed log live, which is exactly the logic the
+   gate exists to hold. The only exclusions stay the application entry point and `config/**`.
+4. **Drools excludes** — no rules engine in this service; nothing to exclude.
+5. **Version-catalog migration (`gradle/libs.versions.toml`)** — `build.gradle` carries a standing
+   instruction that every dependency is declared there so dependabot can track it, dependabot not
+   following `apply from:` files. Moving versions into a catalogue would silently end those
+   updates. Revisit only if dependabot gains catalogue support.
+
+**Rationale**: the two repos are read by the same people, so divergence should be a decision on the
+record rather than an accident. Naming the five non-adoptions is what stops the next alignment pass
+re-proposing them, and stops the third one being adopted by momentum. **Alternatives**: adopt the
+sibling's configuration wholesale (imports a coverage loosening and two jobs with nothing to do);
+leave the repos to drift (the next reader cannot tell a decision from an omission).

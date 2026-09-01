@@ -1,7 +1,28 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 2.0.1 → 2.0.2
+Version change: 2.0.2 → 2.0.3
+Bump rationale: PATCH — static-analysis reality sync (2026-09-01). The build
+                gained no new obligation; what it already required is now
+                actually enforced, and Principle VIII's static-analysis bullet
+                is corrected to describe the build as it is. PMD is pinned;
+                `pmdMain` lost the `onlyIf` that kept it out of `build` and
+                joins `check` with `pmdTest` (its own test ruleset);
+                `checkstyleTest` is enabled with a suppressions file; the
+                coverage report is written before the gate reads it; and the
+                "thresholds are a ratchet" sentence, previously honour-based,
+                is enforced by a pull-request guard. No principle's
+                requirements change.
+
+Modified sections (this amendment): Principle VIII "Static analysis" bullet
+(rewritten to name the pinned PMD version, both PMD tasks and both Checkstyle
+tasks as members of `check`, the test ruleset and suppressions file, the report
+ordering, and the ratchet guard); the Development Workflow "Required to run
+cleanly before merge" list (PMD is no longer the analysis `build` skips, so its
+separate bullet and the `jacocoTestReport` bullet are restated). Decision
+recorded at specs/001-court-register-port/research.md §17.
+
+Previous amendment (2.0.1 → 2.0.2):
 Bump rationale: PATCH — the register grew its first appended row (C35,
                 2026-09-01: the hearing-date wall-clock legs, found in the
                 pipeline-core review). Principle I already provided the
@@ -73,6 +94,12 @@ Modified principles (this amendment):
     DEFECT-FIXES.md with polarity flipped.
 
 History:
+  - 2.0.3 (2026-09-01) Principle VIII static-analysis reality sync: PMD pinned
+    and both PMD tasks in `check` (test sources on their own ruleset),
+    `checkstyleTest` enabled with a suppressions file, coverage report ordered
+    before the gate, and the threshold ratchet enforced on pull requests.
+  - 2.0.2 (2026-09-01) Catalogue language widened to admit appended rows
+    (C35 onward) with the same obligations as C1–C34.
   - 2.0.1 (2026-08-31) Delivery scope stated as 31-in-service plus three
     externally-owned remediations (C18/C28/C34), after the P0 review.
   - 2.0.0 (2026-08-31) Re-ratified for service-cp-crime-court-register.
@@ -395,16 +422,27 @@ to debug it; personal data in a log index is an incident.
 ### VIII. Estate Conventions (NON-NEGOTIABLE)
 
 - **Build**: Gradle (wrapper committed). Maven is forbidden.
-- **Static analysis**: PMD via `.github/pmd-ruleset.xml` with
-  `ignoreFailures = false`, run explicitly as `./gradlew pmdMain` (an `onlyIf`
-  keeps it out of `build`; `pmdTest` is disabled). **Checkstyle**:
-  `google_checks` via `config/checkstyle/google_checks.xml` and
-  `gradle/checkstyle.gradle`, `maxWarnings = 0`, main sources only
-  (`checkstyleTest` disabled), wired into `check` and therefore `build`.
-  **Coverage gate**: `jacocoTestCoverageVerification` in `check` — LINE ≥
-  0.88, BRANCH ≥ 0.85, excluding the application entry point and `config/**`;
-  thresholds are a ratchet, never loosened in passing. Warnings are not
-  tolerated as normal. Suppressions MUST be inline, narrow, and carry a
+- **Static analysis**: every analysis runs in `check`, and therefore in
+  `build`; none of them has to be remembered on a command line. **PMD**, pinned
+  (`toolVersion = "7.22.0"` in `gradle/pmd.gradle`) so a toolchain bump cannot
+  change a verdict without a commit saying so, with `ignoreFailures = false`:
+  `pmdMain` against `.github/pmd-ruleset.xml` and `pmdTest` against
+  `.github/pmd-test-ruleset.xml` — the same base ruleset minus the rules that
+  are inapplicable to test code, each exclusion carrying its reason in the file.
+  **Checkstyle**: `google_checks` via `config/checkstyle/google_checks.xml`,
+  `maxWarnings = 0`, over main **and** test sources; `checkstyleTest` reads
+  `config/checkstyle/checkstyle-suppressions.xml` through `configProperties`,
+  which suppresses `MethodName` over `src/test` and nothing else — the test
+  naming convention is underscore-separated by design. **Coverage gate**:
+  `jacocoTestCoverageVerification` in `check` — LINE ≥ 0.88, BRANCH ≥ 0.85,
+  excluding the application entry point and `config/**`. It `mustRunAfter`
+  `jacocoTestReport`, so a build that fails the gate still leaves a report
+  naming the lines that were missed. Thresholds are a ratchet, never loosened
+  in passing, and that is enforced rather than trusted: a pull request lowering
+  or deleting a `minimum` in `gradle/test.gradle` is failed by the Test job's
+  coverage ratchet guard, which names the before and after values. Warnings are
+  not tolerated as normal. Suppressions MUST be inline (or, where the tool has
+  no inline form, in the named ruleset/suppressions file), narrow, and carry a
   reason.
 - **Package root**: `uk.gov.hmcts.cp`; this service's code lives under
   `uk.gov.hmcts.cp.courtregister`.
@@ -516,16 +554,15 @@ row under Principle I.
   PASS / COMPLIANT. Exempt: markdown-only edits, whitespace/import-only
   edits, and `.claude/rules/*` or `CLAUDE.md` updates.
 - Required to run cleanly before merge:
-  - `./gradlew build` — compilation, the full test suite, **Checkstyle** and
-    the **JaCoCo coverage verification** (both run in `check`). PMD is the
-    one analysis `build` does not run.
+  - `./gradlew build` — compilation, the full test suite, **PMD** (main and
+    test), **Checkstyle** (main and test) and the **JaCoCo coverage
+    verification**. Every analysis runs in `check`; there is no longer an
+    analysis `build` skips, and none of them needs naming separately.
   - `./gradlew test` — the whole suite; there is no separate
     `integrationTest` task, so the Testcontainers suites run here and need
     Docker only when those tests are in the selection.
-  - `./gradlew pmdMain` — static analysis, failures not ignored. It must be
-    named explicitly: an `onlyIf` in `gradle/pmd.gradle` skips it otherwise,
-    and `pmdTest` is disabled.
-  - `./gradlew jacocoTestReport` — coverage report.
+  - `./gradlew jacocoTestReport check` — the order CI uses, so the coverage
+    report exists to be read whichever way the gate goes.
 - Any change to ported logic MUST run the golden-file suite; **a golden file
   is only updated in the same commit as a `doc/DEFECT-FIXES.md` entry (new
   or amended)** — the fix register is what authorises a golden to move
@@ -577,4 +614,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 2.0.2 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-01
+**Version**: 2.0.3 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-01

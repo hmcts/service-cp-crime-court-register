@@ -16,6 +16,29 @@ released, so everything sits under Unreleased.
 
 ### Changed
 
+- 2026-09-01 — **Static analysis now gates `src/test`, and the coverage report is written before
+  the gate reads it.** `pmdMain` loses the `onlyIf` that kept it out of `build` and joins `check`
+  alongside a newly enabled `pmdTest` (its own ruleset, `.github/pmd-test-ruleset.xml` — the main
+  ruleset minus rules inapplicable to test code) and a newly enabled `checkstyleTest` (with
+  `config/checkstyle/checkstyle-suppressions.xml`, which suppresses only `MethodName` over test
+  sources, for the underscore-separated naming convention). PMD is pinned to 7.22.0. Turning the
+  two on surfaced 255 Checkstyle warnings across 36 files and 36 PMD findings; all were fixed in
+  the test sources rather than excluded. `./gradlew build` now runs every analysis this repo has —
+  the standing note that PMD had to be named explicitly no longer applies.
+
+  Coverage: `jacocoTestCoverageVerification` is ordered after `jacocoTestReport`, and CI asks for
+  them in that order, so a build that fails the gate still leaves a report saying which lines were
+  missed; that report is uploaded with the test reports. A pull request that lowers a `minimum`
+  threshold in `gradle/test.gradle` is now failed by a ratchet guard in the Test job, which names
+  the before and after values — Principle VIII's "never loosened in passing" made checkable.
+
+  What was deliberately **not** taken from `service-cp-crime-hearing-results-validator` in the same
+  pass — renovate (that repo has none either; dependabot stays), the API-Test job and API-spec
+  version validation (this service publishes no spec), entity/persistence coverage exclusions (a
+  loosening in configuration's clothing), Drools excludes, and a version-catalog migration (which
+  would end dependabot's version updates) — is recorded as decision 17 in
+  `specs/001-court-register-port/research.md`.
+
 - 2026-09-01 — **One time budget for a whole run, and shorter read timeouts to fit inside it.**
   The processing deadline used to be read once, after the payload fetch; the now-subscriptions read,
   the transformation and the `add-court-register` POST that follow it were bounded only by their own
