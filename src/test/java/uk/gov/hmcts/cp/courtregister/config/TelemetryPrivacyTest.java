@@ -511,16 +511,24 @@ class TelemetryPrivacyTest {
         }
 
         /**
-         * The shipped {@code logging:} block, from its key to the end of the document.
+         * The settings in the shipped {@code logging:} block, from its key to the end of the
+         * document, with the comments taken out.
          *
          * <p>Read as text rather than bound as properties on purpose: what is being asserted is what
          * the file <em>ships</em>, and a binder would hand back the merged view of every source,
          * including whatever the test harness itself set.
+         *
+         * <p>Comments are dropped because the claim is about configured levels. A block that
+         * documents why nothing here may be set to DEBUG is the opposite of the block this refuses,
+         * and a matcher that could not tell the two apart would punish the file for explaining
+         * itself.
          */
         private String loggingSectionOf(final String applicationYaml) {
             final int start = applicationYaml.indexOf("\nlogging:");
             assertThat(start).as("application.yaml declares a logging section").isNotNegative();
-            return applicationYaml.substring(start);
+            return applicationYaml.substring(start).lines()
+                    .filter(line -> !line.strip().startsWith("#"))
+                    .collect(Collectors.joining("\n"));
         }
     }
 

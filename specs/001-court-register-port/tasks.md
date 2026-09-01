@@ -761,7 +761,7 @@ documentation-final states.
       — `logback.xml` emits the MDC, and `application.yaml` turns no logger below INFO.
       `support/NowSubscriptionFixtures` is extracted from `PipelineCompositionTest` so the two
       suites cannot come to disagree about what a matching subscription is.)*
-- [ ] T068a [US4] Implement `config/PipelineConfig` + the final `application.yaml`
+- [x] T068a [US4] Implement `config/PipelineConfig` + the final `application.yaml`
       (green for T068; the logging swept against the privacy test).
       *(partly done, ahead of its phase — 2026-09-01 review. `PipelineConfig` now builds the real
       bean graph: dates, the group-proceedings policy, the fragment builder, the subscription
@@ -775,6 +775,37 @@ documentation-final states.
       payload source) and `adapter/stub/StubRegisterSubmissionClient` (a refusal, chosen by the
       payload mode). What remains for this task: the final `application.yaml` and the privacy
       sweep against T068's tests.)*
+      *(done — the seed is out and all 22 of T068's cases are green. Four things this task settled.
+      **(1) The bean graph needed no widening.** Every port the pipeline takes now has a real
+      adapter behind it, and none of them is declared here: each is a pair of configurations chosen
+      by a mode — payload by `courtregister.payload.mode`, subscriptions by
+      `courtregister.referencedata.mode`, submission by the payload mode, the processed log by
+      `ProcessedLogConfig` — with `PropertiesValidator` deciding which of each pair may be chosen.
+      What this task did to `PipelineConfig` is say so: its class note still described the live
+      adapters as arriving "later", which had stopped being true at T066/T067, and a configuration
+      whose comment describes a graph that no longer exists is the next reader's wrong turn.
+      **(2) `courtregister.submission.validate-outbound` reads nothing, deliberately, and now says
+      so.** The key binds and startup refuses `false` where the deployed credential source is in
+      use — which is all `ConfigurationValidationTest` and the plan's configuration table ever asked
+      of it — but `PropertiesValidator`'s own javadoc claimed local runs could switch the check off
+      "so a fixture can reach the wire", and nothing implements that. The claim is corrected rather
+      than the behaviour: honouring the flag would put a production bypass in front of C29, the fix
+      that turns a swallowed 400 into a recorded failure, and the suite that needs an invalid shape
+      on the wire has one over WireMock in `ProgressionCommandGatewayTest`. Recorded here because it
+      is a decision, not an omission — the alternative reading is a one-method change.
+      **(3) `application.yaml` is final.** `courtregister.referencedata.headers` was the one setting
+      the file never mentioned, bound since T066; it is documented beside its progression twin,
+      including that a header configured under a contract name replaces the contract value. The
+      retry-policy keys renamed in the shared-`RetryPolicy` remediation were already correct here
+      and their budget arithmetic was re-checked against `PropertiesValidator` (69s + 49s + 75s +
+      the fixed 30s margin against a four-minute deadline). The `logging:` block gains the note
+      saying nothing below INFO may be shipped, which T068's suite now enforces.
+      **(4) The sweep found nothing to change in the code.** Every log line in the service was read
+      against the privacy suite: counts, bounded codes, `type=` for anything somebody else wrote the
+      text of, and the permitted correlation set. One test change came out of it — the shipped-level
+      assertion now drops comment lines before matching, because a block that documents why nothing
+      here may be set to DEBUG is the opposite of the block it refuses, and a matcher that could not
+      tell the two apart would punish the file for explaining itself.)*
 - [ ] T069 [A] [US1] `e2e/CourtRegisterEndToEndIT` — message → POST(202) → COMPLETED `submitted`,
       `processed_output.status = POSTED`; one case per no-op reason; runs the quickstart sequence.
 - [ ] T070 [A] [US1] `e2e/MessageAccountingIT`, `e2e/TraceabilityIT`, `e2e/FailureSignalIT` —

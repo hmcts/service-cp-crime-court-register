@@ -112,13 +112,11 @@ public final class AggregationMapper {
         final List<CourtRegisterDefendant> defendants =
                 new YouthDefendantMapper(anomalies).map(youthDefendants, hearing);
 
-        // SEEDED VIOLATION — T068 red run only, removed by T068a.
-        // The shape of the mistake this suite exists to catch: somebody debugging a register that
-        // came out with the wrong people on it logs who was on it. Every one of them is a child.
-        LOG.info("Outbound court register assembled. hearingId={} defendants={} recipients={} "
-                        + "names={}",
-                fragment.hearingId(), defendants.size(), recipients.size(),
-                defendants.stream().map(CourtRegisterDefendant::name).toList());
+        // Counts, and nothing about who is on the register: TelemetryPrivacyTest holds this line to
+        // that, and it is the line the seeded violation was seeded into (T068), because "who was on
+        // the register" is what somebody debugging the wrong register reaches for first.
+        LOG.info("Outbound court register assembled. hearingId={} defendants={} recipients={}",
+                fragment.hearingId(), defendants.size(), recipients.size());
 
         return new CourtRegisterDocument(
                 fragment.registerDate(),

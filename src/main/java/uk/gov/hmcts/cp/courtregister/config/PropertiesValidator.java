@@ -613,8 +613,13 @@ public class PropertiesValidator implements InitializingBean {
      * The C29 pre-send validation is what turns a schema-invalid document into an explicit, recorded
      * failure instead of the 400 the legacy pipeline swallowed, losing the whole hearing's register.
      * A deployed pod with it switched off is back in that failure mode with none of the legacy's
-     * excuses, so it does not start. Local and CI runs may switch it off: a fixture that must reach
-     * the wire with a shape the schemas reject is how the behaviour on the other side gets proven.
+     * excuses, so it does not start.
+     *
+     * <p>This is the whole of what the setting does. {@code PipelineConfig} wires the validator
+     * unconditionally and no bean reads the value, so switching it off outside a deployed
+     * environment changes nothing at runtime — a wiring that honoured it would put C29's blind spot
+     * back behind one property. A suite that needs a shape the schemas reject to reach the wire gets
+     * it from {@code ProgressionCommandGatewayTest} over WireMock instead.
      */
     private static void validateTheOutboundValidatorIsOnWhereItIsDeployed(
             final CourtRegisterProperties properties) {

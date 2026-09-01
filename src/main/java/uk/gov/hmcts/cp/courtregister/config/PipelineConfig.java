@@ -21,15 +21,29 @@ import uk.gov.hmcts.cp.courtregister.pipeline.SubscriptionMatcher;
 import uk.gov.hmcts.cp.courtregister.pipeline.SubscriptionRules;
 
 /**
- * The application core and the adapters currently serving its ports.
+ * The application core, and the one place the whole graph is assembled.
  *
  * <p>Every bean here is declared as its port type rather than as its own class, so replacing an
- * adapter is a change to one method here and to nothing else (constitution Principle V). The ports
- * that reach outside this service arrive as their adapters land — the payload source from
- * {@link StubPayloadConfig} or, later, the live cache-with-fallback configuration, and the
- * now-subscriptions source and submission client with theirs. What is assembled here in full is
- * everything that does not: the transformation, which is pure, and therefore has nothing to wait
- * for.
+ * adapter is a change to one method here and to nothing else (constitution Principle V). The four
+ * ports that reach outside this service are not declared here at all — each is served by a pair of
+ * configurations chosen by a mode, and this file names none of them:
+ *
+ * <ul>
+ *   <li>the hearing payload, by {@link LivePayloadConfig} or {@link StubPayloadConfig}, on
+ *       {@code courtregister.payload.mode};</li>
+ *   <li>the now-subscriptions read, by {@link LiveSubscriptionsConfig} or
+ *       {@link StubSubscriptionsConfig}, on {@code courtregister.referencedata.mode};</li>
+ *   <li>the submission, by {@link LiveSubmissionConfig} or {@link StubSubmissionConfig}, on the
+ *       payload mode — a local stub run never fetches a hearing, so it never reaches the POST, and
+ *       a second switch would give an operator two knobs for one sentence;</li>
+ *   <li>the processed log, by {@link ProcessedLogConfig}.</li>
+ * </ul>
+ *
+ * <p>Which of each pair may be chosen is not decided here either: {@link PropertiesValidator}
+ * refuses a stub wherever the deployed credential source is in use, and refuses a stubbed
+ * subscriptions source beside a live payload source — real hearings answered that way would every
+ * one of them complete {@code no-subscriptions}, which is this flow's commonest legitimate outcome
+ * and therefore indistinguishable from working.
  *
  * <p><strong>The transformation is wired as the chain, not as an absence.</strong> The pipeline's
  * short constructor builds the walking skeleton the transport phase was proven against, and a
@@ -39,6 +53,15 @@ import uk.gov.hmcts.cp.courtregister.pipeline.SubscriptionRules;
  * about a run: the register builder, the subscription matcher and the contract validator are
  * stateless, the validator reading the vendored schemas once when it is built, and the run's own
  * anomaly counter is made per run by the pipeline rather than held by the chain.
+ *
+ * <p><strong>The pre-send contract check is wired unconditionally</strong>, and
+ * {@code courtregister.submission.validate-outbound} is a startup rule rather than a runtime switch:
+ * {@link PropertiesValidator} refuses {@code false} wherever the deployed credential source is in
+ * use, and no bean here reads the value. That is deliberate. C29 exists because a document
+ * progression refuses is otherwise a 400 the legacy swallowed, and a wiring that could be told to
+ * skip the check would put the blind spot back behind one property; a suite that needs an invalid
+ * shape to reach the wire gets it from {@code ProgressionCommandGatewayTest}, over WireMock, without
+ * a production bypass to reach it through.
  *
  * <p>The now-subscriptions read stays in the application layer, where the port is: the core makes
  * the call between the suppression decision and the transformation — which is where the legacy
@@ -130,7 +153,8 @@ public class PipelineConfig {
      * <p>Built once, and deliberately at startup: it reads the vendored schemas when it is
      * constructed and maps every {@code http://justice.gov.uk/…} identity to its vendored copy, so
      * a build that cannot assemble the contract refuses to start rather than degrading to "nothing
-     * was checked", which is the blind spot C29 exists to close.
+     * was checked", which is the blind spot C29 exists to close. Declared without a condition for
+     * the same reason — see the note on {@code validate-outbound} on this class.
      *
      * @param objectMapper the shared, contract-configured mapper, so what is validated is what is
      *                     serialised

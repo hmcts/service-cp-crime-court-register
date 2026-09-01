@@ -106,9 +106,11 @@ courtregister:
   submission:
     # Pre-send contract validation (defect fix C29): every outbound document is validated against
     # the vendored progression schemas (classpath:contracts/progression/) before the POST; a
-    # schema-invalid document is an explicit FAILED with a reason, never a swallowed 400. Never
-    # disabled in a deployed profile — startup refuses false wherever the deployed credential
-    # source (servicebus.namespace) is in use.
+    # schema-invalid document is an explicit FAILED with a reason, never a swallowed 400.
+    # This key is a STARTUP RULE, not a runtime switch: startup refuses false wherever the deployed
+    # credential source (servicebus.namespace) is in use, and the validator is wired unconditionally
+    # in PipelineConfig, so nothing reads the value on the hot path. A wiring that honoured it would
+    # put C29's blind spot back behind one property.
     validate-outbound: true
 
   results:
@@ -144,6 +146,13 @@ courtregister:
     # a different one. REQUIRED in LIVE mode: an anonymous query is refused every time, so the
     # service refuses to start rather than park every hearing that produced a register.
     system-user-id: ${REFERENCEDATA_SYSTEM_USER_ID:${COURT_REGISTER_SYSTEM_USER_ID:}}
+    # headers: an optional map of further static headers for the read, bound but empty by default —
+    # the same key courtregister.progression carries and for the same reason. CJSCPPUID is
+    # documented and reference data's authorisation scheme is not: its access-control rules require
+    # the caller to be in a named user group, so whatever the mesh turns out to need can be supplied
+    # without a code change and nothing is invented here meanwhile. A header configured under a
+    # contract name (Accept, CJSCPPUID) REPLACES the contract value rather than joining it — two
+    # values of either is a 406 or an ambiguous caller.
     # Attempt count carried from the function app's DEFAULT_PUBLISH_RETRY_COUNT
     # (AxiosRetryWrapper.js:10-11) — but the retry POLICY is the corrected one (defect fix C3) and
     # it is the same object every named client holds: connect/IO failures, 5xx, 429 and 408 retry
@@ -234,5 +243,13 @@ management:
           include: db,intakeStartup
 
 logging:
+  # INFO, and nothing below it anywhere in this file. The privacy rules (constitution Principle VII)
+  # are asserted against the code, but the level a pod runs at is what decides how much of the code
+  # gets to speak: a shipped DEBUG level for one package is how a payload dump written for a local
+  # diagnosis reaches the estate's log index. TelemetryPrivacyTest reads this file and fails on a
+  # DEBUG or TRACE level appearing here.
+  #
+  # Format is not configurable and is not set here: logback.xml emits JSON unconditionally, with the
+  # MDC provider that puts requestId and hearingId on every line.
   level:
     root: INFO

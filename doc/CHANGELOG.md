@@ -16,6 +16,18 @@ released, so everything sits under Unreleased.
 
 ### Changed
 
+- 2026-09-01 — **The configuration says what it does, and the log surface is asserted rather than
+  assumed.** `application.yaml` now documents `courtregister.referencedata.headers`, bound and empty
+  since the reference-data client landed and until now the one setting the file did not mention —
+  written up, like its `courtregister.progression` twin, as the place the mesh's undocumented
+  authorisation scheme goes without a code change — and gains a
+  note on the `logging:` block saying that nothing below INFO may be shipped, which is now a test
+  rather than an intention. `courtregister.submission.validate-outbound` is documented for what it
+  is: a **startup rule**, refusing `false` wherever the deployed credential source is in use, and
+  not a runtime switch. The validator is wired unconditionally in `PipelineConfig` and no bean reads
+  the value, because a wiring that honoured it would put C29's blind spot back behind one property.
+  Not operator-affecting: no default changes, and no key is added or removed.
+
 - 2026-09-01 — **Two parity WARNs stop naming the reference they skipped.** The transformation's
   unnamed-application-case warning carried `applicationId=`, and the ported SNI-9005 guard carried
   the prosecution case id in the legacy's `[Case ID: …]` form. Neither identifier is in Principle
