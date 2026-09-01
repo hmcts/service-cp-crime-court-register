@@ -1,14 +1,15 @@
 package uk.gov.hmcts.cp.courtregister.support;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
@@ -89,6 +90,12 @@ public final class RegisteredDefectFixes {
     /** The three renderings {@code HearingMapper} maps {@code attendanceType} to. */
     private static final List<String> APPEARANCES =
             List.of("In person", "By video link", "Not present");
+
+    /** The component C23 moves, as the suffix of the pointer a difference is reported at. */
+    private static final String VERDICT_CODE = "/verdictCode";
+
+    /** The recorded reason the orchestrator gives for a loose-equality group-proceedings skip. */
+    private static final String LOOSE_GROUP_PROCEEDINGS_SKIP = "CourtRegisterOrchestrator/index.js:22";
 
     /**
      * The derivations, by the property name the component reaches the wire under.
@@ -325,18 +332,24 @@ public final class RegisteredDefectFixes {
                 "OffenceMapper.js:20 writes verdict.verdictType.description into a field named "
                         + "verdictCode, so the field is prose where the platform verdict model has a "
                         + "code — and absent altogether where the verdict type carries no "
-                        + "description, which is what the corpus recorded. The port writes the code "
-                        + "itself, falling back to the category type; the claim therefore requires "
-                        + "the port's value to be code-shaped and the recording's not to be.",
+                        + "description, which is what the corpus recorded. The port writes "
+                        + "verdictType.verdictCode, falling back to its categoryType. The claim "
+                        + "derives that value from the recorded verdict object itself — the offence "
+                        + "the difference was reported at is resolved back to the payload offence it "
+                        + "was mapped from, by offence code and order index — and requires the port "
+                        + "to have written exactly it. A code-shaped value the payload's own verdict "
+                        + "does not name is still a difference, and so is a case whose offence "
+                        + "resolves to no verdict, or to two that disagree.",
                 divergence -> {
                     if (!(divergence instanceof Divergence.Field field)
-                            || !field.path().endsWith("/verdictCode")) {
+                            || !field.path().endsWith(VERDICT_CODE)) {
                         return false;
                     }
-                    final String port = string(field.portValue());
-                    final String oracle = string(field.oracleValue());
-                    return port != null && isCodeShaped(port)
-                            && (oracle == null || !isCodeShaped(oracle));
+                    final JsonNode verdictType = verdictTypeBehind(field);
+                    final String owed = verdictCodeOwed(verdictType);
+                    return owed != null
+                            && owed.equals(string(field.portValue()))
+                            && isTheDescriptionOrNothing(field.oracleValue(), verdictType);
                 });
     }
 
@@ -509,13 +522,20 @@ public final class RegisteredDefectFixes {
                         + "with no record — the string \"false\" included. The port suppresses on "
                         + "the JSON boolean true and nothing else, and counts anything that is not a "
                         + "boolean as a contract anomaly. The claim requires the recording to have "
-                        + "skipped on a value that is not a boolean, so a hearing that really is "
-                        + "group proceedings is not explained here.",
+                        + "skipped through that very line, on a value that is not a boolean, so a "
+                        + "hearing that really is group proceedings is not explained here — and it "
+                        + "requires the port to have reached the ending the row governs: the "
+                        + "register the skip was suppressing, assembled, or refused by the frozen "
+                        + "contract (C29) where the payload was already missing a required field. "
+                        + "Not suppressing is not on its own the fix; a port that proceeded and then "
+                        + "lost the register for some other reason is not explained here.",
                 divergence -> divergence instanceof Divergence.Outcome
                         && "skipped-group-proceedings".equals(divergence.recorded().outcome())
+                        && divergence.recorded().noDocumentReason()
+                                .startsWith(LOOSE_GROUP_PROCEEDINGS_SKIP)
                         && isNotABoolean(
                                 divergence.recorded().hearing().get("isGroupProceedings"))
-                        && !divergence.port().suppressed());
+                        && divergence.port().addressedSomebody());
     }
 
     /**
@@ -776,8 +796,23 @@ public final class RegisteredDefectFixes {
                         + "of the shared time. This is the one effect of C10 that never reaches the "
                         + "document: a register addressed from the wrong day's set looks entirely "
                         + "ordinary, which is why the recorder captured the whole GET and why the "
-                        + "audit compares the day on the wire rather than a value in the output.",
-                divergence -> divergence instanceof Divergence.ReferenceDataDay);
+                        + "audit compares the day on the wire rather than a value in the output. "
+                        + "The claim computes both days from the case's own shared time — the port "
+                        + "owes its UTC day, the legacy asked for its Europe/London one — so it "
+                        + "explains that relabelling and not any other day difference. A shared time "
+                        + "carrying no offset names no instant to convert, the two readings coincide, "
+                        + "and a difference there would be a port defect rather than this row.",
+                divergence -> {
+                    if (!(divergence instanceof Divergence.ReferenceDataDay day)) {
+                        return false;
+                    }
+                    final Instant shared = instantOf(day.recorded().sharedTime().orElse(null));
+                    return shared != null
+                            && LocalDate.ofInstant(shared, ZoneOffset.UTC).toString()
+                                    .equals(day.portDay())
+                            && LocalDate.ofInstant(shared, LONDON).toString()
+                                    .equals(day.oracleDay());
+                });
     }
 
     // --- reading the trees -----------------------------------------------------------------------
@@ -824,16 +859,168 @@ public final class RegisteredDefectFixes {
     }
 
     /**
-     * Whether a value looks like a code rather than like prose.
+     * The verdict type the offence a {@code verdictCode} difference was reported at was mapped from.
      *
-     * @param value the value
-     * @return whether every character is one a code is written with
+     * <p>The difference carries a JSON pointer into the recorded <em>document</em>, and the value the
+     * port owes lives in the <em>payload</em>, so the two have to be joined. The pointer's parent is
+     * the recorded offence; the payload offence it was mapped from is the one carrying the same
+     * offence code and order index. Resolving to nothing, or to two verdict types that disagree, is
+     * answered as nothing — a difference this claim cannot attribute exactly is one it does not
+     * attribute at all.
+     *
+     * @param field the observed difference
+     * @return the verdict type, or {@code null} where the offence resolves to none or to several
      */
-    private static boolean isCodeShaped(final String value) {
-        return !value.isEmpty()
-                && value.equals(value.toUpperCase(Locale.ROOT))
-                && value.chars().allMatch(character ->
-                        Character.isLetterOrDigit(character) || character == '_');
+    private static JsonNode verdictTypeBehind(final Divergence.Field field) {
+        final String path = field.path();
+        final JsonNode recordedOffence = field.recorded().expected()
+                .at(path.substring(0, path.length() - VERDICT_CODE.length()));
+        if (!recordedOffence.isObject()) {
+            return null;
+        }
+        JsonNode resolved = null;
+        for (final JsonNode candidate : offencesOf(field.recorded().hearing())) {
+            if (!namesTheSameOffence(recordedOffence, candidate)) {
+                continue;
+            }
+            final JsonNode verdictType = child(child(candidate, "verdict"), "verdictType");
+            if (resolved != null && !resolved.equals(verdictType)) {
+                return null;
+            }
+            resolved = verdictType;
+        }
+        return resolved;
+    }
+
+    /**
+     * The code {@code OffenceMapper.verdictCode} owes for a verdict type — C23's own derivation.
+     *
+     * @param verdictType the payload's verdict type; may be {@code null}
+     * @return the verdict code, its category type where there is no code, or {@code null}
+     */
+    private static String verdictCodeOwed(final JsonNode verdictType) {
+        final String code = string(child(verdictType, "verdictCode"));
+        return code == null ? string(child(verdictType, "categoryType")) : code;
+    }
+
+    /**
+     * Whether the recording carries at this field what the legacy's own mapper would have written:
+     * the verdict type's description, or nothing at all where it has none.
+     *
+     * @param oracleValue the value in the recording; may be {@code null}
+     * @param verdictType the payload's verdict type; may be {@code null}
+     * @return whether the recording is the shape this row describes
+     */
+    private static boolean isTheDescriptionOrNothing(
+            final JsonNode oracleValue, final JsonNode verdictType) {
+
+        final String description = string(child(verdictType, "description"));
+        return isAbsent(oracleValue)
+                ? description == null
+                : description != null && description.equals(string(oracleValue));
+    }
+
+    /**
+     * Whether a recorded register offence and a payload offence are the same offence.
+     *
+     * <p>The register carries no offence id, so identity is the pair the mapper copies straight
+     * through: the offence code and the order index. Both are compared as the trees hold them, so an
+     * offence a mutation operator emptied matches only another that was emptied the same way.
+     *
+     * @param recordedOffence the offence in the recorded document
+     * @param payloadOffence  the offence in the hearing payload
+     * @return whether they are the same offence
+     */
+    private static boolean namesTheSameOffence(
+            final JsonNode recordedOffence, final JsonNode payloadOffence) {
+
+        return sameComponent(recordedOffence, payloadOffence, "offenceCode")
+                && sameComponent(recordedOffence, payloadOffence, "orderIndex");
+    }
+
+    /**
+     * Whether two objects carry the same value at a property, absence included.
+     *
+     * @param left  the first object
+     * @param right the second object
+     * @param name  the property name
+     * @return whether the two agree there
+     */
+    private static boolean sameComponent(
+            final JsonNode left, final JsonNode right, final String name) {
+
+        final JsonNode leftValue = child(left, name);
+        final JsonNode rightValue = child(right, name);
+        return leftValue == null ? rightValue == null : leftValue.equals(rightValue);
+    }
+
+    /**
+     * Every offence a hearing payload carries, wherever it carries it.
+     *
+     * <p>The register gathers offences from prosecution cases and from court applications alike, so
+     * the lookup has to walk the whole payload rather than one branch of it.
+     *
+     * @param hearing the recorded hearing
+     * @return the offences, empty where the payload has none
+     */
+    private static List<JsonNode> offencesOf(final JsonNode hearing) {
+        final List<JsonNode> offences = new ArrayList<>();
+        gatherOffences(hearing, offences);
+        return offences;
+    }
+
+    /**
+     * Collects the offences under a node.
+     *
+     * @param node     the node to walk
+     * @param offences the offences found so far
+     */
+    private static void gatherOffences(final JsonNode node, final List<JsonNode> offences) {
+        if (node.isArray()) {
+            node.forEach(entry -> gatherOffences(entry, offences));
+        } else if (node.isObject()) {
+            for (final JsonNode offence : array(node, "offences")) {
+                if (offence.isObject()) {
+                    offences.add(offence);
+                }
+            }
+            node.propertyStream().forEach(property ->
+                    gatherOffences(property.getValue(), offences));
+        }
+    }
+
+    /**
+     * A node's property, treating an explicit JSON null as the absence it spells.
+     *
+     * @param node the node; may be {@code null}
+     * @param name the property name
+     * @return the value, or {@code null} where nothing is there
+     */
+    private static JsonNode child(final JsonNode node, final String name) {
+        final JsonNode value = node == null ? null : node.get(name);
+        return value == null || value.isNull() ? null : value;
+    }
+
+    /**
+     * The instant a shared time names, where it names one.
+     *
+     * <p>Read here rather than through {@link uk.gov.hmcts.cp.courtregister.pipeline.Dates} for the
+     * same reason C10's derivation reads the recording rather than the port: a fault in this port's
+     * own parsing must not be able to cancel itself out. A value carrying no offset names no instant
+     * at all, and is answered as {@code null}.
+     *
+     * @param sharedTime the recorded shared time; may be {@code null}
+     * @return the instant, or {@code null} where the value names none
+     */
+    private static Instant instantOf(final String sharedTime) {
+        if (sharedTime == null) {
+            return null;
+        }
+        try {
+            return OffsetDateTime.parse(sharedTime).toInstant();
+        } catch (DateTimeParseException namesNoInstant) {
+            return null;
+        }
     }
 
     /**
