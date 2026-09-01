@@ -1,9 +1,23 @@
 package uk.gov.hmcts.cp.courtregister.adapter.progression;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.ClientHttpResponse;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
+import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
 
 /**
  * The one HTTP call this service makes outwards: {@code add-court-register}, once per hearing.
@@ -66,9 +80,6 @@ import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
  * {@code courtregister.progression.base-url} or {@code system-user-id}, so the fault is a startup
  * fault in one place rather than in two.
  */
-// PMD.UnusedPrivateField: the seven collaborators are the seam T061's suite constructs the gateway
-// with, and they are read by the body T067 writes. The suppression comes off with that body.
-@SuppressWarnings("PMD.UnusedPrivateField")
 public class ProgressionCommandGateway {
 
     /** The command's path under the progression context, exactly as the command API declares it. */
@@ -87,6 +98,20 @@ public class ProgressionCommandGateway {
 
     /** The one status the contract calls success. */
     public static final int ACCEPTED = 202;
+
+    private static final Logger LOG = LoggerFactory.getLogger(ProgressionCommandGateway.class);
+
+    private static final String RETRY_AFTER_HEADER = "Retry-After";
+
+    /**
+     * The only {@code Retry-After} form this client acts on: delta-seconds, at most ten digits.
+     *
+     * <p>RFC 9110 also permits an HTTP-date, and honouring one would mean measuring a remote clock
+     * against this pod's — a server a few minutes ahead would park a run past the claim lease it
+     * holds. The form is recognised before it is read, so an unusable value is classified rather
+     * than parsed and caught, and every unusable form falls back to the back-off.
+     */
+    private static final Pattern DELTA_SECONDS = Pattern.compile("\\d{1,10}");
 
     private final RestClient restClient;
     private final String systemUserId;
@@ -138,6 +163,191 @@ public class ProgressionCommandGateway {
      *     unresolved; the status progression answered travels with it where there was one
      */
     public int post(final byte[] body, final CallerIdentity caller) {
-        throw new UnsupportedOperationException("T067 posts the add-court-register command");
+        // Resolved once per command, not once per attempt: a retry made as a different caller would
+        // be a second, differently attributed command for the same hearing.
+        final String identity = caller.orSystem(systemUserId);
+        Duration backoff = initialBackoff;
+        OptionalInt lastStatus = OptionalInt.empty();
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            final Outcome outcome = attempt(body, identity, attempt);
+            if (outcome.status().isPresent()) {
+                lastStatus = outcome.status();
+            }
+            if (outcome.accepted()) {
+                return outcome.status().orElse(ACCEPTED);
+            }
+            if (outcome.refusal().isPresent()) {
+                throw failed(
+                        FailureClassification.NON_TRANSIENT, outcome.refusal().get(), lastStatus);
+            }
+            if (attempt < maxAttempts) {
+                waitFor(capped(outcome.retryAfter().orElse(backoff)));
+                backoff = capped(backoff.multipliedBy(2));
+            }
+        }
+
+        // The transport's half of N42: an unresolved verdict handed back, never a register written
+        // off. The FAILED row and the exhausted_message_id are the guard's, on the last permitted
+        // delivery.
+        LOG.error("The add-court-register attempts are exhausted with the outcome unresolved, so "
+                + "the delivery is handed back. attempts={}", maxAttempts);
+        throw failed(FailureClassification.TRANSIENT, ReasonCode.SUBMISSION_TRANSIENT, lastStatus);
+    }
+
+    /**
+     * One attempt, classified.
+     *
+     * <p>The configured mesh headers are applied first and the two contract headers set over them, so
+     * a header configured under a contract name replaces the contract value rather than joining it:
+     * two values of {@code CJSCPPUID} is an ambiguous caller to a service authorising on identity,
+     * and two content types is a 415.
+     */
+    private Outcome attempt(final byte[] body, final String identity, final int attempt) {
+        Outcome outcome;
+        try {
+            outcome = restClient.post()
+                    .uri(PATH)
+                    .headers(headers -> {
+                        extraHeaders.forEach(headers::set);
+                        headers.setContentType(
+                                MediaType.parseMediaType(ADD_COURT_REGISTER_MEDIA_TYPE));
+                        headers.set(IDENTITY_HEADER, identity);
+                    })
+                    .body(body)
+                    .exchange((request, response) -> classify(response, attempt));
+        } catch (ResourceAccessException unreachable) {
+            // Connect failure, read timeout, connection dropped: the command may or may not have
+            // been applied. Unknown is not failed, and it is retried rather than written off.
+            //
+            // The exception travels with the line rather than only its type. What the pipeline acts
+            // on is the classification; what a human acts on is what it *was* — a refused
+            // connection, a read that timed out, a route the mesh dropped — and the bounded reason
+            // code this is eventually reported under is deliberately incapable of carrying it. It is
+            // safe to keep: a transport exception is raised instead of a response, so it carries the
+            // endpoint and the socket error and never a register body.
+            LOG.warn("The add-court-register attempt did not reach a verdict, so the outcome is "
+                    + "unknown; retrying. attempt={}", attempt, unreachable);
+            outcome = Outcome.retryable(Optional.empty(), OptionalInt.empty());
+        }
+        return outcome;
+    }
+
+    /**
+     * What progression's answer means.
+     *
+     * <p>Nothing progression wrote is read: the body of a court-register refusal can name a child,
+     * and this method's decisions all travel into a log line and a dead-letter description.
+     */
+    private Outcome classify(final ClientHttpResponse response, final int attempt)
+            throws IOException {
+        final HttpStatusCode status = response.getStatusCode();
+        final int code = status.value();
+        final Outcome outcome;
+
+        if (code == ACCEPTED) {
+            outcome = Outcome.accepted(code);
+        } else if (status.is2xxSuccessful()) {
+            // The contract declares one success. A 200 or a 204 means something other than the
+            // command endpoint answered — a proxy, or a route that no longer reaches it — and
+            // calling it success would complete the run `submitted` for a command nothing enqueued.
+            LOG.error("Progression answered a success this contract does not define, so the command "
+                    + "cannot be assumed enqueued. status={}", code);
+            outcome = Outcome.refused(ReasonCode.SUBMISSION_NOT_ACCEPTED, code);
+        } else if (code == HttpStatus.TOO_MANY_REQUESTS.value()) {
+            LOG.warn("Progression asked this service to slow down. attempt={}", attempt);
+            outcome = Outcome.retryable(retryAfter(response), OptionalInt.of(code));
+        } else if (code == HttpStatus.REQUEST_TIMEOUT.value() || status.is5xxServerError()) {
+            // The two the legacy never retries and every server error. AxiosRetryWrapper.js:34
+            // abandons on any status at or below 429, which makes 408 and 429 — the two statuses
+            // that most plainly mean "ask me again" — the least-retried failures it has (C3).
+            LOG.warn("Progression could not process the command. attempt={} status={}",
+                    attempt, code);
+            outcome = Outcome.retryable(Optional.empty(), OptionalInt.of(code));
+        } else {
+            // Any other 4xx: the request was understood and declined, so the same bytes will be
+            // declined again and the delivery budget is finite.
+            LOG.error("Progression refused the command, and no redelivery can change that. "
+                    + "status={}", code);
+            outcome = Outcome.refused(ReasonCode.SUBMISSION_REJECTED, code);
+        }
+        return outcome;
+    }
+
+    /**
+     * The wait progression asked for, where it asked for one this client can act on.
+     *
+     * @return the delta-seconds wait, or empty for every other form — which falls back to the
+     *     back-off, the same outcome as no header at all
+     */
+    private static Optional<Duration> retryAfter(final ClientHttpResponse response) {
+        final String header = response.getHeaders().getFirst(RETRY_AFTER_HEADER);
+        final String asked = header == null ? "" : header.trim();
+        final Optional<Duration> wait;
+        if (DELTA_SECONDS.matcher(asked).matches()) {
+            wait = Optional.of(Duration.ofSeconds(Long.parseLong(asked)));
+        } else {
+            if (!asked.isEmpty()) {
+                LOG.warn("Retry-After was not a number of seconds, so the back-off is used instead.");
+            }
+            wait = Optional.empty();
+        }
+        return wait;
+    }
+
+    /** The ceiling on any wait, a server-supplied one included: a run holds a bounded claim. */
+    private Duration capped(final Duration wait) {
+        return wait.compareTo(maxBackoff) > 0 ? maxBackoff : wait;
+    }
+
+    private void waitFor(final Duration wait) {
+        try {
+            pause.pause(wait);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            LOG.warn("Interrupted while waiting to retry the add-court-register command, so the "
+                    + "delivery is handed back unresolved.");
+            throw new SubmissionFailedException(
+                    FailureClassification.TRANSIENT, ReasonCode.SUBMISSION_TRANSIENT);
+        }
+    }
+
+    /**
+     * The failure, carrying the status progression answered where there was one.
+     *
+     * <p>An empty status is a real answer: a connect failure has none, and a row carrying an invented
+     * one would say an attempt was answered when nothing answered. A status is also all that may
+     * cross this boundary — it is bounded, and says nothing about a child.
+     */
+    private static SubmissionFailedException failed(final FailureClassification classification,
+            final ReasonCode reason, final OptionalInt status) {
+        return new SubmissionFailedException(classification, reason,
+                status.isPresent() ? status.getAsInt() : null);
+    }
+
+    /**
+     * What one attempt came to.
+     *
+     * @param accepted   whether progression accepted the command
+     * @param refusal    the bounded reason where the answer is final, empty where another attempt
+     *                   may change it
+     * @param retryAfter the wait progression asked for, where it asked for a usable one
+     * @param status     the status progression answered with, where anything answered
+     */
+    private record Outcome(boolean accepted, Optional<ReasonCode> refusal,
+            Optional<Duration> retryAfter, OptionalInt status) {
+
+        private static Outcome accepted(final int status) {
+            return new Outcome(true, Optional.empty(), Optional.empty(), OptionalInt.of(status));
+        }
+
+        private static Outcome refused(final ReasonCode reason, final int status) {
+            return new Outcome(false, Optional.of(reason), Optional.empty(), OptionalInt.of(status));
+        }
+
+        private static Outcome retryable(
+                final Optional<Duration> retryAfter, final OptionalInt status) {
+            return new Outcome(false, Optional.empty(), retryAfter, status);
+        }
     }
 }

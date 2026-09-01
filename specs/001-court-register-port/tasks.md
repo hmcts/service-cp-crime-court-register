@@ -701,9 +701,25 @@ vocabulary and matching semantics.
       deployed credential source is in use and beside a LIVE payload source, which
       `ConfigurationValidationTest` re-proved on this run — the live bean landing beside the stub
       changes which of the pair is chosen, never whether the refusals apply.)*
-- [ ] T067 [US1] Implement `adapter/progression/{ProgressionCommandGateway,
+- [x] T067 [US1] Implement `adapter/progression/{ProgressionCommandGateway,
       ProgressionRegisterSubmissionClient}` (green T061, T062, T064) — updates C1/C3 and the
       submission half of C29.
+      *(done — 62 cases green across the three suites, and C1 and C3 move to FIXED with C29's
+      submission half noted. Three things worth stating. **(1)** The retry taxonomy is written as the
+      positive set rather than the legacy's cut-off, and it is now asserted identically in all three
+      clients; the one deliberate disagreement is `404`, which is an empty answer from the payload
+      query and a refusal from the now-subscriptions read. **(2)** `config/LiveSubmissionConfig` is
+      chosen by the **payload** mode, exactly as `StubSubmissionConfig` is, because that is the
+      discriminator `PropertiesValidator` already reasons with — "a local stub run never fetches a
+      hearing, so it never reaches the POST at all" — and a second mode property would give an
+      operator two switches for one sentence. **(3)** The skipped-POST receipt carries no status:
+      `SubmissionReceipt`'s `responseCode` is an `int` and cannot express absence, so it is zero and
+      `sentByThisDelivery` is what says nothing was sent — the pipeline logs both together, and a
+      202 there would have the run report a call it never made.
+      **Partially-flipped rows reviewed**: C32's adapter half landed at T065 and the row is now
+      FIXED; C33 was already complete at T056 and needed nothing here; C29's submission half is this
+      task's and is recorded, and what stays open on that row is the business fallback (Q4), which is
+      a decision rather than an implementation.)*
 
 **Checkpoint**: all live adapters proven against WireMock/containers; every C-fix landed except
 documentation-final states.
