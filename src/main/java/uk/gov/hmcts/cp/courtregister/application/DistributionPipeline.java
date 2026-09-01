@@ -367,7 +367,7 @@ public class DistributionPipeline {
         return switch (transformer.transform(command, payload, subscriptions)) {
             case TransformationResult.NoRegister nothing -> spent(budget)
                     ? overran(claim, budget)
-                    : completed(claim, nothing.reason());
+                    : completed(claim, nothing.reason().completion());
             case TransformationResult.Register register -> submit(command, register, claim, budget);
         };
     }

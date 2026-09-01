@@ -37,6 +37,7 @@ import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
+import uk.gov.hmcts.cp.courtregister.domain.NoRegisterReason;
 import uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
@@ -436,7 +437,7 @@ class DistributionPipelineTest {
                     any(JsonNode.class))).thenAnswer(call -> {
                         clock.advance(OVER_BUDGET);
                         return new TransformationResult.NoRegister(
-                                CompletionReason.NO_SUBSCRIPTIONS);
+                                NoRegisterReason.NO_SUBSCRIPTIONS);
                     });
 
             final GuardDecision decision = pipelineOn(clock).process(command, delivery());
@@ -492,10 +493,9 @@ class DistributionPipelineTest {
     class NoOpOutcomes {
 
         @ParameterizedTest
-        @EnumSource(value = CompletionReason.class,
-                names = {"NO_DEFENDANTS", "NO_SUBSCRIPTIONS", "NO_YOUTH_DEFENDANTS"})
+        @EnumSource(NoRegisterReason.class)
         @DisplayName("no op outcomes are distinguishable")
-        void no_op_outcomes_are_distinguishable(final CompletionReason reason) {
+        void no_op_outcomes_are_distinguishable(final NoRegisterReason reason) {
             when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
                     any(JsonNode.class)))
                     .thenReturn(new TransformationResult.NoRegister(reason));
@@ -503,16 +503,15 @@ class DistributionPipelineTest {
             final GuardDecision decision = run();
 
             assertThat(decision).isInstanceOf(GuardDecision.Complete.class);
-            verify(guard).recordCompletion(claim, reason);
-            assertThat(completions(reason.value())).isEqualTo(1);
+            verify(guard).recordCompletion(claim, reason.completion());
+            assertThat(completions(reason.completion().value())).isEqualTo(1);
             assertThat(completions("submitted")).isEqualTo(ABSENT);
         }
 
         @ParameterizedTest
-        @EnumSource(value = CompletionReason.class,
-                names = {"NO_DEFENDANTS", "NO_SUBSCRIPTIONS", "NO_YOUTH_DEFENDANTS"})
+        @EnumSource(NoRegisterReason.class)
         @DisplayName("sends nothing at all when there is nothing to send")
-        void sends_nothing_when_there_is_nothing_to_send(final CompletionReason reason) {
+        void sends_nothing_when_there_is_nothing_to_send(final NoRegisterReason reason) {
             when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
                     any(JsonNode.class)))
                     .thenReturn(new TransformationResult.NoRegister(reason));
@@ -529,7 +528,7 @@ class DistributionPipelineTest {
             when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
                     any(JsonNode.class)))
                     .thenReturn(new TransformationResult.NoRegister(
-                            CompletionReason.NO_DEFENDANTS));
+                            NoRegisterReason.NO_DEFENDANTS));
 
             run();
 

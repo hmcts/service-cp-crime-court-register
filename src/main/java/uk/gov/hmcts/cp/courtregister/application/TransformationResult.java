@@ -1,7 +1,8 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
-import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
+import java.util.Objects;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
+import uk.gov.hmcts.cp.courtregister.domain.NoRegisterReason;
 
 /**
  * What a hearing transformed into: a register to send, or a reason there is nothing to send.
@@ -15,16 +16,25 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
  * rather than an acceptable simplification.
  *
  * <p>Making the reason part of the type means a transformation cannot decline to produce a register
- * without saying which of the four it was.
+ * without saying which of the three it was — and the reason is a
+ * {@link NoRegisterReason} rather than the wider {@link
+ * uk.gov.hmcts.cp.courtregister.domain.CompletionReason}, so it cannot say {@code submitted} for a
+ * register it never sent or {@code group-proceedings} for a decision made before it was called. The
+ * five ways a run ends are mutually exclusive by construction.
  */
 public sealed interface TransformationResult {
 
     /**
-     * There is nothing to send, and this is which of the four reasons.
+     * There is nothing to send, and this is which of the three reasons.
      *
-     * @param reason the completion reason recorded for the run
+     * @param reason which of the three no-register reasons it was; never {@code null}
      */
-    record NoRegister(CompletionReason reason) implements TransformationResult {
+    record NoRegister(NoRegisterReason reason) implements TransformationResult {
+
+        /** A reason is the whole content of this answer; there is no such thing as an absent one. */
+        public NoRegister {
+            Objects.requireNonNull(reason, "a transformation that produces no register says why");
+        }
     }
 
     /**
