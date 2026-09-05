@@ -82,7 +82,7 @@ committing agents at once.**
 - [ ] T005 [P] [A] Verify the vendored file-service DDL against the deployed schema: in an STE stack,
       `\d metadata` and `\d content` on the `fileservice` database match
       `contracts/fileservice/` changesets 001–006 (columns, types, defaults). Record the result in
-      `contracts/README.md` (date, stack). If it differs, re-vendor and note the delta before T030. (deferred: needs STE access; see checkpoint note)
+      `contracts/README.md` (date, stack). If it differs, re-vendor and note the delta before T033. (deferred: needs STE access; see checkpoint note)
 - [x] T006 [P] Append rows **P1–P9** to `doc/DEFECT-FIXES.md` as **PLANNED** (P6, P7 as RETIRED with the
       retirement-PR pointer; P8 as MOOT with the index citation), each with the progression `file:line`
       citation from the design §3.4, the fixed behaviour from §7.3 and the pinning test name from the
@@ -104,8 +104,8 @@ committing agents at once.**
   STE-86 is the canonical reference), records the date, the stack number and the result in the
   `fileservice/` provenance row of `contracts/README.md`, and re-vendors the changesets if they differ.
 - **Deadline**: this must complete **before T033 (`FileServicePayloadStoreIT`) starts** - T033 asserts
-  against the vendored DDL, so verifying it afterwards proves nothing. Per the dependency note below,
-  the result must also be recorded before T044 is merged.
+  against the vendored DDL, so verifying it afterwards proves nothing. The dependency note below
+  carries the same deadline.
 
 ---
 
@@ -450,7 +450,7 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
   file is shared (`DistributionPipeline`, `RegisterTransformationChain`, `PipelineConfig`,
   `PropertiesValidator`, `DocumentOutcomeSinkImpl`).
 - T004 (goldens) blocks T031 and T019. T005 (DDL verification) blocks nothing in code but must be
-  recorded before T044 is merged. T006 (P rows PLANNED) blocks every "flip P# to FIXED" commit.
+  recorded before T033 starts. T006 (P rows PLANNED) blocks every "flip P# to FIXED" commit.
 
 ## Notes
 
