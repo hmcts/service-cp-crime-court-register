@@ -58,7 +58,7 @@ goldens for `PdfPayloadMapper` and `DefendantTypeResolver` **recorded from progr
 60-minute run deadline for *requesting*; completion is event-driven so a slow render never blocks the
 next request.
 
-**Constraints**: constitution v3.0.0 — zone `Europe/London` validated at startup; flag read per run,
+**Constraints**: constitution v3.0.1 — zone `Europe/London` validated at startup; flag read per run,
 no cache, fail-closed; ids minted and persisted before every downstream call; `202` and nothing else;
 broker never gates readiness; file-service datasource gates readiness only during a run; no PII at
 INFO+; no AI attribution; never two committing agents at once; TDD red-run convention.
@@ -85,7 +85,7 @@ NN delivery events, PCR, history migration, C18.
 
 ## Constitution Check
 
-*GATE: evaluated against constitution v3.0.0 (2026-09-05).*
+*GATE: evaluated against constitution v3.0.1 (2026-09-05; re-checked after the PATCH amendment - the commit-type list change affects no gate).*
 
 | # | Principle | Verdict for this increment |
 |---|---|---|
