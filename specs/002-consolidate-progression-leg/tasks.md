@@ -78,6 +78,22 @@ committing agents at once.**
 
 **Checkpoint**: build green, compose up, goldens present, register carries the P rows. Codex review 1.
 
+**Checkpoint note — T005 deferral (2026-09-05)**: T005 is **not done** and its box stays unticked.
+
+- **Not verified**: that `contracts/fileservice/` changesets 001–006 (vendored from `framework-libraries`
+  `58aad8664`, **2023-12-22**) still match the deployed `fileservice` schema — the columns, types and
+  defaults of `metadata` and `content`. The vendored DDL is nearly three years old, so the
+  `FileServicePayloadStoreIT` Testcontainers seed may not be what the platform actually runs.
+- **Why deferred**: no STE access from the machine this increment is being built on. The check needs a
+  live stack, not a local clone, so it cannot be closed from here.
+- **Who and where**: the implementer who picks up T033/T044 (the file-service leg) runs `\d metadata`
+  and `\d content` against the `fileservice` database on an **STE stack** (per `~/moj/cpp-knowledgebase/ENVIRONMENTS.md`;
+  STE-86 is the canonical reference), records the date, the stack number and the result in the
+  `fileservice/` provenance row of `contracts/README.md`, and re-vendors the changesets if they differ.
+- **Deadline**: this must complete **before T033 (`FileServicePayloadStoreIT`) starts** — T033 asserts
+  against the vendored DDL, so verifying it afterwards proves nothing. Per the dependency note below,
+  the result must also be recorded before T044 is merged.
+
 ---
 
 ## Phase 2: Foundational (schema, domain, ports, store, validators, metrics)
