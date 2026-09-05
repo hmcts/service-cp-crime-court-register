@@ -3,23 +3,25 @@ SYNC IMPACT REPORT
 ==================
 Version change: 3.0.0 → 3.0.1
 Bump rationale: PATCH - the commit-type list is completed (2026-09-05). The
-                Development Workflow's Commits bullet listed six Conventional
-                Commit types (feat, fix, chore, docs, refactor, test), but
+                Commits bullet of Principle VIII (Estate Conventions) listed six
+                Conventional Commit types (feat, fix, chore, docs, refactor, test), but
                 `main` already carries three `ci:`, three `build:` (two of them
                 dependabot's `build(deps)`) and one `style:` commit, so the
                 list described the repository's practice incompletely and an
                 author following it had nowhere to put a workflow or a
                 dependency bump. The list now names all nine and says what the
-                three added types cover. No principle changes, no obligation is
-                added or removed, and no existing commit is rewritten.
+                three added types cover. No principle changes and no obligation
+                is added or removed.
 
-                Also recorded: the Phase 1 commit `0e6cd80` used `config:`,
-                which is NOT in the list and is not to be repeated - a
-                configuration change is `chore:` (or `build:` when it is
-                tooling). It stands in history because history is not rewritten.
+                Also recorded: the Phase 1 commit that declared the 002
+                configuration keys was written with `config:`, which is NOT in
+                the list - a configuration change is `chore:` (or `build:` when
+                it is tooling). That commit has since been reworded to
+                `chore(config):`, so history and the list agree.
 
-Modified sections (this amendment): Development Workflow, Commits bullet only.
-Principles I-VIII unchanged in substance and in wording.
+Modified sections (this amendment): Principle VIII, Commits bullet only.
+Principles I-VII unchanged; Principle VIII changed only in that bullet (the
+accepted commit-type list), with no new obligation.
 
 Templates / guidance reviewed:
   - specs/002-consolidate-progression-leg/tasks.md  ✅ aligned (2026-09-05):
