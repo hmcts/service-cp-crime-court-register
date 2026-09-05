@@ -51,11 +51,23 @@ courtregister:
     zone: Europe/London
 
   # Deliberately absent from this profile: courtregister.feature.*, courtregister.fileservice.*,
-  # courtregister.endpoints.*, courtregister.email.templates.* and spring.artemis.*. They are
-  # required only when generation is enabled, and it is disabled above; leaving them unset is what
-  # proves the refusals are conditional rather than making them pass with placeholder values.
+  # courtregister.endpoints.* and courtregister.email.templates.*. They are required only when
+  # generation is enabled, and it is disabled above; leaving them unset is what proves the refusals
+  # are conditional rather than making them pass with placeholder values. The one `spring.artemis`
+  # key this profile does set is the embedded switch below, and it is there to keep the promise the
+  # header makes rather than to configure a connection.
 
 spring:
+  artemis:
+    # `artemis-jakarta-server` is on the test classpath for the durable-subscription listener IT, and
+    # with the embedded broker classes visible Boot's ArtemisAutoConfiguration DEDUCES embedded mode
+    # whenever `spring.artemis.mode` is unset — so a full in-VM broker would start and stop inside
+    # every context load in this profile, contradicting the "no broker" promise in the header. Off
+    # unconditionally: the deduction runs off the classpath, not off any switch above, so disabling
+    # the consumer and the generation job does not suppress it. The deployed profiles never set this
+    # (the server artefact is test-only there), so nothing outside the tests is affected.
+    embedded:
+      enabled: false
   autoconfigure:
     # No datasource is configured in this profile, and with the JDBC starter on the classpath
     # DataSourceAutoConfiguration would otherwise fail the context demanding a URL. Flyway's
