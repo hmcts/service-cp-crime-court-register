@@ -219,7 +219,7 @@ DEFECT-FIXES rows use these names verbatim.**
 | Area | Planned test | Layer | Covers |
 |---|---|---|---|
 | Schema | `SchemaMigrationV2IT` | PG | V2 columns, constraints, partial indexes, `shedlock` |
-| Recording | `RegisterStoreIT` | PG | FR-001/003: record, supersede same key in one txn, no touch to GENERATED rows, flag-state stamp, `activeUnbatched` excludes OFF/superseded/batched |
+| Recording | `RegisterStoreIT` | PG | FR-001/003: record, supersede same key in one txn, no touch to GENERATED rows, flag-state stamp, `activeUnbatched` excludes OFF/superseded/batched; `markGenerated(batchId)` flips this batch's rows only (P3: `generation_flips_only_the_batchs_own_rows`) |
 | Recording | `DistributionPipelineTest` (extended) | U | reason `recorded`; SCHEMA_INVALID before record; store-down ⇒ abandon+suspend; `progression-post` mode still submits |
 | Defendant type | `DefendantTypeResolverTest` | U | FR-002 goldens from `CourtRegisterHandler.getDefendantType` (Applicant / Appellant / Respondent / no application); the as-at-hearing deviation pinned |
 | PDF payload | `PdfPayloadMapperTest` | U | FR-007: byte-identical to goldens recorded from `CourtRegisterPdfPayloadGenerator.mapPayload` for every recorded batch shape; C24 `####` → newline pinned (`sentinel_is_substituted_exactly_as_progression_did`) |
@@ -234,7 +234,7 @@ DEFECT-FIXES rows use these names verbatim.**
 | SDG client | `SystemDocGeneratorClientTest` | W | body verbatim incl. `originatingSource=CourtRegisterService`, `sourceCorrelationId=batch_id`; media type; `CJSCPPUID`; 202-only; retry taxonomy shared (`retry_taxonomy_matches_the_submission_client`); query mapping |
 | Listener | `DocumentEventListenerTest` | U | envelope parse (`_metadata` + payload), `CPPNAME` selector values, originatingSource filter (ignore others), correlation → sink calls |
 | Listener | `DocumentEventListenerIT` | AR | durable subscription on embedded Artemis: event published while down is delivered on reconnect; selector excludes other CPPNAMEs |
-| Outcome | `DocumentOutcomeSinkTest` | U | GENERATED marks only this batch's rows (P3: `generation_flips_only_the_batchs_own_rows`); FAILED records sdg reason (P2: `generation_failed_event_fails_the_batch_with_reason`); duplicate event idempotent |
+| Outcome | `DocumentOutcomeSinkTest` | U | GENERATED delegates to `RegisterStore.markGenerated(batchId)` — the sink scopes the flip to the batch it was given and never widens it (the P3 pin itself lives in `RegisterStoreIT`, above); FAILED records sdg reason (P2: `generation_failed_event_fails_the_batch_with_reason`); duplicate event idempotent |
 | Reconciler | `GenerationReconcilerTest` | U/W | grace period; GET applied through the sink; still pending ⇒ GENERATION_TIMED_OUT; `reconciled` metric |
 | Notify | `NotificationNotifyClientTest` | W | body verbatim (`notificationId, templateId, sendToAddress, fileId, personalisation.yotsName`); media type; 202-only; same id on retry |
 | Notify | `RegisterNotifierServiceTest` | U | per-recipient rows minted first; ACCEPTED/FAILED; NOTIFIED / PARTIALLY_NOTIFIED / NOTIFIED_NOBODY (P1: `a_batch_with_no_recipients_ends_notified_nobody_not_generated_forever`); resend only FAILED |
