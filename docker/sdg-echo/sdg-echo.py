@@ -16,9 +16,11 @@ not invented here; `originatingSource` is echoed for the same reason, since the 
 the events whose source is CourtRegisterService.
 
 STOMP rather than a JMS client because it needs no broker library: Artemis's default acceptor
-multiplexes CORE, AMQP, STOMP, MQTT and OpenWire on 61616, `/topic/<name>` addresses a multicast
-address, and a SEND frame's custom headers arrive as message properties - which is what makes the
-`CPPNAME` selector the service subscribes with match.
+multiplexes CORE, AMQP, STOMP, MQTT and OpenWire on 61616, a SEND frame's destination is the bare
+address name (`public.event`, with NO `/topic/` prefix, because the default acceptor declares no
+`multicastPrefix` and would treat the prefix as part of a second, wrongly named address), and a SEND
+frame's custom headers arrive as message properties - which is what makes the `CPPNAME` selector the
+service subscribes with match.
 
 Environment (all with local defaults, see docker-compose.yml):
   WIREMOCK_URL, GENERATE_DOCUMENT_PATH, ARTEMIS_HOST, ARTEMIS_PORT, ARTEMIS_USER,
@@ -127,7 +129,7 @@ def publish(event):
 
 def main():
     log("watching {} for POSTs to {}".format(WIREMOCK_URL, GENERATE_DOCUMENT_PATH))
-    log("publishing {} to {}:{} /topic/{}".format(
+    log("publishing {} to {}:{} address {} (bare name, no /topic/ prefix)".format(
         DOCUMENT_AVAILABLE, ARTEMIS_HOST, ARTEMIS_PORT, PUBLIC_EVENT_TOPIC))
 
     # Everything already in the journal at start-up is history: echoing it would publish a second
