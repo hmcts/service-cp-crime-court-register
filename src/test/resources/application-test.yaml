@@ -61,7 +61,7 @@ spring:
   artemis:
     # `artemis-jakarta-server` is on the test classpath for the durable-subscription listener IT, and
     # with the embedded broker classes visible Boot's ArtemisAutoConfiguration DEDUCES embedded mode
-    # whenever `spring.artemis.mode` is unset — so a full in-VM broker would start and stop inside
+    # whenever `spring.artemis.mode` is unset - so a full in-VM broker would start and stop inside
     # every context load in this profile, contradicting the "no broker" promise in the header. Off
     # unconditionally: the deduction runs off the classpath, not off any switch above, so disabling
     # the consumer and the generation job does not suppress it. The deployed profiles never set this

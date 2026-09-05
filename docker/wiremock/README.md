@@ -41,7 +41,7 @@ curl -s http://localhost:8089/__admin/scenarios          # which state it is in 
 
 The shorthand lives at `/flag/off` and NOT at `/__admin/flag/off`, which is what the plan sketched:
 WireMock reserves the whole `/__admin` prefix for its own admin API and never consults the stub
-mappings there, so a mapping registered at `/__admin/flag/off` is unreachable — verified against
+mappings there, so a mapping registered at `/__admin/flag/off` is unreachable - verified against
 `wiremock/wiremock:3.13.2`, which answers such a request `404` from the admin router.
 
 ## Adding a mapping

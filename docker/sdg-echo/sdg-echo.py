@@ -5,19 +5,19 @@ LOCAL ONLY, and a test double rather than a model of systemdocgenerator. The rea
 payload and then publishes `public.systemdocgenerator.events.document-available` onto the shared
 `public.event` topic; the WireMock stub can only answer 202, so without this helper a local run
 would leave every batch sitting in GENERATING until the reconciler timed it out, and the
-event-driven completion path — the one the deployed service actually uses — would never be
+event-driven completion path (the one the deployed service actually uses) would never be
 exercised locally at all.
 
 It polls WireMock's request journal for `generate-document` POSTs, and for each one it has not seen
 before publishes the matching `document-available` event to Artemis over STOMP. The event is built
-from the request the service actually sent, so the two fields that correlate it back to a batch —
-`sourceCorrelationId` (the batch id) and `payloadFileServiceId` — are the service's own values and
+from the request the service actually sent, so the two fields that correlate it back to a batch,
+`sourceCorrelationId` (the batch id) and `payloadFileServiceId`, are the service's own values and
 not invented here; `originatingSource` is echoed for the same reason, since the listener keeps only
 the events whose source is CourtRegisterService.
 
 STOMP rather than a JMS client because it needs no broker library: Artemis's default acceptor
 multiplexes CORE, AMQP, STOMP, MQTT and OpenWire on 61616, `/topic/<name>` addresses a multicast
-address, and a SEND frame's custom headers arrive as message properties — which is what makes the
+address, and a SEND frame's custom headers arrive as message properties - which is what makes the
 `CPPNAME` selector the service subscribes with match.
 
 Environment (all with local defaults, see docker-compose.yml):
@@ -81,7 +81,7 @@ def document_available_from(generate_document):
         "generatedTime": now_iso(),
         "generateVersion": 1,
         # Correlation. Absent from the command only if the service stopped sending it, in which
-        # case the listener could not match the event either — so it is copied, never defaulted.
+        # case the listener could not match the event either - so it is copied, never defaulted.
         "sourceCorrelationId": generate_document.get("sourceCorrelationId"),
         "originatingSource": generate_document.get("originatingSource"),
     }
@@ -109,7 +109,7 @@ def publish(event):
         broker.sendall(frame("SEND", {
             # The bare address name, NOT `/topic/public.event`: Artemis only strips a `/topic/`
             # prefix on an acceptor that declares `multicastPrefix=/topic/`, and the default one
-            # does not — the prefix would become part of a second, wrongly named address, and the
+            # does not - the prefix would become part of a second, wrongly named address, and the
             # service's subscription to `public.event` would hear nothing. A bare name routes by
             # the address's own routing type, and docker-compose.yml creates `public.event`
             # multicast for exactly this reason.

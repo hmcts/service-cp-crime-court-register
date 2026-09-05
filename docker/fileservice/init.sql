@@ -11,13 +11,13 @@
 --   001-common-initial-schema        content(file_id UUID PK, content BLOB NOT NULL)
 --                                    metadata(file_id UUID PK) + FK fk_file_id -> content(file_id)
 --   002-postgres-specific            metadata.metadata JSONB NOT NULL
---   003-h2-specific                  dbms="H2" — DOES NOT APPLY here, and is why `metadata` is
+--   003-h2-specific                  dbms="H2" - DOES NOT APPLY here, and is why `metadata` is
 --                                    jsonb below rather than text
 --   004-add-is-deleted-column        content.deleted BOOLEAN NOT NULL DEFAULT false
 --   005-change-content-to-byte-array dbms="postgresql": drops `content` and re-adds it as BINARY,
 --                                    i.e. bytea. The re-added column carries NO nullable
 --                                    constraint, so 001's NOT NULL is gone and `content` is
---                                    NULLABLE here — deliberately, and not a transcription slip.
+--                                    NULLABLE here - deliberately, and not a transcription slip.
 --   006-add-date-deleted-column      dbms="postgresql": content.deleted_at TIMESTAMP WITH TIME ZONE
 --                                    NULL. NOTE the column is `deleted_at`; only the changeset's
 --                                    file name says "date-deleted".

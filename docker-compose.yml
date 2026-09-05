@@ -98,7 +98,7 @@ services:
   # document's outcome and where this service's durable subscription listens. The address is created
   # with the broker instance rather than left to auto-creation: `--addresses public.event` defaults
   # to the MULTICAST routing type, and an address that auto-created as anycast would deliver each
-  # event to one subscriber instead of all of them — the local stack would then disagree with the
+  # event to one subscriber instead of all of them - the local stack would then disagree with the
   # deployed broker about the one thing the topic exists for.
   #
   # `apache/activemq-artemis`, PINNED, rather than the estate's `hmcts/artemis_ubuntu`: the estate
@@ -126,7 +126,7 @@ services:
       retries: 12
       start_period: 20s
 
-  # The framework file service's Postgres — ONE shared database per stack in a deployed environment,
+  # The framework file service's Postgres - ONE shared database per stack in a deployed environment,
   # and the reason this service writes the PDF payload straight into it: systemdocgenerator renders
   # only a payload that is already in the file service. Seeded from docker/fileservice/init.sql,
   # which is the vendored liquibase changesets 001–006 written as plain DDL (see the header there).
