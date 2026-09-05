@@ -26,6 +26,8 @@ the task records the initial observed result.
 `src/test/java/uk/gov/hmcts/cp/courtregister/`; progression sources referenced as `PROG` =
 `cpp-context-progression` at `main` `79edf7cf3d`. `*IT` suites need Docker and run inside
 `./gradlew test`. Conventional Commits on `002-consolidate-progression-leg`; no AI attribution.
+The accepted types are `feat`, `fix`, `chore`, `docs`, `test`, `refactor`, `build`, `ci` and `style`
+(`config` is not one of them; a configuration change is a `chore` or a `build`).
 **Every task that lands a P-fix flips that row of `doc/DEFECT-FIXES.md` (status → FIXED, pinning
 test confirmed) in the same commit.** Every phase ends with a `./gradlew build` that is green and a
 Codex review (new session) whose findings are fixed before the next phase starts. **Never two
@@ -64,12 +66,19 @@ committing agents at once.**
       `apache/activemq-artemis` image, since `hmcts/artemis_ubuntu` sits in a private ACR a fresh
       clone cannot pull; and the flag switch is `PUT /flag/off|on`, since WireMock reserves
       `/__admin` for its own API and never serves stub mappings there)
-- [ ] T004 [P] Record the progression goldens (research §6): in a local, uncommitted module of `PROG`,
+- [x] T004 [P] Record the progression goldens (research §6): in a local, uncommitted module of `PROG`,
       run `CourtRegisterPdfPayloadGenerator.mapPayload` over the 001 recorded documents grouped per
       (court centre, register date) and `CourtRegisterHandler.getDefendantType` over the base hearings;
       write `src/test/resources/goldens/progression/pdf-payload/*.json`,
       `…/defendant-type/*.json` and `…/PROVENANCE.md` (PROG commit, core-domain version, corpus
-      digest, batch composition). Record the count of goldens per kind.
+      digest, batch composition). Record the count of goldens per kind. (recorded: 161 document and
+      7 batch pdf-payload goldens, 9 defendant-type goldens of which 6 are synthesised, and 52
+      refusals recorded in `INDEX.json`; delivered with two deviations, both recorded in
+      `src/test/resources/goldens/progression/PROVENANCE.md`: `getDefendantType` is carried as a
+      verified verbatim transcription in `…/goldens/progression/harness/CourtRegisterHandlerRule.java`,
+      because `CourtRegisterHandler` cannot be compiled in isolation; and the Applicant/Appellant/
+      Respondent branches are reached through six synthesised inputs, because no base fixture reaches
+      those branches)
 - [ ] T005 [P] [A] Verify the vendored file-service DDL against the deployed schema: in an STE stack,
       `\d metadata` and `\d content` on the `fileservice` database match
       `contracts/fileservice/` changesets 001–006 (columns, types, defaults). Record the result in
