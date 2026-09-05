@@ -1,7 +1,58 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 2.0.2 → 2.0.3
+Version change: 2.0.4 → 3.0.0
+Bump rationale: MAJOR — Principle III is redefined (2026-09-05). The
+                outbound contract is no longer "the progression-owned
+                add-court-register command, POSTed once per hearing": the
+                register document is written to this service's own register
+                store, and the service becomes a client of four platform
+                contracts it consumes but does not own — systemdocgenerator's
+                generate-document command and its document-available /
+                generation-failed public events, notificationnotify's
+                send-email-notification command, the framework file-service
+                table schema (write-only), and the CourtRegisterService App
+                Configuration flag. The Technology Stack section's "contains
+                no scheduler, no PDF generation, no GOV.UK Notify code" and
+                "progression's leg is out of scope" statements are reversed.
+                Decision recorded in the design (Confluence "Court Register
+                Service", rev 2 / 2.1, §10) and specs/002-consolidate-
+                progression-leg/spec.md.
+
+Modified sections (this amendment): Principle III (redefined — contracts
+enumerated, ownership per contract, the register store as the outbound
+boundary, the flag as a contract); Technology Stack & Deployment (Idempotency
+bullet — supersession at the write replaces the "absorbed downstream"
+argument; Outbound bullet — record, batch, render, notify; new Scheduling,
+Events, Second datasource and Feature flag bullets; Deployment bullet; Out of
+scope bullet — progression's leg leaves it, its retirement is named);
+"Current increment" → 002 "consolidate-progression-leg" with 001 recorded as
+complete. Principles I, II, IV–VIII unchanged in substance; Principle I's
+catalogue widens to the progression-leg P rows by the append mechanism it
+already carries.
+
+Templates / guidance reviewed:
+  - .specify/templates/plan-template.md       ✅ compatible — Constitution
+      Check is filled per feature; plan authors gate on III as redefined.
+  - .specify/templates/spec-template.md       ✅ compatible — behaviour is
+      expressed as queue message in, register record + platform commands out.
+  - .specify/templates/tasks-template.md      ✅ compatible.
+  - CLAUDE.md                                 ✅ aligned (2026-09-05): contract
+      rule, cutover rule, Confluence as the design authority.
+  - README.md                                 ✅ aligned (2026-09-05).
+  - .claude/rules/design_rules.md             ⚠ pending — still describes the
+      001 shape (RegisterSubmissionClient, POST); updated by a 002 task.
+  - .claude/rules/workflow.md, technical-default.md  ✅ aligned (2026-09-05).
+  - .claude/agents/spec-validator.md          ✅ interim note added; full
+      rewrite of "The Four Contracts" is a 002 task.
+
+Previous amendment (2.0.3 → 2.0.4):
+Bump rationale: PATCH — wording (2026-09-05). The repo no longer carries
+                doc/API_CONTRACTS.md or doc/openapi.yaml; Principle III and
+                the Development Workflow now name the Confluence design page
+                and the JSON schemas as where the contracts are documented.
+
+Previous amendment (2.0.2 → 2.0.3):
 Bump rationale: PATCH — static-analysis reality sync (2026-09-01). The build
                 gained no new obligation; what it already required is now
                 actually enforced, and Principle VIII's static-analysis bullet
@@ -139,35 +190,47 @@ Follow-up TODOs: None. All placeholders resolved.
 
 # service-cp-crime-court-register Constitution
 
-This service is a Spring Boot port, onto AKS, of the court register Node.js
-function app (the `CourtRegister*` pipeline in
-`cpp-context-azure-legalaidagency/azure-functions/durable-functions/`). It
-consumes thin hearing-resulted messages from a dedicated Azure Service Bus
-queue, assembles **one court register per hearing** covering **youth
-defendants only**, matches recipients via NOW-subscription rules keyed on the
-court centre, and POSTs the result to the Progression context's existing
-`add-court-register` command; progression batches, renders the PDF at 18:00
-and emails it — that half is untouched. The legacy app fails silently and
-carries 34 catalogued defects; this port exists to end both. Unlike its
-informant-register predecessor, **this is deliberately not a bug-for-bug
-port**: thirty-one of the thirty-four catalogued defects are fixed in this
-service, the remaining three (C18, C28, C34) are externally-owned
-remediations tracked to conclusion before cutover, and every fix is
-registered.
+This service is a Spring Boot replacement, on AKS, of the whole court-register
+flow: the Node.js function app (the `CourtRegister*` pipeline in
+`cpp-context-azure-legalaidagency/azure-functions/durable-functions/`) and,
+since increment 002, progression's court-register leg. It consumes thin
+hearing-resulted messages from a dedicated Azure Service Bus queue, assembles
+**one court register per hearing** covering **youth defendants only**,
+matches recipients via NOW-subscription rules keyed on the court centre, and
+**records** the result in its own register store; at 18:00 Europe/London on
+weekdays it batches the recorded registers per court centre and register
+date, renders each batch through systemdocgenerator (the unchanged
+`OEE_Layout5` template) and e-mails it through notificationnotify. The
+legacy flow fails silently on both halves and carries 34 catalogued
+function-app defects (C1–C34) and 9 catalogued progression-leg defects
+(P1–P9); this service exists to end that. Unlike its informant-register
+predecessor, **this is deliberately not a bug-for-bug port**: thirty-one of
+the thirty-four function-app defects are fixed in this service, the
+remaining three (C18, C28, C34) are externally-owned remediations tracked to
+conclusion before cutover; six of the nine progression-leg defects are fixed
+by construction, two retire with the leg and one is moot; and every fix is
+registered. Which implementation is live — legacy or this service, intake
+and generation together — is decided by one App Configuration flag.
 
 ## Core Principles
 
 ### I. Defect-Fix-First with Characterised Legacy Behaviour (NON-NEGOTIABLE)
 
-The legacy JavaScript function app under
-`cpp-context-azure-legalaidagency/azure-functions/durable-functions/` —
-together with its Jest fixtures — is the **oracle for every behaviour that is
-not catalogued as a defect**. For the catalogued behaviours — C1–C34 from
-the court-register design document §7, plus any row appended to this repo's
-`doc/DEFECT-FIXES.md` under review (C35 onward) — the fixed behaviour
-specified in the register is the requirement, and reproducing the defect is
-itself a defect. An appended row carries exactly the same obligations as an
-original one: a fix specification, a pinning test, and a sign-off state.
+The legacy implementation is the **oracle for every behaviour that is not
+catalogued as a defect**: for the intake half, the JavaScript function app
+under `cpp-context-azure-legalaidagency/azure-functions/durable-functions/`
+together with its Jest fixtures; for the downstream half (increment 002),
+progression's court-register classes at `cpp-context-progression` `main`
+`79edf7cf3d` — `CourtRegisterPdfPayloadGenerator`, `CourtRegisterHandler`,
+`CourtRegisterRequestRepository`, `CourtCentreAggregate`,
+`CourtRegisterEventProcessor` — together with their tests, whose outputs are
+recorded as goldens by executing those classes. For the catalogued
+behaviours — C1–C34 from the court-register design §7 and P1–P9 from its
+§7.3, plus any row appended to this repo's `doc/DEFECT-FIXES.md` under
+review (C35 onward) — the fixed behaviour specified in the register is the
+requirement, and reproducing the defect is itself a defect. An appended row
+carries exactly the same obligations as an original one: a fix
+specification, a pinning test, and a sign-off state.
 
 - The 34 original catalogued defects (C1–C34) are **pre-approved fixes**: no
   further authorisation is needed to implement them; a row appended later is
@@ -252,36 +315,60 @@ This service has **no business REST API**. Its contracts are:
   `{ source, requestId, hearingId, hearingDay, sharedTime, eventType,
   userId? }` (`userId` optional; absent, never null). Agreed jointly with
   `cpp-context-results` (the publisher); changes are a cross-team event.
-- **Outbound** — the Progression context's existing `add-court-register`
-  command (`application/vnd.progression.add-court-register+json`). It is
-  **progression-owned, fixed, and `additionalProperties: false`**, with its
-  nested `courtRegisterDocument/*` schemas compiled at
-  `criminal-court-public-model` **17.103.13** and vendored into this repo as
-  the frozen contract. **Success is `202 Accepted` and nothing else.** This
-  service adapts to the contract; it does not negotiate it mid-story.
+- **The register document** — the `courtRegisterDocument/*` schemas compiled
+  at `criminal-court-public-model` **17.103.13**, `additionalProperties:
+  false`, vendored into this repo as the **frozen** contract and enforced at
+  the write into the service's own **register store**. Since increment 002
+  the document is recorded here, not POSTed to progression; the schema is
+  kept frozen because it is what the PDF payload mapper was written against
+  and what any future consumer of the store will read. Changing it is a
+  contract change under this principle even though no other context now
+  receives it.
+- **Consumed platform contracts** — owned elsewhere, adapted to here, never
+  redefined here:
+  - systemdocgenerator `systemdocgenerator.generate-document` (REST command,
+    **202 and nothing else is success**) and its public events
+    `public.systemdocgenerator.events.document-available` /
+    `generation-failed` on the Artemis `public.event` topic;
+  - notificationnotify `notificationnotify.send-email-notification` (REST
+    command, 202 only), attachment by file-service `fileId`;
+  - the framework file-service `metadata` + `content` table schema
+    (write-only, pinned to liquibase changesets 001–006), used to place the
+    PDF payload where systemdocgenerator reads it;
+  - the Azure App Configuration feature flag `CourtRegisterService`, read
+    fail-closed, the same flag the results producer and the legacy triggers
+    read — **the one lever** that decides which implementation is live.
 
 Rules:
 
-- Both contracts MUST be documented on the Confluence design page (the repo
-  carries no design narrative) and the inbound message MUST have a JSON
-  schema, versioned with the repo, that contract tests assert against.
-- A change to either contract is a **cross-team event**: it requires a spec,
-  an agreed change with the owning context, and a compatibility plan
-  (consumers and producers deploy independently — assume the old shape is in
-  flight).
-- **A defect fix that changes the shape or population of an outbound
-  component is a cross-team event too**: progression MUST be notified before
-  the fix ships, and the DEFECT-FIXES row records that notification. Fixes
-  that change only *values* within the frozen shape (dates, text, recipients)
-  carry the sign-off-before-cutover marker instead.
+- Every contract MUST be documented on the Confluence design page (the repo
+  carries no design narrative); the inbound message and the register document
+  MUST have JSON schemas, versioned with the repo, that contract tests assert
+  against; the consumed contracts MUST be vendored (schemas, DDL) under
+  `specs/*/contracts/` or `src/*/resources/contracts/` with provenance, and
+  adapter tests MUST assert against those copies.
+- A change to the inbound contract or the register document is a
+  **cross-team event**: a spec, an agreed change with the owning or consuming
+  context, and a compatibility plan (assume the old shape is in flight).
+  A change in a consumed platform contract is **their** event; this service
+  detects it (a schema-asserting adapter test, a pinned DDL) and adapts.
+- **A defect fix that changes the shape or population of a register-document
+  component is still a cross-team event** in spirit: the Confluence design and
+  the DEFECT-FIXES row MUST record it, and where the change is visible on the
+  rendered PDF it carries the sign-off-before-cutover marker.
+- **One lever.** No configuration value, static-data patch or endpoint MUST
+  ever be introduced that decides, independently of the
+  `CourtRegisterService` flag, whether this service or the legacy generates
+  registers. Every failure to read the flag MUST leave the legacy in charge.
 - The only HTTP this service exposes is Spring Boot Actuator. There is no
   OpenAPI file, and adding a business endpoint requires a constitution
-  amendment, not just a spec.
+  amendment, not just a spec. Operational actions are a CLI in the image.
 
-**Rationale**: the queue message and the progression command are the whole
-external surface. Treating them with the discipline other services give an
-OpenAPI spec is what keeps a redeploy on either side from silently dropping
-registers.
+**Rationale**: the queue message, the register document and the platform
+commands are the whole external surface. Treating them with the discipline
+other services give an OpenAPI spec is what keeps a redeploy on any side from
+silently dropping registers — and treating the flag as a contract is what
+keeps the rollback to a single action.
 
 ### IV. Canonical JSON In, Typed Models Out (NON-NEGOTIABLE)
 
@@ -485,28 +572,57 @@ them read it the same way they read everything else.
   **`UNIQUE (source, request_id)`**: the court register produces exactly one
   document per hearing, so the output cardinality is 0..1 and there is no
   fan-out dimension (the informant's per-authority key does not apply).
-  Schema migrations via **Flyway**. The POST to `add-court-register` is not
-  idempotent on the Progression side (every POST appends an event and a
-  row), but a duplicate POST for the same hearing is **absorbed for
-  generation** by progression's `max(register_time) per hearing_id` sweep.
-  The honest guarantee: **at-most-once submission in all normal operation**,
-  redeliveries and replays included; across a crash in the instant between a
-  successful POST and recording it, **at-least-once** — the duplicate row is
-  superseded downstream like a re-share. An ambiguous POST (timeout, unknown
-  outcome) is therefore **retried**: a possible duplicate, which is
-  absorbed, is preferred to a possible loss, which is silent.
+  Schema migrations via **Flyway**. Since increment 002 the output is a
+  **local transaction** into the register store: `processed_output` carries
+  the validated document and a re-share of the same hearing on the same
+  register date supersedes the earlier row **at the write**, so the guarantee
+  is exactly-once recording per command. Downstream, the batch's
+  `payload_file_id` and each recipient's `notification_id` are minted and
+  persisted **before** the call that uses them, so a retried
+  `generate-document` re-renders the same payload and a retried
+  `send-email-notification` reaches the same notification aggregate: an
+  ambiguous downstream outcome is therefore **retried** — a possible
+  duplicate is absorbed by construction, a possible loss is silent.
 - **Payload source**: Redis `INT_` claim-check (dated key form first, then
   the legacy undated twin) with a results-query-api fallback; verified TLS on
   both (fix C15). A cache miss AND fallback miss is a recorded transient
   failure, never a silent stop (fix C32).
-- **Outbound**: one HTTP POST of `add-court-register` per hearing to
-  `cpp-context-progression`, body validated against the vendored
-  `courtRegisterDocument/*` schemas before send (fix C29), with retry on
-  connect/IO/5xx/429/408 honouring bounded delta-seconds `Retry-After`
-  (fix C3), and dead-letter on exhaustion (fix C1). **202 and nothing else
-  is success.**
+- **Outbound (per command)**: the document is validated against the vendored
+  `courtRegisterDocument/*` schemas (fix C29) and **recorded** in
+  `processed_output` with completion reason `recorded`. The 001 POST to
+  progression is retained only behind `courtregister.output=progression-post`
+  for the documented fallback sequencing; the default is `record`.
+- **Outbound (per batch)**: a service-owned job at **18:00 Europe/London,
+  Mon–Fri** (explicit zone, validated at startup; **ShedLock** so one run
+  proceeds across instances) reads the `CourtRegisterService` flag once, no
+  cache, and skips when OFF or unreadable; otherwise it groups active
+  records by (court centre, register date), maps each batch to the PDF
+  payload progression's `CourtRegisterPdfPayloadGenerator` produced
+  (bug-for-bug, `####` → newline kept), inserts the payload into the shared
+  file-service database (write-only role), POSTs `generate-document`
+  (`OEE_Layout5`, `originatingSource = CourtRegisterService`,
+  `sourceCorrelationId = batch_id`; 202 only), and awaits the outcome.
+- **Events**: a durable JMS subscription to the Artemis `public.event` topic
+  with a `CPPNAME` selector for `document-available` / `generation-failed`,
+  filtered on the service's own `originatingSource`, correlated on
+  `sourceCorrelationId`. A batch still GENERATING after the grace period is
+  reconciled once through the SDG query API and otherwise fails
+  `GENERATION_TIMED_OUT`. Both paths write the outcome through one code path.
+- **Notification**: one `send-email-notification` (202 only) per distinct
+  recipient in the de-duplicated union of the batch's records' recipients,
+  `fileId = documentFileServiceId`, `personalisation.yotsName`; per-recipient
+  outcome recorded; batch state NOTIFIED / PARTIALLY_NOTIFIED /
+  NOTIFIED_NOBODY. The `cr_standard` template id is required at startup.
+- **Second datasource**: the shared framework `fileservice` Postgres,
+  `INSERT` on `metadata` and `content` only, credentials via Key Vault CSI; a
+  readiness input only while a run is in progress.
+- **Feature flag**: `com.azure:azure-data-appconfiguration` + workload
+  identity (`App Configuration Data Reader`), key
+  `.appconfig.featureflag/CourtRegisterService`, label = stack, 2 s timeout.
 - **HTTP surface**: Spring Boot Actuator only — health, readiness/liveness,
-  metrics. No business endpoints (Principle III).
+  metrics. No business endpoints (Principle III). Operations are a CLI in the
+  image: `generate-register`, `notify-register`, `list-batches`,
+  `supersede-before`, `check-flag`, run with `kubectl exec`.
 - **Test stack**: JUnit Jupiter 6 (the Boot 4.1 test starter) + Mockito
   (unit); golden-file/fixture tests for the ported transformation;
   **Testcontainers** — Service Bus emulator and PostgreSQL — for integration
@@ -518,25 +634,38 @@ them read it the same way they read everything else.
   15 minutes. Expect a high COMPLETED-but-not-submitted rate: two of the four
   no-op reasons are this flow's most common legitimate outcomes.
 - **Secrets/identity**: workload identity + Key Vault CSI.
-- **Deployment**: AKS via the standard Flux route. This service contains no
-  scheduler, no PDF generation, and no GOV.UK Notify code — progression's
-  18:00 sweep, systemdocgenerator rendering and notify fan-out are untouched.
+- **Deployment**: AKS via the standard Flux route. Since increment 002 this
+  service **owns the schedule, the render request and the e-mail fan-out**;
+  it contains **no PDF rendering code** (systemdocgenerator renders the
+  unchanged template) and **no GOV.UK Notify client** (notificationnotify
+  sends). Progression's court-register leg stays deployed and idle through
+  cutover and soak and is retired by a separate change in that repository.
 - **Out of scope by construction**: the prison court register (its own
-  pipeline and future migration), progression's court-register leg (the
-  `court_register_request` table, generation, distribution), SJP hearings
-  (the court register has no SJP leg), and the legacy function-app repo
-  itself (C18/C28/C34 are registered as pending items owned elsewhere).
+  pipeline and future migration), SJP hearings (the court register has no SJP
+  leg), the legacy function-app repo itself (C18/C28/C34 are registered as
+  pending items owned elsewhere), and the progression retirement PR
+  (progression's repository, after soak).
 
-### Current increment — 001 "court-register-port"
+### Increments
 
-The full pipeline port with the 31 in-service defect fixes landed
-(C18/C28/C34 tracked externally to conclusion before cutover): ASB consumer,
-idempotency guard, the ported transformation (fragment build, subscription
-matching, the 12-mapper aggregation), the Redis + results-query payload
-adapter, the reference-data adapter, and the progression submission adapter —
-finished by the differential audit against the legacy oracle. Every phase is
-built test-first under Principle II; every fix lands with its DEFECT-FIXES
-row under Principle I.
+- **001 "court-register-port" — complete.** The full pipeline port with the
+  31 in-service defect fixes landed (C18/C28/C34 tracked externally to
+  conclusion before cutover): ASB consumer, idempotency guard, the ported
+  transformation (fragment build, subscription matching, the 12-mapper
+  aggregation), the Redis + results-query payload adapter, the reference-data
+  adapter, and the progression submission adapter — finished by the
+  differential audit against the legacy oracle (381 runs, zero unattributed
+  differences).
+- **002 "consolidate-progression-leg" — current.** Record instead of POST
+  with write-time supersession; the 18:00 Europe/London flag-gated batch job;
+  `DefendantTypeResolver` and `PdfPayloadMapper` ported Java→Java from
+  progression with goldens recorded from progression's classes; the
+  file-service, systemdocgenerator, notificationnotify and App Configuration
+  adapters; the `public.event` listener with the query-API reconciler; the
+  operations CLI; the progression-leg defects appended to the register as
+  `P1`–`P9` (six FIXED, two RETIRED, one MOOT). Every phase is built
+  test-first under Principle II; every fix lands with its DEFECT-FIXES row
+  under Principle I.
 
 ## Development Workflow & Quality Gates
 
@@ -614,4 +743,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 2.0.4 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-05
+**Version**: 3.0.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-05
