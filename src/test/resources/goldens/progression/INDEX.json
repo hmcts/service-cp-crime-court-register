@@ -12,7 +12,8 @@
       "defendantType": "",
       "golden": "defendant-type/hearing-with-address-less-youth-and-parent.json",
       "goldenId": "hearing-with-address-less-youth-and-parent",
-      "kind": "base-fixture"
+      "kind": "base-fixture",
+      "outputSha256": "c561dfb30cfa050072cc3c9c95fa9666614a3fd0cfe597f7ebb7f9b021781166"
     },
     {
       "golden": null,
@@ -33,55 +34,63 @@
       "defendantType": "",
       "golden": "defendant-type/hearing-with-non-prosecuting-authority-application.json",
       "goldenId": "hearing-with-non-prosecuting-authority-application",
-      "kind": "base-fixture"
+      "kind": "base-fixture",
+      "outputSha256": "f5da7939ff36e5c7c661b21a9a05c68040a9092a162e2278fa7430afb623e4fd"
     },
     {
       "defendantType": "",
       "golden": "defendant-type/hearing-with-surviving-youth-defendant.json",
       "goldenId": "hearing-with-surviving-youth-defendant",
-      "kind": "base-fixture"
+      "kind": "base-fixture",
+      "outputSha256": "6a8d4bcf16c221502d8ebe29a284cb2763248813f818b608347d3349c39b5fd7"
     },
     {
       "defendantType": "Appellant",
       "expected": "Appellant",
       "golden": "defendant-type/synthetic__appellant.json",
       "goldenId": "synthetic__appellant",
-      "kind": "synthetic"
+      "kind": "synthetic",
+      "outputSha256": "418c84ad0a2511d15a4892f1b0fc8dabd26119fb7c04a09ccd3430a4a2d4da01"
     },
     {
       "defendantType": "Applicant",
       "expected": "Applicant",
       "golden": "defendant-type/synthetic__applicant-flags-false.json",
       "goldenId": "synthetic__applicant-flags-false",
-      "kind": "synthetic"
+      "kind": "synthetic",
+      "outputSha256": "74986b612a78fbcf2e70055f1b7845874013631bd38dbd4118c88640ab24ad6c"
     },
     {
       "defendantType": "Applicant",
       "expected": "Applicant",
       "golden": "defendant-type/synthetic__applicant-no-respondent-match.json",
       "goldenId": "synthetic__applicant-no-respondent-match",
-      "kind": "synthetic"
+      "kind": "synthetic",
+      "outputSha256": "66ffd72af19e57552d4e41609bd94c8b381c3078784de2dad3a9291fd49736d1"
     },
     {
       "defendantType": null,
       "expected": "NullPointerException",
       "golden": "defendant-type/synthetic__master-defendant-without-flags.json",
       "goldenId": "synthetic__master-defendant-without-flags",
-      "kind": "synthetic"
+      "kind": "synthetic",
+      "outputSha256": "363248fd0ecf3d8861651f8ef614ae5c6cccdfb2408896796852b9196c8fb28d"
     },
     {
       "defendantType": "Respondent",
       "expected": "Respondent",
       "golden": "defendant-type/synthetic__respondent.json",
       "goldenId": "synthetic__respondent",
-      "kind": "synthetic"
+      "kind": "synthetic",
+      "outputSha256": "a50a6dac3d6075720b13285d401dafaa797fc531acb6fcac88cf29f109b4cca7"
     },
     {
       "defendantType": null,
       "expected": "NullPointerException",
       "golden": "defendant-type/synthetic__respondents-absent.json",
       "goldenId": "synthetic__respondents-absent",
-      "kind": "synthetic"
+      "kind": "synthetic",
+      "outputSha256": "7cdbce528056135feb0248e557b60601ddff1c81f324ca6bde3bee08fd580684"
     }
   ],
   "inputDigests": {
@@ -499,7 +508,8 @@
       "memberCount": 1,
       "members": [
         "mut__surviving-youth-defendant__shared-time__dst-spring-forward"
-      ]
+      ],
+      "outputSha256": "fabfbc3216cd2de7adad4cf00277b7d0584664a4a6b18aa7238c656ae5639777"
     },
     {
       "batchKey": "853b1ff8-fc2a-44d1-a621-0cd16419f54a__2020-06-01",
@@ -635,7 +645,8 @@
         "subscriptions__surviving-youth-defendant__subscription-set-cr-only",
         "subscriptions__surviving-youth-defendant__subscription-set-cr-sample",
         "subscriptions__surviving-youth-defendant__subscription-set-full"
-      ]
+      ],
+      "outputSha256": "2a397eab95f183b9bf3da8032b4747e9e85ee1365bd075c7939b83e2fa936894"
     },
     {
       "batchKey": "853b1ff8-fc2a-44d1-a621-0cd16419f54a__2020-06-02",
@@ -645,7 +656,8 @@
       "memberCount": 1,
       "members": [
         "mut__surviving-youth-defendant__shared-time__bst-2300-utc"
-      ]
+      ],
+      "outputSha256": "8d0ea680304bd22fae5284b32f3443fcf10fd44f158904b9bec39723f57588d1"
     },
     {
       "batchKey": "853b1ff8-fc2a-44d1-a621-0cd16419f54a__2020-10-25",
@@ -655,7 +667,8 @@
       "memberCount": 1,
       "members": [
         "mut__surviving-youth-defendant__shared-time__dst-fall-back"
-      ]
+      ],
+      "outputSha256": "1bef71424f8a04a5f4e4e61eb033882338120220a450fa449bcd973beac53b31"
     },
     {
       "batchKey": "853b1ff8-fc2a-44d1-a621-0cd16419f54a__2020-12-01",
@@ -665,7 +678,8 @@
       "memberCount": 1,
       "members": [
         "mut__surviving-youth-defendant__shared-time__gmt-midnight-utc"
-      ]
+      ],
+      "outputSha256": "7d63d92a51ec0dc0fad93b28b0d48eff61819f7f1aaec6b4b19a97810fb20881"
     },
     {
       "batchKey": "853b1ff8-fc2a-44d1-a621-0cd16419f54a__2021-03-11",
@@ -677,7 +691,8 @@
         "mut__surviving-youth-defendant__shared-time__date-only",
         "mut__surviving-youth-defendant__shared-time__millis",
         "mut__surviving-youth-defendant__shared-time__no-zone"
-      ]
+      ],
+      "outputSha256": "23ee6f3bfc17c7172b96bb8be74ea2ac773d89db6cd237ffdf626eced2c194e7"
     },
     {
       "batchKey": "853b1ff8-fc2a-44d1-a621-0cd16419f54a__2026-08-21",
@@ -687,7 +702,8 @@
       "memberCount": 1,
       "members": [
         "mut__surviving-youth-defendant__shared-time__absent"
-      ]
+      ],
+      "outputSha256": "9646127d12872d45473bd60b1b72bac1af04e45ccfb6eebba2f78aecf84ace48"
     }
   ],
   "pdfPayloadDocuments": [
@@ -706,6 +722,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/base__non-prosecuting-authority-application.json",
       "goldenId": "base__non-prosecuting-authority-application",
+      "outputSha256": "450df35cbcd86081bdeedf7af26cb387005e45bfac199ab5e958df00605411f2",
       "source": "src/test/resources/differential/recorded/base__non-prosecuting-authority-application/expected.json",
       "variant": "expected"
     },
@@ -715,6 +732,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/base__surviving-youth-defendant.json",
       "goldenId": "base__surviving-youth-defendant",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/base__surviving-youth-defendant/expected.json",
       "variant": "expected"
     },
@@ -1111,6 +1129,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__address-less-youth-and-parent__youth-presence__first-only.json",
       "goldenId": "mut__address-less-youth-and-parent__youth-presence__first-only",
+      "outputSha256": "8fef2eed1abe7c3d0e8925779bda4acdbde1d698ab9cdd466cb117bf19976157",
       "source": "src/test/resources/differential/recorded/mut__address-less-youth-and-parent__youth-presence__first-only/expected.json",
       "variant": "expected"
     },
@@ -1120,6 +1139,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__adult-first-youth-second__empty-array__prosecutioncases.json",
       "goldenId": "mut__adult-first-youth-second__empty-array__prosecutioncases",
+      "outputSha256": "60a7db4654a6877f91355d1bacb6405c9585c8c1a098d5e447ac92d11d3d6596",
       "source": "src/test/resources/differential/recorded/mut__adult-first-youth-second__empty-array__prosecutioncases/expected.json",
       "variant": "expected"
     },
@@ -1129,6 +1149,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__adult-first-youth-second__empty-array__prosecutioncases-defendants.json",
       "goldenId": "mut__adult-first-youth-second__empty-array__prosecutioncases-defendants",
+      "outputSha256": "18b26d077b8846506efb7420a213b7a8bfa02b3e0d17d7a2a1b8101866dd5d11",
       "source": "src/test/resources/differential/recorded/mut__adult-first-youth-second__empty-array__prosecutioncases-defendants/expected.json",
       "variant": "expected"
     },
@@ -1138,6 +1159,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__adult-first-youth-second__reorder-array__prosecutioncases-defendants.json",
       "goldenId": "mut__adult-first-youth-second__reorder-array__prosecutioncases-defendants",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__adult-first-youth-second__reorder-array__prosecutioncases-defendants/expected.json",
       "variant": "expected"
     },
@@ -1147,6 +1169,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__adult-first-youth-second__subscriptions-shape__court-register-without-subscription-rules.json",
       "goldenId": "mut__adult-first-youth-second__subscriptions-shape__court-register-without-subscription-rules",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__adult-first-youth-second__subscriptions-shape__court-register-without-subscription-rules/expected.json",
       "variant": "expected"
     },
@@ -1156,6 +1179,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__adult-first-youth-second__youth-presence__all-youth.json",
       "goldenId": "mut__adult-first-youth-second__youth-presence__all-youth",
+      "outputSha256": "a55eb5cd9d23a9f67ac85bb809a3449f6866e41feb716375afcf70bf2a0dd4fe",
       "source": "src/test/resources/differential/recorded/mut__adult-first-youth-second__youth-presence__all-youth/expected.json",
       "variant": "expected"
     },
@@ -1165,6 +1189,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__adult-first-youth-second__youth-presence__first-only.json",
       "goldenId": "mut__adult-first-youth-second__youth-presence__first-only",
+      "outputSha256": "fc3591c702e642e33094f87bb1d6e1a21c2f19546eeda6bef85dcccfae2303cd",
       "source": "src/test/resources/differential/recorded/mut__adult-first-youth-second__youth-presence__first-only/expected.json",
       "variant": "expected"
     },
@@ -1174,6 +1199,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__complete-court-centre__youth-presence__all-youth.json",
       "goldenId": "mut__complete-court-centre__youth-presence__all-youth",
+      "outputSha256": "7be59afb664d76f06b2fd9334a5c5ab95c431477cbeb99c74fe1eaddfa8199ad",
       "source": "src/test/resources/differential/recorded/mut__complete-court-centre__youth-presence__all-youth/expected.json",
       "variant": "expected"
     },
@@ -1183,6 +1209,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__complete-court-centre__youth-presence__first-only.json",
       "goldenId": "mut__complete-court-centre__youth-presence__first-only",
+      "outputSha256": "7be59afb664d76f06b2fd9334a5c5ab95c431477cbeb99c74fe1eaddfa8199ad",
       "source": "src/test/resources/differential/recorded/mut__complete-court-centre__youth-presence__first-only/expected.json",
       "variant": "expected"
     },
@@ -1192,6 +1219,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__group-proceedings__group-proceedings__absent.json",
       "goldenId": "mut__group-proceedings__group-proceedings__absent",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__group-proceedings__group-proceedings__absent/expected.json",
       "variant": "expected"
     },
@@ -1201,6 +1229,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__group-proceedings__group-proceedings__empty-string.json",
       "goldenId": "mut__group-proceedings__group-proceedings__empty-string",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__group-proceedings__group-proceedings__empty-string/expected.json",
       "variant": "expected"
     },
@@ -1210,6 +1239,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__group-proceedings__group-proceedings__false.json",
       "goldenId": "mut__group-proceedings__group-proceedings__false",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__group-proceedings__group-proceedings__false/expected.json",
       "variant": "expected"
     },
@@ -1219,6 +1249,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__group-proceedings__group-proceedings__null.json",
       "goldenId": "mut__group-proceedings__group-proceedings__null",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__group-proceedings__group-proceedings__null/expected.json",
       "variant": "expected"
     },
@@ -1228,6 +1259,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__group-proceedings__group-proceedings__zero.json",
       "goldenId": "mut__group-proceedings__group-proceedings__zero",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__group-proceedings__group-proceedings__zero/expected.json",
       "variant": "expected"
     },
@@ -1246,6 +1278,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__non-prosecuting-authority-application__address-less__defendant.json",
       "goldenId": "mut__non-prosecuting-authority-application__address-less__defendant",
+      "outputSha256": "551b18d08991f319deab5d5e4394c4c4125695c8b749c2745329adb49d5d7e40",
       "source": "src/test/resources/differential/recorded/mut__non-prosecuting-authority-application__address-less__defendant/expected.json",
       "variant": "expected"
     },
@@ -1255,6 +1288,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__non-prosecuting-authority-application__address-less__defendant-address-without-address1.json",
       "goldenId": "mut__non-prosecuting-authority-application__address-less__defendant-address-without-address1",
+      "outputSha256": "c65eca463f6f05df5de005b7630978b20c745e1127bd2b788d5727795ff7af29",
       "source": "src/test/resources/differential/recorded/mut__non-prosecuting-authority-application__address-less__defendant-address-without-address1/expected.json",
       "variant": "expected"
     },
@@ -1273,6 +1307,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__non-prosecuting-authority-application__multi-defendant__plus-1.json",
       "goldenId": "mut__non-prosecuting-authority-application__multi-defendant__plus-1",
+      "outputSha256": "a50ee8721fae1b0f666adda4e6018730fca3f114bb99db602f8c618cebad37b6",
       "source": "src/test/resources/differential/recorded/mut__non-prosecuting-authority-application__multi-defendant__plus-1/expected.json",
       "variant": "expected"
     },
@@ -1282,6 +1317,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__non-prosecuting-authority-application__multi-defendant__plus-2.json",
       "goldenId": "mut__non-prosecuting-authority-application__multi-defendant__plus-2",
+      "outputSha256": "5a59167fc2d0263665c84e4656abf2f8460a74634306a6e88919e405d36f60aa",
       "source": "src/test/resources/differential/recorded/mut__non-prosecuting-authority-application__multi-defendant__plus-2/expected.json",
       "variant": "expected"
     },
@@ -1291,6 +1327,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__non-prosecuting-authority-application__multi-defendant__plus-4.json",
       "goldenId": "mut__non-prosecuting-authority-application__multi-defendant__plus-4",
+      "outputSha256": "145d601b6fe59b8d8ee680d3eafaadce84862c1ea0f50340ac33dbacbb6057a7",
       "source": "src/test/resources/differential/recorded/mut__non-prosecuting-authority-application__multi-defendant__plus-4/expected.json",
       "variant": "expected"
     },
@@ -1300,6 +1337,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__non-prosecuting-authority-application__youth-presence__all-youth.json",
       "goldenId": "mut__non-prosecuting-authority-application__youth-presence__all-youth",
+      "outputSha256": "450df35cbcd86081bdeedf7af26cb387005e45bfac199ab5e958df00605411f2",
       "source": "src/test/resources/differential/recorded/mut__non-prosecuting-authority-application__youth-presence__all-youth/expected.json",
       "variant": "expected"
     },
@@ -1309,6 +1347,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__non-prosecuting-authority-application__youth-presence__first-only.json",
       "goldenId": "mut__non-prosecuting-authority-application__youth-presence__first-only",
+      "outputSha256": "450df35cbcd86081bdeedf7af26cb387005e45bfac199ab5e958df00605411f2",
       "source": "src/test/resources/differential/recorded/mut__non-prosecuting-authority-application__youth-presence__first-only/expected.json",
       "variant": "expected"
     },
@@ -1327,6 +1366,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__address-less__defendant.json",
       "goldenId": "mut__surviving-youth-defendant__address-less__defendant",
+      "outputSha256": "8fef2eed1abe7c3d0e8925779bda4acdbde1d698ab9cdd466cb117bf19976157",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__address-less__defendant/expected.json",
       "variant": "expected"
     },
@@ -1336,6 +1376,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__address-less__defendant-address-without-address1.json",
       "goldenId": "mut__surviving-youth-defendant__address-less__defendant-address-without-address1",
+      "outputSha256": "c0e947d8b2bd44b2952d87973720da1e051ab5f1b5c9a0ec9198ef959c9a4940",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__address-less__defendant-address-without-address1/expected.json",
       "variant": "expected"
     },
@@ -1354,6 +1395,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__application-reference__extra-ineligible-application.json",
       "goldenId": "mut__surviving-youth-defendant__application-reference__extra-ineligible-application",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__application-reference__extra-ineligible-application/expected.json",
       "variant": "expected"
     },
@@ -1363,6 +1405,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__application-reference__id-replaced.json",
       "goldenId": "mut__surviving-youth-defendant__application-reference__id-replaced",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__application-reference__id-replaced/expected.json",
       "variant": "expected"
     },
@@ -1372,6 +1415,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__application-reference__subject-master-defendant-absent.json",
       "goldenId": "mut__surviving-youth-defendant__application-reference__subject-master-defendant-absent",
+      "outputSha256": "7392a25b1c052c53863e1c7d7d89f921af5f038bb76e9cdd75bfa451ff5c2855",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__application-reference__subject-master-defendant-absent/expected.json",
       "variant": "expected"
     },
@@ -1381,6 +1425,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__court-centre-completeness__address-without-postcode.json",
       "goldenId": "mut__surviving-youth-defendant__court-centre-completeness__address-without-postcode",
+      "outputSha256": "e351578e6b185cbbd8afa04eaa6aeefab83dfbd37a142b663124f185fcba77aa",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__court-centre-completeness__address-without-postcode/expected.json",
       "variant": "expected"
     },
@@ -1390,6 +1435,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__court-centre-completeness__no-address.json",
       "goldenId": "mut__surviving-youth-defendant__court-centre-completeness__no-address",
+      "outputSha256": "0445842d70b2082f629f1618d6ac1abc3953f42af036d5e9014d82372158d61d",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__court-centre-completeness__no-address/expected.json",
       "variant": "expected"
     },
@@ -1399,6 +1445,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__court-centre-completeness__no-lja.json",
       "goldenId": "mut__surviving-youth-defendant__court-centre-completeness__no-lja",
+      "outputSha256": "7ef08ca6d245f5e86600ccd5837dc5514d02811010c8d0f9db57bb8f5886a5af",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__court-centre-completeness__no-lja/expected.json",
       "variant": "expected"
     },
@@ -1408,6 +1455,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__court-centre-completeness__no-name.json",
       "goldenId": "mut__surviving-youth-defendant__court-centre-completeness__no-name",
+      "outputSha256": "1ae022e917cb23a82bc9a6f9887cc23de21a46385cdc4f6cb0a311c14445e3ab",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__court-centre-completeness__no-name/expected.json",
       "variant": "expected"
     },
@@ -1417,6 +1465,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__court-centre-completeness__no-room.json",
       "goldenId": "mut__surviving-youth-defendant__court-centre-completeness__no-room",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__court-centre-completeness__no-room/expected.json",
       "variant": "expected"
     },
@@ -1426,6 +1475,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__courtapplications-applicant-prosecutingauthority.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__courtapplications-applicant-prosecutingauthority",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__courtapplications-applicant-prosecutingauthority/expected.json",
       "variant": "expected"
     },
@@ -1435,6 +1485,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__courtapplications-subject-masterdefendant.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__courtapplications-subject-masterdefendant",
+      "outputSha256": "7392a25b1c052c53863e1c7d7d89f921af5f038bb76e9cdd75bfa451ff5c2855",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__courtapplications-subject-masterdefendant/expected.json",
       "variant": "expected"
     },
@@ -1444,6 +1495,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__courtcentre-address.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__courtcentre-address",
+      "outputSha256": "0445842d70b2082f629f1618d6ac1abc3953f42af036d5e9014d82372158d61d",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__courtcentre-address/expected.json",
       "variant": "expected"
     },
@@ -1453,6 +1505,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__courtcentre-lja.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__courtcentre-lja",
+      "outputSha256": "7ef08ca6d245f5e86600ccd5837dc5514d02811010c8d0f9db57bb8f5886a5af",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__courtcentre-lja/expected.json",
       "variant": "expected"
     },
@@ -1462,6 +1515,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__courtcentre-name.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__courtcentre-name",
+      "outputSha256": "1ae022e917cb23a82bc9a6f9887cc23de21a46385cdc4f6cb0a311c14445e3ab",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__courtcentre-name/expected.json",
       "variant": "expected"
     },
@@ -1471,6 +1525,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__courtcentre-roomname.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__courtcentre-roomname",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__courtcentre-roomname/expected.json",
       "variant": "expected"
     },
@@ -1480,6 +1535,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__defencecounsels.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__defencecounsels",
+      "outputSha256": "541f9f7585514f3debe2fb465357fc66681df2c9f28e258c935119ef65e59e4c",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__defencecounsels/expected.json",
       "variant": "expected"
     },
@@ -1489,6 +1545,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__defendantattendance.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__defendantattendance",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__defendantattendance/expected.json",
       "variant": "expected"
     },
@@ -1498,6 +1555,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-aliases.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-aliases",
+      "outputSha256": "8ff3142403225285afffd44c313103d64f7ba39c67c1eff87f325c902d10a30d",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-aliases/expected.json",
       "variant": "expected"
     },
@@ -1507,6 +1565,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-associateddefenceorganisation.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-associateddefenceorganisation",
+      "outputSha256": "91c92447e6c04609700fe5901dbe23f9f09b2fe0ad34969141bc5e367698adac",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-associateddefenceorganisation/expected.json",
       "variant": "expected"
     },
@@ -1516,6 +1575,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-associatedpersons.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-associatedpersons",
+      "outputSha256": "7a7966ab4606e13bf16305604d53b454a36cfe5756391e079c105ab022eb3dce",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-associatedpersons/expected.json",
       "variant": "expected"
     },
@@ -1525,6 +1585,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-defendantcasejudicialresults.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-defendantcasejudicialresults",
+      "outputSha256": "7d752bdbdaf68458eebfe100bbc807131ff0553504a4d19b6b4e9d7e9820bb8b",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-defendantcasejudicialresults/expected.json",
       "variant": "expected"
     },
@@ -1534,6 +1595,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-allocationdecision.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-allocationdecision",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-allocationdecision/expected.json",
       "variant": "expected"
     },
@@ -1543,6 +1605,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-offencetitle.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-offencetitle",
+      "outputSha256": "a1b1c30aab7a9f8643cf438298becd45b66c4eccc0732440a80cff43608f8995",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-offencetitle/expected.json",
       "variant": "expected"
     },
@@ -1552,6 +1615,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-orderindex.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-orderindex",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-orderindex/expected.json",
       "variant": "expected"
     },
@@ -1561,6 +1625,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-plea.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-plea",
+      "outputSha256": "e41a190ad19b522e6c75df8907bbce719bcfc0131be0c8e504fec5662dd9ccca",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-plea/expected.json",
       "variant": "expected"
     },
@@ -1570,6 +1635,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-verdict.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-verdict",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-offences-verdict/expected.json",
       "variant": "expected"
     },
@@ -1579,6 +1645,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-address.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-address",
+      "outputSha256": "8fef2eed1abe7c3d0e8925779bda4acdbde1d698ab9cdd466cb117bf19976157",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-address/expected.json",
       "variant": "expected"
     },
@@ -1588,6 +1655,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-dateofbirth.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-dateofbirth",
+      "outputSha256": "b06ce226cc4d3626ab2acef22902790bd6d3fe538b01cdc99a0955a62c3b4852",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-dateofbirth/expected.json",
       "variant": "expected"
     },
@@ -1597,6 +1665,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-ethnicity.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-ethnicity",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-ethnicity/expected.json",
       "variant": "expected"
     },
@@ -1606,6 +1675,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-gender.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-gender",
+      "outputSha256": "f0a7499191a4ea160122b50120916652c5fa013ab4a9dcbc093ebe9598f8117c",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-gender/expected.json",
       "variant": "expected"
     },
@@ -1615,6 +1685,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-middlename.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-middlename",
+      "outputSha256": "1598e49dc9d0c1dd03081263f04d33a0dc2881ecd7a2285a1866e704e1c07f2e",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-middlename/expected.json",
       "variant": "expected"
     },
@@ -1624,6 +1695,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-nationalitydescription.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-nationalitydescription",
+      "outputSha256": "cf3b09ea8893a54b6a35247f877c366735b4df898063f58a14db865923556798",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-nationalitydescription/expected.json",
       "variant": "expected"
     },
@@ -1633,6 +1705,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-title.json",
       "goldenId": "mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-title",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__drop-optional-field__prosecutioncases-defendants-persondefendant-persondetails-title/expected.json",
       "variant": "expected"
     },
@@ -1642,6 +1715,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__courtapplications.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__courtapplications",
+      "outputSha256": "87c4b20a4b6724f194c470e9c3b77b908e83624302941bfaf858d7d4848019f4",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__courtapplications/expected.json",
       "variant": "expected"
     },
@@ -1651,6 +1725,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__courtapplications-courtapplicationcases.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__courtapplications-courtapplicationcases",
+      "outputSha256": "f0b47711a35e62304fb8427a4d0a0d483d0aeb553d7479000688af2d66eb9780",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__courtapplications-courtapplicationcases/expected.json",
       "variant": "expected"
     },
@@ -1660,6 +1735,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__courtapplications-courtapplicationcases-offences.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__courtapplications-courtapplicationcases-offences",
+      "outputSha256": "f0b47711a35e62304fb8427a4d0a0d483d0aeb553d7479000688af2d66eb9780",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__courtapplications-courtapplicationcases-offences/expected.json",
       "variant": "expected"
     },
@@ -1669,6 +1745,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__defencecounsels.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__defencecounsels",
+      "outputSha256": "c4ff53a7d21d224f5473500b3b1d96d28c1235e1120dd084cb16a8b55e6e3f71",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__defencecounsels/expected.json",
       "variant": "expected"
     },
@@ -1678,6 +1755,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__defendantattendance.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__defendantattendance",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__defendantattendance/expected.json",
       "variant": "expected"
     },
@@ -1687,6 +1765,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__defendantattendance-attendancedays.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__defendantattendance-attendancedays",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__defendantattendance-attendancedays/expected.json",
       "variant": "expected"
     },
@@ -1696,6 +1775,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__defendantjudicialresults.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__defendantjudicialresults",
+      "outputSha256": "b3d1def596b28d832ff791a8eacfb99b75e425d247524b0e1f07152b3d94fcb7",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__defendantjudicialresults/expected.json",
       "variant": "expected"
     },
@@ -1705,6 +1785,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases",
+      "outputSha256": "1dd74da9f942666453e293552ea072758f2f9de4fe5c1e41bd14fe3f07342e30",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases/expected.json",
       "variant": "expected"
     },
@@ -1714,6 +1795,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants",
+      "outputSha256": "dbd58684905ea9385b78e2bea927c1aca01dc066368c4e9f359225d9f4146a0c",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants/expected.json",
       "variant": "expected"
     },
@@ -1723,6 +1805,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-aliases.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-aliases",
+      "outputSha256": "137c72c93826066ca674ac65729dc24f017ca7ac5d60cb92e176457927c6bd10",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-aliases/expected.json",
       "variant": "expected"
     },
@@ -1732,6 +1815,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-associatedpersons.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-associatedpersons",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-associatedpersons/expected.json",
       "variant": "expected"
     },
@@ -1741,6 +1825,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-defendantcasejudicialresults.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-defendantcasejudicialresults",
+      "outputSha256": "e3f04bb4d11babafaf0e3da86a621a788d3584cd282bd7a7b04c384d79ffb112",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-defendantcasejudicialresults/expected.json",
       "variant": "expected"
     },
@@ -1750,6 +1835,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-offences.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-offences",
+      "outputSha256": "0bfa932ac7faa1644186049ccd228e5f53d886248153c4204c3a47493515a13b",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-offences/expected.json",
       "variant": "expected"
     },
@@ -1759,6 +1845,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-offences-judicialresults.json",
       "goldenId": "mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-offences-judicialresults",
+      "outputSha256": "93522d2450ed86d713f7dede36bdd34bda8d9ce11066c549d46c1a8113d2a1c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__duplicate-array-entry__prosecutioncases-defendants-offences-judicialresults/expected.json",
       "variant": "expected"
     },
@@ -1768,6 +1855,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__courtapplications.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__courtapplications",
+      "outputSha256": "7392a25b1c052c53863e1c7d7d89f921af5f038bb76e9cdd75bfa451ff5c2855",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__courtapplications/expected.json",
       "variant": "expected"
     },
@@ -1777,6 +1865,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__courtapplications-courtapplicationcases.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__courtapplications-courtapplicationcases",
+      "outputSha256": "01043000d604904a93899de62ad22b27c07075e5c4d3cb969cd29557b6a089f7",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__courtapplications-courtapplicationcases/expected.json",
       "variant": "expected"
     },
@@ -1786,6 +1875,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__courtapplications-courtapplicationcases-offences.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__courtapplications-courtapplicationcases-offences",
+      "outputSha256": "01043000d604904a93899de62ad22b27c07075e5c4d3cb969cd29557b6a089f7",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__courtapplications-courtapplicationcases-offences/expected.json",
       "variant": "expected"
     },
@@ -1795,6 +1885,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__defencecounsels.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__defencecounsels",
+      "outputSha256": "541f9f7585514f3debe2fb465357fc66681df2c9f28e258c935119ef65e59e4c",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__defencecounsels/expected.json",
       "variant": "expected"
     },
@@ -1804,6 +1895,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__defendantattendance-attendancedays.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__defendantattendance-attendancedays",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__defendantattendance-attendancedays/expected.json",
       "variant": "expected"
     },
@@ -1813,6 +1905,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__defendantjudicialresults.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__defendantjudicialresults",
+      "outputSha256": "5a290f0fdadbfc3875fb881167fa1ea91e61240b06c70472bdf85f87040b9997",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__defendantjudicialresults/expected.json",
       "variant": "expected"
     },
@@ -1822,6 +1915,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__hearingdays.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__hearingdays",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__hearingdays/expected.json",
       "variant": "expected"
     },
@@ -1831,6 +1925,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__prosecutioncases.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__prosecutioncases",
+      "outputSha256": "60a7db4654a6877f91355d1bacb6405c9585c8c1a098d5e447ac92d11d3d6596",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__prosecutioncases/expected.json",
       "variant": "expected"
     },
@@ -1840,6 +1935,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants",
+      "outputSha256": "18b26d077b8846506efb7420a213b7a8bfa02b3e0d17d7a2a1b8101866dd5d11",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants/expected.json",
       "variant": "expected"
     },
@@ -1849,6 +1945,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-aliases.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-aliases",
+      "outputSha256": "ddc3b238231b1b2c7969755369fa90cde51ba86fed415c7c1a9546d722dd4944",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-aliases/expected.json",
       "variant": "expected"
     },
@@ -1858,6 +1955,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-associatedpersons.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-associatedpersons",
+      "outputSha256": "7a7966ab4606e13bf16305604d53b454a36cfe5756391e079c105ab022eb3dce",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-associatedpersons/expected.json",
       "variant": "expected"
     },
@@ -1867,6 +1965,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-defendantcasejudicialresults.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-defendantcasejudicialresults",
+      "outputSha256": "7d752bdbdaf68458eebfe100bbc807131ff0553504a4d19b6b4e9d7e9820bb8b",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-defendantcasejudicialresults/expected.json",
       "variant": "expected"
     },
@@ -1876,6 +1975,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-offences.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-offences",
+      "outputSha256": "6223c0ea0cb57fcf813da1efbf557e01ad437f6d263c7de4ab609dc42d7e9a3e",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-offences/expected.json",
       "variant": "expected"
     },
@@ -1885,6 +1985,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-offences-judicialresults.json",
       "goldenId": "mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-offences-judicialresults",
+      "outputSha256": "2293a2aa94771706a3269647cfdcab36ebf97952629f5948bad14e1368ed545b",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__empty-array__prosecutioncases-defendants-offences-judicialresults/expected.json",
       "variant": "expected"
     },
@@ -1894,6 +1995,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__ethnicity-partial__neither.json",
       "goldenId": "mut__surviving-youth-defendant__ethnicity-partial__neither",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__ethnicity-partial__neither/expected.json",
       "variant": "expected"
     },
@@ -1903,6 +2005,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__ethnicity-partial__observed-only.json",
       "goldenId": "mut__surviving-youth-defendant__ethnicity-partial__observed-only",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__ethnicity-partial__observed-only/expected.json",
       "variant": "expected"
     },
@@ -1912,6 +2015,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__ethnicity-partial__self-defined-only.json",
       "goldenId": "mut__surviving-youth-defendant__ethnicity-partial__self-defined-only",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__ethnicity-partial__self-defined-only/expected.json",
       "variant": "expected"
     },
@@ -1921,6 +2025,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__group-proceedings__absent.json",
       "goldenId": "mut__surviving-youth-defendant__group-proceedings__absent",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__group-proceedings__absent/expected.json",
       "variant": "expected"
     },
@@ -1930,6 +2035,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__group-proceedings__empty-string.json",
       "goldenId": "mut__surviving-youth-defendant__group-proceedings__empty-string",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__group-proceedings__empty-string/expected.json",
       "variant": "expected"
     },
@@ -1939,6 +2045,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__group-proceedings__false.json",
       "goldenId": "mut__surviving-youth-defendant__group-proceedings__false",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__group-proceedings__false/expected.json",
       "variant": "expected"
     },
@@ -1948,6 +2055,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__group-proceedings__null.json",
       "goldenId": "mut__surviving-youth-defendant__group-proceedings__null",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__group-proceedings__null/expected.json",
       "variant": "expected"
     },
@@ -1957,6 +2065,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__group-proceedings__zero.json",
       "goldenId": "mut__surviving-youth-defendant__group-proceedings__zero",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__group-proceedings__zero/expected.json",
       "variant": "expected"
     },
@@ -1966,6 +2075,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__hearing-date__no-ordered-date.json",
       "goldenId": "mut__surviving-youth-defendant__hearing-date__no-ordered-date",
+      "outputSha256": "0fce1f45c28879966226ede6c18304d2ecef46a4ccc0056cced6c9b010262a7b",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__hearing-date__no-ordered-date/expected.json",
       "variant": "expected"
     },
@@ -1975,6 +2085,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__hearing-date__no-ordered-date__alternate-clock.json",
       "goldenId": "mut__surviving-youth-defendant__hearing-date__no-ordered-date__alternate-clock",
+      "outputSha256": "c8bd09eabd226829332e22b245a10191df5fa3fa96ce358f58379a92e98c70c6",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__hearing-date__no-ordered-date/expected-alternate-clock.json",
       "variant": "expected-alternate-clock"
     },
@@ -1984,6 +2095,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__hearing-date__sitting-day-absent-on-the-ordered-day.json",
       "goldenId": "mut__surviving-youth-defendant__hearing-date__sitting-day-absent-on-the-ordered-day",
+      "outputSha256": "0fce1f45c28879966226ede6c18304d2ecef46a4ccc0056cced6c9b010262a7b",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__hearing-date__sitting-day-absent-on-the-ordered-day/expected.json",
       "variant": "expected"
     },
@@ -1993,6 +2105,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__hearing-date__sitting-day-absent-on-the-ordered-day__alternate-clock.json",
       "goldenId": "mut__surviving-youth-defendant__hearing-date__sitting-day-absent-on-the-ordered-day__alternate-clock",
+      "outputSha256": "0fce1f45c28879966226ede6c18304d2ecef46a4ccc0056cced6c9b010262a7b",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__hearing-date__sitting-day-absent-on-the-ordered-day/expected-alternate-clock.json",
       "variant": "expected-alternate-clock"
     },
@@ -2002,6 +2115,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__multi-defendant__plus-1.json",
       "goldenId": "mut__surviving-youth-defendant__multi-defendant__plus-1",
+      "outputSha256": "2bb94ac2ebf166ae87fbfa9bf15b4b46e6feb01888e4bdba2908afa7c84d7a93",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__multi-defendant__plus-1/expected.json",
       "variant": "expected"
     },
@@ -2011,6 +2125,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__multi-defendant__plus-2.json",
       "goldenId": "mut__surviving-youth-defendant__multi-defendant__plus-2",
+      "outputSha256": "4e4484bf13cc1ce4ac50cf6efee7ebd739441cd10668042c3fa7b82e119388e6",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__multi-defendant__plus-2/expected.json",
       "variant": "expected"
     },
@@ -2020,6 +2135,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__multi-defendant__plus-4.json",
       "goldenId": "mut__surviving-youth-defendant__multi-defendant__plus-4",
+      "outputSha256": "80c2ffcb0b2744b0f8f151ad3af227572c92c1dc544a83d55f8515f49850b5dd",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__multi-defendant__plus-4/expected.json",
       "variant": "expected"
     },
@@ -2029,6 +2145,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__courtapplications-applicant-prosecutingauthority.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__courtapplications-applicant-prosecutingauthority",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__courtapplications-applicant-prosecutingauthority/expected.json",
       "variant": "expected"
     },
@@ -2038,6 +2155,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__courtapplications-subject-masterdefendant.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__courtapplications-subject-masterdefendant",
+      "outputSha256": "7392a25b1c052c53863e1c7d7d89f921af5f038bb76e9cdd75bfa451ff5c2855",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__courtapplications-subject-masterdefendant/expected.json",
       "variant": "expected"
     },
@@ -2047,6 +2165,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__courtcentre-address.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__courtcentre-address",
+      "outputSha256": "0445842d70b2082f629f1618d6ac1abc3953f42af036d5e9014d82372158d61d",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__courtcentre-address/expected.json",
       "variant": "expected"
     },
@@ -2056,6 +2175,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__courtcentre-lja.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__courtcentre-lja",
+      "outputSha256": "7ef08ca6d245f5e86600ccd5837dc5514d02811010c8d0f9db57bb8f5886a5af",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__courtcentre-lja/expected.json",
       "variant": "expected"
     },
@@ -2065,6 +2185,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__courtcentre-name.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__courtcentre-name",
+      "outputSha256": "1ae022e917cb23a82bc9a6f9887cc23de21a46385cdc4f6cb0a311c14445e3ab",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__courtcentre-name/expected.json",
       "variant": "expected"
     },
@@ -2074,6 +2195,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__courtcentre-roomname.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__courtcentre-roomname",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__courtcentre-roomname/expected.json",
       "variant": "expected"
     },
@@ -2083,6 +2205,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__defencecounsels.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__defencecounsels",
+      "outputSha256": "541f9f7585514f3debe2fb465357fc66681df2c9f28e258c935119ef65e59e4c",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__defencecounsels/expected.json",
       "variant": "expected"
     },
@@ -2092,6 +2215,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__defendantattendance.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__defendantattendance",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__defendantattendance/expected.json",
       "variant": "expected"
     },
@@ -2101,6 +2225,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-aliases.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-aliases",
+      "outputSha256": "8ff3142403225285afffd44c313103d64f7ba39c67c1eff87f325c902d10a30d",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-aliases/expected.json",
       "variant": "expected"
     },
@@ -2110,6 +2235,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-associateddefenceorganisation.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-associateddefenceorganisation",
+      "outputSha256": "91c92447e6c04609700fe5901dbe23f9f09b2fe0ad34969141bc5e367698adac",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-associateddefenceorganisation/expected.json",
       "variant": "expected"
     },
@@ -2119,6 +2245,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-associatedpersons.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-associatedpersons",
+      "outputSha256": "7a7966ab4606e13bf16305604d53b454a36cfe5756391e079c105ab022eb3dce",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-associatedpersons/expected.json",
       "variant": "expected"
     },
@@ -2128,6 +2255,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-defendantcasejudicialresults.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-defendantcasejudicialresults",
+      "outputSha256": "7d752bdbdaf68458eebfe100bbc807131ff0553504a4d19b6b4e9d7e9820bb8b",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-defendantcasejudicialresults/expected.json",
       "variant": "expected"
     },
@@ -2137,6 +2265,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-allocationdecision.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-allocationdecision",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-allocationdecision/expected.json",
       "variant": "expected"
     },
@@ -2146,6 +2275,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-offencetitle.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-offencetitle",
+      "outputSha256": "a1b1c30aab7a9f8643cf438298becd45b66c4eccc0732440a80cff43608f8995",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-offencetitle/expected.json",
       "variant": "expected"
     },
@@ -2155,6 +2285,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-orderindex.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-orderindex",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-orderindex/expected.json",
       "variant": "expected"
     },
@@ -2164,6 +2295,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-plea.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-plea",
+      "outputSha256": "e41a190ad19b522e6c75df8907bbce719bcfc0131be0c8e504fec5662dd9ccca",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-plea/expected.json",
       "variant": "expected"
     },
@@ -2173,6 +2305,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-verdict.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-verdict",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-offences-verdict/expected.json",
       "variant": "expected"
     },
@@ -2182,6 +2315,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-address.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-address",
+      "outputSha256": "8fef2eed1abe7c3d0e8925779bda4acdbde1d698ab9cdd466cb117bf19976157",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-address/expected.json",
       "variant": "expected"
     },
@@ -2200,6 +2334,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-ethnicity.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-ethnicity",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-ethnicity/expected.json",
       "variant": "expected"
     },
@@ -2209,6 +2344,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-gender.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-gender",
+      "outputSha256": "f0a7499191a4ea160122b50120916652c5fa013ab4a9dcbc093ebe9598f8117c",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-gender/expected.json",
       "variant": "expected"
     },
@@ -2218,6 +2354,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-middlename.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-middlename",
+      "outputSha256": "1598e49dc9d0c1dd03081263f04d33a0dc2881ecd7a2285a1866e704e1c07f2e",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-middlename/expected.json",
       "variant": "expected"
     },
@@ -2227,6 +2364,7 @@
       "contractStatus": "SCHEMA_INVALID",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-nationalitydescription.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-nationalitydescription",
+      "outputSha256": "cf3b09ea8893a54b6a35247f877c366735b4df898063f58a14db865923556798",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-nationalitydescription/expected.json",
       "variant": "expected"
     },
@@ -2236,6 +2374,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-title.json",
       "goldenId": "mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-title",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__null-field__prosecutioncases-defendants-persondefendant-persondetails-title/expected.json",
       "variant": "expected"
     },
@@ -2245,6 +2384,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__re-share-duplicate__fresh-payload.json",
       "goldenId": "mut__surviving-youth-defendant__re-share-duplicate__fresh-payload",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__re-share-duplicate__fresh-payload/expected.json",
       "variant": "expected"
     },
@@ -2254,6 +2394,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__re-share-duplicate__fresh-payload__second-delivery.json",
       "goldenId": "mut__surviving-youth-defendant__re-share-duplicate__fresh-payload__second-delivery",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__re-share-duplicate__fresh-payload/expected-second-delivery.json",
       "variant": "expected-second-delivery"
     },
@@ -2263,6 +2404,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__re-share-duplicate__shared-payload.json",
       "goldenId": "mut__surviving-youth-defendant__re-share-duplicate__shared-payload",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__re-share-duplicate__shared-payload/expected.json",
       "variant": "expected"
     },
@@ -2272,6 +2414,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__re-share-duplicate__shared-payload__second-delivery.json",
       "goldenId": "mut__surviving-youth-defendant__re-share-duplicate__shared-payload__second-delivery",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__re-share-duplicate__shared-payload/expected-second-delivery.json",
       "variant": "expected-second-delivery"
     },
@@ -2281,6 +2424,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__refdata-unavailable__http-500-then-success.json",
       "goldenId": "mut__surviving-youth-defendant__refdata-unavailable__http-500-then-success",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__refdata-unavailable__http-500-then-success/expected.json",
       "variant": "expected"
     },
@@ -2290,6 +2434,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__reorder-array__defendantattendance.json",
       "goldenId": "mut__surviving-youth-defendant__reorder-array__defendantattendance",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__reorder-array__defendantattendance/expected.json",
       "variant": "expected"
     },
@@ -2299,6 +2444,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__reorder-array__prosecutioncases-defendants-defendantcasejudicialresults.json",
       "goldenId": "mut__surviving-youth-defendant__reorder-array__prosecutioncases-defendants-defendantcasejudicialresults",
+      "outputSha256": "58fc23ea38d95b5e535df56e5b95586870d7ca8c6501ae21a0d2024c7e24e96a",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__reorder-array__prosecutioncases-defendants-defendantcasejudicialresults/expected.json",
       "variant": "expected"
     },
@@ -2308,6 +2454,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__shared-time__absent.json",
       "goldenId": "mut__surviving-youth-defendant__shared-time__absent",
+      "outputSha256": "9646127d12872d45473bd60b1b72bac1af04e45ccfb6eebba2f78aecf84ace48",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__shared-time__absent/expected.json",
       "variant": "expected"
     },
@@ -2317,6 +2464,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__shared-time__absent__alternate-clock.json",
       "goldenId": "mut__surviving-youth-defendant__shared-time__absent__alternate-clock",
+      "outputSha256": "a89d7c39684479941b1d74f4973173f032856c585a38b32c2fd7876b131b5893",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__shared-time__absent/expected-alternate-clock.json",
       "variant": "expected-alternate-clock"
     },
@@ -2326,6 +2474,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__shared-time__bst-2300-utc.json",
       "goldenId": "mut__surviving-youth-defendant__shared-time__bst-2300-utc",
+      "outputSha256": "8d0ea680304bd22fae5284b32f3443fcf10fd44f158904b9bec39723f57588d1",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__shared-time__bst-2300-utc/expected.json",
       "variant": "expected"
     },
@@ -2335,6 +2484,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__shared-time__bst-midnight-utc.json",
       "goldenId": "mut__surviving-youth-defendant__shared-time__bst-midnight-utc",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__shared-time__bst-midnight-utc/expected.json",
       "variant": "expected"
     },
@@ -2344,6 +2494,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__shared-time__date-only.json",
       "goldenId": "mut__surviving-youth-defendant__shared-time__date-only",
+      "outputSha256": "5c142db1ecc16fbbab7eec7aa1c05ef4a09a288fae2d15d28184c5ed337a39ba",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__shared-time__date-only/expected.json",
       "variant": "expected"
     },
@@ -2353,6 +2504,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__shared-time__dst-fall-back.json",
       "goldenId": "mut__surviving-youth-defendant__shared-time__dst-fall-back",
+      "outputSha256": "1bef71424f8a04a5f4e4e61eb033882338120220a450fa449bcd973beac53b31",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__shared-time__dst-fall-back/expected.json",
       "variant": "expected"
     },
@@ -2362,6 +2514,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__shared-time__dst-spring-forward.json",
       "goldenId": "mut__surviving-youth-defendant__shared-time__dst-spring-forward",
+      "outputSha256": "fabfbc3216cd2de7adad4cf00277b7d0584664a4a6b18aa7238c656ae5639777",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__shared-time__dst-spring-forward/expected.json",
       "variant": "expected"
     },
@@ -2371,6 +2524,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__shared-time__gmt-midnight-utc.json",
       "goldenId": "mut__surviving-youth-defendant__shared-time__gmt-midnight-utc",
+      "outputSha256": "7d63d92a51ec0dc0fad93b28b0d48eff61819f7f1aaec6b4b19a97810fb20881",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__shared-time__gmt-midnight-utc/expected.json",
       "variant": "expected"
     },
@@ -2380,6 +2534,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__shared-time__millis.json",
       "goldenId": "mut__surviving-youth-defendant__shared-time__millis",
+      "outputSha256": "5c142db1ecc16fbbab7eec7aa1c05ef4a09a288fae2d15d28184c5ed337a39ba",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__shared-time__millis/expected.json",
       "variant": "expected"
     },
@@ -2389,6 +2544,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__shared-time__no-zone.json",
       "goldenId": "mut__surviving-youth-defendant__shared-time__no-zone",
+      "outputSha256": "5c142db1ecc16fbbab7eec7aa1c05ef4a09a288fae2d15d28184c5ed337a39ba",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__shared-time__no-zone/expected.json",
       "variant": "expected"
     },
@@ -2398,6 +2554,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__subscription-routing__any-major-creditor.json",
       "goldenId": "mut__surviving-youth-defendant__subscription-routing__any-major-creditor",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__subscription-routing__any-major-creditor/expected.json",
       "variant": "expected"
     },
@@ -2407,6 +2564,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__subscription-routing__informant-code-only.json",
       "goldenId": "mut__surviving-youth-defendant__subscription-routing__informant-code-only",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__subscription-routing__informant-code-only/expected.json",
       "variant": "expected"
     },
@@ -2416,6 +2574,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__subscription-routing__now-subscription-route.json",
       "goldenId": "mut__surviving-youth-defendant__subscription-routing__now-subscription-route",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__subscription-routing__now-subscription-route/expected.json",
       "variant": "expected"
     },
@@ -2425,6 +2584,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__subscription-routing__prison-court-register-route.json",
       "goldenId": "mut__surviving-youth-defendant__subscription-routing__prison-court-register-route",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__subscription-routing__prison-court-register-route/expected.json",
       "variant": "expected"
     },
@@ -2434,6 +2594,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__subscriptions-cardinality__all-houses-match.json",
       "goldenId": "mut__surviving-youth-defendant__subscriptions-cardinality__all-houses-match",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__subscriptions-cardinality__all-houses-match/expected.json",
       "variant": "expected"
     },
@@ -2443,6 +2604,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__subscriptions-cardinality__duplicated.json",
       "goldenId": "mut__surviving-youth-defendant__subscriptions-cardinality__duplicated",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__subscriptions-cardinality__duplicated/expected.json",
       "variant": "expected"
     },
@@ -2452,6 +2614,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__subscriptions-cardinality__reversed.json",
       "goldenId": "mut__surviving-youth-defendant__subscriptions-cardinality__reversed",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__subscriptions-cardinality__reversed/expected.json",
       "variant": "expected"
     },
@@ -2461,6 +2624,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__subscriptions-shape__court-register-but-no-recipient.json",
       "goldenId": "mut__surviving-youth-defendant__subscriptions-shape__court-register-but-no-recipient",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__subscriptions-shape__court-register-but-no-recipient/expected.json",
       "variant": "expected"
     },
@@ -2470,6 +2634,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__subscriptions-shape__court-register-not-for-distribution.json",
       "goldenId": "mut__surviving-youth-defendant__subscriptions-shape__court-register-not-for-distribution",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__subscriptions-shape__court-register-not-for-distribution/expected.json",
       "variant": "expected"
     },
@@ -2479,6 +2644,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__subscriptions-shape__court-register-without-subscription-rules.json",
       "goldenId": "mut__surviving-youth-defendant__subscriptions-shape__court-register-without-subscription-rules",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__subscriptions-shape__court-register-without-subscription-rules/expected.json",
       "variant": "expected"
     },
@@ -2488,6 +2654,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__unicode-name__accented.json",
       "goldenId": "mut__surviving-youth-defendant__unicode-name__accented",
+      "outputSha256": "f2a67a28a266e8aba3fcf3f40e49ff7b4cb08e17e9a1aebb781552b90db2d06e",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__unicode-name__accented/expected.json",
       "variant": "expected"
     },
@@ -2497,6 +2664,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__unicode-name__cjk.json",
       "goldenId": "mut__surviving-youth-defendant__unicode-name__cjk",
+      "outputSha256": "1a058dcc92eb52745cce2c4a08ea3b8cf4f22041d61c174a97b1422a0bb0997d",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__unicode-name__cjk/expected.json",
       "variant": "expected"
     },
@@ -2506,6 +2674,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__unicode-name__emoji-zwj.json",
       "goldenId": "mut__surviving-youth-defendant__unicode-name__emoji-zwj",
+      "outputSha256": "e73ada7c36a69e0b62ebeb7cf16f298e5e818b70d75d74d2d9ea43901e0b72b3",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__unicode-name__emoji-zwj/expected.json",
       "variant": "expected"
     },
@@ -2515,6 +2684,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__unicode-name__nbsp-padded.json",
       "goldenId": "mut__surviving-youth-defendant__unicode-name__nbsp-padded",
+      "outputSha256": "cdfa8e106d009ecd6c32dfea2c7b9081d55d2158f63035888590b98b8d359992",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__unicode-name__nbsp-padded/expected.json",
       "variant": "expected"
     },
@@ -2524,6 +2694,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__unicode-name__rtl.json",
       "goldenId": "mut__surviving-youth-defendant__unicode-name__rtl",
+      "outputSha256": "b153e3e91ce6fd15cb5da5b6af08b5c0a4bbf21e0c6d3f1902eaf33f7fb5cbdc",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__unicode-name__rtl/expected.json",
       "variant": "expected"
     },
@@ -2533,6 +2704,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__unicode-name__zero-width.json",
       "goldenId": "mut__surviving-youth-defendant__unicode-name__zero-width",
+      "outputSha256": "0b45f6b5a9022e8bea9ca914c2f2fd436381f85771462368d8950851e33aa567",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__unicode-name__zero-width/expected.json",
       "variant": "expected"
     },
@@ -2542,6 +2714,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__youth-presence__all-youth.json",
       "goldenId": "mut__surviving-youth-defendant__youth-presence__all-youth",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__youth-presence__all-youth/expected.json",
       "variant": "expected"
     },
@@ -2551,6 +2724,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/mut__surviving-youth-defendant__youth-presence__first-only.json",
       "goldenId": "mut__surviving-youth-defendant__youth-presence__first-only",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/mut__surviving-youth-defendant__youth-presence__first-only/expected.json",
       "variant": "expected"
     },
@@ -2587,6 +2761,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/subscriptions__surviving-youth-defendant__subscription-set-cr-only.json",
       "goldenId": "subscriptions__surviving-youth-defendant__subscription-set-cr-only",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/subscriptions__surviving-youth-defendant__subscription-set-cr-only/expected.json",
       "variant": "expected"
     },
@@ -2596,6 +2771,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/subscriptions__surviving-youth-defendant__subscription-set-cr-sample.json",
       "goldenId": "subscriptions__surviving-youth-defendant__subscription-set-cr-sample",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/subscriptions__surviving-youth-defendant__subscription-set-cr-sample/expected.json",
       "variant": "expected"
     },
@@ -2605,6 +2781,7 @@
       "contractStatus": "IN_CONTRACT",
       "golden": "pdf-payload/subscriptions__surviving-youth-defendant__subscription-set-full.json",
       "goldenId": "subscriptions__surviving-youth-defendant__subscription-set-full",
+      "outputSha256": "be3ba56c2db78c2cd71cc1ea5420e8a8ac1e812672ed47bfff5b5b1ec7fc21c2",
       "source": "src/test/resources/differential/recorded/subscriptions__surviving-youth-defendant__subscription-set-full/expected.json",
       "variant": "expected"
     }

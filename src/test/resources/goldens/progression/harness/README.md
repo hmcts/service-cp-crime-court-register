@@ -1,8 +1,9 @@
 # The recording harness
 
-Reference copies of the two classes that recorded the goldens beside this file. They are **not** on
-the test classpath and nothing in `src/test/java` compiles them: they are here so a reader can see
-exactly what was run, and so a re-record is a repeat rather than a reconstruction.
+Reference copies of the two classes that recorded the goldens beside this file, and the script that
+indexes the recorded goldens' digests. They are **not** on the test classpath and nothing in
+`src/test/java` compiles them: they are here so a reader can see exactly what was run, and so a
+re-record is a repeat rather than a reconstruction.
 
 `GoldenRecorder` is the recorder. `CourtRegisterHandlerRule` carries
 `CourtRegisterHandler.getDefendantType` (`:131-153`) and `CourtRegisterHandler.getCourtApplicationId`
@@ -44,6 +45,18 @@ TZ=Europe/London $JDK/bin/java -Duser.timezone=Europe/London \
 
 The recorder overwrites `../pdf-payload/`, `../defendant-type/*.json` and `../INDEX.json`. It reads
 `../defendant-type/synthetic/` and never writes there: those six inputs are authored, not recorded.
+
+Then stamp each golden's own digest into the index, which the recorder does not do:
+
+```bash
+python3 $REPO/src/test/resources/goldens/progression/harness/index-output-digests.py
+```
+
+`index-output-digests.py` is a step of its own, not part of `GoldenRecorder`, because it needs
+nothing but this repository: no progression checkout, no jars, no JDK 17. That is what lets a
+reviewer with only a clone re-derive `outputSha256` for all 177 goldens and compare. It rewrites
+`../INDEX.json` in the recorder's own canonical form, so running it on an unchanged tree is a
+no-op, and it fails if the goldens on disk and the goldens named in the index are not the same set.
 
 `cases[].age` is the one field a re-record can legitimately move, because
 `CourtRegisterPdfPayloadGenerator.getAge` (`:323-329`) reads `LocalDate.now()`. `../PROVENANCE.md`

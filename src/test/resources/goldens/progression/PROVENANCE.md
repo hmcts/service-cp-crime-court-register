@@ -234,9 +234,19 @@ decide what it does instead, and whatever it decides is a difference from progre
 ```
 goldens/progression/
 ├── PROVENANCE.md                 this file
-├── INDEX.json                    every golden, its source, its digest, the counts, the clock date
+├── INDEX.json                    every golden, its source, both digests, the counts, the clock date
 ├── pdf-payload/                  161 document goldens + 7 batch goldens
 ├── defendant-type/               9 goldens
 │   └── synthetic/                6 authored inputs, not recordings
-└── harness/                      the recorder, for reference - not on the test classpath
+└── harness/                      the recorder and the digest indexer, for reference - not on the
+                                  test classpath
 ```
+
+**Both digests**, precisely: `inputDigests` maps each of the 404 recorded inputs (repo-relative
+path) to its sha256, and `corpusDigest` is the manifest digest over that map; each of the 177
+entries that names a golden - 161 documents, 7 batches, 9 defendant types - also carries
+`outputSha256`, the sha256 of the golden file itself. An entry with `golden: null` is a refusal or
+a skip and carries neither a golden nor an `outputSha256`. `harness/index-output-digests.py`
+writes the output digests and is re-run after every re-record; it needs nothing but this tree,
+unlike the recorder, and it fails if the goldens on disk and the goldens named here are not the
+same set. It does not touch `corpusDigest`, which remains a statement about the inputs.
