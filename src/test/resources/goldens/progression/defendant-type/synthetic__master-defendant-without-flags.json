@@ -1,0 +1,9 @@
+{
+  "courtApplicationFoundOnHearing": true,
+  "courtApplicationId": "6984d5b6-5c5d-472b-9ead-dff7a49c9600",
+  "defendantType": null,
+  "documentSource": "src/test/resources/goldens/progression/defendant-type/synthetic/master-defendant-without-flags.json",
+  "hearingFixture": "src/test/resources/goldens/progression/defendant-type/synthetic/master-defendant-without-flags.json",
+  "note": "Synthesised to record what the rule does when the applicant has a masterDefendant and the type flags are absent: the shape all six base fixtures carry. Both flags unbox from null.",
+  "threw": "java.lang.NullPointerException: Cannot invoke \"java.lang.Boolean.booleanValue()\" because the return value of \"uk.gov.justice.core.courts.CourtApplicationType.getAppealFlag()\" is null"
+}

@@ -1,0 +1,67 @@
+{
+  "cases": [
+    {
+      "address1": "1234",
+      "address2": "StreetDescription",
+      "address3": "Locality2O",
+      "address4": "",
+      "address5": "",
+      "age": "36",
+      "aliases": "-",
+      "applications": [
+        {
+          "decision": "-",
+          "decisionDate": "-",
+          "response": "-",
+          "responseDate": "-",
+          "result": "-",
+          "type": "sample type"
+        }
+      ],
+      "arrestSummonsNumber": "TFL1",
+      "attendingSolicitorName": "-",
+      "caseReference": "APR35890458",
+      "dateOfBirth": "01/01/1990",
+      "dateOfHearing": "20/01/2020",
+      "defenceCounselName": "James Benjamin Simpson",
+      "defenceCounselStatus": "Junior QC",
+      "defendantAppearanceDetails": "-",
+      "defendantResults": [
+        {
+          "resultCode": "-",
+          "resultText": "collection order"
+        }
+      ],
+      "defendantType": "",
+      "gender": "MALE",
+      "hearingType": "Sentence",
+      "jurisdiction": "MAGISTRATES",
+      "name": "Foster BradtkeConnelly",
+      "nationality": "-",
+      "offences": [
+        {
+          "allocationDecision": "-",
+          "convictionDate": "-",
+          "indicatedPleaValue": "-",
+          "offenceCode": "TH68001",
+          "offenceTitle": "Theft from a shop",
+          "pleaValue": "-",
+          "verdictCode": "-",
+          "wording": "On 02/07/2018 at Bond street stole one bicycle to the value of 200 pounds belonging to another.\nContrary to section 1(1) and section 7 of the Theft Act 1968."
+        }
+      ],
+      "officerInCase": "-",
+      "parentGuardianAddress1": "-",
+      "parentGuardianName": "-",
+      "postCode": "",
+      "postHearingCustodyStatus": "Not Applicable",
+      "prosecutionCounselName": "David Kieran Walsh",
+      "prosecutionCounselStatus": "Leading QC",
+      "prosecutorName": "-"
+    }
+  ],
+  "courtHouse": "Lavender Hill Magistrates' Court",
+  "courtHouseAddress": "176A Lavender Hill, London, SW11 1JU",
+  "ljaName": "South West London Magistrates' Court",
+  "registerDate": "01/06/2020"
+}

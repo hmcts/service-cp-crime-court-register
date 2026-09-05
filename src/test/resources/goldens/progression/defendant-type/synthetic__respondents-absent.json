@@ -1,0 +1,9 @@
+{
+  "courtApplicationFoundOnHearing": true,
+  "courtApplicationId": "6984d5b6-5c5d-472b-9ead-dff7a49c9600",
+  "defendantType": null,
+  "documentSource": "src/test/resources/goldens/progression/defendant-type/synthetic/respondents-absent.json",
+  "hearingFixture": "src/test/resources/goldens/progression/defendant-type/synthetic/respondents-absent.json",
+  "note": "Synthesised to record what the rule does when the applicant has no masterDefendant and the application carries no respondents: the shape five of the six base fixtures carry. getRespondents() is null and the stream call dereferences it.",
+  "threw": "java.lang.NullPointerException: Cannot invoke \"java.util.List.stream()\" because the return value of \"uk.gov.justice.core.courts.CourtApplication.getRespondents()\" is null"
+}

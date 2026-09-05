@@ -1,0 +1,142 @@
+{
+  "cases": [
+    {
+      "address1": "Flat 1",
+      "address2": "1 Old Road",
+      "address3": "London",
+      "address4": "Merton",
+      "address5": "",
+      "age": "18",
+      "aliases": "Mr John Duncan Smith",
+      "arrestSummonsNumber": "-",
+      "attendingSolicitorName": "Harold Benjamin Solicitors",
+      "caseReference": "TFL4359536",
+      "caseResults": [
+        {
+          "resultCode": "-",
+          "resultText": "Adjourned to a later hearing"
+        },
+        {
+          "resultCode": "-",
+          "resultText": "Remanded in custody"
+        }
+      ],
+      "dateOfBirth": "17/04/2008",
+      "dateOfHearing": "20/01/2020",
+      "defenceCounselName": "James Benjamin Simpson",
+      "defenceCounselStatus": "Junior QC",
+      "defendantAppearanceDetails": "-",
+      "defendantResults": [
+        {
+          "resultCode": "-",
+          "resultText": "collection order"
+        }
+      ],
+      "defendantType": "",
+      "gender": "MALE",
+      "hearingType": "Sentence",
+      "jurisdiction": "MAGISTRATES",
+      "name": "Fred Duncan Smith",
+      "nationality": "British",
+      "offences": [
+        {
+          "allocationDecision": "-",
+          "convictionDate": "14/11/2019",
+          "indicatedPleaValue": "-",
+          "offenceCode": "PS90010",
+          "offenceTitle": "Public service vehicle - passenger use altered / defaced ticket",
+          "pleaValue": "NOT_GUILTY, 14/11/2019",
+          "results": [
+            {
+              "resultCode": "-",
+              "resultText": "Pay by date"
+            }
+          ],
+          "verdictCode": "-",
+          "wording": "On 02/07/2018 at Bond street, being a passenger on a vehicle, namely Volvo B9TL 30x, used for the carriage of passengers at separate fares, used a ticket which had been altered or defaced.\nContrary to regulation 7(1)(a) of the Public Service Vehicles (Conduct of Drivers, Inspectors, Conductors and Passengers) Regulations 1990 and section 25 of the Public Passenger Vehicles Act 1981."
+        }
+      ],
+      "officerInCase": "-",
+      "parentGuardianAddress1": "Father - Flat 1",
+      "parentGuardianAddress2": "Father - 1 Old Road",
+      "parentGuardianAddress3": "Father - London",
+      "parentGuardianAddress4": "Father - Merton",
+      "parentGuardianAddress5": "",
+      "parentGuardianName": "Father - Fred Father - Smith",
+      "parentGuardianPostCode": "Father - SW99 1AA",
+      "postCode": "SW99 1AA",
+      "postHearingCustodyStatus": "REMANDED_IN_CUSTODY",
+      "prosecutionCounselName": "-",
+      "prosecutionCounselStatus": "-",
+      "prosecutorName": "-"
+    },
+    {
+      "address1": "Flat 1",
+      "address2": "1 Old Road",
+      "address3": "London",
+      "address4": "Merton",
+      "address5": "",
+      "age": "18",
+      "aliases": "Mr John Duncan Smith",
+      "applications": [
+        {
+          "decision": "-",
+          "decisionDate": "-",
+          "response": "-",
+          "responseDate": "-",
+          "result": "-",
+          "type": "sample type"
+        }
+      ],
+      "arrestSummonsNumber": "TFL1",
+      "attendingSolicitorName": "Harold Benjamin Solicitors",
+      "caseReference": "APR35890458",
+      "dateOfBirth": "17/04/2008",
+      "dateOfHearing": "20/01/2020",
+      "defenceCounselName": "James Benjamin Simpson",
+      "defenceCounselStatus": "Junior QC",
+      "defendantAppearanceDetails": "-",
+      "defendantResults": [
+        {
+          "resultCode": "-",
+          "resultText": "collection order"
+        }
+      ],
+      "defendantType": "",
+      "gender": "MALE",
+      "hearingType": "Sentence",
+      "jurisdiction": "MAGISTRATES",
+      "name": "Fred Duncan Smith",
+      "nationality": "British",
+      "offences": [
+        {
+          "allocationDecision": "-",
+          "convictionDate": "-",
+          "indicatedPleaValue": "-",
+          "offenceCode": "TH68001",
+          "offenceTitle": "Theft from a shop",
+          "pleaValue": "-",
+          "verdictCode": "-",
+          "wording": "On 02/07/2018 at Bond street stole one bicycle to the value of 200 pounds belonging to another.\nContrary to section 1(1) and section 7 of the Theft Act 1968."
+        }
+      ],
+      "officerInCase": "-",
+      "parentGuardianAddress1": "Father - Flat 1",
+      "parentGuardianAddress2": "Father - 1 Old Road",
+      "parentGuardianAddress3": "Father - London",
+      "parentGuardianAddress4": "Father - Merton",
+      "parentGuardianAddress5": "",
+      "parentGuardianName": "Father - Fred Father - Smith",
+      "parentGuardianPostCode": "Father - SW99 1AA",
+      "postCode": "SW99 1AA",
+      "postHearingCustodyStatus": "REMANDED_IN_CUSTODY",
+      "prosecutionCounselName": "David Kieran Walsh",
+      "prosecutionCounselStatus": "Leading QC",
+      "prosecutorName": "-"
+    }
+  ],
+  "courtHouse": "Lavender Hill Magistrates' Court",
+  "courtHouseAddress": "176A Lavender Hill, London, SW11 1JU",
+  "ljaName": "South West London Magistrates' Court",
+  "registerDate": "01/06/2020"
+}

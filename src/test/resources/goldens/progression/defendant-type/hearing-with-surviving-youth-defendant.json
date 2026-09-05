@@ -1,0 +1,7 @@
+{
+  "courtApplicationId": null,
+  "defendantType": "",
+  "documentSource": "src/test/resources/differential/recorded/base__surviving-youth-defendant/expected.json",
+  "hearingFixture": "src/test/resources/fixtures/base/hearing-with-surviving-youth-defendant.json",
+  "rule": "CourtRegisterHandler:84 leaves StringUtils.EMPTY when getCourtApplicationId returns null"
+}

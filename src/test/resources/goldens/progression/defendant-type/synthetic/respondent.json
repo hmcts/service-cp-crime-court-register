@@ -1,0 +1,39 @@
+{
+  "note": "Synthesised: no base fixture carries respondents, so no recorded hearing can reach the Respondent branch. The applicant has no masterDefendant and a respondent's masterDefendantId is one of the document's defendants.",
+  "expected": "Respondent",
+  "hearing": {
+    "courtApplications": [
+      {
+        "id": "6984d5b6-5c5d-472b-9ead-dff7a49c9600",
+        "type": {
+          "appealFlag": false,
+          "applicantAppellantFlag": false
+        },
+        "applicant": {
+          "prosecutingAuthority": {
+            "name": "Transport for London"
+          }
+        },
+        "respondents": [
+          {
+            "masterDefendant": {
+              "masterDefendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "document": {
+    "defendants": [
+      {
+        "masterDefendantId": "6647df67-a065-4d07-90ba-a8daa064ecc4",
+        "prosecutionCasesOrApplications": [
+          {
+            "courtApplicationId": "6984d5b6-5c5d-472b-9ead-dff7a49c9600"
+          }
+        ]
+      }
+    ]
+  }
+}

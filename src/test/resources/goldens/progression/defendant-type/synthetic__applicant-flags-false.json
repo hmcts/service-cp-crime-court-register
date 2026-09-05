@@ -1,0 +1,8 @@
+{
+  "courtApplicationFoundOnHearing": true,
+  "courtApplicationId": "6984d5b6-5c5d-472b-9ead-dff7a49c9600",
+  "defendantType": "Applicant",
+  "documentSource": "src/test/resources/goldens/progression/defendant-type/synthetic/applicant-flags-false.json",
+  "hearingFixture": "src/test/resources/goldens/progression/defendant-type/synthetic/applicant-flags-false.json",
+  "note": "Synthesised: the Applicant default reached through the masterDefendant branch with both flags present and false. No base fixture carries the flags at all."
+}

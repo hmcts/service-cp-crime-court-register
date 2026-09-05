@@ -1,0 +1,8 @@
+{
+  "courtApplicationFoundOnHearing": true,
+  "courtApplicationId": "6984d5b6-5c5d-472b-9ead-dff7a49c9600",
+  "defendantType": "Appellant",
+  "documentSource": "src/test/resources/goldens/progression/defendant-type/synthetic/appellant.json",
+  "hearingFixture": "src/test/resources/goldens/progression/defendant-type/synthetic/appellant.json",
+  "note": "Synthesised: no base fixture carries type.appealFlag or type.applicantAppellantFlag, so no recorded hearing can reach the Appellant branch. Applicant has a masterDefendant and both flags are true."
+}
