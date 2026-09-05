@@ -1,0 +1,15 @@
+{
+  "name": "flag switch: PUT /flag/on -> the kv stub answers enabled=true",
+  "scenarioName": "CourtRegisterServiceFlag",
+  "newScenarioState": "Started",
+  "priority": 1,
+  "request": {
+    "method": "PUT",
+    "urlPath": "/flag/on"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "text/plain" },
+    "body": "CourtRegisterService flag: ON\n"
+  }
+}

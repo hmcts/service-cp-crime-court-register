@@ -3,18 +3,23 @@
 ## Local dependencies
 
 ```bash
-docker compose up -d postgres servicebus-emulator artemis fileservice-postgres wiremock
+docker compose up -d postgres servicebus-emulator artemis fileservice-postgres wiremock sdg-echo
 ```
 
-- `postgres` — the service's store (Flyway V1 + V2 on first start).
+- `postgres` — the service's store (Flyway V1 + V2 on first start), on 5432.
 - `servicebus-emulator` (+ its SQL Server companion) — `courtregister.requests`.
-- `artemis` — an `artemis-jakarta-server` broker with `public.event` as a multicast address; the
-  `wiremock` service's SDG stub publishes `document-available` onto it after each
-  `generate-document` (via the compose `sdg-echo` helper), so the local loop closes without a real SDG.
-- `fileservice-postgres` — a Postgres seeded with the vendored file-service liquibase DDL
-  (`specs/002-consolidate-progression-leg/contracts/fileservice/`).
-- `wiremock` — mappings for systemdocgenerator (command 202, query document), notificationnotify
-  (202) and the App Configuration `kv` endpoint (flag ON by default; `PUT /__admin/flag/off` flips it).
+- `artemis` — an Artemis broker (`apache/activemq-artemis`, pinned) with `public.event` created as a
+  multicast address, on 61616; console on 8161 (admin/admin).
+- `sdg-echo` — the helper that closes the loop: it watches WireMock's request journal and publishes
+  `public.systemdocgenerator.events.document-available` onto `public.event` after each
+  `generate-document`, carrying back the `sourceCorrelationId` and `payloadFileServiceId` the
+  service sent, so the event-driven completion path runs locally without a real SDG.
+- `fileservice-postgres` — a Postgres on 5433 seeded with `docker/fileservice/init.sql`, which is
+  the vendored file-service liquibase DDL
+  (`specs/002-consolidate-progression-leg/contracts/fileservice/`, changesets 001–006) as plain DDL.
+- `wiremock` — on 8089: mappings for systemdocgenerator (command 202, query document),
+  notificationnotify (202) and the App Configuration `kv` endpoint, with the flag ON by default.
+  See `docker/wiremock/README.md`.
 
 ## Run the service with generation enabled
 
@@ -48,11 +53,22 @@ docker compose exec app ./startup.sh generate-register --date "$(date +%F)"
 docker compose exec app ./startup.sh list-batches --date "$(date +%F)"
 
 # 4. flip the flag off and show the gate
-curl -X PUT http://localhost:8089/__admin/flag/off
+curl -X PUT http://localhost:8089/flag/off
 docker compose exec app ./startup.sh generate-register --date "$(date +%F)"   # refuses: flag OFF
 docker compose exec app ./startup.sh check-flag                                 # OFF
 docker compose exec app ./startup.sh generate-register --date "$(date +%F)" --ignore-flag
+
+# 5. flag back on (either form; they set the same WireMock scenario state)
+curl -X PUT http://localhost:8089/flag/on
+curl -X PUT http://localhost:8089/__admin/scenarios/CourtRegisterServiceFlag/state -d '{"state":"Started"}'
+curl -s http://localhost:8089/__admin/scenarios      # which state the flag is in now
 ```
+
+The shorthand is `/flag/off` and `/flag/on`, NOT `/__admin/flag/off` as the plan first sketched:
+WireMock reserves the whole `/__admin` prefix for its own admin API and never consults the stub
+mappings there, so a mapping registered under it is unreachable (it answers 404 from the admin
+router — verified against `wiremock/wiremock:3.13.2`). The second form above is WireMock's real
+scenario admin endpoint, which is what the shorthand drives.
 
 ## Tests
 

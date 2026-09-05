@@ -1,0 +1,23 @@
+{
+  "name": "systemdocgenerator query: document/{payloadFileServiceId} (generated)",
+  "priority": 1,
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/systemdocgenerator-query-api/query/api/rest/systemdocgenerator/document/[0-9a-fA-F-]{36}"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/vnd.systemdocgenerator.query.document+json"
+    },
+    "transformers": ["response-template"],
+    "jsonBody": {
+      "payloadFileServiceId": "{{request.pathSegments.[6]}}",
+      "templateIdentifier": "OEE_Layout5",
+      "conversionFormat": "pdf",
+      "requestedTime": "{{now offset='-5 minutes'}}",
+      "documentFileServiceId": "{{randomValue type='UUID'}}",
+      "generatedTime": "{{now}}"
+    }
+  }
+}

@@ -1,12 +1,20 @@
-# Local development stack for 001-court-register-port.
+# Local development stack for 001-court-register-port and 002-consolidate-progression-leg.
 #
 # Everything here is LOCAL ONLY. The credentials below are development defaults, deliberately
 # committed so the stack starts with no .env file; they are never used in any deployed environment,
 # where Postgres credentials and the Service Bus identity come from Key Vault via the Secrets Store
 # CSI driver.
 #
-#   docker compose up -d postgres servicebus-emulator   # dependencies only, for ./gradlew bootRun
+#   docker compose up -d postgres servicebus-emulator   # the 001 intake half, for ./gradlew bootRun
+#   docker compose up -d artemis fileservice-postgres wiremock sdg-echo
+#                                                       # + the 002 generation half
 #   docker compose up app                               # the service in its container
+#
+# The generation half is four services and one helper (see quickstart.md for the full local loop):
+# `artemis` carries the shared `public.event` topic, `fileservice-postgres` is the framework file
+# service's database, `wiremock` stands in for systemdocgenerator, notificationnotify and Azure App
+# Configuration, and `sdg-echo` turns each stubbed `generate-document` into the
+# `document-available` event the real renderer would publish, so the loop closes with no real SDG.
 #
 # `app` deliberately declares no depends_on, so it can be started on its own.
 services:
@@ -82,5 +90,111 @@ services:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "LocalOnly_Passw0rd!"
 
+  # ---------------------------------------------------------------------------------------------
+  # 002: the generation half's dependencies.
+  # ---------------------------------------------------------------------------------------------
+
+  # The estate's shared `public.event` topic, which is where systemdocgenerator publishes each
+  # document's outcome and where this service's durable subscription listens. The address is created
+  # with the broker instance rather than left to auto-creation: `--addresses public.event` defaults
+  # to the MULTICAST routing type, and an address that auto-created as anycast would deliver each
+  # event to one subscriber instead of all of them — the local stack would then disagree with the
+  # deployed broker about the one thing the topic exists for.
+  #
+  # `apache/activemq-artemis`, PINNED, rather than the estate's `hmcts/artemis_ubuntu`: the estate
+  # image lives in a private ACR that a fresh clone cannot pull. The wire protocol is the same one
+  # (Artemis CORE on 61616), which is what the service talks; the version is bumped as its own
+  # reviewed change, re-running *IT.
+  artemis:
+    image: apache/activemq-artemis:2.42.0-alpine
+    ports:
+      # The broker's multiplexed acceptor: CORE for the service, STOMP for the sdg-echo helper.
+      - "61616:61616"
+      # The management console, for looking at the subscription and its backlog by hand.
+      - "8161:8161"
+    environment:
+      ARTEMIS_USER: admin
+      ARTEMIS_PASSWORD: admin
+      ANONYMOUS_LOGIN: "false"
+      # --http-host / --relax-jolokia are the image's own defaults, repeated because naming
+      # EXTRA_ARGS replaces them; the console is unreachable without them.
+      EXTRA_ARGS: "--http-host 0.0.0.0 --relax-jolokia --addresses public.event"
+    healthcheck:
+      test: ["CMD-SHELL", "/var/lib/artemis-instance/bin/artemis check node --up --user admin --password admin || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  # The framework file service's Postgres — ONE shared database per stack in a deployed environment,
+  # and the reason this service writes the PDF payload straight into it: systemdocgenerator renders
+  # only a payload that is already in the file service. Seeded from docker/fileservice/init.sql,
+  # which is the vendored liquibase changesets 001–006 written as plain DDL (see the header there).
+  # 5433 on the host: 5432 is this service's own store above.
+  fileservice-postgres:
+    image: postgres:16
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: fileservice
+      POSTGRES_USER: fileservice
+      POSTGRES_PASSWORD: fileservice
+    volumes:
+      # Run once, on an empty data directory. `docker compose down --volumes` is what re-seeds it
+      # after the DDL changes.
+      - ./docker/fileservice/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - fileservice-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fileservice -d fileservice"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # systemdocgenerator (command + query), notificationnotify and the Azure App Configuration
+  # data-plane read, all on one port. The mappings and the flag switch are documented in
+  # docker/wiremock/README.md. PINNED for the same reason the emulator is: a moved tag on a stub
+  # server can change matching behaviour under a green build.
+  wiremock:
+    image: wiremock/wiremock:3.13.2
+    ports:
+      - "8089:8080"
+    volumes:
+      # The whole directory, so WireMock finds `mappings/` where it expects it.
+      - ./docker/wiremock:/home/wiremock:ro
+    # Verbose deliberately: a mapping that does not match prints the near-miss diff, which is the
+    # difference between "the local loop is broken" and "the Content-Type is wrong".
+    command: ["--verbose", "--local-response-templating"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://localhost:8080/__admin/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # The renderer's echo: WireMock can answer 202 but cannot publish, so this turns each
+  # `generate-document` it accepted into the `document-available` event the real systemdocgenerator
+  # would put on `public.event`. Without it a local batch would sit in GENERATING until the
+  # reconciler timed it out, and the event-driven completion path would never run locally.
+  # A stock python image with the script mounted: no image to build, and nothing to keep in step
+  # with a Dockerfile.
+  sdg-echo:
+    image: python:3.13-alpine
+    command: ["python", "-u", "/opt/sdg-echo/sdg-echo.py"]
+    volumes:
+      - ./docker/sdg-echo/sdg-echo.py:/opt/sdg-echo/sdg-echo.py:ro
+    environment:
+      WIREMOCK_URL: http://wiremock:8080
+      ARTEMIS_HOST: artemis
+      ARTEMIS_PORT: "61616"
+      ARTEMIS_USER: admin
+      ARTEMIS_PASSWORD: admin
+      PUBLIC_EVENT_TOPIC: public.event
+    depends_on:
+      wiremock:
+        condition: service_healthy
+      artemis:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres-data:
+  fileservice-data:

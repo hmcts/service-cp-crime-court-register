@@ -1,0 +1,21 @@
+{
+  "name": "systemdocgenerator command: generate-document (202)",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "urlPath": "/systemdocgenerator-command-api/command/api/rest/systemdocgenerator/generate-document",
+    "headers": {
+      "Content-Type": {
+        "matches": "application/vnd\\.systemdocgenerator\\.generate-document\\+json.*"
+      }
+    },
+    "bodyPatterns": [
+      { "matchesJsonPath": "$.templateIdentifier" },
+      { "matchesJsonPath": "$.conversionFormat" },
+      { "matchesJsonPath": "$.payloadFileServiceId" }
+    ]
+  },
+  "response": {
+    "status": 202
+  }
+}
