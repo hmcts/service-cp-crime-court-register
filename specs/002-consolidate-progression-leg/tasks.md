@@ -41,7 +41,7 @@ committing agents at once.**
 
 ## Phase 1: Setup (dependencies, configuration surface, local loop, goldens)
 
-- [ ] T001 Add dependencies to `build.gradle`: `spring-boot-starter-artemis` (with the `javax.jms`
+- [x] T001 Add dependencies to `build.gradle`: `spring-boot-starter-artemis` (with the `javax.jms`
       / `artemis-jms-client` exclusions as `service-cp-crime-results-enforcementgateway/build.gradle:57-60`),
       `com.azure:azure-data-appconfiguration` (BOM-managed), `net.javacrumbs.shedlock:shedlock-spring`
       + `shedlock-provider-jdbc-template`, test-only `org.apache.activemq:artemis-jakarta-server`;
