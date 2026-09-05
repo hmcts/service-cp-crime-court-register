@@ -5,6 +5,11 @@
 # no database, and therefore without Docker. Container-backed suites do NOT activate it: they boot
 # the real configuration against Testcontainers.
 courtregister:
+  # record | progression-post. The same default `application.yaml` carries, stated rather than
+  # inherited: this profile's context-load tests assert the recording pipeline is the one wired, and
+  # a default that moved would move them silently.
+  output: record
+
   consumer:
     # Master switch for starting the Service Bus processor at all. Off here, so no test in this
     # profile ever tries to reach a broker.
@@ -25,6 +30,30 @@ courtregister:
     # For the same reason: nothing in this profile matches a subscription, so there is no reference
     # data to reach and no identity mounted to reach it with. LIVE would correctly refuse to start.
     mode: STUB
+  generation:
+    # Off, and off UNCONDITIONALLY: `application.yaml` reads COURTREGISTER_GENERATION_ENABLED and a
+    # developer who exported it for a local run would otherwise turn the job, the listener and the
+    # second datasource on inside every context-load test. Written as a literal here for that
+    # reason, so nothing in this profile can be switched on from the environment.
+    enabled: false
+    # The downstream modes, for the same reason `payload` and `referencedata` above are stubbed:
+    # nothing in this profile renders, notifies, stores a payload or reads the flag, so there is no
+    # endpoint to reach and no identity mounted to reach it with, and LIVE would correctly refuse to
+    # start. Startup refuses STUB on the deployed credential source, and this profile carries the
+    # local one above.
+    sdg-mode: STUB
+    nn-mode: STUB
+    fileservice-mode: STUB
+    flag-mode: STUB
+    # The zone stays Europe/London even with the job disabled: the startup zone check is
+    # unconditional, exactly as the servicebus credential check is, because "the job happens to be
+    # off" is not a reason to let a misconfigured schedule through.
+    zone: Europe/London
+
+  # Deliberately absent from this profile: courtregister.feature.*, courtregister.fileservice.*,
+  # courtregister.endpoints.*, courtregister.email.templates.* and spring.artemis.*. They are
+  # required only when generation is enabled, and it is disabled above; leaving them unset is what
+  # proves the refusals are conditional rather than making them pass with placeholder values.
 
 spring:
   autoconfigure:

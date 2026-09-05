@@ -26,10 +26,41 @@ spring:
     # store probe, before intake starts, so no message is ever consumed against an unmigrated schema.
     enabled: true
 
+  # The Artemis connection behind the `public.event` subscription (the systemdocgenerator completion
+  # events). Every value is a binding, never a value chosen here: the broker URL and credentials
+  # arrive from Key Vault through the Secrets Store CSI driver, and the empty defaults leave a local
+  # run with nothing to connect to unless docker-compose's `artemis` is pointed at explicitly.
+  # The broker NEVER gates readiness (constitution): a blip must not roll the pods.
+  artemis:
+    broker-url: ${ARTEMIS_BROKER_URL:}
+    user: ${ARTEMIS_USER:}
+    password: ${ARTEMIS_PASSWORD:}
+
+  jms:
+    # `public.event` is a TOPIC, so the listener container has to be told so; a queue-shaped
+    # container would silently receive nothing from a multicast address.
+    pub-sub-domain: true
+    # A DURABLE subscription, so events published while this service is down or redeploying are
+    # still delivered afterwards. A batch's completion arrives exactly once and there is no second
+    # chance to hear it; the reconciler is the safety net, not the transport.
+    subscription-durable: true
+    # The client id the durable subscription is registered under. It is part of the subscription's
+    # identity on the broker: changing it abandons the existing subscription (and its backlog) and
+    # creates a new one, so it must be changed on the broker and here together.
+    client-id: courtregister-service
+
 server:
   port: ${SERVER_PORT:8082}
 
 courtregister:
+  # record | progression-post. `record` writes the register into this service's own store and is what
+  # an environment that says nothing gets. `progression-post` is the 001 behaviour - POST to the
+  # progression command API - kept only as a fallback sequencing option while progression's leg is
+  # still deployed. It is a BUILD-TIME fallback, not the cutover switch: the one lever that decides
+  # which implementation generates is the App Configuration flag `CourtRegisterService`
+  # (constitution Principle III), and nothing here may become a second one.
+  output: record
+
   consumer:
     # The master switch for intake. Off in the `test` profile, so context-load tests need no broker.
     enabled: true
@@ -213,6 +244,111 @@ courtregister:
       # run: 20s of cache reads and three attempts of 5s + 10s with two bounded waits of 2s is 69s
       # of the four-minute budget.
       read-timeout: 10s
+
+  generation:
+    # The master switch for the whole downstream half: the nightly job, the public-event listener,
+    # the file-service datasource and the validators that guard them. LOCAL DEFAULT ONLY - it is
+    # false here so a developer's run and the plain context-load tests need no broker, no second
+    # database and no App Configuration; deployed environments set COURTREGISTER_GENERATION_ENABLED
+    # to true. Turning it on turns on the startup refusals with it: the file-service datasource, the
+    # flag configuration, the SDG/NN endpoints and the e-mail template id all become required.
+    enabled: ${COURTREGISTER_GENERATION_ENABLED:false}
+    # 18:00, Monday to Friday. Six fields, Spring's cron dialect (second first).
+    cron: "0 0 18 * * MON-FRI"
+    # The zone the cron above is read in, and the requirement is 18:00 WALL CLOCK in BST and GMT
+    # alike. The legacy fires in the scheduling JVM's default zone because its Quartz trigger is
+    # built without a time zone; that ambiguity is not inherited. Startup refuses any other value
+    # unless zone-override-acknowledged below is true.
+    zone: Europe/London
+    # An explicit acknowledgement, and the only way to run in another zone. It exists so a zone
+    # change is a deliberate, reviewable act rather than a typo that silently moves the run.
+    zone-override-acknowledged: false
+    # The bound on REQUESTING: how long one run may go on asking systemdocgenerator to render
+    # batches. Completion is event-driven, so a slow render never spends this budget and never
+    # blocks the next request.
+    run-deadline: 60m
+    # How long a batch may sit in GENERATING before the reconciler asks systemdocgenerator's query
+    # API what happened to it. Past it with no answer, the batch fails GENERATION_TIMED_OUT.
+    grace-period: 10m
+    # event | poll-only. `event` learns each outcome from the public-event topic and is the platform
+    # pattern; the reconciler above is its safety net. `poll-only` is an escape hatch for a broker
+    # outage, is logged loudly at every run, and makes the SDG query API this flow's only synchronous
+    # coupling. `event` additionally requires the broker configuration above at startup.
+    completion: event
+    # LIVE | STUB, one per downstream, with the same rule the 001 modes carry: LIVE is what an
+    # environment that says nothing gets, and startup refuses STUB wherever the deployed credential
+    # source (servicebus.namespace) is in use or generation is enabled. The stubs exist for local
+    # runs and for the container suites whose subject is the batch state machine rather than the
+    # downstream itself.
+    sdg-mode: LIVE
+    nn-mode: LIVE
+    fileservice-mode: LIVE
+    flag-mode: LIVE
+
+  feature:
+    # The App Configuration store this service reads the cutover flag from - the THIRD reader of one
+    # flag, after the producer and the legacy. The job reads it once per run, with no cache, and
+    # fails closed: OFF or unreadable means the run is skipped and counted, never that this service
+    # generates anyway. A secret-adjacent binding and never a value: the endpoint arrives from the
+    # deployment, and the empty default leaves a local run with no store to read.
+    endpoint: ${APPCONFIG_ENDPOINT:}
+    # The setting key, in App Configuration's feature-flag form. It is the SAME key the legacy JS
+    # client reads, which is what makes the flag one lever rather than three: changing it here
+    # without changing it there would leave two implementations disagreeing about the cutover.
+    key: .appconfig.featureflag/CourtRegisterService
+    # The App Configuration label, which is how one store serves every stack. Empty locally; the
+    # deployment supplies its stack's label. A wrong label reads a different stack's flag.
+    label: ${STACK_LABEL:}
+    # The whole budget for the read, and short on purpose: the flag gates the start of a run, and a
+    # store that is slow must not hold the run open. A timeout is UNREADABLE, which is OFF.
+    timeout: 2s
+
+  fileservice:
+    # The framework file service's own Postgres - one shared database per stack - written to
+    # directly, because systemdocgenerator's generate-document takes a payloadFileServiceId and will
+    # only render a payload that is already in the file service. This service's use of it is
+    # WRITE-ONLY: it inserts the metadata and content rows the framework's own repositories insert
+    # and reads nothing back. A separate datasource from spring.datasource above, and one that gates
+    # readiness only while a run is in progress. Bindings, never values: the URL and credentials
+    # arrive from Key Vault through the Secrets Store CSI driver, and the empty defaults are what
+    # make startup refuse when generation is enabled without them.
+    url: ${FILESERVICE_DATASOURCE_URL:}
+    username: ${FILESERVICE_DATASOURCE_USERNAME:}
+    password: ${FILESERVICE_DATASOURCE_PASSWORD:}
+
+  endpoints:
+    # The internal mesh hosts of the two downstreams. HOSTS ONLY: each client appends its own
+    # contract path (systemdocgenerator's command generate-document and query document/{id};
+    # notificationnotify's send-email-notification), so a path written here would be appended to.
+    # Empty by default rather than pointed at localhost: an endpoint this service invents is an
+    # endpoint a deployment can forget to set and still start. With generation enabled, startup
+    # refuses without them.
+    systemdocgenerator: ${SYSTEMDOCGENERATOR_BASE_URL:}
+    notificationnotify: ${NOTIFICATIONNOTIFY_BASE_URL:}
+
+  email:
+    templates:
+      # The notificationnotify template the court-register e-mail is sent with, by UUID. It is
+      # REQUIRED in LIVE mode when generation is enabled and validated for shape at startup, not at
+      # send time (defect fix P9): a blank or malformed id discovered at 18:00 is a night's registers
+      # unsent, whereas a deployment that cannot start is a deployment that gets fixed. A binding,
+      # never a value - the id belongs to the environment's notificationnotify configuration.
+      cr_standard: ${CR_EMAIL_TEMPLATE_ID:}
+
+  publicevents:
+    # The platform's shared public-event topic, and the destination the completion listener
+    # subscribes to. Not this service's own topic and not configurable per environment in practice:
+    # it is the estate's one multicast address.
+    topic: public.event
+    # The durable subscription's name on the broker. It, with spring.jms.client-id above, IS the
+    # subscription's identity: changing either abandons the existing subscription and its backlog.
+    subscription: courtregister-service.sdg
+    # The JMS selector, applied by the BROKER, so only the two systemdocgenerator outcome events
+    # ever reach this service off a topic the whole estate publishes to. It is the coarse filter
+    # only: the listener still keeps just the events whose originatingSource is CourtRegisterService
+    # and correlates them to a batch by sourceCorrelationId, which is what keeps progression's
+    # still-deployed listener and this one out of each other's documents.
+    selector: "CPPNAME IN ('public.systemdocgenerator.events.document-available','public.systemdocgenerator.events.generation-failed')"
 
 # Application Insights is configured by the Java agent (lib/applicationinsights.json).
 # The per-environment connection string is supplied as APPLICATIONINSIGHTS_CONNECTION_STRING,
