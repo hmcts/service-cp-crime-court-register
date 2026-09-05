@@ -551,8 +551,8 @@ class ProcessingMetricsTest {
          * would know is an alert that has quietly stopped firing.
          *
          * <p>So the scrape text itself is asserted, series by series. The two counters that carry a
-         * {@code reason} are the ones worth spelling out: the five completions, because on this flow
-         * "nothing was sent" is the ordinary answer and telling the five apart is defect C33's fix;
+         * {@code reason} are the ones worth spelling out: the completions, because on this flow
+         * "nothing was sent" is the ordinary answer and telling them apart is defect C33's fix;
          * and the anomalies, because they are the telemetry half of C19, C20 and C27.
          */
         @Nested
@@ -585,16 +585,17 @@ class ProcessingMetricsTest {
             }
 
             @Test
-            @DisplayName("the five completion reasons are five series, named as documented")
-            void the_completions_counter_should_scrape_as_exactly_five_reason_series() {
+            @DisplayName("every completion reason is its own series, named as documented")
+            void the_completions_counter_should_scrape_one_reason_series_per_completion() {
                 for (final CompletionReason reason : CompletionReason.values()) {
                     scraped.completed(reason);
                 }
 
                 assertThat(samplesOf(ProcessingMetrics.COMPLETIONS))
-                        .as("four of the five sent nothing, and two of those four are this flow's "
+                        .as("four of the six sent nothing, and two of those four are this flow's "
                                 + "commonest results — an undifferentiated success is defect C33")
                         .containsExactlyInAnyOrder(
+                                "courtregister_completions_total{reason=\"recorded\"}",
                                 "courtregister_completions_total{reason=\"submitted\"}",
                                 "courtregister_completions_total{reason=\"group-proceedings\"}",
                                 "courtregister_completions_total{reason=\"no-defendants\"}",

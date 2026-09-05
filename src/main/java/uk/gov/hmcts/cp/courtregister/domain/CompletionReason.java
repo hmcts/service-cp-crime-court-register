@@ -5,14 +5,26 @@ package uk.gov.hmcts.cp.courtregister.domain;
  *
  * <p>A bounded set rather than free text: the value is written to
  * {@code processed_request.completion_reason}, labels the completions counter, and is read by
- * support. All five are successes; what separates them is whether a register was sent and, if not,
- * which of the four legitimate business skips ended the run. Two of those skips are this flow's most
- * common results, so an undifferentiated success is the legacy defect (C33) rather than an
+ * support. All six are successes; what separates them is whether a register was produced and, if
+ * not, which of the four legitimate business skips ended the run. Two of those skips are this flow's
+ * most common results, so an undifferentiated success is the legacy defect (C33) rather than an
  * acceptable simplification — "nothing to publish" is a state, not silence.
+ *
+ * <p>The first two are the same success under the two output modes, and both stay: {@code recorded}
+ * is what {@code courtregister.output=record} completes with, and {@code submitted} is what
+ * {@code progression-post} completes with. They are never both live in one deployment.
  */
 public enum CompletionReason {
 
-    /** One POST was made and progression answered 202 — or the output was already POSTED. */
+    /** The register was written into this service's own store as an active RECORDED row. */
+    RECORDED("recorded"),
+
+    /**
+     * One POST was made and progression answered 202, or the output was already POSTED.
+     *
+     * <p>Retained for {@code courtregister.output=progression-post}, the 001 behaviour kept for the
+     * documented fallback sequencing while progression's leg is still deployed.
+     */
     SUBMITTED("submitted"),
 
     /** The hearing is group proceedings, which the business rule skips (C7, strictly typed). */
