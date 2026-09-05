@@ -99,8 +99,10 @@ dependencies {
   testRuntimeOnly 'com.microsoft.sqlserver:mssql-jdbc'
 
   // Embedded Artemis broker for the durable-subscription listener IT (version via the BOM, so the
-  // embedded server always matches the BOM-managed client - no Artemis version drift).
-  testImplementation 'org.apache.activemq:artemis-jakarta-server'
+  // embedded server always matches the BOM-managed client - no Artemis version drift). Declared on
+  // the relocated `org.apache.artemis` group, which is where the BOM resolves it (2.53.0); the old
+  // `org.apache.activemq` coordinate only got there through a relocation POM.
+  testImplementation 'org.apache.artemis:artemis-jakarta-server'
 
   // HTTP stub for the results-query-api fallback suite and for the outbound
   // `add-court-register` adapter's suites. The standalone, shaded artefact deliberately: the
@@ -124,7 +126,11 @@ dependencies {
 }
 
 // Guard against any legacy javax.jms slipping onto the classpath alongside Spring Boot 4's jakarta.jms.
+// artemis-jms-client is the javax.jms client, and Artemis 3 relocated it from the `org.apache.activemq`
+// group to `org.apache.artemis`, so both coordinates are excluded: dropping the old one alone would let
+// the relocated artefact back in the moment a transitive dependency moved to the new group.
 configurations.all {
   exclude group: 'javax.jms', module: 'javax.jms-api'
   exclude group: 'org.apache.activemq', module: 'artemis-jms-client'
+  exclude group: 'org.apache.artemis', module: 'artemis-jms-client'
 }
