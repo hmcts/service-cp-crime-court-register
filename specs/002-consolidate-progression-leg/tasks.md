@@ -53,13 +53,17 @@ committing agents at once.**
       `courtregister.email.templates.cr_standard`, `spring.artemis.*`, `spring.jms.*`,
       `courtregister.publicevents.*`), with the same "LOCAL DEFAULT ONLY" comments the 001 keys carry;
       `./gradlew bootRun` still refuses for the documented reasons (record the message).
-- [ ] T003 [P] Extend `docker-compose.yml` with `artemis` (`artemis-jakarta-server` image or the
+- [x] T003 [P] Extend `docker-compose.yml` with `artemis` (`artemis-jakarta-server` image or the
       estate `hmcts/artemis_ubuntu`, `public.event` multicast address), `fileservice-postgres`
       (postgres:16 seeded from `specs/002-consolidate-progression-leg/contracts/fileservice/` via an
       init script) and `wiremock` (mappings under `docker/wiremock/` for SDG command 202 + query,
       NN 202, App Configuration `kv` flag ON, `__admin/flag/off|on`), plus an `sdg-echo` helper that
       publishes `document-available` onto `public.event` after each `generate-document`; `docker compose
-      up -d` brings all up healthy (record the `ps` output).
+      up -d` brings all up healthy (record the `ps` output). (delivered with two deviations, both
+      recorded in quickstart.md and `docker/wiremock/README.md`: the broker is the public
+      `apache/activemq-artemis` image, since `hmcts/artemis_ubuntu` sits in a private ACR a fresh
+      clone cannot pull; and the flag switch is `PUT /flag/off|on`, since WireMock reserves
+      `/__admin` for its own API and never serves stub mappings there)
 - [ ] T004 [P] Record the progression goldens (research §6): in a local, uncommitted module of `PROG`,
       run `CourtRegisterPdfPayloadGenerator.mapPayload` over the 001 recorded documents grouped per
       (court centre, register date) and `CourtRegisterHandler.getDefendantType` over the base hearings;
