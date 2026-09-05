@@ -377,6 +377,18 @@ management:
           # The `servicebus` indicator is deliberately absent from both: a broker blip must never
           # roll the pods, and the service cannot heal the queue by restarting (spec FR-011).
           include: db,intakeStartup
+  health:
+    jms:
+      # Spring Boot auto-configures a `jms` health indicator as soon as a ConnectionFactory is on the
+      # context, and it goes DOWN whenever the broker is quiet or briefly unreachable. That indicator
+      # is part of the health aggregate, so leaving it on would let broker silence turn the whole
+      # service DOWN - the exact behaviour spec FR-011 forbids, for the same reason `servicebus` is
+      # kept out of the readiness group above.
+      #
+      # The broker is still reported, just not by this: Phase 2's `PublicEventsHealthIndicator`
+      # (tasks T041, wired in T051) reports the `public.event` subscription as its own detail, outside
+      # readiness, so an operator can see the broker state without a blip rolling the pods.
+      enabled: false
 
 logging:
   # INFO, and nothing below it anywhere in this file. The privacy rules (constitution Principle VII)
