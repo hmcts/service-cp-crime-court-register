@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "id": "http://justice.gov.uk/json/schemas/domains/systemdocgenerator/commands/systemdocgenerator.generate-document.json",
+  "type": "object",
+  "properties": {
+    "templateIdentifier": {
+      "type": "string"
+    },
+    "conversionFormat": {
+      "type": "string",
+      "enum": [
+        "pdf",
+        "thymeleaf",
+        "csv"
+      ]
+    },
+    "payloadFileServiceId": {
+      "$ref": "http://cpp.moj.gov.uk/core/domain/json/schema/data-types.json#/definitions/uuid"
+    },
+    "sourceCorrelationId": {
+      "$ref": "http://cpp.moj.gov.uk/core/domain/json/schema/data-types.json#/definitions/uuid"
+    },
+    "originatingSource": {
+      "type": "string"
+    },
+    "additionalInformation": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "properties": {
+          "propertyName": {
+            "type": "string"
+          },
+          "propertyValue": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "propertyName",
+          "propertyValue"
+        ]
+      }
+    }
+  },
+  "required": [
+    "templateIdentifier",
+    "conversionFormat",
+    "payloadFileServiceId"
+  ],
+  "additionalProperties": false
+}
