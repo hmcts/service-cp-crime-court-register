@@ -9,8 +9,8 @@ The queue-message contract is owned by this service, jointly agreed with the pro
 - Canonical schema: `src/main/resources/contracts/distribution-command.schema.json` (draft-07,
   `additionalProperties: false`, six required fields, optional `userId`, court-register `$id`,
   `eventType` enum `["Hearing_Resulted"]`).
-- Prose: `doc/API_CONTRACTS.md` §1 (field semantics, message properties, delivery/settlement,
-  the replay rule).
+- Prose: the Confluence design page (field semantics, message properties, delivery/settlement,
+  the replay rule). (`doc/API_CONTRACTS.md`, cited here originally, was retired on 2026-09-05.)
 
 ## Outbound
 
@@ -26,4 +26,4 @@ The queue-message contract is owned by this service, jointly agreed with the pro
 
 ## HTTP
 
-None beyond Spring Boot Actuator (see `doc/openapi.yaml` — deliberately a comment block only).
+None beyond Spring Boot Actuator. (The comment-only `doc/openapi.yaml` placeholder was removed on 2026-09-05; there is no OpenAPI file.)

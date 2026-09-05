@@ -295,7 +295,7 @@ class TelemetryPrivacyTest {
      * under the bounded {@code OUTBOUND_CONTRACT_VIOLATION}. That code says a document was refused
      * and never says by what, which leaves support re-deriving the field by hand from a hearing they
      * are not allowed to read — so the JSON pointer of the offending field is written to the log,
-     * and written only to the log ({@code doc/API_CONTRACTS.md} §2 says so in those words).
+     * and written only to the log (the design's contract section says so in those words).
      *
      * <p>It is safe because of what a pointer is made of: the instance location, plus the missing
      * property's name for a {@code required} failure, and both are schema vocabulary. The document

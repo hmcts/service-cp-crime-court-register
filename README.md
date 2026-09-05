@@ -2,27 +2,33 @@
 
 When a hearing is resulted on the Common Platform, the court-register flow assembles one register
 document per hearing covering **youth defendants only**, matches recipients (Youth Offending Teams)
-against NOW-subscription rules keyed on the court centre, and submits it to the progression context
-— which batches per (court centre, register date), renders a PDF nightly and emails it out. Today
-the first half of that flow is a Node.js Azure Durable Functions app that fails silently by design:
-the final POST swallows every error, four separate guards report success when nothing happened, and
-a schema-invalid document loses the whole hearing's register without a trace.
+against NOW-subscription rules keyed on the court centre, batches the documents per (court centre,
+register date), renders a PDF at 18:00 each weekday and e-mails it to the matched teams. Today that
+flow is split across a Node.js Azure Durable Functions app (assembly and matching) and the
+progression context (batching, the nightly PDF through systemdocgenerator, the e-mail through
+notificationnotify), and it fails silently at several points on both halves.
 
-This service replaces that function app with a Spring Boot pipeline on AKS: it consumes hearing
+This service replaces **both halves** with one Spring Boot pipeline on AKS. It consumes hearing
 commands from the Azure Service Bus queue `courtregister.requests`, builds the register from the
-Redis claim-check payload (with the results-query fallback), matches subscriptions, and POSTs
-`progression.add-court-register` — with idempotency, explicit settlement, bounded retries, and a
-recorded terminal state for every command. It was built phase by phase, test-first, per
-`specs/001-court-register-port/tasks.md`; the Status section below says where the increment
-stands.
+Redis claim-check payload (with the results-query fallback), matches subscriptions, validates the
+document against the frozen register contract and **records** it in its own store; a service-owned
+job at **18:00 Europe/London, Monday to Friday** batches the recorded rows, writes the PDF payload
+into the platform file service, asks systemdocgenerator to render the unchanged `OEE_Layout5`
+template, learns the outcome from systemdocgenerator's public events, and sends one
+notificationnotify e-mail per Youth Offending Team with the PDF attached. Every command and every
+batch has a recorded terminal state; nothing is swallowed.
 
-It is deliberately **not** a bug-for-bug port. Of the thirty-four defects catalogued in the
-migration design, the thirty-one that live in this service are **fixed**, each with a pinning test
-and a sign-off state, in the [defect-fix register](doc/DEFECT-FIXES.md); the other three
-(C18/C28/C34) are externally-owned remediations the register tracks to conclusion before cutover.
-Two further rows (C35, C36) were appended under the constitution's append mechanism when the
-differential audit reached shapes the catalogue had not, bringing the register to thirty-six.
-Legacy behaviour remains the oracle for everything not catalogued there.
+The whole flow is switched between the legacy implementation and this service by **one Azure App
+Configuration feature flag, `CourtRegisterService`**, read by the results producer, by the legacy
+function-app triggers and by this service's nightly job. Flag on: the producer publishes, the legacy
+stands down, this service generates. Flag off: the reverse, and progression's still-scheduled job
+generates again. Every failure to read the flag leaves the legacy in charge.
+
+It is deliberately **not** a bug-for-bug port. The defects catalogued in the design are **fixed**,
+each with a pinning test and a sign-off state, in the [defect-fix register](doc/DEFECT-FIXES.md);
+legacy behaviour remains the oracle for everything not catalogued there. Externally-owned
+remediations (the legacy repo's kill-switch, the producer) are registered as pending and tracked to
+conclusion before cutover.
 
 | Field     | Value                                                 |
 |-----------|-------------------------------------------------------|
@@ -32,31 +38,51 @@ Legacy behaviour remains the oracle for everything not catalogued there.
 | Package   | `uk.gov.hmcts.cp.courtregister`                       |
 | Ports     | 8082 local / 4550 Kubernetes                          |
 
-## Status — court-register-port (pipeline and differential audit complete; cutover outstanding)
+## Design
 
-The full pipeline is implemented and green under the full quality gates: inbound transport with
-explicit settlement and the durable idempotency guard, the ported transformation (fragment build,
-subscription matching, the twelve-mapper aggregation document), pre-send contract validation
-against the vendored progression schemas, and the 202-only submission gateway — proven by the `e2e/`
-suites and the container smoke. Five of those suites are edge-level, driving a hearing from the
-emulator queue to a socket over a real payload cache and real HTTP contexts; the rest run the real
-broker and store with the outward ports stubbed, and are about settlement, the processed log and
-readiness rather than about what reaches a socket. Which is which is listed in
-[doc/TECHNICAL_DESIGN.md](doc/TECHNICAL_DESIGN.md#testing-strategy). Every in-service defect fix is
-landed and pinned; the content-changing ones stay **gated on sign-off before cutover**, tracked
-per row in the [defect-fix register](doc/DEFECT-FIXES.md). The differential audit against the
-recorded legacy oracle (Phase 8 of `specs/001-court-register-port/tasks.md`) is **complete**: 381
-recorded runs of the real function app, zero unattributed differences, reported in
-[specs/001-court-register-port/checklists/differential-audit.md](specs/001-court-register-port/checklists/differential-audit.md).
-What remains is business sign-off on the content-changing rows, and cutover itself — the producer's
-queue publisher and the legacy kill-switch — which is a separate increment.
-This service exposes **no REST API**. The only HTTP surface is Spring Boot Actuator.
+The design lives on Confluence and is the authority for what this service does and why:
+
+**[Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service)**
+(CRA space) — as-is topology and sequence, the to-be architecture, the consolidation of progression's
+court-register leg, the one-flag cutover, and the open questions.
+
+This repository carries no design narrative of its own. What it does carry:
+
+| Artefact | Location | Purpose |
+|---|---|---|
+| **Defect-fix register** | [doc/DEFECT-FIXES.md](doc/DEFECT-FIXES.md) | Every catalogued legacy defect (function-app `C` rows and progression-leg `P` rows), its fix, its pinning test and its sign-off state — the quality gate the constitution enforces |
+| Engineering constitution | [.specify/memory/constitution.md](.specify/memory/constitution.md) | The non-negotiable principles (fix-first, TDD, message-contract first, ports and adapters, nothing swallowed, privacy, estate conventions) |
+| Specifications | [specs/](specs/) | Spec Kit increments: `001-court-register-port` (complete) and `002-consolidate-progression-leg` (in progress) — spec, plan, research, data model, tasks, checklists |
+| Inbound contract | [src/main/resources/contracts/distribution-command.schema.json](src/main/resources/contracts/distribution-command.schema.json) | The `courtregister.requests` message, `additionalProperties: false` |
+| Register contract | [src/main/resources/contracts/progression/](src/main/resources/contracts/progression/) | The `courtRegisterDocument/*` schemas frozen at `criminal-court-public-model` 17.103.13, with provenance — enforced at the write into the register store |
+| Working conventions | [CLAUDE.md](CLAUDE.md) | Build loop, contract rule, fix-first rule, build and test commands |
+
+## Status
+
+- **Increment 001 — court-register-port: complete.** The intake half is implemented and green
+  under the full quality gates: transport with explicit settlement and the durable idempotency guard,
+  the ported transformation (fragment build, subscription matching, the twelve-mapper aggregation
+  document), contract validation against the vendored schemas, and the terminal-state processed log.
+  The differential audit against 381 recorded runs of the real function app found zero unattributed
+  differences.
+- **Increment 002 — consolidate-progression-leg: in progress.** Replaces the POST to progression
+  with the register store; adds the nightly batch job, the systemdocgenerator and notificationnotify
+  adapters, the `public.event` listener, the flag gate and the operations CLI; appends the
+  progression-leg `P` rows to the defect-fix register. Progress is the checkbox state in
+  `specs/002-consolidate-progression-leg/tasks.md`.
+- **Cutover** is a separate step once both increments are signed off: the producer's queue publisher
+  and the legacy kill-switch already exist as patterns; the flag is the only lever.
+
+This service exposes **no REST API**. The only HTTP surface is Spring Boot Actuator. Operational
+actions (regenerate a date, resend a batch's failed notifications, list batches, review rows recorded
+while the flag was off) are a CLI baked into the image and run with `kubectl exec`.
 
 ## Prerequisites
 
 - ☕️ Java 25 on `PATH` (the build resolves a 25 toolchain; use `./gradlew`, never a system Gradle)
 - 🐳 Docker (the compose stack — Postgres and the Service Bus emulator with its SQL Server
-  companion — plus the Redis and WireMock fixtures the `*IT` suites start for themselves)
+  companion — plus the Redis, WireMock and, from increment 002, Artemis and file-service fixtures the
+  `*IT` suites start for themselves)
 
 ## Quickstart
 
@@ -81,31 +107,20 @@ COURTREGISTER_PAYLOAD_MODE=STUB COURTREGISTER_REFERENCEDATA_MODE=STUB \
 Both adapter modes default to `LIVE` — a service that has to be told to fetch payloads is one that
 will be deployed not fetching them — so a bare `bootRun` refuses to start: startup demands upstream
 endpoints and a `CJSCPPUID`, and compose has neither results nor reference data to call. The `app`
-service in `docker-compose.yml` sets the same three variables for the same reason.
+service in `docker-compose.yml` sets the same three variables for the same reason. Generation is
+disabled by default in local runs; enabling it demands the file-service datasource, the broker and
+the systemdocgenerator and notificationnotify endpoints, for the same reason.
 
 The emulator's queue definition lives in `docker/servicebus-emulator/config.json`; the `*IT` test
 fixtures mount the same file, so local, CI and deployed queue properties cannot drift. Compose is
 local-only, and `bootRun` does not inherit compose environment variables — which is why the command
 above passes them itself.
 
-## Documentation
-
-| Document                                          | Location                                           |
-|---------------------------------------------------|----------------------------------------------------|
-| Solution brief                                    | [doc/SOLUTION_BRIEF.md](doc/SOLUTION_BRIEF.md)     |
-| Technical design                                  | [doc/TECHNICAL_DESIGN.md](doc/TECHNICAL_DESIGN.md) |
-| Contracts (inbound message and outbound command)  | [doc/API_CONTRACTS.md](doc/API_CONTRACTS.md)       |
-| **Defect-fix register** — all 36 rows: the 34 catalogued legacy defects plus the two appended under review, each with its pinning test and sign-off state | [doc/DEFECT-FIXES.md](doc/DEFECT-FIXES.md) |
-| Changelog                                         | [doc/CHANGELOG.md](doc/CHANGELOG.md)               |
-| OpenAPI placeholder — deliberately empty: there is no REST API (the comment says why) | [doc/openapi.yaml](doc/openapi.yaml)               |
-
-Repository working conventions live in `CLAUDE.md`; the engineering constitution —
-including the defect-fix-first rule the register above enforces — is
-`.specify/memory/constitution.md` and takes precedence where they overlap.
-
 ### Contribute to this repository
 
-See [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md).
+See [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md). Repository working conventions live in
+`CLAUDE.md`; the engineering constitution is `.specify/memory/constitution.md` and takes precedence
+where they overlap.
 
 ## Licence
 

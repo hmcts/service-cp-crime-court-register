@@ -1,12 +1,19 @@
 # service-cp-crime-court-register
 
-Consumes hearing-resulted messages from a dedicated Azure Service Bus queue and produces one
-youth-defendant court register submission per hearing to `cpp-context-progression` — a fix-first
-port of the court register function app. Thirty-one of the thirty-four catalogued defects are
-fixed in this service; C18, C28 and C34 are externally-owned remediations (the legacy function-app
-repo and the producer), registered as PENDING and tracked to conclusion before cutover. Every fix
-is registered in `doc/DEFECT-FIXES.md`, which now also carries the rows appended under review
-(C35, C36) — an appended row carries the same obligations as an original one.
+Consumes hearing-resulted messages from a dedicated Azure Service Bus queue, builds one
+youth-defendant court register document per hearing and **records** it in the service's own store;
+a service-owned job at 18:00 Europe/London (Mon–Fri) batches the recorded documents per
+(court centre, register date), renders each batch to PDF through **systemdocgenerator**
+(`OEE_Layout5`, unchanged), learns the outcome from systemdocgenerator's public events on the
+Artemis `public.event` topic, and e-mails each matched Youth Offending Team through
+**notificationnotify** with the PDF attached by file-service id. This replaces both the court
+register function app and progression's court-register leg. The whole flow is switched between
+legacy and new by the single App Configuration flag `CourtRegisterService`, which this service's
+nightly job reads (fail-closed) as its third reader.
+
+It is a fix-first port: every catalogued defect — the function app's `C` rows and the progression
+leg's `P` rows — is fixed or externally owned, each with a register row naming its pinning test
+(`doc/DEFECT-FIXES.md`). An appended row carries the same obligations as an original one.
 
 ## Programme
 Crime Common Platform (CPP) — Modern by Default (MbD)
@@ -18,30 +25,44 @@ Team: Resulting Assistant
 - Port: 8082 (local) / 4550 (Kubernetes)
 
 ## Key Documentation
-| Document           | Location                      |
-|--------------------|-------------------------------|
-| Solution Brief     | doc/SOLUTION_BRIEF.md         |
-| Technical Design   | doc/TECHNICAL_DESIGN.md       |
-| API Contract (OpenAPI) | doc/openapi.yaml          |
-| API Contracts (docs)   | doc/API_CONTRACTS.md      |
-| Defect-fix register    | doc/DEFECT-FIXES.md       |
-| Changelog          | doc/CHANGELOG.md              |
+| Document | Location |
+|---|---|
+| **Design (authoritative)** | Confluence — [Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service) (CRA space). This repo carries **no** design narrative; do not create `doc/*_DESIGN.md`, `SOLUTION_BRIEF.md`, `API_CONTRACTS.md` or `CHANGELOG.md` here |
+| Defect-fix register | `doc/DEFECT-FIXES.md` |
+| Constitution | `.specify/memory/constitution.md` |
+| Specifications | `specs/001-court-register-port/` (complete), `specs/002-consolidate-progression-leg/` (in progress) |
+| Inbound message schema | `src/main/resources/contracts/distribution-command.schema.json` |
+| Register contract (frozen) | `src/main/resources/contracts/progression/` (+ `PROVENANCE.md`) |
 
 ## Message-Contract Rule
-This service exposes NO REST API (actuator only). Its inbound contract is the
-`courtregister.requests` queue message; its outbound contract is the
-Progression-owned `add-court-register` command (frozen, `additionalProperties: false`,
-`criminal-court-public-model` 17.103.13, vendored under
-`src/main/resources/contracts/progression/`). See `doc/API_CONTRACTS.md`. Contract
-changes are cross-team events, agreed jointly with `cpp-context-results` (inbound)
-or `cpp-context-progression` (outbound). The spec-validator agent checks contract
-compliance, the defect-fix register, and the absence of REST after implementation.
+This service exposes NO REST API (actuator only). Its contracts are:
+- **Inbound**: the `courtregister.requests` queue message (`distribution-command.schema.json`,
+  `additionalProperties: false`), agreed with `cpp-context-results` (the publisher).
+- **Register document**: the `courtRegisterDocument/*` schemas frozen at
+  `criminal-court-public-model` 17.103.13 and vendored under `src/main/resources/contracts/progression/`,
+  enforced at the write into the register store. Progression no longer receives it.
+- **Consumed platform contracts** (this service adapts to them, never redefines them):
+  systemdocgenerator `generate-document` (REST command, 202) and its public
+  `document-available` / `generation-failed` events; notificationnotify `send-email-notification`
+  (REST command, 202); the framework file-service `metadata` + `content` table schema (write-only,
+  pinned to changesets 001–006); the App Configuration flag `CourtRegisterService`.
+
+Contract changes are cross-team events. The spec-validator agent checks contract compliance, the
+defect-fix register, and the absence of REST after implementation.
 
 ## Fix-First Rule
-The legacy JS pipeline is the oracle for every behaviour NOT catalogued in
-`doc/DEFECT-FIXES.md`; every catalogued defect is fixed or externally owned, each with a
-register row naming its pinning test. A fix without a row is reverted; an uncatalogued behaviour
-change needs written sign-off before merge. See constitution Principle I.
+The legacy pipeline (the function app for the intake half, progression's leg for the downstream
+half) is the oracle for every behaviour NOT catalogued in `doc/DEFECT-FIXES.md`; every catalogued
+defect is fixed or externally owned, each with a register row naming its pinning test. A fix without
+a row is reverted; an uncatalogued behaviour change needs written sign-off before merge. See
+constitution Principle I.
+
+## Cutover Rule
+One lever: the App Configuration flag `CourtRegisterService`. Never add a second switch (Helm value,
+static-data patch, endpoint) that decides which implementation is live. The nightly job reads the
+flag once per run with no cache and does nothing when it is off or unreadable; the regeneration CLI
+refuses without `--ignore-flag`. Never run generation with notification enabled against production
+data outside cutover.
 
 ## Build & Test
 ```bash
@@ -59,11 +80,20 @@ change needs written sign-off before merge. See constitution Principle I.
 ./gradlew bootRun            # Run locally
 ```
 
+## Repository Conventions
+- Conventional Commits; no AI attribution in commits, PRs, comments or docs.
+- TDD red-run convention per `specs/*/tasks.md`: a test task lands its compile-safe seams so the
+  recorded red run is a failing assertion, never a compile error; the paired implementation task
+  quotes the green run.
+- A `DEFECT-FIXES.md` row flips to FIXED only in the commit whose pinning test passes.
+- Never run two committing agents concurrently in this repo.
+
 ## Setup
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/001-court-register-port/plan.md` (with `research.md`,
-`data-model.md`, `quickstart.md` and `contracts/` alongside it).
+`specs/002-consolidate-progression-leg/plan.md` (with `research.md`,
+`data-model.md`, `quickstart.md` and `contracts/` alongside it); the completed
+increment is `specs/001-court-register-port/`.
 <!-- SPECKIT END -->

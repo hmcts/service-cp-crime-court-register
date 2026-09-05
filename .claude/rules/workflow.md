@@ -7,8 +7,8 @@ Contract → Failing test → Write → Code Review (agent) → QA (agent) → C
 ```
 
 - **Contract:** this service has **no OpenAPI spec**. Its contracts are:
-  1. the **inbound ASB message schema** — `doc/API_CONTRACTS.md` plus the JSON schema under
-     `src/main/resources/contracts/`, and
+  1. the **inbound ASB message schema** — the JSON schema under `src/main/resources/contracts/`
+     (semantics documented on the Confluence design page), and
   2. the **outbound `add-court-register` command** — owned by `cpp-context-progression`
      (`progression_command_api.raml` + the `courtRegisterDocument/*` schemas frozen at
      `criminal-court-public-model` 17.103.13, `additionalProperties: false`), consumed here, never
@@ -52,8 +52,8 @@ A change ships only when all applicable gates are green:
 1. **Message-contract gate.** The inbound message is parsed and validated against the documented
    schema. Unknown fields, missing required fields, and unparseable messages have explicit,
    tested behaviour, and all of it is dead-lettering with a reason — never a silent drop. The
-   contract is **closed** (`additionalProperties: false`, per the schema, FR-002 and
-   `doc/API_CONTRACTS.md`): an unknown extra field is a contract violation and dead-letters like
+   contract is **closed** (`additionalProperties: false`, per the schema and FR-002): an unknown
+   extra field is a contract violation and dead-letters like
    any other, because tolerating it would hide producer drift until it mattered. The offending
    field's name is never quoted back (producer-chosen text); the reason code is.
 2. **Settlement gate.** Every path through the message listener performs exactly one explicit
@@ -106,7 +106,7 @@ A change ships only when all applicable gates are green:
 ### spec-validator (Read only)
 - Spawned as sub-agent with Read-only tools
 - **There is no OpenAPI spec to validate against.** Instead it checks:
-  - the inbound message record and its validation against `doc/API_CONTRACTS.md` and the JSON schema
+  - the inbound message record and its validation against the JSON schema under `src/main/resources/contracts/`
   - the outbound `add-court-register` body against the vendored progression-owned schemas (no extra fields —
     the command is `additionalProperties: false`)
   - settlement discipline: one explicit settlement on every listener path

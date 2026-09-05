@@ -72,9 +72,8 @@
 
 | Document                | Location                  |
 |-------------------------|---------------------------|
-| Solution Brief          | `doc/SOLUTION_BRIEF.md`   |
-| Technical Design        | `doc/TECHNICAL_DESIGN.md` |
-| Contracts (in + out)    | `doc/API_CONTRACTS.md`    |
+| **Design (authoritative)** | Confluence — [Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service) (CRA space). This repo carries no design narrative (no `doc/*_DESIGN.md`, `SOLUTION_BRIEF.md`, `API_CONTRACTS.md`, `CHANGELOG.md`) |
 | **Defect-fix register** | `doc/DEFECT-FIXES.md`     |
-| Changelog               | `doc/CHANGELOG.md`        |
-| Design doc (authoritative current-state + target) | `~/moj/analysis/results-distribution/CourtRegister/service-cp-crime-court-register-design.md` (§2 = legacy behaviour, §7 = the 34 defects) |
+| Contracts               | `src/main/resources/contracts/distribution-command.schema.json` (inbound); `src/main/resources/contracts/progression/` (register document, frozen, with `PROVENANCE.md`) |
+| Specifications          | `specs/NNN-slug/` (spec, plan, research, data-model, tasks, checklists) |
+| Working copy of the design (analysis repo, local) | `~/moj/analysis/results-distribution/CourtRegister/service-cp-crime-court-register-design.md` (§2 = legacy function-app behaviour, §3 = progression leg, §7 = the C and P defects) — the Confluence page is the published authority |

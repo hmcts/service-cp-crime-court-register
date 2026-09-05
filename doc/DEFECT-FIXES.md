@@ -1,8 +1,10 @@
 # Defect-Fix Register
 
 This service is deliberately **not** a bug-for-bug port. The register carries the thirty-four
-defects catalogued in the court-register design document (§7, C1–C34) plus the rows appended under
-review (C35, C36 — see the final rule below). The thirty-one catalogued defects that live in this
+defects catalogued in the court-register design (§7, C1–C34 — the design is the Confluence page
+[Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service);
+its §7.3 additionally catalogues the progression-leg defects P1–P9, which increment 002 appends
+here as `P` rows) plus the rows appended under review (C35, C36 — see the final rule below). The thirty-one catalogued defects that live in this
 service are **fixed**, as are both appended ones; the other three (C18, C28, C34) are
 externally-owned remediations registered as PENDING with an owner and a trigger and tracked to
 conclusion before cutover. Every fix is recorded here — legacy behaviour, fixed behaviour, the test

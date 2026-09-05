@@ -2,7 +2,7 @@
 
 The processed-log design is the informant service's; this file records only what is court-register
 specific and cites the rest (IR-REPO `specs/CRA-220-informant-register-initial-poc/data-model.md`
-and `doc/TECHNICAL_DESIGN.md` "Idempotency"). The guard SQL — claim acquisition, read-and-branch,
+and the "Idempotency" section of the design, now on Confluence). The guard SQL — claim acquisition, read-and-branch,
 stale-claim reclaim, outcome writes, FAILED replay, collision check — transfers verbatim with the
 table names unchanged.
 

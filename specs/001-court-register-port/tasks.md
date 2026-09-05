@@ -1,5 +1,11 @@
 # Tasks: Court Register Service — full pipeline port, fix-first
 
+> **Historical note (2026-09-05):** this increment is complete. Its tasks reference `doc/TECHNICAL_DESIGN.md`,
+> `doc/API_CONTRACTS.md`, `doc/SOLUTION_BRIEF.md`, `doc/CHANGELOG.md` and `doc/openapi.yaml`, which were
+> retired from the repo on that date — the design narrative lives on Confluence
+> ([Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service)).
+> The task text is left as written; `doc/DEFECT-FIXES.md` remains.
+
 **Input**: Design documents from `/specs/001-court-register-port/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md
 

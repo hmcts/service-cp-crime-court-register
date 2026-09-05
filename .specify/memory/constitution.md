@@ -262,9 +262,9 @@ This service has **no business REST API**. Its contracts are:
 
 Rules:
 
-- Both contracts MUST be documented in this repo (`doc/API_CONTRACTS.md`) and
-  the inbound message MUST have a JSON schema, versioned with the repo, that
-  contract tests assert against.
+- Both contracts MUST be documented on the Confluence design page (the repo
+  carries no design narrative) and the inbound message MUST have a JSON
+  schema, versioned with the repo, that contract tests assert against.
 - A change to either contract is a **cross-team event**: it requires a spec,
   an agreed change with the owning context, and a compatibility plan
   (consumers and producers deploy independently — assume the old shape is in
@@ -274,9 +274,9 @@ Rules:
   the fix ships, and the DEFECT-FIXES row records that notification. Fixes
   that change only *values* within the frozen shape (dates, text, recipients)
   carry the sign-off-before-cutover marker instead.
-- The only HTTP this service exposes is Spring Boot Actuator.
-  `doc/openapi.yaml` does not describe business endpoints, and adding a
-  business endpoint requires a constitution amendment, not just a spec.
+- The only HTTP this service exposes is Spring Boot Actuator. There is no
+  OpenAPI file, and adding a business endpoint requires a constitution
+  amendment, not just a spec.
 
 **Rationale**: the queue message and the progression command are the whole
 external surface. Treating them with the discipline other services give an
@@ -540,8 +540,8 @@ row under Principle I.
 
 ## Development Workflow & Quality Gates
 
-- The contract artefacts (inbound message schema, `doc/API_CONTRACTS.md`,
-  the vendored progression schemas) MUST be updated **before** any code
+- The contract artefacts (inbound message schema, the vendored progression
+  schemas, the Confluence design page) MUST be updated **before** any code
   change that affects a contract (Principle III).
 - Every feature built via spec-kit lives under `specs/NNN-slug/` containing
   at least `spec.md`, `plan.md`, and `tasks.md`. Flow:
@@ -614,4 +614,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 2.0.3 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-01
+**Version**: 2.0.4 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-05

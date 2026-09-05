@@ -36,4 +36,4 @@ over the network.
 
 These files are the frozen contract the pre-send validator refuses against and the harness
 classifies against. Re-vendor only when progression's `coredomain.version` moves, in the same
-change that records the move in `doc/DEFECT-FIXES.md` / `doc/CHANGELOG.md`.
+change that records the move in `doc/DEFECT-FIXES.md` and on the Confluence design page.

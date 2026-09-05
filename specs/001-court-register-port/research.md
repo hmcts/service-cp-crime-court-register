@@ -239,8 +239,8 @@ that rule does not mistake for a getter, and it reports nothing here.
    `service-cp-crime-hearing-results-validator`). `.github/dependabot.yml` is the estate line for
    this repo and stays.
 2. **The API-Test job and `validate-api-spec-version`** — both are about an API-spec artefact.
-   This service publishes none (Principle III: actuator only, `doc/openapi.yaml` describes no
-   business endpoints), so the job would have nothing to validate.
+   This service publishes none (Principle III: actuator only, no OpenAPI file), so the job
+   would have nothing to validate.
 3. **Entity and persistence coverage exclusions** — the sibling excludes those packages from the
    JaCoCo gate. Here that would be a loosening wearing a configuration's clothes: the persistence
    layer is where the idempotency guard and the processed log live, which is exactly the logic the

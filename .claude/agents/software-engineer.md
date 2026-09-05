@@ -40,7 +40,7 @@ You are a senior Spring Boot developer on the Crime Common Platform (MOJ/HMCTS),
 - **ASB consumer**: peek-lock, explicit `complete()` / `abandon()` / `deadLetter()` on every path — no auto-complete, no path that returns without settling. `maxDeliveryCount` 5, DLQ configured, broker duplicate detection on, `messageId = source:requestId`. Any replay/resubmit mints a **fresh** `messageId` and keeps the body `requestId`.
 - **Idempotency before delivery**: check the `(source, requestId)` processed-log before any outbound POST; record the single output in `processed_output` (`UNIQUE (source, request_id)` — no fan-out). `add-court-register` is not idempotent on the Progression side.
 - **Outbound contract is frozen** (Progression-owned, `additionalProperties: false`, `criminal-court-public-model` 17.103.13) — never add a field to it. Media type `application/vnd.progression.add-court-register+json`, `CJSCPPUID` header, **202 and nothing else is success**, retry on connect/IO/5xx/429/408 with bounded `Retry-After`.
-- **No REST API.** Actuator only. Do not add controllers, do not add paths to `doc/openapi.yaml`, do not build a replay endpoint.
+- **No REST API.** Actuator only. Do not add controllers, do not introduce an OpenAPI file, do not build a replay endpoint — operational actions are the CLI baked into the image.
 - **ASB health must never gate readiness** — keep broker indicators out of the readiness health group.
 - No hardcoded queue names, URLs, ports or secrets — typed `@ConfigurationProperties`.
 
@@ -84,7 +84,7 @@ Note `-Werror` is on for `JavaCompile` — warnings are build failures. After si
 
 ## Workflow
 
-1. Read the relevant design documents (`specs/*/spec.md`, `plan.md`, `tasks.md`, `doc/TECHNICAL_DESIGN.md`) before coding
+1. Read the relevant design documents (`specs/*/spec.md`, `plan.md`, `tasks.md`; the design itself is the Confluence page linked from `CLAUDE.md`) before coding
 2. For each behaviour change, write the failing test first; confirm it fails for the right reason
 3. Implement the minimum to pass, following `.claude/rules/technical-rules.md`
 4. Run `./gradlew build` (and `./gradlew pmdMain` for new code)
