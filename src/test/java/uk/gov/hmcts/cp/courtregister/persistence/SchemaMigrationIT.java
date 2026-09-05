@@ -181,6 +181,10 @@ class SchemaMigrationIT {
     /**
      * The smallest valid {@code processed_output} row: everything the data model marks NOT NULL and
      * nothing it marks optional.
+     *
+     * <p>The register-store columns V2 adds are carried here because they are NOT NULL and a row
+     * without them cannot be offered to the database at all; what they mean, and the rules they are
+     * held to, are pinned in {@code SchemaMigrationV2IT} rather than repeated here.
      */
     private static String insertOutput(final UUID requestId, final String status) {
         return insertOutput(requestId, status, "", "");
@@ -189,10 +193,13 @@ class SchemaMigrationIT {
     private static String insertOutput(final UUID requestId, final String status,
                                        final String extraColumns, final String extraValues) {
         return "INSERT INTO " + OUTPUT_TABLE
-                + " (output_id, source, request_id, court_centre_id, register_date, file_name, status"
+                + " (output_id, source, request_id, court_centre_id, register_date, file_name, "
+                + "status, document, hearing_id, hearing_date, register_time, recorded_flag_state"
                 + extraColumns + ") VALUES ('"
                 + UUID.randomUUID() + "', 'RESULTS', '" + requestId + "', '" + UUID.randomUUID()
-                + "', DATE '2026-08-20', 'courtregister_2026-08-20.json', '" + status + "'"
+                + "', DATE '2026-08-20', 'courtregister_2026-08-20.json', '" + status + "', "
+                + "'{\"documentType\": \"CourtRegister\"}'::jsonb, '" + UUID.randomUUID() + "', "
+                + "TIMESTAMPTZ '2026-08-20T09:00:00Z', TIMESTAMPTZ '2026-08-20T17:00:00Z', 'ON'"
                 + extraValues + ")";
     }
 
@@ -416,10 +423,18 @@ class SchemaMigrationIT {
 
             // No `prosecution_authority_id`: the court register has no fan-out dimension, and the
             // informant's per-authority column is replaced by the court-centre descriptors below.
+            //
+            // The single "and nothing else" pin for this table, over the whole of db/migration: the
+            // first thirteen are V1's, the ten after them are the register store V2 widened the
+            // table into (data-model.md), and a column added by a later migration without a data
+            // model to point at fails here.
             assertThat(columns).containsOnlyKeys(
                     "output_id", "source", "request_id", "court_centre_id", "court_centre_ou_code",
                     "register_date", "file_name", "status", "response_code", "request_digest",
-                    "anomaly_summary", "created_at", "updated_at");
+                    "anomaly_summary", "created_at", "updated_at",
+                    "document", "hearing_id", "hearing_date", "court_house", "register_time",
+                    "defendant_type", "batch_id", "superseded_at", "superseded_by",
+                    "recorded_flag_state");
 
             assertThat(columns.get("source")).isEqualTo(new Column("text", false, null));
             assertThat(columns.get("request_id")).isEqualTo(new Column("uuid", false, null));
