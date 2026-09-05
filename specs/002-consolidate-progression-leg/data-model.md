@@ -122,7 +122,10 @@ DONE)`, recorded as the run report (log + gauges), not as a table.
 ## File-service tables (not owned; vendored DDL for tests)
 
 From `contracts/fileservice/` (changesets 001–006): `metadata(file_id uuid PK, metadata jsonb)`;
-`content(file_id uuid PK, content bytea, deleted boolean default false, date_deleted timestamp)`.
+`content(file_id uuid PK, content bytea, deleted boolean default false,
+deleted_at timestamp with time zone)`. The timestamp column is named `deleted_at`, not
+`date_deleted`: only the changeset file (`006-add-date-deleted-column-to-content-table.xml`) carries
+the older name, and the column it adds is `deleted_at`.
 This service issues exactly:
 
 ```sql
