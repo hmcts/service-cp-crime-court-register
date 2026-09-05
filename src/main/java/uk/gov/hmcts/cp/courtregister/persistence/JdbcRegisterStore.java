@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.persistence;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
@@ -31,6 +32,25 @@ public class JdbcRegisterStore implements RegisterStore {
     /** The task that replaces every refusal in this class with a statement. */
     private static final String PENDING_TASK =
             "T015 implements JdbcRegisterStore; RegisterStoreIT (T008) guards it";
+
+    /**
+     * The connection every statement in this class is issued through.
+     *
+     * <p>Held from construction rather than looked up per method, so that the store is one client's
+     * worth of statements and a caller can see what it talks to. Nothing reads it yet: the
+     * statements are T015's, and the suppression goes with them.
+     */
+    @SuppressWarnings("PMD.UnusedPrivateField")
+    private final JdbcClient jdbcClient;
+
+    /**
+     * Binds the store to this service's own Postgres.
+     *
+     * @param jdbcClient the client every statement in this class is issued through
+     */
+    public JdbcRegisterStore(final JdbcClient jdbcClient) {
+        this.jdbcClient = jdbcClient;
+    }
 
     @Override
     public RecordOutcome record(final DistributionCommand command,
