@@ -41,7 +41,7 @@ committing agents at once.**
 
 ## Phase 1: Setup (dependencies, configuration surface, local loop, goldens)
 
-- [x] T001 Add dependencies to `build.gradle`: `spring-boot-starter-artemis` (with the `javax.jms`
+- [ ] T001 Add dependencies to `build.gradle`: `spring-boot-starter-artemis` (with the `javax.jms`
       / `artemis-jms-client` exclusions as `service-cp-crime-results-enforcementgateway/build.gradle:57-60`),
       `com.azure:azure-data-appconfiguration` (BOM-managed), `net.javacrumbs.shedlock:shedlock-spring`
       + `shedlock-provider-jdbc-template`, test-only `org.apache.activemq:artemis-jakarta-server`;
@@ -53,14 +53,14 @@ committing agents at once.**
       `courtregister.email.templates.cr_standard`, `spring.artemis.*`, `spring.jms.*`,
       `courtregister.publicevents.*`), with the same "LOCAL DEFAULT ONLY" comments the 001 keys carry;
       `./gradlew bootRun` still refuses for the documented reasons (record the message).
-- [x] T003 [P] Extend `docker-compose.yml` with `artemis` (`artemis-jakarta-server` image or the
+- [ ] T003 [P] Extend `docker-compose.yml` with `artemis` (`artemis-jakarta-server` image or the
       estate `hmcts/artemis_ubuntu`, `public.event` multicast address), `fileservice-postgres`
       (postgres:16 seeded from `specs/002-consolidate-progression-leg/contracts/fileservice/` via an
       init script) and `wiremock` (mappings under `docker/wiremock/` for SDG command 202 + query,
       NN 202, App Configuration `kv` flag ON, `__admin/flag/off|on`), plus an `sdg-echo` helper that
       publishes `document-available` onto `public.event` after each `generate-document`; `docker compose
       up -d` brings all up healthy (record the `ps` output).
-- [x] T004 [P] Record the progression goldens (research §6): in a local, uncommitted module of `PROG`,
+- [ ] T004 [P] Record the progression goldens (research §6): in a local, uncommitted module of `PROG`,
       run `CourtRegisterPdfPayloadGenerator.mapPayload` over the 001 recorded documents grouped per
       (court centre, register date) and `CourtRegisterHandler.getDefendantType` over the base hearings;
       write `src/test/resources/goldens/progression/pdf-payload/*.json`,
