@@ -13,7 +13,11 @@ docker compose up -d postgres servicebus-emulator artemis fileservice-postgres w
 - `sdg-echo` - the helper that closes the loop: it watches WireMock's request journal and publishes
   `public.systemdocgenerator.events.document-available` onto `public.event` after each
   `generate-document`, carrying back the `sourceCorrelationId` and `payloadFileServiceId` the
-  service sent, so the event-driven completion path runs locally without a real SDG.
+  service sent, so the event-driven completion path runs locally without a real SDG. What it puts on
+  the topic is a framework **JsonEnvelope** - a top-level `_metadata` object (`id`, `name`,
+  `createdAt`, `source`, `stream.id`, `correlation.client`) alongside the payload fields, with
+  `_metadata.name` the field the listener reads to know which event it holds - and not the bare
+  payload, which would reach the listener as an envelope with no name.
 - `fileservice-postgres` - a Postgres on 5433 seeded with `docker/fileservice/init.sql`, which is
   the vendored file-service liquibase DDL
   (`specs/002-consolidate-progression-leg/contracts/fileservice/`, changesets 001–006) as plain DDL.

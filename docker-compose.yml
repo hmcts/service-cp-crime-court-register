@@ -14,7 +14,9 @@
 # `artemis` carries the shared `public.event` topic, `fileservice-postgres` is the framework file
 # service's database, `wiremock` stands in for systemdocgenerator, notificationnotify and Azure App
 # Configuration, and `sdg-echo` turns each stubbed `generate-document` into the
-# `document-available` event the real renderer would publish, so the loop closes with no real SDG.
+# `document-available` event the real renderer would publish - as a framework JsonEnvelope, i.e. a
+# top-level `_metadata` (whose `name` is the field the listener reads) alongside the payload fields
+# - so the loop closes with no real SDG.
 #
 # `app` deliberately declares no depends_on, so it can be started on its own.
 services:
@@ -171,7 +173,8 @@ services:
       retries: 12
 
   # The renderer's echo: WireMock can answer 202 but cannot publish, so this turns each
-  # `generate-document` it accepted into the `document-available` event the real systemdocgenerator
+  # `generate-document` it accepted into the `document-available` JsonEnvelope (`_metadata.name`
+  # plus the payload fields) the real systemdocgenerator
   # would put on `public.event`. Without it a local batch would sit in GENERATING until the
   # reconciler timed it out, and the event-driven completion path would never run locally.
   # A stock python image with the script mounted: no image to build, and nothing to keep in step
