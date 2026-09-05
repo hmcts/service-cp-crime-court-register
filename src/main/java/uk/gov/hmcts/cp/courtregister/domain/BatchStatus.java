@@ -1,5 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
+import java.util.Objects;
+
 /**
  * The states one register batch moves through, from assembly to a terminal outcome.
  *
@@ -47,7 +49,9 @@ public enum BatchStatus {
      * @return whether the data-model state machine permits the move
      */
     public boolean canTransitionTo(final BatchStatus next) {
-        throw new UnsupportedOperationException(
-                "T013 completes the batch state machine; BatchStateTest (T011) guards it");
+        Objects.requireNonNull(next, "a transition names the next state it moves to");
+        // Seam: permits every move until T013 lands the machine of data-model.md. BatchStateTest
+        // (T011) fails on the moves the diagram does not draw, which is the red run T013 turns.
+        return true;
     }
 }
