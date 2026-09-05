@@ -24,6 +24,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param referencedata the reference-data context the register's recipients are looked up in
  * @param progression   the progression context the court register is POSTed to
  * @param submission    what is checked before a register is sent
+ * @param fileservice   the framework file service's database the render payload is written to
+ * @param endpoints     the internal hosts of the two downstreams the nightly run calls
+ * @param email         the notificationnotify templates the register is sent with
  */
 @ConfigurationProperties(prefix = "courtregister")
 // PMD.AvoidDuplicateLiterals: the repeated literal is a `@DefaultValue`, which must be a compile-
@@ -41,7 +44,10 @@ public record CourtRegisterProperties(
         @DefaultValue Results results,
         @DefaultValue Referencedata referencedata,
         @DefaultValue Progression progression,
-        @DefaultValue Submission submission) {
+        @DefaultValue Submission submission,
+        @DefaultValue Fileservice fileservice,
+        @DefaultValue Endpoints endpoints,
+        @DefaultValue Email email) {
 
     /**
      * Master switch for the Service Bus consumer.
@@ -265,5 +271,61 @@ public record CourtRegisterProperties(
      *                         deployed
      */
     public record Submission(@DefaultValue("true") boolean validateOutbound) {
+    }
+
+    /**
+     * The framework file service's own database, which this service writes the render payload into.
+     *
+     * <p>A second datasource, and a write-only one: systemdocgenerator renders a payload that is
+     * already in the file service and takes its id, so the payload is inserted there and never read
+     * back. Bindings rather than values for the same reason the broker and the two command APIs are
+     * - the URL and the credentials arrive from Key Vault through the CSI driver, and an empty
+     * default is what lets startup refuse a deployment that enabled generation without them.
+     *
+     * <p><strong>Seam.</strong> The refusals themselves are T016's, guarded by
+     * {@code ConfigurationValidationTest} (T009); nothing reads these values yet.
+     *
+     * @param url      the JDBC URL of the stack's file-service database
+     * @param username the write identity; a secret, never logged
+     * @param password the write identity's password; a secret, never logged
+     */
+    public record Fileservice(String url, String username, String password) {
+    }
+
+    /**
+     * The internal mesh hosts of the two downstreams the nightly run calls.
+     *
+     * <p>Hosts only. Each client appends its own contract path - systemdocgenerator's
+     * {@code generate-document} command and {@code document/{id}} query, notificationnotify's
+     * {@code send-email-notification} - so a path written here would be appended to rather than
+     * replaced. Neither has a default: an endpoint this service invents is an endpoint a deployment
+     * can forget to set and still start.
+     *
+     * @param systemdocgenerator scheme, host and port of systemdocgenerator, no path
+     * @param notificationnotify scheme, host and port of notificationnotify, no path
+     */
+    public record Endpoints(String systemdocgenerator, String notificationnotify) {
+    }
+
+    /**
+     * What the register e-mail is sent with.
+     *
+     * @param templates the notificationnotify templates, by name
+     */
+    public record Email(@DefaultValue Templates templates) {
+    }
+
+    /**
+     * The notificationnotify templates this service sends under, by the name the environment
+     * configures them with.
+     *
+     * <p>Validated for shape at startup rather than at send time, which is defect fix P9: the
+     * legacy resolved the id per recipient and, finding it blank, logged a line and moved on - a
+     * night's registers unsent, with nothing recording that they were not. A deployment that cannot
+     * start is a deployment that gets fixed.
+     *
+     * @param crStandard the standard court-register template, a UUID; required in LIVE mode
+     */
+    public record Templates(String crStandard) {
     }
 }

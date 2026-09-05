@@ -757,6 +757,12 @@ class TelemetryPrivacyTest {
                 new CourtRegisterProperties.Progression(
                         "http://localhost:8080", null, null, 4, Duration.ofMillis(500),
                         Duration.ofSeconds(5), Duration.ofSeconds(5), Duration.ofSeconds(10)),
-                new CourtRegisterProperties.Submission(true));
+                new CourtRegisterProperties.Submission(true),
+                // The downstream half is absent from this suite's subject: it logs nothing here,
+                // and the credential these cases are about is the broker's.
+                new CourtRegisterProperties.Fileservice(null, null, null),
+                new CourtRegisterProperties.Endpoints(null, null),
+                new CourtRegisterProperties.Email(
+                        new CourtRegisterProperties.Templates(null)));
     }
 }

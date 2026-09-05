@@ -7,6 +7,8 @@ import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -23,6 +25,12 @@ import org.springframework.context.annotation.Import;
  * the wrong broker. The court register adds a third family of them — a submission that cannot
  * authorise its POST, a retry policy that cannot make one, and the C29 pre-send validator switched
  * off where the service is deployed.
+ *
+ * <p>The downstream half adds a fourth family, and the same argument carries them: a schedule read
+ * in the wrong zone, a run with no payload store, no flag, no renderer or no notifier, an
+ * event-driven completion with no broker to hear from, a stub reachable where the service is
+ * deployed, and a blank or malformed e-mail template id (fix P9). Every one of them is a
+ * configuration error a deploy should fail on rather than a night's registers nobody receives.
  *
  * <p>The plan's Spring-level rows — datasource, Flyway, server and management — are not asserted
  * here. They arrive with {@code application.yaml} and are proven by the context boot and the
@@ -72,6 +80,39 @@ class ConfigurationValidationTest {
     private static final String REFDATA_IDENTITY_PROPERTY =
             "courtregister.referencedata.system-user-id=2c7b1e64-0f4a-4f0e-9b2c-8d1a6f3e5c07";
 
+    /** The master switch for the downstream half, which is what turns its refusals on with it. */
+    private static final String GENERATION_ENABLED_PROPERTY =
+            "courtregister.generation.enabled=true";
+
+    /**
+     * Everything an enabled generation deployment needs, carried by every case here that is about
+     * something else. Each of the cases below blanks exactly one of them, which is how a refusal is
+     * attributed to the setting that is missing rather than to whichever is checked first.
+     */
+    private static final String FILESERVICE_URL_PROPERTY =
+            "courtregister.fileservice.url=jdbc:postgresql://localhost:5432/fileservice";
+
+    private static final String FLAG_ENDPOINT_PROPERTY =
+            "courtregister.feature.endpoint=https://appconfig.internal";
+
+    private static final String FLAG_LABEL_PROPERTY = "courtregister.feature.label=ste86";
+
+    private static final String SDG_ENDPOINT_PROPERTY =
+            "courtregister.endpoints.systemdocgenerator=http://systemdocgenerator.internal:8080";
+
+    private static final String NN_ENDPOINT_PROPERTY =
+            "courtregister.endpoints.notificationnotify=http://notificationnotify.internal:8080";
+
+    /** The notificationnotify template the register e-mail is sent with, and a UUID (P9). */
+    private static final String TEMPLATE_ID = "5c9a0e21-3d47-4f18-9b62-0a71c4e8d530";
+
+    private static final String TEMPLATE_PROPERTY =
+            "courtregister.email.templates.cr_standard=" + TEMPLATE_ID;
+
+    /** The broker the event-driven completion listens on; Spring's own key, not this service's. */
+    private static final String BROKER_URL_PROPERTY =
+            "spring.artemis.broker-url=tcp://artemis.internal:61616";
+
     private final ApplicationContextRunner runner =
             new ApplicationContextRunner()
                     .withUserConfiguration(PropertiesTestConfiguration.class)
@@ -79,8 +120,21 @@ class ConfigurationValidationTest {
                             PROGRESSION_IDENTITY_PROPERTY, REFDATA_ENDPOINT_PROPERTY,
                             REFDATA_IDENTITY_PROPERTY);
 
+    /**
+     * A deployment with the downstream half switched on and every setting it requires supplied.
+     *
+     * <p>The local credential source rather than a namespace, because the two discriminators are
+     * independent: these cases are about what generation requires, and a namespace would bring the
+     * deployed-environment rules along with them.
+     */
+    private final ApplicationContextRunner generating = runner.withPropertyValues(
+            CONNECTION_STRING_PROPERTY, GENERATION_ENABLED_PROPERTY, FILESERVICE_URL_PROPERTY,
+            FLAG_ENDPOINT_PROPERTY, FLAG_LABEL_PROPERTY, SDG_ENDPOINT_PROPERTY, NN_ENDPOINT_PROPERTY,
+            TEMPLATE_PROPERTY, BROKER_URL_PROPERTY);
+
     @Configuration(proxyBeanMethods = false)
-    @EnableConfigurationProperties(CourtRegisterProperties.class)
+    @EnableConfigurationProperties({CourtRegisterProperties.class, GenerationProperties.class,
+        FeatureFlagProperties.class})
     @Import(PropertiesValidator.class)
     static class PropertiesTestConfiguration {
     }
@@ -1221,6 +1275,315 @@ class ConfigurationValidationTest {
                     "courtregister.referencedata.mode=STUB",
                     "courtregister.payload.fallback.read-timeout=5m",
                     "courtregister.referencedata.read-timeout=5m")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+    }
+
+    /**
+     * The schedule the requirement is written in wall-clock terms.
+     *
+     * <p>18:00 in the court's own zone, in BST and GMT alike. The legacy fires in the scheduling
+     * JVM's default zone, because its trigger is built without one, and that ambiguity is not
+     * inherited: the zone is a value this service states and startup holds it to. The check is
+     * unconditional - a job that happens to be disabled in this deployment is not a reason to accept
+     * a schedule that would run at the wrong hour in the next one.
+     */
+    @Nested
+    @DisplayName("the nightly run happens at 18:00 in the court's own zone")
+    class GenerationSchedule {
+
+        /**
+         * The binding half of the rule, and the reason there is no separate scheduling suite: what
+         * the annotation reads is what these two settings bind to, so the settings are what is
+         * pinned.
+         */
+        @Test
+        void job_is_scheduled_in_europe_london() {
+            generating.run(context -> {
+                assertThat(context).hasNotFailed();
+                final GenerationProperties generation =
+                        context.getBean(GenerationProperties.class);
+                assertThat(generation.cron()).isEqualTo("0 0 18 * * MON-FRI");
+                assertThat(generation.zone()).isEqualTo("Europe/London");
+            });
+        }
+
+        @Test
+        void another_zone_without_an_acknowledgement_should_fail_startup() {
+            generating.withPropertyValues("courtregister.generation.zone=Europe/Paris")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.generation.zone")
+                                .hasMessageContaining("Europe/London")
+                                .hasMessageContaining(
+                                        "courtregister.generation.zone-override-acknowledged");
+                    });
+        }
+
+        /**
+         * The override exists so that moving the run is a deliberate, reviewable act rather than a
+         * typo nobody notices until the registers arrive an hour late.
+         */
+        @Test
+        void another_zone_with_an_acknowledgement_should_start() {
+            generating.withPropertyValues("courtregister.generation.zone=Europe/Paris",
+                    "courtregister.generation.zone-override-acknowledged=true")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        @Test
+        void a_wrong_zone_should_be_refused_even_with_the_job_disabled() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.generation.zone=Europe/Paris").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.generation.zone");
+                    });
+        }
+    }
+
+    /**
+     * Enabling the downstream half is enabling everything it depends on.
+     *
+     * <p>Each of these is the same failure wearing a different name: the pod starts, reports itself
+     * healthy, waits until 18:00 and then cannot store the payload, cannot read the flag, cannot ask
+     * for a render or cannot send an e-mail. The registers are not late, they are simply never
+     * produced, and the first anybody hears of it is a Youth Offending Team asking where the
+     * register is. Every one of these settings arrives from the deployment, so every one of them is
+     * a deploy that should have failed.
+     */
+    @Nested
+    @DisplayName("generation cannot be enabled without the downstreams it needs")
+    class GenerationDownstreams {
+
+        @Test
+        void enabling_generation_without_a_payload_store_should_fail_startup() {
+            generating.withPropertyValues("courtregister.fileservice.url=").run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("courtregister.fileservice.url")
+                        .hasMessageContaining("courtregister.generation.enabled");
+            });
+        }
+
+        @Test
+        void enabling_generation_without_a_flag_store_should_fail_startup() {
+            generating.withPropertyValues("courtregister.feature.endpoint=").run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("courtregister.feature.endpoint")
+                        .hasMessageContaining("courtregister.generation.enabled");
+            });
+        }
+
+        /**
+         * The label is how one App Configuration store serves every stack, so an unlabelled read is
+         * not a read of this stack's flag - it is a read of somebody else's, or of none.
+         */
+        @Test
+        void enabling_generation_without_a_flag_label_should_fail_startup() {
+            generating.withPropertyValues("courtregister.feature.label=").run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("courtregister.feature.label")
+                        .hasMessageContaining("courtregister.generation.enabled");
+            });
+        }
+
+        @Test
+        void enabling_generation_without_a_renderer_endpoint_should_fail_startup() {
+            generating.withPropertyValues("courtregister.endpoints.systemdocgenerator=")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(
+                                        "courtregister.endpoints.systemdocgenerator")
+                                .hasMessageContaining("courtregister.generation.enabled");
+                    });
+        }
+
+        @Test
+        void enabling_generation_without_a_notifier_endpoint_should_fail_startup() {
+            generating.withPropertyValues("courtregister.endpoints.notificationnotify=")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(
+                                        "courtregister.endpoints.notificationnotify")
+                                .hasMessageContaining("courtregister.generation.enabled");
+                    });
+        }
+
+        @Test
+        void a_fully_configured_generation_deployment_should_start() {
+            generating.run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /**
+         * The conditionality is the point of the rule and not an accident of it. A local run and
+         * every plain context-load test leave all of these unset, and they are configured exactly as
+         * they mean to be: with the job, the listener and the second datasource absent, there is
+         * nothing to store a payload in, nothing to render and nobody to notify.
+         */
+        @Test
+        void leaving_generation_disabled_should_require_none_of_them() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY)
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+    }
+
+    /**
+     * Fix P9: the e-mail template id is a deployment fact, discovered at deploy time.
+     *
+     * <p>The legacy resolved it per recipient and, finding it blank, logged
+     * {@code "Court register notification is not sent due to missing template Id"} at INFO and moved
+     * on to the next one. The e-mail was never sent, nothing recorded that it had not been, and the
+     * batch reported the state it would have reported had every recipient been e-mailed. A whole
+     * evening's registers can be lost that way to a value nobody set, and the loss is invisible.
+     *
+     * <p>So the id is validated for shape at startup rather than for presence at send time: blank
+     * or not a UUID is a refusal to start. A deployment that cannot start is a deployment that gets
+     * fixed within the hour.
+     */
+    @Nested
+    @DisplayName("the register e-mail's template id is checked at startup, not at 18:00")
+    class EmailTemplate {
+
+        @Test
+        void blank_email_template_refuses_to_start_in_live_mode() {
+            generating.withPropertyValues("courtregister.email.templates.cr_standard=")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.email.templates.cr_standard")
+                                .hasMessageContaining("courtregister.generation.nn-mode");
+                    });
+        }
+
+        /**
+         * A malformed id fails in exactly the same way a blank one does, and later: notificationnotify
+         * refuses the command, every recipient of every batch, on a value that was wrong before the
+         * pod ever started.
+         */
+        @Test
+        void a_template_id_that_is_not_a_uuid_should_fail_startup() {
+            generating.withPropertyValues(
+                    "courtregister.email.templates.cr_standard=cr-standard-template")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.email.templates.cr_standard")
+                                .hasMessageContaining("cr-standard-template");
+                    });
+        }
+
+        @Test
+        void the_configured_template_should_be_the_one_the_notifier_is_given() {
+            generating.run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context.getBean(CourtRegisterProperties.class)
+                        .email().templates().crStandard()).isEqualTo(TEMPLATE_ID);
+            });
+        }
+
+        /** Nothing notifies where generation is off, so there is no template to be wrong. */
+        @Test
+        void a_blank_template_with_generation_disabled_should_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.email.templates.cr_standard=")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+    }
+
+    /**
+     * How a batch learns what became of its render.
+     *
+     * <p>{@code event} is the platform pattern and the default: systemdocgenerator publishes the
+     * outcome and this service hears it on a durable subscription. It cannot hear anything without a
+     * broker to subscribe to, and a run that never learns an outcome is a batch that stays
+     * GENERATING until the reconciler times it out - every batch, every night, silently.
+     * {@code poll-only} is the escape hatch for an environment without broker access and asks for no
+     * broker at all.
+     */
+    @Nested
+    @DisplayName("event-driven completion needs a broker to hear the outcome from")
+    class CompletionMechanism {
+
+        @Test
+        void event_completion_without_a_broker_should_fail_startup() {
+            generating.withPropertyValues("spring.artemis.broker-url=").run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("spring.artemis.broker-url")
+                        .hasMessageContaining("courtregister.generation.completion");
+            });
+        }
+
+        @Test
+        void poll_only_completion_without_a_broker_should_start() {
+            generating.withPropertyValues("spring.artemis.broker-url=",
+                    "courtregister.generation.completion=poll-only")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /** The listener is part of the downstream half, so a disabled one subscribes to nothing. */
+        @Test
+        void event_completion_with_generation_disabled_should_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.generation.completion=event")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+    }
+
+    /**
+     * Constitution Principle V, applied to the four downstreams the nightly run has.
+     *
+     * <p>The same rule the payload and now-subscriptions stubs are held to, and the same two
+     * discriminators: a namespace means workload identity, which means a deployed pod, and an
+     * enabled generation means a pod that means to produce registers tonight. A stubbed renderer or
+     * notifier in either of those places is a run that completes, counts its batches, reports itself
+     * healthy - and sends nobody anything.
+     */
+    @Nested
+    @DisplayName("the generation stubs are not reachable where registers are really produced")
+    class GenerationStubs {
+
+        @ParameterizedTest
+        @ValueSource(strings = {"sdg-mode", "nn-mode", "fileservice-mode", "flag-mode"})
+        void a_stub_on_the_deployed_credential_source_should_fail_startup(final String mode) {
+            runner.withPropertyValues(NAMESPACE_PROPERTY,
+                    "courtregister.generation." + mode + "=STUB").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.generation." + mode)
+                                .hasMessageContaining("courtregister.servicebus.namespace");
+                    });
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"sdg-mode", "nn-mode", "fileservice-mode", "flag-mode"})
+        void a_stub_beside_an_enabled_generation_should_fail_startup(final String mode) {
+            generating.withPropertyValues("courtregister.generation." + mode + "=STUB")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.generation." + mode)
+                                .hasMessageContaining("courtregister.generation.enabled");
+                    });
+        }
+
+        /**
+         * Which leaves the one place the stubs exist for: a local run and the container suites whose
+         * subject is the batch state machine rather than the downstream itself.
+         */
+        @Test
+        void the_stubs_should_start_locally_with_generation_disabled() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.generation.sdg-mode=STUB",
+                    "courtregister.generation.nn-mode=STUB",
+                    "courtregister.generation.fileservice-mode=STUB",
+                    "courtregister.generation.flag-mode=STUB")
                     .run(context -> assertThat(context).hasNotFailed());
         }
     }
