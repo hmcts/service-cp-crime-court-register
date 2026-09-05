@@ -1,7 +1,31 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 2.0.4 → 3.0.0
+Version change: 3.0.0 → 3.0.1
+Bump rationale: PATCH - the commit-type list is completed (2026-09-05). The
+                Development Workflow's Commits bullet listed six Conventional
+                Commit types (feat, fix, chore, docs, refactor, test), but
+                `main` already carries three `ci:`, three `build:` (two of them
+                dependabot's `build(deps)`) and one `style:` commit, so the
+                list described the repository's practice incompletely and an
+                author following it had nowhere to put a workflow or a
+                dependency bump. The list now names all nine and says what the
+                three added types cover. No principle changes, no obligation is
+                added or removed, and no existing commit is rewritten.
+
+                Also recorded: the Phase 1 commit `0e6cd80` used `config:`,
+                which is NOT in the list and is not to be repeated - a
+                configuration change is `chore:` (or `build:` when it is
+                tooling). It stands in history because history is not rewritten.
+
+Modified sections (this amendment): Development Workflow, Commits bullet only.
+Principles I-VIII unchanged in substance and in wording.
+
+Templates / guidance reviewed:
+  - specs/002-consolidate-progression-leg/tasks.md  ✅ aligned (2026-09-05):
+      its Conventions paragraph names the same nine types.
+
+Previous amendment (2.0.4 → 3.0.0):
 Bump rationale: MAJOR — Principle III is redefined (2026-09-05). The
                 outbound contract is no longer "the progression-owned
                 add-court-register command, POSTed once per hearing": the
@@ -534,7 +558,9 @@ to debug it; personal data in a log index is an incident.
 - **Package root**: `uk.gov.hmcts.cp`; this service's code lives under
   `uk.gov.hmcts.cp.courtregister`.
 - **Commits**: Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`,
-  `refactor:`, `test:`).
+  `refactor:`, `test:`, `build:`, `ci:`, `style:`). `build` covers dependency
+  and local-tooling changes (dependabot raises them as `build(deps)`), `ci` the
+  workflows, `style` formatting-only changes that leave behaviour untouched.
 - **Branches**: work lands on `main`; no ticket prefixes (user decision,
   2026-08-31 — there is no Jira ticket for this increment). If a ticketed
   workflow arrives later, branch naming is revisited by PATCH amendment.
@@ -743,4 +769,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 3.0.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-05
+**Version**: 3.0.1 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-05
