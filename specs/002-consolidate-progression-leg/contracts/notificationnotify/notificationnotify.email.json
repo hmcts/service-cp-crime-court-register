@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "id": "http://justice.gov.uk/json/schemas/domains/notificationnotify/notificationnotify.send-email-notification.json",
+  "type": "object",
+  "properties": {
+    "templateId": {
+      "$ref": "http://justice.gov.uk/domain/core/common/definitions.json#/definitions/uuid"
+    },
+    "sendToAddress": {
+      "type": "string"
+    },
+    "replyToAddress": {
+      "type": "string",
+      "format": "email"
+    },
+    "replyToAddressId": {
+      "$ref": "http://justice.gov.uk/domain/core/common/definitions.json#/definitions/uuid"
+    },
+    "materialUrl": {
+      "type": "string"
+    },
+    "fileId": {
+      "$ref": "http://justice.gov.uk/domain/core/common/definitions.json#/definitions/uuid"
+    },
+    "personalisation": {
+      "type": "object",
+      "properties": {
+      },
+      "additionalProperties": true
+    },
+    "clientContext" : {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "templateId",
+    "sendToAddress"
+  ]
+}

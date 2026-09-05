@@ -3,14 +3,13 @@
   "priority": 1,
   "request": {
     "method": "POST",
-    "urlPath": "/notificationnotify-command-api/command/api/rest/notificationnotify/send-email-notification",
+    "urlPathPattern": "/notificationnotify-command-api/command/api/rest/notificationnotify/notifications/[0-9a-fA-F-]{36}",
     "headers": {
       "Content-Type": {
-        "matches": "application/vnd\\.notificationnotify\\.send-email-notification\\+json.*"
+        "matches": "application/vnd\\.notificationnotify\\.email\\+json.*"
       }
     },
     "bodyPatterns": [
-      { "matchesJsonPath": "$.notificationId" },
       { "matchesJsonPath": "$.templateId" },
       { "matchesJsonPath": "$.sendToAddress" }
     ]

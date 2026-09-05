@@ -339,9 +339,10 @@ PARTIALLY_NOTIFIED; resend ⇒ NOTIFIED.
       order stable; **P4 pin: `recipients_are_the_union_across_the_batch_not_the_first_rows`** (fails
       against first-row-only). Red: seam throws.
 - [ ] T055 [P] [US3] `adapter/notificationnotify/NotificationNotifyClientTest` (WireMock) — body
-      verbatim (`notificationId`, `templateId`, `sendToAddress`, `fileId`, `personalisation.yotsName`),
-      media type, `CJSCPPUID`, path `/notifications/{notificationId}`; 202 only; retry reuses the id;
-      `retry_taxonomy_matches_the_submission_client`. Red: seam throws.
+      verbatim (`templateId`, `sendToAddress`, `fileId`, `personalisation.yotsName`) with no
+      `notificationId` in it, media type `application/vnd.notificationnotify.email+json`, `CJSCPPUID`,
+      path `/notifications/{notificationId}` carrying the id; 202 only; retry reuses the same id in
+      the path; `retry_taxonomy_matches_the_submission_client`. Red: seam throws.
 - [ ] T056 [P] [US3] `application/RegisterNotifierServiceTest` — rows minted PENDING before any POST;
       ACCEPTED/FAILED per recipient; batch NOTIFIED / PARTIALLY_NOTIFIED; **P1 pin:
       `a_batch_with_no_recipients_ends_notified_nobody_not_generated_forever`**; `resendFailed(batchId)`
