@@ -146,6 +146,29 @@ public final class RegisterStackSupport implements AutoCloseable {
         return settings;
     }
 
+    /**
+     * The same stack, with the deployment stating the last stage that POSTs.
+     *
+     * <p>For the suites whose subject <em>is</em> the POST: what the gateway sends, what it does with
+     * what progression answers, and what a run that ran out of budget does about a command
+     * progression appends. {@code courtregister.output} defaults to {@code record}, under which a
+     * register is written into this service's own store and progression is never called at all, so a
+     * suite about the submission has to say which of the two last stages it is about rather than
+     * inherit an answer that would leave it asserting against a socket nothing was ever sent to.
+     *
+     * <p>It is a statement about the deployment and not a second cutover lever - the value is fixed
+     * for the life of a release, and the one lever is the App Configuration flag. The suites about
+     * accounting, tracing and settlement take {@link #settings()} and run in the default mode, as a
+     * deployed pod does.
+     *
+     * @return the settings
+     */
+    public Map<String, String> postingSettings() {
+        final Map<String, String> settings = settings();
+        settings.put("courtregister.output", "progression-post");
+        return settings;
+    }
+
     // --- the payload cache -----------------------------------------------------------------------
 
     /**

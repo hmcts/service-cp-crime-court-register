@@ -40,6 +40,13 @@ import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
  * completed {@code submitted} and that {@code processed_output} holds a POSTED row carrying that
  * status and the digest of exactly the bytes that were sent.
  *
+ * <p><strong>It states the mode it is about.</strong> {@code courtregister.output} defaults to
+ * {@code record}, under which the register is written into this service's own store and progression
+ * is not called at all; every assertion below is about the POST, so this suite boots the pod under
+ * {@code progression-post} - the documented fallback shape - rather than inheriting a default that
+ * would leave it watching a socket nothing was sent to. The default mode's own end-to-end sequence
+ * is {@code RecordEndToEndIT}.
+ *
  * <p><strong>Nothing between the queue and the socket is doubled.</strong> The bean graph is the one
  * {@code PipelineConfig} assembles, the payload comes out of a Redis container under the key the
  * producer writes, the subscriptions come over HTTP from something answering the reference-data
@@ -99,7 +106,7 @@ class CourtRegisterEndToEndIT {
     static void startTheWholeStack() {
         ProcessedLogTestSupport.dataSource();
         stack = RegisterStackSupport.start();
-        service = ServiceTestSupport.start(stack.settings());
+        service = ServiceTestSupport.start(stack.postingSettings());
     }
 
     @AfterAll

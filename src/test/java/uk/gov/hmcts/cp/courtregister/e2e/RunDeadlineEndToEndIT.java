@@ -111,7 +111,7 @@ class RunDeadlineEndToEndIT {
      * @return the settings
      */
     private static Map<String, String> atTheFloorOfTheBudget() {
-        final Map<String, String> settings = new LinkedHashMap<>(stack.settings());
+        final Map<String, String> settings = new LinkedHashMap<>(stack.postingSettings());
         settings.put("courtregister.claim.processing-deadline", DEADLINE.toString());
         settings.put("courtregister.claim.lease", "45s");
         settings.put("courtregister.servicebus.max-auto-lock-renew-duration", "75s");

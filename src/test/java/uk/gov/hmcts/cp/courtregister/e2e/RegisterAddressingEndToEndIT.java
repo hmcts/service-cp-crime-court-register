@@ -85,7 +85,7 @@ class RegisterAddressingEndToEndIT {
     static void startTheWholeStack() {
         ProcessedLogTestSupport.dataSource();
         stack = RegisterStackSupport.start();
-        service = ServiceTestSupport.start(stack.settings());
+        service = ServiceTestSupport.start(stack.postingSettings());
     }
 
     @AfterAll
