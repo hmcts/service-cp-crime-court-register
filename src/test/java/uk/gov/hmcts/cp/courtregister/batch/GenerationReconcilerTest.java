@@ -164,7 +164,7 @@ class GenerationReconcilerTest {
         return new RegisterBatch(UUID.randomUUID(), UUID.randomUUID(), "B01OU", "Court House",
                 REGISTER_DATE, "CourtRegister_B01OU_2026-03-02.pdf", payloadFileId, null,
                 BatchStatus.GENERATING, null, null, true, null, ASSEMBLED_AT, requestedAt, null,
-                null, null, 1);
+                null, null, 1, null, 0);
     }
 
     /** A batch overdue by fifteen minutes, which is the ordinary subject of every case here. */

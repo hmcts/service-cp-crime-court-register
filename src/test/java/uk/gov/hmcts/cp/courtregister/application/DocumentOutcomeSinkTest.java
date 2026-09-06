@@ -182,7 +182,7 @@ class DocumentOutcomeSinkTest {
         return new RegisterBatch(UUID.randomUUID(), COURT_CENTRE, OU_CODE, COURT_HOUSE,
                 registerDate, fileName(registerDate), UUID.randomUUID(), null,
                 BatchStatus.GENERATING, null, null, true, null, ASSEMBLED_AT, REQUESTED_AT, null,
-                null, null, 1);
+                null, null, 1, null, 0);
     }
 
     /** The same batch once the document exists, which is where a redelivery finds it. */
@@ -190,7 +190,7 @@ class DocumentOutcomeSinkTest {
         return new RegisterBatch(batch.batchId(), COURT_CENTRE, OU_CODE, COURT_HOUSE,
                 batch.registerDate(), batch.fileName(), batch.payloadFileId(), DOCUMENT_FILE_ID,
                 BatchStatus.GENERATED, null, null, true, learnedBy, ASSEMBLED_AT, REQUESTED_AT,
-                GENERATED_AT, null, null, 1);
+                GENERATED_AT, null, null, 1, null, 0);
     }
 
     /** The same batch once the renderer has refused it, which is where a redelivery finds it. */
@@ -198,7 +198,7 @@ class DocumentOutcomeSinkTest {
         return new RegisterBatch(batch.batchId(), COURT_CENTRE, OU_CODE, COURT_HOUSE,
                 batch.registerDate(), batch.fileName(), batch.payloadFileId(), null,
                 BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, SDG_REASON, true,
-                learnedBy, ASSEMBLED_AT, REQUESTED_AT, null, null, FAILED_AT, 1);
+                learnedBy, ASSEMBLED_AT, REQUESTED_AT, null, null, FAILED_AT, 1, null, 0);
     }
 
     private static String fileName(final LocalDate registerDate) {

@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.stream.Stream;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
@@ -39,6 +40,8 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties.SourceMode;
+import uk.gov.hmcts.cp.courtregister.domain.AssembledBatch;
+import uk.gov.hmcts.cp.courtregister.domain.BatchAssembly;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CourtCentreDay;
@@ -200,7 +203,23 @@ class RegisterGenerationJobTest {
     private void aNightHolding(final RegisterBatch... assembled) {
         theGateAnswers(new Proceed(false));
         when(store.activeUnbatched()).thenReturn(ACTIVE);
-        when(assembler.assemble(any(), anyBoolean())).thenReturn(List.of(assembled));
+        when(assembler.assemble(any(), any(), anyBoolean())).thenReturn(assembly(assembled));
+    }
+
+    /**
+     * The assembly the assembler answers with, one pairing per batch and nothing deferred.
+     *
+     * <p>Each batch is paired with the night's active records because
+     * {@link AssembledBatch} refuses a batch assembled from none; which records belong to which
+     * batch is the assembler's own concern (T032) and nothing here asserts it.
+     *
+     * @param assembled the batches the night holds
+     * @return those batches as an assembly
+     */
+    private static BatchAssembly assembly(final RegisterBatch... assembled) {
+        return new BatchAssembly(Stream.of(assembled)
+                .map(batch -> new AssembledBatch(batch, ACTIVE))
+                .toList(), List.of());
     }
 
     /** Every request is accepted, and each answers about the batch it was given. */
@@ -217,7 +236,7 @@ class RegisterGenerationJobTest {
     private static RegisterBatch batch() {
         return new RegisterBatch(UUID.randomUUID(), UUID.randomUUID(), "B01LY", "Youth Court",
                 THURSDAY, "courtregister_" + THURSDAY + ".json", null, null, BatchStatus.PENDING,
-                null, null, true, null, SIX_PM, null, null, null, null, 0);
+                null, null, true, null, SIX_PM, null, null, null, null, 0, null, 0);
     }
 
     private static RegisterRecord record() {
@@ -293,7 +312,7 @@ class RegisterGenerationJobTest {
             final InOrder order = inOrder(gate, store, assembler, service);
             order.verify(gate).decide(false);
             order.verify(store).activeUnbatched();
-            order.verify(assembler).assemble(any(), anyBoolean());
+            order.verify(assembler).assemble(any(), any(), anyBoolean());
             order.verify(service).request(any(), any());
         }
 
@@ -339,7 +358,7 @@ class RegisterGenerationJobTest {
         void a_run_an_operator_overrode_should_go_ahead_and_the_report_should_say_it_was() {
             theGateAnswers(new Proceed(true));
             when(store.activeUnbatched()).thenReturn(ACTIVE);
-            when(assembler.assemble(any(), anyBoolean())).thenReturn(List.of());
+            when(assembler.assemble(any(), any(), anyBoolean())).thenReturn(assembly());
 
             final RunReport report = run();
 
@@ -365,7 +384,7 @@ class RegisterGenerationJobTest {
 
             run();
 
-            verify(assembler).assemble(eq(ACTIVE), anyBoolean());
+            verify(assembler).assemble(eq(ACTIVE), any(), anyBoolean());
         }
 
         @Test
@@ -374,7 +393,7 @@ class RegisterGenerationJobTest {
 
             run();
 
-            verify(assembler).assemble(any(), eq(true));
+            verify(assembler).assemble(any(), any(), eq(true));
         }
 
         @Test

@@ -198,7 +198,7 @@ class RegisterGenerationServiceTest {
     private static RegisterBatch batch(final UUID batchId) {
         return new RegisterBatch(batchId, COURT_CENTRE_ID, "B01LY", "Lavender Hill", REGISTER_DATE,
                 FILE_NAME, null, null, BatchStatus.PENDING, null, null, true, null, NOW, null, null,
-                null, null, 0);
+                null, null, 0, null, 0);
     }
 
     private static RegisterBatch batch() {
