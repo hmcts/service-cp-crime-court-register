@@ -10,8 +10,21 @@ import java.util.List;
  * <p>Ports {@code OutboundCourtRegister/CourtRegisterRequest/Models/CourtRegisterAggregationRequest}
  * against the vendored, progression-owned {@code progression.add-court-register.json} — which is
  * {@code additionalProperties: false}, so this record's components are the whole of what may be
- * sent, and its required list is what must be. Seven of the eight are required; only
- * {@code recipients} is not, and a register with none is never posted at all.
+ * sent, and its required list is what must be. Seven of the nine are required; the two that are not
+ * are {@code recipients}, and a register with none is never posted at all, and
+ * {@code defendantType}.
+ *
+ * <p><strong>{@code defendantType} belongs to the register document, not to the command.</strong> It
+ * is a legal, optional field of the frozen register-document schema
+ * ({@code courtRegisterDocumentRequest.json:30-32}, a plain string outside the {@code required}
+ * list), which is what 002 records and what the batch's PDF payload prints the defendants under; it
+ * is resolved from the hearing's own court application by {@code DefendantTypeResolver}. The
+ * {@code add-court-register} command above does <em>not</em> declare it, and is
+ * {@code additionalProperties: false}, so a document that carries one is refused by
+ * {@code OutboundContractValidator} under {@code UNKNOWN_FIELD [/defendantType]} - which schema a
+ * recorded register is held to at the write is T023's to settle. Declaring the component moves no
+ * wire byte on its own: the record is serialised {@code NON_NULL}, so every register without a court
+ * application leaves the field absent exactly as it did in 001.
  *
  * <p><strong>Two spellings the legacy gets wrong meet here.</strong> {@code courtCentreId} is
  * spelled the way the contract spells it, end to end (defect C26): the legacy writes
@@ -32,6 +45,8 @@ import java.util.List;
  * @param hearingId     the hearing this register is for
  * @param courtCentreId the court centre the hearing sat at, spelled correctly (fix C26)
  * @param fileName      the name progression stores the rendered register under (fix C11)
+ * @param defendantType the side of the hearing's court application its defendants are on, or
+ *                      {@code null} where the hearing carried no court application
  * @param hearingVenue  the court house the register was produced at
  * @param recipients    the subscribing organisations it is emailed to
  * @param defendants    the youth defendants the register covers — never empty
@@ -43,6 +58,7 @@ public record CourtRegisterDocument(
         String hearingId,
         String courtCentreId,
         String fileName,
+        String defendantType,
         CourtRegisterHearingVenue hearingVenue,
         List<CourtRegisterRecipient> recipients,
         List<CourtRegisterDefendant> defendants) {

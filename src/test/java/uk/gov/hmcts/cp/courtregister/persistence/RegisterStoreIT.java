@@ -1134,6 +1134,7 @@ class RegisterStoreIT {
                 hearingId.toString(),
                 courtCentre.toString(),
                 fileName(hearingId, registerDate),
+                null,
                 new CourtRegisterHearingVenue("Lavender Hill LJA", "Lavender Hill Youth Court",
                         null),
                 List.of(new CourtRegisterRecipient(

@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
 import java.time.Clock;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -11,6 +12,7 @@ import uk.gov.hmcts.cp.courtregister.application.GroupProceedingsPolicy;
 import uk.gov.hmcts.cp.courtregister.application.HearingPayloadSource;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
 import uk.gov.hmcts.cp.courtregister.application.NowSubscriptionsSource;
+import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.application.RegisterTransformer;
 import uk.gov.hmcts.cp.courtregister.inbound.DistributionCommandParser;
@@ -188,19 +190,32 @@ public class PipelineConfig {
     /**
      * The use-case orchestrator, wired against ports only.
      *
+     * <p><strong>The output mode is bound here and nowhere else.</strong>
+     * {@code courtregister.output} says whether the last stage records the register in this
+     * service's own store or POSTs it to progression; it is read once, when the graph is assembled,
+     * and handed to the pipeline as a value. Both last stages are wired, because the mode chooses
+     * between them rather than replacing one - see {@link OutputMode} on why that is a build-time
+     * fallback and not a second cutover lever.
+     *
+     * <p>The register store is taken as a provider rather than as a bean, because the wiring that
+     * declares it is T024's: until then a {@code record}-mode pipeline is assembled with no store
+     * and refuses at the recording stage, which is the seam the T020 suite is written against, and
+     * no context is made unstartable by a bean that does not exist yet.
+     *
      * @param guard               the processed-log guard
      * @param payloadSource       where hearing payloads come from
      * @param groupProceedings    whether the hearing's flag suppresses its register
      * @param subscriptionsSource where the now-subscriptions a register is addressed with come from
      * @param dates               the register's date handling, for the subscription day
      * @param transformer         how a hearing payload and its subscriptions become a register
-     * @param submissionClient    where an assembled register is sent
+     * @param registerStore       this service's own register store, where one is wired
+     * @param submissionClient    where an assembled register is sent under {@code progression-post}
      * @param metrics             the instrument surface every outcome is counted on
      * @param clock               the clock the run's deadline is measured against
-     * @param properties          the typed settings, for the processing deadline
+     * @param properties          the typed settings, for the output mode and the processing deadline
      * @return the pipeline
      */
-    // Five ports, one policy, one date helper and two settings: the core's own dependencies, each
+    // Six ports, one policy, one date helper and three settings: the core's own dependencies, each
     // injected as the port type it is asked for. See DistributionPipeline's own note on the count.
     @Bean
     public DistributionPipeline distributionPipeline(
@@ -210,12 +225,14 @@ public class PipelineConfig {
             final NowSubscriptionsSource subscriptionsSource,
             final Dates dates,
             final RegisterTransformer transformer,
+            final ObjectProvider<RegisterStore> registerStore,
             final RegisterSubmissionClient submissionClient,
             final ProcessingMetrics metrics,
             final Clock clock,
             final CourtRegisterProperties properties) {
         return new DistributionPipeline(
                 guard, payloadSource, groupProceedings, subscriptionsSource, dates, transformer,
-                submissionClient, metrics, clock, properties.claim().processingDeadline());
+                properties.output(), registerStore.getIfAvailable(), submissionClient, metrics,
+                clock, properties.claim().processingDeadline());
     }
 }

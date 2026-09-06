@@ -94,7 +94,7 @@ class OutboundContractValidationTest {
             assertThatCode(() -> validator.validate(
                     new CourtRegisterDocument(
                             "2020-06-01T10:00:00Z", "2020-01-20T00:00:00Z", HEARING_ID,
-                            COURT_CENTRE_ID, FILE_NAME, venue(), null,
+                            COURT_CENTRE_ID, FILE_NAME, null, venue(), null,
                             List.of(minimalDefendant()))))
                     .doesNotThrowAnyException();
         }
@@ -192,6 +192,7 @@ class OutboundContractValidationTest {
             final CourtRegisterDocument document = new CourtRegisterDocument(
                     "2020-06-01T10:00:00Z", "2020-01-20T00:00:00Z", HEARING_ID, COURT_CENTRE_ID,
                     FILE_NAME,
+                    null,
                     new CourtRegisterHearingVenue(
                             "South West London Magistrates' Court",
                             "Lavender Hill Magistrates' Court",
@@ -215,7 +216,7 @@ class OutboundContractValidationTest {
         void a_document_with_no_file_name() {
             final CourtRegisterDocument document = new CourtRegisterDocument(
                     "2020-06-01T10:00:00Z", "2020-01-20T00:00:00Z", HEARING_ID, COURT_CENTRE_ID,
-                    null, venue(), List.of(recipient()), List.of(minimalDefendant()));
+                    null, null, venue(), List.of(recipient()), List.of(minimalDefendant()));
 
             assertThatThrownBy(() -> validator.validate(document))
                     .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.type(
@@ -232,6 +233,7 @@ class OutboundContractValidationTest {
             final CourtRegisterDocument document = new CourtRegisterDocument(
                     "2020-06-01T10:00:00Z", "2020-01-20T00:00:00Z", HEARING_ID, COURT_CENTRE_ID,
                     FILE_NAME,
+                    null,
                     new CourtRegisterHearingVenue("South West London Magistrates' Court", null,
                             address("176A Lavender Hill")),
                     List.of(recipient()), List.of(minimalDefendant()));
@@ -248,7 +250,7 @@ class OutboundContractValidationTest {
         void a_register_with_no_defendants() {
             final CourtRegisterDocument document = new CourtRegisterDocument(
                     "2020-06-01T10:00:00Z", "2020-01-20T00:00:00Z", HEARING_ID, COURT_CENTRE_ID,
-                    FILE_NAME, venue(), List.of(recipient()), List.of());
+                    FILE_NAME, null, venue(), List.of(recipient()), List.of());
 
             assertThatThrownBy(() -> validator.validate(document))
                     .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.type(
@@ -263,7 +265,7 @@ class OutboundContractValidationTest {
             // this, and it is why every list on the record family keeps all three apart.
             final CourtRegisterDocument document = new CourtRegisterDocument(
                     "2020-06-01T10:00:00Z", "2020-01-20T00:00:00Z", HEARING_ID, COURT_CENTRE_ID,
-                    FILE_NAME, venue(), List.of(), List.of(minimalDefendant()));
+                    FILE_NAME, null, venue(), List.of(), List.of(minimalDefendant()));
 
             assertThatThrownBy(() -> validator.validate(document))
                     .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.type(
@@ -314,7 +316,7 @@ class OutboundContractValidationTest {
         void a_recipient_with_no_address_to_send_to() {
             final CourtRegisterDocument document = new CourtRegisterDocument(
                     "2020-06-01T10:00:00Z", "2020-01-20T00:00:00Z", HEARING_ID, COURT_CENTRE_ID,
-                    FILE_NAME, venue(),
+                    FILE_NAME, null, venue(),
                     List.of(new CourtRegisterRecipient(
                             "Lavender Hill Youth Panel", null, null, "cr_standard")),
                     List.of(minimalDefendant()));
@@ -336,7 +338,7 @@ class OutboundContractValidationTest {
     private CourtRegisterDocument document(final CourtRegisterDefendant defendant) {
         return new CourtRegisterDocument(
                 "2020-06-01T10:00:00Z", "2020-01-20T00:00:00Z", HEARING_ID, COURT_CENTRE_ID,
-                FILE_NAME, venue(), List.of(recipient()), List.of(defendant));
+                FILE_NAME, null, venue(), List.of(recipient()), List.of(defendant));
     }
 
     /**
@@ -383,6 +385,13 @@ class OutboundContractValidationTest {
         return new CourtRegisterDocument(
                 "2020-06-01T10:00:00Z", "2020-01-20T00:00:00Z", HEARING_ID, COURT_CENTRE_ID,
                 FILE_NAME,
+                // Deliberately absent, and it is the one declared field this document leaves out.
+                // `defendantType` is a legal field of the register document itself
+                // (courtRegisterDocumentRequest.json:30-32) but not of the add-court-register
+                // command this validator enforces, which is additionalProperties: false and does
+                // not declare it. Setting it here refuses the document under UNKNOWN_FIELD
+                // [/defendantType]. Which schema a recorded register is held to is T023's to settle.
+                null,
                 new CourtRegisterHearingVenue(
                         "South West London Magistrates' Court",
                         "Lavender Hill Magistrates' Court",

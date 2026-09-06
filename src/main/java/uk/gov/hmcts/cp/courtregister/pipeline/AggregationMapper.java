@@ -124,6 +124,10 @@ public final class AggregationMapper {
                 fragment.hearingId(),
                 fragment.courtCentreId(),
                 fileName(fragment, hearing),
+                // The defendant type is resolved from the hearing's court application by the chain
+                // above this mapper, which is where the hearing and the assembled document meet;
+                // T023 sets it there.
+                null,
                 HearingVenueMapper.map(hearing),
                 recipients,
                 defendants);

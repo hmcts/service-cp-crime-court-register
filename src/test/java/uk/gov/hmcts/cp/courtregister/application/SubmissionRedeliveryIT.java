@@ -328,6 +328,7 @@ class SubmissionRedeliveryIT {
                 COURT_CENTRE_ID,
                 "court-register_2026-08-20_B01LY00_1828f356-f746-4f2d-932b-79ef2df95c80.pdf",
                 null,
+                null,
                 List.of(recipient),
                 List.of(defendant));
     }

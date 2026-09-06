@@ -134,6 +134,7 @@ class DistributionPipelineTest {
             "court-register_2020-06-01_B01LY00_" + command.hearingId() + ".pdf",
             null,
             null,
+            null,
             null);
 
     private final JsonNode payload = mapper.readTree(

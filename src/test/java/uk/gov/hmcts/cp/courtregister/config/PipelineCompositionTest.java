@@ -91,7 +91,16 @@ class PipelineCompositionTest {
     private final RunClaim claim = new RunClaim(
             "RESULTS", command().requestId(), "runner-1", UUID.randomUUID(), "msg-1");
 
+    /**
+     * The wiring this suite is about is the one that ends in the POST, so the output mode is stated
+     * rather than inherited: {@code courtregister.output} decides which last stage
+     * {@link PipelineConfig} gives the pipeline, and the {@code record} default's stage is T024's,
+     * whose own suite is {@code DistributionPipelineTest}. Stating it here keeps the three cases
+     * below about what they were written about - the twelve mappers, the matcher and the validator
+     * between the fetch and the POST.
+     */
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
+            .withPropertyValues("courtregister.output=progression-post")
             .withUserConfiguration(PipelineConfig.class, CompositionTestConfiguration.class)
             .withBean(ObjectMapper.class, JacksonConfig::contractObjectMapper)
             .withBean(IdempotencyGuard.class, () -> guard)

@@ -8,6 +8,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
+import uk.gov.hmcts.cp.courtregister.config.OutputMode;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
@@ -51,6 +52,12 @@ import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
  * written and counted rather than folded away (defect fixes C6 and C33): a court centre nobody
  * subscribes to and a pipeline that has quietly stopped working look identical from the outside
  * otherwise.
+ *
+ * <p><strong>What happens to a register that was built is a deployment's choice, made once.</strong>
+ * {@code courtregister.output} says whether the last stage records the register in this service's
+ * own store or POSTs it to progression, and the pipeline is handed the answer rather than reading a
+ * setting. It is not a second cutover lever: the value is fixed for the life of a release, the one
+ * lever is the App Configuration flag, and {@link OutputMode} says so at length.
  *
  * <p><strong>The transformation port is not implemented yet</strong>, and a pipeline constructed
  * without one — the walking skeleton the transport suites use — ends every run it admits as
@@ -111,12 +118,22 @@ public class DistributionPipeline {
     /** The field of the claim-check payload the results' share instant sits under. */
     private static final String SHARED_TIME = "sharedTime";
 
+    /** The task that replaces the recording refusal with the write into the register store. */
+    private static final String RECORDING_PENDING_TASK =
+            "T024 records through RegisterStore; DistributionPipelineTest (T020) guards it";
+
     private final IdempotencyGuard guard;
     private final HearingPayloadSource payloadSource;
     private final GroupProceedingsPolicy groupProceedings;
     private final NowSubscriptionsSource subscriptionsSource;
     private final Dates dates;
     private final RegisterTransformer transformer;
+    private final OutputMode outputMode;
+    // The store the recording stage writes through. Held from here so that the composition is
+    // settled in one place, and read by T024, which replaces the refusal in `output` below with the
+    // recording itself.
+    @SuppressWarnings("PMD.UnusedPrivateField")
+    private final RegisterStore registerStore;
     private final RegisterSubmissionClient submissionClient;
     private final ProcessingMetrics metrics;
     private final Clock clock;
@@ -148,8 +165,13 @@ public class DistributionPipeline {
     }
 
     /**
-     * Creates the pipeline over all four ports, the group-proceedings policy and the register's own
-     * date handling.
+     * Creates the 001 pipeline, whose last stage is the POST to progression.
+     *
+     * <p>{@link OutputMode#PROGRESSION_POST} by construction, and it is the constructor the 001
+     * suites keep using: their subject is the submission leg, and a submission suite that had to
+     * name an output mode to reach the submission would be saying the same thing twice. A
+     * deployment's mode is stated by {@code courtregister.output} and reaches the pipeline through
+     * the constructor below.
      *
      * @param guard               the {@code (source, requestId)} processed-log guard
      * @param payloadSource       where the hearing payload comes from
@@ -176,12 +198,56 @@ public class DistributionPipeline {
             final ProcessingMetrics metrics,
             final Clock clock,
             final Duration processingDeadline) {
+        this(guard, payloadSource, groupProceedings, subscriptionsSource, dates, transformer,
+                OutputMode.PROGRESSION_POST, null, submissionClient, metrics, clock,
+                processingDeadline);
+    }
+
+    /**
+     * Creates the pipeline over both last stages, and the mode that says which of them runs.
+     *
+     * <p>Both are handed in rather than one: the mode is a deployment's statement, and a pipeline
+     * that held only the port its mode selected could not be asked what the other mode would have
+     * done. Which one is exercised is decided once, here, and never per run.
+     *
+     * @param guard               the {@code (source, requestId)} processed-log guard
+     * @param payloadSource       where the hearing payload comes from
+     * @param groupProceedings    whether the hearing's flag suppresses its register
+     * @param subscriptionsSource where the now-subscriptions a register is addressed with come from
+     * @param dates               the register's date handling, for the day the subscriptions are
+     *                            read on; pure, so holding it here costs the core no I/O
+     * @param transformer         how a hearing payload and its subscriptions become a register
+     * @param outputMode          what this deployment does with a register that was built
+     * @param registerStore       this service's own register store, the {@code record} mode's last
+     *                            stage
+     * @param submissionClient    where an assembled register is sent under {@code progression-post}
+     * @param metrics             the instrument surface every outcome is counted on
+     * @param clock               elapsed-time source for the run's own deadline
+     * @param processingDeadline  the enforced bound on a run, strictly shorter than the claim lease
+     */
+    // Six ports, one policy, one date helper and three settings. The count is the core's dependency
+    // list, not a smell: see the note on the constructor above.
+    public DistributionPipeline(
+            final IdempotencyGuard guard,
+            final HearingPayloadSource payloadSource,
+            final GroupProceedingsPolicy groupProceedings,
+            final NowSubscriptionsSource subscriptionsSource,
+            final Dates dates,
+            final RegisterTransformer transformer,
+            final OutputMode outputMode,
+            final RegisterStore registerStore,
+            final RegisterSubmissionClient submissionClient,
+            final ProcessingMetrics metrics,
+            final Clock clock,
+            final Duration processingDeadline) {
         this.guard = guard;
         this.payloadSource = payloadSource;
         this.groupProceedings = groupProceedings;
         this.subscriptionsSource = subscriptionsSource;
         this.dates = dates;
         this.transformer = transformer;
+        this.outputMode = outputMode;
+        this.registerStore = registerStore;
         this.submissionClient = submissionClient;
         this.metrics = metrics;
         this.clock = clock;
@@ -389,7 +455,44 @@ public class DistributionPipeline {
                         : completed(claim, nothing.reason().completion());
             }
             case TransformationResult.Register register ->
-                submit(command, register, anomalies.counts(), registerDay, claim, budget);
+                output(command, register, anomalies.counts(), registerDay, claim, budget);
+        };
+    }
+
+    /**
+     * The last stage, under the output mode this deployment was built for.
+     *
+     * <p>One decision, taken once when the pipeline was assembled, so a run never asks a setting
+     * what to do with a register it has already built. The two arms are the same success reported
+     * under two reasons - {@code recorded} and {@code submitted} - and they are never both live.
+     *
+     * <p><strong>Seam.</strong> The recording arm is T024's, and its green run is
+     * {@code DistributionPipelineTest} (T020): the write needs the defendant type T022 resolves and
+     * the flag state T030 attaches, so it refuses here rather than recording a row missing both. The
+     * refusal is a {@link RuntimeException} like any other, which the run's own boundary records as
+     * a transient failure and hands the delivery back - nothing is lost and nothing is invented
+     * while the arm is unimplemented.
+     *
+     * @param command     the validated request
+     * @param register    the register the transformation produced
+     * @param anomalies   how many of each guarded skip it survived
+     * @param registerDay the day the register covers, as its recipients were read for it (C12)
+     * @param claim       the claim this run holds
+     * @param budget      what is left of the run's time
+     * @return the settlement the outcome calls for
+     */
+    private GuardDecision output(
+            final DistributionCommand command,
+            final TransformationResult.Register register,
+            final Map<TransformationAnomaly, Integer> anomalies,
+            final LocalDate registerDay,
+            final RunClaim claim,
+            final RunBudget budget) {
+
+        return switch (outputMode) {
+            case RECORD -> throw new UnsupportedOperationException(RECORDING_PENDING_TASK);
+            case PROGRESSION_POST ->
+                submit(command, register, anomalies, registerDay, claim, budget);
         };
     }
 

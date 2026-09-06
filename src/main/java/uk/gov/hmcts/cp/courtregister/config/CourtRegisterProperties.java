@@ -14,6 +14,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * because a service that invents a broker address, a command API or an identity is a service that
  * can talk to the wrong one.
  *
+ * @param output        what the pipeline does with an assembled register - record it here, or POST
+ *                      it to progression
  * @param consumer      whether intake runs at all
  * @param servicebus    broker connection and consumer settings
  * @param claim         the single-runner claim's timings
@@ -35,6 +37,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 // of what a per-setting default is for.
 @SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public record CourtRegisterProperties(
+        @DefaultValue("RECORD") OutputMode output,
         @DefaultValue Consumer consumer,
         @DefaultValue Servicebus servicebus,
         @DefaultValue Claim claim,

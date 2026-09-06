@@ -634,6 +634,7 @@ class ProgressionRegisterSubmissionClientTest {
                 COURT_CENTRE_ID,
                 FILE_NAME,
                 null,
+                null,
                 List.of(recipient),
                 List.of(defendant));
     }

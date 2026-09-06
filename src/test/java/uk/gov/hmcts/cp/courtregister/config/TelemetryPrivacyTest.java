@@ -735,6 +735,7 @@ class TelemetryPrivacyTest {
     /** The whole settings object, carrying a broker credential nobody may write down. */
     private static CourtRegisterProperties credentialledWith(final String connectionString) {
         return new CourtRegisterProperties(
+                OutputMode.RECORD,
                 new CourtRegisterProperties.Consumer(true),
                 new CourtRegisterProperties.Servicebus(
                         connectionString, null, "courtregister.requests", 2, MAX_DELIVERY_COUNT,
