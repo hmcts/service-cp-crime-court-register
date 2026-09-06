@@ -373,13 +373,25 @@ class DocumentEventListenerTest {
          * {@code sourceCorrelationId} is optional in the schema and mandatory in practice: without
          * it there is no batch to apply the outcome to, and inventing one from the payload id would
          * be this service guessing at somebody else's document.
+         *
+         * <p>Nothing is routed, and the event is still counted. It is one of ours by its source, so
+         * it is not the foreign-source reading; it is an announcement that reached this
+         * subscription and was applied to nothing, which is the question
+         * {@code courtregister_public_events_ignored_total} answers. An event dropped here without
+         * a count is an outcome that vanished between the renderer and the register, and a night of
+         * them would look exactly like a night nothing was published at all.
          */
         @Test
-        void an_outcome_that_names_no_batch_should_not_be_routed() throws JMSException {
+        void an_outcome_that_names_no_batch_should_be_ignored_and_counted() throws JMSException {
             listener.onPublicEvent(message(DocumentEventListener.DOCUMENT_AVAILABLE,
                     documentAvailableWithoutCorrelation()));
 
             verifyNoInteractions(sink);
+            assertThat(ignored(GenerationMetrics.UNKNOWN_CORRELATION))
+                    .as("an outcome this service cannot attribute is counted under the reason that "
+                            + "is true of it, exactly as the sink counts the one whose correlation "
+                            + "names a batch this store has never held")
+                    .isEqualTo(1);
         }
 
         /**
