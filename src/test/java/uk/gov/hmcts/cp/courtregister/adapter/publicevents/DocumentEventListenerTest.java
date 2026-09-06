@@ -7,22 +7,35 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.networknt.schema.Error;
+import com.networknt.schema.Schema;
+import com.networknt.schema.SchemaRegistry;
+import com.networknt.schema.SchemaRegistryConfig;
+import com.networknt.schema.SpecificationVersion;
+import com.networknt.schema.path.PathType;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.jms.JMSException;
 import jakarta.jms.TextMessage;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
+import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 
 /**
@@ -52,6 +65,20 @@ import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
  * state is asserted here, because nothing about batch state is decided here: the sink's own suite
  * (T037) owns what an outcome does to a batch, and this one owns only whether the outcome arrives
  * at the sink at all, with which fields.
+ *
+ * <p><strong>The fixtures are held to the vendored schemas rather than to a comment.</strong>
+ * systemdocgenerator's two public events are its contract and not this service's, and every case
+ * below is only as good as the envelopes it puts in front of the listener: a fixture that has
+ * drifted from the shape the platform publishes would let this suite pass while the deployed
+ * listener drops every real event. So each fixture's payload is validated against the copy in
+ * {@code specs/002-consolidate-progression-leg/contracts/systemdocgenerator/}, offline, with the
+ * same validator and the same no-network rule {@code OutboundContractValidator} holds the frozen
+ * progression contract to - and the negative control below deliberately breaks a fixture, so a
+ * validation that had quietly stopped checking anything would be caught rather than trusted.
+ *
+ * <p>The other half is the routing: every field this listener reads out of a payload has to be a
+ * field the schema declares. A field the schema does not have is one the platform never sends, and
+ * a listener reading it would drop or mis-apply every event for a reason no test would show.
  *
  * <p>The times are read with their offsets. The two schemas' {@code generatedTime} and
  * {@code failedTime} are {@code date-time} strings and the estate publishes them with an offset
@@ -94,6 +121,57 @@ class DocumentEventListenerTest {
 
     /** The single-quoted event names inside the shipped {@code CPPNAME} selector. */
     private static final Pattern SELECTOR_EVENT_NAME = Pattern.compile("'([^']+)'");
+
+    /** The vendored copy of systemdocgenerator's announcement that a document was rendered. */
+    private static final String DOCUMENT_AVAILABLE_SCHEMA =
+            "public.systemdocgenerator.events.document-available.json";
+
+    /** The vendored copy of its announcement that a generation was refused. */
+    private static final String GENERATION_FAILED_SCHEMA =
+            "public.systemdocgenerator.events.generation-failed.json";
+
+    /**
+     * The vendored contracts, with their provenance, read from the file this repository holds them
+     * in.
+     *
+     * <p>The same directory {@code SystemDocGeneratorClientTest} reads the command and query schemas
+     * from, and for the same reason: the vendored copy is the thing that has to be right, so a
+     * re-vendoring that changes either event shows up here rather than at 18:00.
+     */
+    private static final Path VENDORED = Path.of(
+            "specs", "002-consolidate-progression-leg", "contracts", "systemdocgenerator");
+
+    /**
+     * The framework core definitions the two event schemas {@code $ref}, mapped to the vendored
+     * copy.
+     *
+     * <p>Nothing here may go to the network to resolve a reference: a validation that degraded to
+     * "could not fetch the schema, so nothing was checked" is the shape that passes for ever, and
+     * one that reached the internet from a test would be worse. It is the same rule, and the same
+     * mechanism, {@code OutboundContractValidator} resolves the frozen progression contract with.
+     *
+     * <p>The stand-in is on the test classpath rather than beside the two event schemas because
+     * this resolver honours {@code classpath:} and nothing else - a {@code file:} mapping is passed
+     * over and the original {@code http://} IRI is what gets opened. Its provenance, and the fact
+     * that it is written rather than vendored, are recorded in {@code contracts/README.md}.
+     */
+    private static final Map<String, String> VENDORED_REFS = Map.of(
+            "http://cpp.moj.gov.uk/core/domain/json/schema/data-types.json",
+            "classpath:contracts/systemdocgenerator/data-types.json");
+
+    /** The shared contract mapper, so a fixture is parsed exactly as the listener parses it. */
+    private static final ObjectMapper MAPPER = JacksonConfig.contractObjectMapper();
+
+    /**
+     * Every field this listener reads out of an event payload.
+     *
+     * <p>Each of them has to be declared by the schema of the event it is read from, or the
+     * listener is reading a field the platform does not send. The two times are one each - a
+     * document has a {@code generatedTime} and a refusal a {@code failedTime} - so which schema
+     * each is asserted against is stated by the cases rather than by the list.
+     */
+    private static final List<String> COMMON_ROUTED_FIELDS =
+            List.of("sourceCorrelationId", "payloadFileServiceId", "originatingSource");
 
     private final DocumentOutcomeSink sink = mock(DocumentOutcomeSink.class);
 
@@ -321,6 +399,106 @@ class DocumentEventListenerTest {
     }
 
     /**
+     * The contract the fixtures above are only useful if they honour.
+     *
+     * <p>systemdocgenerator owns these two events and this service adapts to them (constitution
+     * Principle III), so the vendored copies under
+     * {@code specs/002-consolidate-progression-leg/contracts/systemdocgenerator/} are what every
+     * fixture in this suite is measured against. Two claims, and they fail in opposite directions:
+     * a fixture that does not satisfy the schema is a suite testing a message the platform never
+     * sends, and a routed field the schema does not declare is a listener reading a field the
+     * platform never fills.
+     */
+    @Nested
+    @DisplayName("the vendored systemdocgenerator event schemas")
+    class VendoredContracts {
+
+        @Test
+        void the_document_available_fixture_should_be_a_message_the_platform_could_publish() {
+            assertThat(refusals(DOCUMENT_AVAILABLE_SCHEMA, ourDocumentAvailable()))
+                    .as("every case above hands the listener this payload, so a drift between it "
+                            + "and the schema would let the whole suite pass against a message "
+                            + "systemdocgenerator does not send")
+                    .isEmpty();
+        }
+
+        @Test
+        void the_generation_failed_fixture_should_be_a_message_the_platform_could_publish() {
+            assertThat(refusals(GENERATION_FAILED_SCHEMA,
+                    generationFailed(DocumentEventListener.ORIGINATING_SOURCE)))
+                    .as("the refusal half of the same claim, and the one carrying the generator's "
+                            + "own reason")
+                    .isEmpty();
+        }
+
+        /**
+         * The two members the schema makes optional are the two the suite leaves out, and leaving
+         * them out has to stay contract-legal: those cases are about what the listener does with a
+         * message it may really receive, and they would say nothing about a message that could not
+         * exist.
+         */
+        @Test
+        void the_fixtures_that_leave_an_optional_member_out_should_still_satisfy_the_schema() {
+            assertThat(refusals(DOCUMENT_AVAILABLE_SCHEMA, documentAvailableWithoutSource()))
+                    .as("originatingSource is optional, and an event without one is what the "
+                            + "foreign-source filter is asserted on")
+                    .isEmpty();
+            assertThat(refusals(DOCUMENT_AVAILABLE_SCHEMA, documentAvailableWithoutCorrelation()))
+                    .as("sourceCorrelationId is optional, and an event without one is what the "
+                            + "names-no-batch case is asserted on")
+                    .isEmpty();
+        }
+
+        /**
+         * The negative control, and the reason the three claims above are worth anything.
+         *
+         * <p>A validator whose references had silently failed to resolve, or one applied to the
+         * wrong half of the envelope, would return no refusals for everything put in front of it
+         * and every assertion above would pass for ever. This one hands it a payload that is
+         * missing a field the schema requires and states that it is refused.
+         */
+        @Test
+        void a_payload_missing_a_field_the_schema_requires_should_be_refused() {
+            assertThat(refusals(DOCUMENT_AVAILABLE_SCHEMA, documentAvailableWithoutTheDocument()))
+                    .as("documentFileServiceId is required, so a validator that accepted this one "
+                            + "is a validator that is checking nothing at all")
+                    .isNotEmpty();
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"documentFileServiceId", "generatedTime"})
+        void every_field_a_document_available_is_routed_by_should_be_declared(final String field) {
+            assertThat(declaredProperties(DOCUMENT_AVAILABLE_SCHEMA))
+                    .as("the listener reads this field out of a document-available; a field the "
+                            + "schema does not declare is one the platform never fills, and every "
+                            + "real event would be acknowledged and dropped for a reason nothing "
+                            + "here would show")
+                    .contains(field);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"failedTime", "reason"})
+        void every_field_a_generation_failed_is_routed_by_should_be_declared(final String field) {
+            assertThat(declaredProperties(GENERATION_FAILED_SCHEMA))
+                    .as("the same claim for the refusal, whose reason is what a support call is "
+                            + "answered from")
+                    .contains(field);
+        }
+
+        @Test
+        void the_fields_both_events_are_routed_by_should_be_declared_by_both_schemas() {
+            assertThat(declaredProperties(DOCUMENT_AVAILABLE_SCHEMA))
+                    .as("the correlation, its cross-check and the source filter are read from "
+                            + "whichever of the two arrives")
+                    .containsAll(COMMON_ROUTED_FIELDS);
+            assertThat(declaredProperties(GENERATION_FAILED_SCHEMA))
+                    .as("so a field declared by only one of the two would be a filter that worked "
+                            + "for documents and not for refusals")
+                    .containsAll(COMMON_ROUTED_FIELDS);
+        }
+    }
+
+    /**
      * The reading that says the subscription is being served at all.
      *
      * <p>{@code PublicEventsHealthIndicator} publishes {@code lastDeliveryAt} and
@@ -370,6 +548,57 @@ class DocumentEventListenerTest {
 
             verify(deliveries).recordDelivery();
         }
+    }
+
+    /**
+     * One vendored schema, assembled with its references resolved against the vendored copies.
+     *
+     * @param fileName the schema's file name under {@link #VENDORED}
+     * @return the assembled contract
+     */
+    private static Schema vendoredSchema(final String fileName) {
+        final SchemaRegistryConfig config = SchemaRegistryConfig.builder()
+                .formatAssertionsEnabled(Boolean.TRUE)
+                .pathType(PathType.JSON_POINTER)
+                .preloadSchema(true)
+                .build();
+        return SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_4,
+                        builder -> builder
+                                .schemaRegistryConfig(config)
+                                .schemaIdResolvers(resolvers -> resolvers.mappings(VENDORED_REFS)))
+                .getSchema(vendoredText(fileName));
+    }
+
+    /** The text of a vendored schema, or a failure that names the copy that is missing. */
+    private static String vendoredText(final String fileName) {
+        final Path schema = VENDORED.resolve(fileName);
+        try {
+            return Files.readString(schema, StandardCharsets.UTF_8);
+        } catch (IOException unreadable) {
+            throw new UncheckedIOException(
+                    "the vendored systemdocgenerator contract must be committed at " + schema,
+                    unreadable);
+        }
+    }
+
+    /** The properties one vendored schema declares, which is what the routing may read. */
+    private static List<String> declaredProperties(final String fileName) {
+        return List.copyOf(MAPPER.readTree(vendoredText(fileName)).get("properties").propertyNames());
+    }
+
+    /**
+     * What the vendored schema makes of one fixture's payload.
+     *
+     * <p>The payload and not the whole envelope: {@code _metadata} is the framework's and is not in
+     * systemdocgenerator's schema at all, which is exactly the split
+     * {@link PublicEventEnvelope} makes and this suite's first nested class pins.
+     *
+     * @param fileName the schema's file name under {@link #VENDORED}
+     * @param envelope the fixture, as the platform would publish it
+     * @return every rule the payload broke, empty where it satisfies the contract
+     */
+    private static List<Error> refusals(final String fileName, final String envelope) {
+        return vendoredSchema(fileName).validate(PublicEventEnvelope.parse(envelope).payload());
     }
 
     /**
@@ -461,6 +690,19 @@ class DocumentEventListenerTest {
     private static String documentAvailableWithoutCorrelation() {
         return documentAvailableEnvelope("",
                 "  \"originatingSource\": \"" + DocumentEventListener.ORIGINATING_SOURCE + "\"\n");
+    }
+
+    /**
+     * The same envelope with a member the schema <em>requires</em> taken out.
+     *
+     * <p>The negative control, and nothing routes it: it exists so that a validator that had
+     * stopped refusing anything is caught by an assertion rather than trusted.
+     *
+     * @return the envelope as text, one required member short
+     */
+    private static String documentAvailableWithoutTheDocument() {
+        return ourDocumentAvailable()
+                .replace("  \"documentFileServiceId\": \"" + DOCUMENT_FILE_ID + "\",\n", "");
     }
 
     /**
