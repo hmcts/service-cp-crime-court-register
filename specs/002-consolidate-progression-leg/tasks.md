@@ -207,6 +207,13 @@ precedent.
    followed; approved as an **[A]** characterisation after the fact, which is what the test turned
    out to be - it accepts four stubs, the per-mode selection and the ON-by-default answer as they
    stand rather than specifying behaviour a red run could have driven.
+5. **The exhaustive attribution-mapping pin (`81e13d0` "test(store): pin the attribution mapping for
+   every failure reason"), written after `3d76be9` introduced `BatchFailureReason.isGeneratorAttributed()`.**
+   The mapping was specified by the review finding it answers and landed with its own red run in
+   `e2879e2`/`3d76be9` for GENERATION_FAILED; `81e13d0` widens the pin to every constant (an
+   EnumSource table, both directions of GENERATION_TIMED_OUT, and the schema check naming every
+   state) and is an **[A]** characterisation whose non-vacuity was shown by mutation. Approved as
+   such; the mapping itself changed nothing.
 
 ---
 
