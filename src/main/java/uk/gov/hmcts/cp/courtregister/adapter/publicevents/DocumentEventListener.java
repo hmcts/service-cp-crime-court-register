@@ -39,11 +39,20 @@ import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
  * batch state is decided here: this class knows JMS and envelopes, and the sink knows what an
  * outcome means.
  *
- * <p><strong>Nothing here ever throws at the container.</strong> A listener that threw would nack,
- * and a nack on a durable subscription is a message the broker offers again for ever - so a message
- * that cannot be read, is not an envelope, contradicts its own header or names no batch is said out
- * loud and acknowledged. The one failure worth a redelivery is the sink's, and the sink is the thing
- * that decides that: an exception it raises travels back through here untouched.
+ * <p><strong>One failure leaves here, and it is the sink's.</strong> A listener that threw at
+ * anything else would nack, and a nack on a durable subscription is a message the broker offers
+ * again for ever - so a message that cannot be read, is not an envelope, contradicts its own header
+ * or names no batch is said out loud and acknowledged. A sink that could not write is the opposite
+ * case: the outcome is good and the store was not there for a second, so it is said at ERROR
+ * naming the batch and handed back for the broker to offer again.
+ *
+ * <p>That hand-back is only a redelivery because of how the container is configured, and this class
+ * cannot make it one on its own. {@link PublicEventsConfig} runs the listener in a
+ * <strong>transacted session</strong>; a container left at the default {@code AUTO_ACKNOWLEDGE}
+ * would have acknowledged the message before calling this method, and the exception would then be a
+ * lost outcome dressed as a retry. The two statements are one arrangement written in two files, and
+ * {@code DocumentEventListenerIT.an_outcome_the_sink_could_not_apply_should_be_offered_again} is
+ * where it is held down.
  *
  * <p><strong>The subscription is configured, not hard-coded.</strong> The destination, the durable
  * subscription's name and the selector all come from {@code courtregister.publicevents.*}, and the
@@ -235,8 +244,8 @@ public class DocumentEventListener {
                     correlationId);
             return;
         }
-        sink.documentAvailable(correlationId, payloadFileId, documentFileId, generatedAt,
-                CompletedBy.EVENT);
+        apply(correlationId, () -> sink.documentAvailable(correlationId, payloadFileId,
+                documentFileId, generatedAt, CompletedBy.EVENT));
     }
 
     /**
@@ -258,8 +267,37 @@ public class DocumentEventListener {
                     + "and dropped; the reconciler is what asks again.", correlationId);
             return;
         }
-        sink.generationFailed(correlationId, payloadFileId, text(payload, REASON), failedAt,
-                CompletedBy.EVENT);
+        apply(correlationId, () -> sink.generationFailed(correlationId, payloadFileId,
+                text(payload, REASON), failedAt, CompletedBy.EVENT));
+    }
+
+    /**
+     * Applies one outcome, and says which batch it was if the sink could not.
+     *
+     * <p>The one exception this class lets past, reported at the level a lost-and-recovered outcome
+     * is worth reading at (constitution Principle VI) and then rethrown, so the transacted session
+     * rolls back and the broker offers the event again. The line carries the batch identity - which
+     * is the thing the container's own handler cannot know - and the failure's type; neither is
+     * about a defendant or a recipient, and the sink is handed the renderer's words rather than
+     * this method (constitution Principle VII).
+     *
+     * @param correlationId the batch the outcome is about, for the line
+     * @param outcome       the sink call this event turned into
+     */
+    // PMD.AvoidCatchingGenericException: what the sink raises is the store's own unchecked type
+    // today and whatever the next adapter behind the port raises tomorrow. Narrowing this to the
+    // types known here would silently take a future one back to the acknowledged-and-lost path this
+    // exists to close.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static void apply(final UUID correlationId, final Runnable outcome) {
+        try {
+            outcome.run();
+        } catch (final RuntimeException notApplied) {
+            LOG.error("The outcome for batch {} could not be applied, so it is handed back to the "
+                    + "container and the broker offers the event again. cause={}", correlationId,
+                    notApplied.getClass().getName());
+            throw notApplied;
+        }
     }
 
     /**

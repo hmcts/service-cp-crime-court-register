@@ -17,15 +17,33 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
 /**
  * The listener container the public-event subscription runs in.
  *
- * <p>Four settings make it the subscription this service needs rather than a queue consumer that
+ * <p>Five settings make it the subscription this service needs rather than a queue consumer that
  * happens to work: {@code pub-sub-domain}, because {@code public.event} is a topic and a consumer
  * that read it as a queue would compete with every other subscriber on the estate;
  * {@code subscription-durable} with a {@code client-id}, because a document rendered while this pod
- * was restarting must still be delivered, which is the whole of what
- * {@code DocumentEventListenerIT} proves; and the {@code CPPNAME} selector, so the broker filters
- * the topic rather than this service filtering it after delivery. The selector, the destination and
+ * was restarting must still be delivered, which is one of the things
+ * {@code DocumentEventListenerIT} proves; the {@code CPPNAME} selector, so the broker filters
+ * the topic rather than this service filtering it after delivery; and a <strong>transacted
+ * session</strong>, which is the subject of the next paragraph. The selector, the destination and
  * the subscription's name are on the listener itself, read from {@code courtregister.publicevents.*};
- * the three settings above are Spring's own {@code spring.jms.*} keys and are read from there.
+ * the three broker-shape settings are Spring's own {@code spring.jms.*} keys and are read from there.
+ *
+ * <p><strong>The session is transacted, and the listener's contract depends on it.</strong>
+ * {@link DocumentEventListener} absorbs every message it cannot make sense of and hands exactly one
+ * failure back to the container - the sink's, which is the register store having been unavailable
+ * for the second the outcome arrived in. That hand-back is only worth anything if the message is
+ * still the broker's to offer again: a {@code DefaultMessageListenerContainer} left at the default
+ * {@code AUTO_ACKNOWLEDGE} acknowledges before it invokes the listener, so the exception would reach
+ * a container with nothing left to roll back and the outcome would be lost until the grace-period
+ * reconciler noticed it ten minutes later. Boot's own
+ * {@code DefaultJmsListenerContainerFactoryConfigurer} sets this for precisely that reason and is
+ * not used here, so it is set here instead
+ * ({@code DocumentEventListenerIT.an_outcome_the_sink_could_not_apply_should_be_offered_again}).
+ *
+ * <p><strong>And the failure is reported at ERROR.</strong> A container with no error handler logs a
+ * listener failure at WARN, which is not the level a lost-then-recovered outcome is worth reading at
+ * (constitution Principle VI). The handler below is the container-level half of that line; the
+ * batch it was about is named by the listener's own line, which is where the identity is known.
  *
  * <p><strong>The container is given the native connection factory.</strong> Boot's shared
  * {@code jmsConnectionFactory} is a caching one, and a container that carries the client id cannot
@@ -85,9 +103,32 @@ public class PublicEventsConfig {
         factory.setSubscriptionDurable(jms.isSubscriptionDurable());
         factory.setClientId(jms.getClientId());
         factory.setConcurrency(ONE_CONSUMER);
+        // The listener hands the sink's failure back on purpose; this is what leaves the broker
+        // something to hand back to.
+        factory.setSessionTransacted(true);
+        factory.setErrorHandler(PublicEventsConfig::notApplied);
         factory.setAutoStartup(
                 GenerationProperties.COMPLETION_EVENT.equals(generation.completion()));
         return factory;
+    }
+
+    /**
+     * Says at ERROR that a delivery was rolled back, and is the reason the container does not say it
+     * at WARN.
+     *
+     * <p>The cause's type is named in the line and the throwable carries the stack: a store outage
+     * and a bug in the sink are the same sentence from here and different investigations, and the
+     * type is the only bounded thing that tells them apart. Nothing else is added - which batch this
+     * was about is on {@link DocumentEventListener}'s own line, where the identity is known, and no
+     * value here comes from a register (constitution Principle VII).
+     *
+     * @param notApplied whatever the listener handed back, which is the sink's failure or the
+     *                   container's own
+     */
+    private static void notApplied(final Throwable notApplied) {
+        LOG.error("A public event was not applied, so the transacted session is rolled back and the "
+                + "broker offers the message again. cause={}", notApplied.getClass().getName(),
+                notApplied);
     }
 
     /**
