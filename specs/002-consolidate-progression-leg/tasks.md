@@ -420,6 +420,28 @@ GENERATED / FAILED with reason; grace period → reconciler.
 
 **Checkpoint**: batches render end to end against stubs; quickstart steps 2–3 work. Codex review 5.
 
+### Approved TDD exceptions (Phase 5)
+
+One, and it is recorded here rather than argued for in a commit body, which is where it was argued
+for until this entry existed. Approver: **design owner, 2026-09-06**. Anything else in Phase 5 that
+arrived test-after is a defect, not a precedent.
+
+1. **`5599ae7` "test(persistence): pin the two batch statements that landed without a case",
+   written after `7c6ffe6`.** `7c6ffe6` "feat(batch): request a render for each batch, or record
+   exactly why not" landed `JdbcRegisterStore.batched` (`BATCH_REGISTERS`) and
+   `markPayloadMinted` (`MARK_PAYLOAD_MINTED`) with no automated test of either:
+   `RegisterGenerationServiceTest` mocks the `RegisterStore` port, so it pins that the service calls
+   them and nothing about what the statements do, and `RegisterStoreIT` was not extended in that
+   commit. `5599ae7` added six `RegisterStoreIT` cases afterwards and recorded a passing run.
+   **Why no red run was recorded**: the two statements were written as part of T049's requesting
+   sequence rather than as behaviour of their own, and by the time the gap was seen the statements
+   already existed - so the cases that closed it are **[A]** characterisations of statements that
+   were already correct, not the red half of a pair. They accept `batched`'s ordering and
+   batch-scoping and `markPayloadMinted`'s PENDING fence as they stand. Splitting unpushed history
+   to manufacture a red run for behaviour nobody was going to change was judged higher risk than
+   recording the exception, which is the same judgement the Phase 2 and Phase 3 blocks record.
+   The statements themselves are unchanged and remain pinned by those six cases.
+
 ---
 
 ## Phase 6: User Story 3 — every matched Youth Offending Team receives the register once (Priority: P1)
