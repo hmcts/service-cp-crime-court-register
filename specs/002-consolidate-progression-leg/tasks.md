@@ -117,7 +117,9 @@ exceptions of this kind are pre-approved. **Never two committing agents at once.
 - [ ] T005 [P] [A] Verify the vendored file-service DDL against the deployed schema: in an STE stack,
       `\d metadata` and `\d content` on the `fileservice` database match
       `contracts/fileservice/` changesets 001–006 (columns, types, defaults). Record the result in
-      `contracts/README.md` (date, stack). If it differs, re-vendor and note the delta before T033. (deferred: needs STE access; see checkpoint note)
+      `contracts/README.md` (date, stack). If it differs, re-vendor and note the delta **before the
+      first deploy of the generation half to any stack**. (deferred: needs STE access. T033 and T044
+      landed on 2026-09-06 against the unverified DDL rather than waiting for it; see checkpoint note)
 - [x] T006 [P] Append rows **P1–P9** to `doc/DEFECT-FIXES.md` as **PLANNED** (P6, P7 as RETIRED with the
       retirement-PR pointer; P8 as MOOT with the index citation), each with the progression `file:line`
       citation from the design §3.4, the fixed behaviour from §7.3 and the pinning test name from the
@@ -126,7 +128,8 @@ exceptions of this kind are pre-approved. **Never two committing agents at once.
 
 **Checkpoint**: build green, compose up, goldens present, register carries the P rows. Codex review 1.
 
-**Checkpoint note - T005 deferral (2026-09-05)**: T005 is **not done** and its box stays unticked.
+**Checkpoint note - T005 deferral (2026-09-05, restated 2026-09-06)**: T005 is **not done** and its
+box stays unticked.
 
 - **Not verified**: that `contracts/fileservice/` changesets 001–006 (vendored from `framework-libraries`
   `58aad8664`, **2023-12-22**) still match the deployed `fileservice` schema - the columns, types and
@@ -134,13 +137,22 @@ exceptions of this kind are pre-approved. **Never two committing agents at once.
   `FileServicePayloadStoreIT` Testcontainers seed may not be what the platform actually runs.
 - **Why deferred**: no STE access from the machine this increment is being built on. The check needs a
   live stack, not a local clone, so it cannot be closed from here.
-- **Who and where**: the implementer who picks up T033/T044 (the file-service leg) runs `\d metadata`
+- **Who and where**: the implementer who took T033/T044 (the file-service leg) runs `\d metadata`
   and `\d content` against the `fileservice` database on an **STE stack** (per `~/moj/cpp-knowledgebase/ENVIRONMENTS.md`;
   STE-86 is the canonical reference), records the date, the stack number and the result in the
   `fileservice/` provenance row of `contracts/README.md`, and re-vendors the changesets if they differ.
-- **Deadline**: this must complete **before T033 (`FileServicePayloadStoreIT`) starts** - T033 asserts
-  against the vendored DDL, so verifying it afterwards proves nothing. The dependency note below
-  carries the same deadline.
+- **What actually happened**: T033 (`FileServicePayloadStoreIT`) and T044 (`FileServicePayloadStore`)
+  landed on **2026-09-06 against the unverified 2023-12-22 DDL**, and the earlier deadline below - that
+  the check complete before T033 started - was not met. The suite's own javadoc carries the caveat, so
+  a reader of the test is told what it pins: the vendored DDL, not yet a verified copy of the deployed
+  schema. Nothing was re-vendored, because nothing has been compared.
+- **Deadline**: this must complete **before the first deploy of the generation half to any stack**.
+  A Testcontainers suite seeded from the vendored changesets is green whether or not they describe the
+  deployed schema, so what the check now protects is not the test but the first night a run writes a
+  real payload into a real file service: a column that has moved is a batch that fails
+  PAYLOAD_STORE_UNAVAILABLE for every key, and it is cheaper to learn that from `\d metadata` than
+  from a night's registers. Same owner and the same re-vendoring instruction as above. The dependency
+  note below carries the same deadline.
 
 ---
 
@@ -572,8 +584,10 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
 - Within each "Tests first" block every task is [P]; the implementation block is serialised where a
   file is shared (`DistributionPipeline`, `RegisterTransformationChain`, `PipelineConfig`,
   `PropertiesValidator`, `DocumentOutcomeSinkImpl`).
-- T004 (goldens) blocks T031 and T019. T005 (DDL verification) blocks nothing in code but must be
-  recorded before T033 starts. T006 (P rows PLANNED) blocks every "flip P# to FIXED" commit.
+- T004 (goldens) blocks T031 and T019. T005 (DDL verification) blocks nothing in code and did not
+  hold up T033/T044, which landed against the unverified DDL on 2026-09-06; it must be recorded
+  before the first deploy of the generation half to any stack (checkpoint note above). T006 (P rows
+  PLANNED) blocks every "flip P# to FIXED" commit.
 
 ## Notes
 
