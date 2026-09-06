@@ -3,6 +3,13 @@ tasks.named('test') {
   }
   systemProperty 'API_SPEC_VERSION', project.version
   failFast = !Boolean.getBoolean("test.noFailFast")
+  // One forked JVM runs the whole suite, and the container-backed suites keep a great deal alive in
+  // it at once: several Spring contexts, WireMock servers, Testcontainers clients, an embedded
+  // broker and the Service Bus emulator's AMQP stack. Gradle's default 512m test heap is no longer
+  // enough for that - the run dies with an OutOfMemoryError while a late suite is refreshing its
+  // context, which reads as a failure of whichever suite happened to be last rather than as the
+  // memory ceiling it is. Stated here so the ceiling is a decision rather than a default.
+  maxHeapSize = '2g'
   // Mockito must be added as an agent, see:
   // https://javadoc.io/doc/org.mockito/mockito-core/latest/org.mockito/org/mockito/Mockito.html#0.3
   jvmArgs += [
