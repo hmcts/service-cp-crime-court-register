@@ -14,8 +14,10 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -67,6 +69,16 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * {@code mark notified}, {@code flipped} reads {@code generated} through {@code FROM}, because the
  * rows that move are the rows of the batch the update just settled.
  *
+ * <p><strong>Recording is idempotent on the command's own key.</strong> The recording and the
+ * completion of the command are two statements and not one, so a pod that stops between them leaves
+ * a register written against a request the broker will deliver again. The recording statement is
+ * therefore preceded, inside its own transaction, by a read of {@code (source, request_id)}: a
+ * command that has been recorded before is answered with the row it already wrote, exactly as 001's
+ * POST path answers a re-claim through {@code ON CONFLICT (source, request_id)}. The two unique
+ * keys a recording can meet are told apart for the same reason - only
+ * {@code idx_output_active_register_key} is a lost race worth retrying, and
+ * {@code processed_output_unique_request} is this command arriving twice.
+ *
  * <p><strong>Every {@code mark} is fenced on the status it read.</strong> The permitted moves belong
  * to {@link BatchStatus#canTransitionTo(BatchStatus)} and are asked there rather than re-encoded as
  * SQL predicates, so there is one state machine; the status that answered is then the predicate the
@@ -97,14 +109,50 @@ public class JdbcRegisterStore implements RegisterStore {
     /** How every refusal in this class names the batch it is about, and the only thing it names. */
     private static final String BATCH = "batch ";
 
+    /** V1's key on the request a row is evidence about: one output row per command, ever. */
+    private static final String COMMAND_KEY = "processed_output_unique_request";
+
+    /** The four statuses the recorder writes, and the only ones a recorded register can be in. */
+    private static final Set<String> RECORDER_STATUSES =
+            Set.of("RECORDED", "SUPERSEDED", "GENERATED", "NOTIFIED");
+
     private static final String BATCH_ID = "batchId";
     private static final String OUTPUT_ID = "outputId";
+    private static final String SOURCE = "source";
+    private static final String REQUEST_ID = "requestId";
+    private static final String SUPERSEDED_OUTPUT_ID = "superseded_output_id";
     private static final String OUTPUT_IDS = "outputIds";
     private static final String EXPECTED = "expected";
     private static final String COURT_CENTRE_ID = "courtCentreId";
     private static final String REGISTER_DATE = "registerDate";
     private static final String REGISTER_TIME = "registerTime";
     private static final String HEARING_ID = "hearingId";
+
+    /**
+     * Statement 0 - the register this command already has, where it has been delivered before.
+     *
+     * <p>Read on the recording transaction's own snapshot and before anything is written, because a
+     * redelivery is not a second register: the command is the same command, and the row it wrote the
+     * first time is the answer to it. Without this read the insert meets {@value #COMMAND_KEY} and
+     * the store, which cannot tell that refusal from the V3 key race, would fail a command whose
+     * register is recorded and active and would go on failing it until the broker parked it.
+     *
+     * <p>The row it superseded comes back with it, through the only thing that leads from a dropped
+     * register to its replacement, so a redelivery is answered exactly as the delivery that recorded
+     * it was. The scalar subquery is deliberate for the reason statement 1's is: it answers
+     * {@code NULL} where nothing was superseded and <em>fails</em> where two rows name this one,
+     * which is a key that had already lost the invariant rather than a redelivery.
+     */
+    private static final String RECORDED_REGISTER = """
+            SELECT recorded.output_id,
+                   recorded.status,
+                   (SELECT replaced.output_id
+                      FROM processed_output replaced
+                     WHERE replaced.superseded_by = recorded.output_id) AS superseded_output_id
+              FROM processed_output recorded
+             WHERE recorded.source = :source
+               AND recorded.request_id = :requestId
+            """;
 
     /**
      * Statement 1 - record this hearing's register, superseding the one it replaces.
@@ -454,12 +502,25 @@ public class JdbcRegisterStore implements RegisterStore {
      * the read rather than on the write. The identifier the caller is answered with is minted once
      * and reused, which is safe precisely because a refused attempt committed nothing.
      *
+     * <p><strong>A command delivered again is answered rather than recorded again.</strong> The
+     * completion of a command is written after this call and not inside it, so a pod that stops in
+     * between - or a completion that fails transiently - leaves the register written and the request
+     * unfinished, and the broker delivers the message again. Each attempt therefore reads
+     * {@code (source, request_id)} first and answers with the row it finds, which is the same answer
+     * the first delivery was given: 001's POST path settles the same shape with
+     * {@code ON CONFLICT (source, request_id)}, and a recording that failed here instead would park a
+     * command whose register is recorded and active. The two unique keys are told apart rather than
+     * both read as contention - {@value #COMMAND_KEY} is this command arriving beside itself and is
+     * settled from the row that landed, and only {@code idx_output_active_register_key} is a race
+     * for the day's key worth trying again.
+     *
      * @throws ConcurrencyFailureException if {@value #RECORD_ATTEMPTS} attempts all lost the race
      *                                     for this key, which is the store answering rather than
      *                                     the store being unreachable: the delivery is handed back
      *                                     and intake keeps running
-     * @throws IllegalStateException       if the key already carries more than one active row, or if
-     *                                     the statement recorded nothing
+     * @throws IllegalStateException       if the key already carries more than one active row, if
+     *                                     the command already holds an output row no recording
+     *                                     wrote, or if the statement recorded nothing
      */
     @Override
     public RecordOutcome record(final DistributionCommand command,
@@ -474,7 +535,10 @@ public class JdbcRegisterStore implements RegisterStore {
             try {
                 outcome = insert(recording);
             } catch (DuplicateKeyException collision) {
-                lost = collision;
+                outcome = violates(collision, COMMAND_KEY)
+                        ? recorded(command).orElseThrow(() -> unrecorded(command, collision))
+                        : null;
+                lost = outcome == null ? collision : lost;
             }
         }
         if (outcome == null) {
@@ -494,15 +558,86 @@ public class JdbcRegisterStore implements RegisterStore {
      * incumbent by the time its insert is refused, and without a transaction to roll back that
      * supersession would stand: the register the winner replaced would carry the loser's identity in
      * {@code superseded_by}, pointing support at a row that was never recorded.
+     *
+     * <p>The read that opens it is inside the same transaction, so what it sees and what the write
+     * is refused for are one snapshot's worth of the same table.
      */
     private RecordOutcome insert(final Recording recording) {
+        return transactions.execute(recorded ->
+                recorded(recording.command()).orElseGet(() -> write(recording)));
+    }
+
+    /**
+     * The register a command already holds, where a delivery of it has been here before.
+     *
+     * <p>Answered from the row rather than inferred from a refusal, so the redelivery is settled the
+     * same way whether it arrived after the first delivery committed or beside it.
+     *
+     * @param command the request being recorded
+     * @return the recording this command already has, or empty where it has none
+     * @throws IllegalStateException if the command holds an output row no recording wrote, which is
+     *                               a {@code progression-post} row left by an earlier release: its
+     *                               register was never recorded and this one cannot be, because the
+     *                               command may hold only one output row
+     */
+    private Optional<RecordOutcome> recorded(final DistributionCommand command) {
+        return jdbcClient.sql(RECORDED_REGISTER)
+                .param(SOURCE, command.source())
+                .param(REQUEST_ID, command.requestId())
+                .query((rs, rowNumber) -> recordedBy(command, rs))
+                .optional();
+    }
+
+    /** The recording a row stands for, and a refusal where the row is not a recording at all. */
+    private static RecordOutcome recordedBy(final DistributionCommand command, final ResultSet rs)
+            throws SQLException {
+        final String status = rs.getString("status");
+        if (!RECORDER_STATUSES.contains(status)) {
+            throw new IllegalStateException("source=" + command.source() + " requestId="
+                    + command.requestId() + " already holds a " + status + " output row, which a "
+                    + "submission wrote and no recording may replace");
+        }
+        return new RecordOutcome(rs.getObject("output_id", UUID.class),
+                rs.getObject(SUPERSEDED_OUTPUT_ID, UUID.class));
+    }
+
+    /**
+     * Whether a refusal is the named unique key's, asked of the driver's own message.
+     *
+     * <p>The two keys a recording can meet mean opposite things - one delivery of one command twice,
+     * and two commands racing for one hearing's day - so which was violated decides whether the
+     * attempt is answered or made again. Spring reports both as {@link DuplicateKeyException}; the
+     * constraint's name survives only on the cause the driver raised.
+     */
+    private static boolean violates(final DuplicateKeyException collision, final String key) {
+        final Throwable cause = NestedExceptionUtils.getMostSpecificCause(collision);
+        return cause.getMessage() != null && cause.getMessage().contains(key);
+    }
+
+    /** The state a redelivery cannot be in: refused by the command key, with no row behind it. */
+    private static IllegalStateException unrecorded(final DistributionCommand command,
+            final DuplicateKeyException collision) {
+        return new IllegalStateException("source=" + command.source() + " requestId="
+                + command.requestId() + " was refused by " + COMMAND_KEY
+                + ", and the row that refused it is not there to be answered with", collision);
+    }
+
+    /**
+     * The recording statement itself, on a snapshot that has just been read for this command.
+     *
+     * <p>Issued inside {@link #insert(Recording)}'s transaction and opening none of its own: the
+     * read that decided this command has no register yet and the write that gives it one belong to
+     * the same transaction, or a redelivery could be answered from a snapshot the write no longer
+     * agrees with.
+     */
+    private RecordOutcome write(final Recording recording) {
         final CourtRegisterDocument document = recording.document();
         final Instant registerTime = instantOf(document.registerDate(), "registerDate");
         final Instant hearingDate = instantOf(document.hearingDate(), "hearingDate");
-        return transactions.execute(recorded -> jdbcClient.sql(RECORD_REGISTER)
+        return jdbcClient.sql(RECORD_REGISTER)
                 .param(OUTPUT_ID, recording.outputId())
-                .param("source", recording.command().source())
-                .param("requestId", recording.command().requestId())
+                .param(SOURCE, recording.command().source())
+                .param(REQUEST_ID, recording.command().requestId())
                 .param(COURT_CENTRE_ID, UUID.fromString(document.courtCentreId()))
                 .param("courtCentreOuCode", recording.courtCentreOuCode(), Types.VARCHAR)
                 .param(REGISTER_DATE, LocalDate.ofInstant(registerTime, LONDON))
@@ -516,8 +651,8 @@ public class JdbcRegisterStore implements RegisterStore {
                 .param("defendantType", recording.defendantType())
                 .param("flagState", recording.flagState().name())
                 .query((rs, rowNumber) -> new RecordOutcome(recording.outputId(),
-                        rs.getObject("superseded_output_id", UUID.class)))
-                .single());
+                        rs.getObject(SUPERSEDED_OUTPUT_ID, UUID.class)))
+                .single();
     }
 
     @Override

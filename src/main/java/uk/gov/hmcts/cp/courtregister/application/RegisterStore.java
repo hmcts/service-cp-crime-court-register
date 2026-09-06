@@ -41,6 +41,13 @@ public interface RegisterStore {
      * it is on its way to a PDF, and rewriting it would take a register out of a batch the renderer
      * has already been asked about.
      *
+     * <p><strong>Idempotent on the command.</strong> The completion of a command is written after
+     * this call and not inside it, so a delivery that stopped in between leaves a register recorded
+     * against a request the broker will deliver again. A command that has been recorded before is
+     * answered with the row it already wrote - the row it superseded included - and nothing is
+     * written a second time, so the redelivery completes rather than failing on a register that is
+     * safely recorded.
+     *
      * <p>The court centre's OU code is an argument because it is the one fact the batch needs that
      * the document does not carry: the transformation resolves it from reference data (001 carries
      * it on {@code ProcessedOutputClaim} for the same reason), {@code assemble} copies it from the
