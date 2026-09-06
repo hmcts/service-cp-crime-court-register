@@ -535,10 +535,11 @@ public class JdbcRegisterStore implements RegisterStore {
             try {
                 outcome = insert(recording);
             } catch (DuplicateKeyException collision) {
-                outcome = violates(collision, COMMAND_KEY)
-                        ? recorded(command).orElseThrow(() -> unrecorded(command, collision))
-                        : null;
-                lost = outcome == null ? collision : lost;
+                if (violates(collision, COMMAND_KEY)) {
+                    outcome = recorded(command).orElseThrow(() -> unrecorded(command, collision));
+                } else {
+                    lost = collision;
+                }
             }
         }
         if (outcome == null) {
