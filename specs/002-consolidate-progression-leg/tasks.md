@@ -168,8 +168,29 @@ committing agents at once.**
 - [x] T017 [P] `config/GenerationMetrics`. Green: T010.
 - [x] T018 [P] `adapter/stub/Stub{PayloadFileStore,DocumentRenderer,RegisterNotifier,FeatureFlagReader}`
       and `config/StubGenerationConfig` for test/local profiles (flag ON by default, overridable).
+      Landed untested; `adapter/stub/StubGenerationAdaptersTest` now pins all four stubs, the
+      per-mode selection and the ON-by-default answer as an [A] characterisation.
 
 **Checkpoint**: `./gradlew build` green; V2 applies on a fresh and on a V1 database. Codex review 2.
+
+**Approved TDD exceptions (Phase 2)**. Principle II is non-negotiable and these are recorded, not
+excused: two pieces of behaviour in this phase were pinned after the code rather than before it, and
+each is named here with the reason it was allowed. Approver: **design owner, 2026-09-06**. Anything
+else in Phase 2 that arrived test-after is a defect, not a precedent.
+
+1. **The V1-to-V2 backfill case (`SchemaMigrationV2IT.BackfillOfADeployedV1Row`), written after
+   T012.** The migration's backfill values were chosen and hand-checked when V2 was written, and the
+   case accepts an existing migration rather than specifying a new behaviour: there was no design
+   decision left for a red run to make. Recorded because the promise the migration's comment makes
+   was, until that case, asserted nowhere.
+2. **`FlagDecision`'s bounded-reason behaviour, landed in the compile-safe seams commit before
+   T011.** The seam had to carry the invariant - a decision that can never hold free text - because
+   five test authors were writing against it in parallel and a seam that left the question open
+   would have had each of them answer it differently. The invariant is pinned by `BatchStateTest`,
+   which is T011's own file and was written against the seam rather than after the implementation.
+
+The third gap the Phase 2 review found, T018's untested stubs, is **not** on this list: it is closed
+by `StubGenerationAdaptersTest` rather than approved.
 
 ---
 
