@@ -1058,6 +1058,8 @@ public class JdbcRegisterStore implements RegisterStore {
                 null,
                 null,
                 null,
+                0,
+                null,
                 0);
     }
 

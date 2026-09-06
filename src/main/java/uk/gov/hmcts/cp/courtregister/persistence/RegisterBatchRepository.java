@@ -73,19 +73,19 @@ public class RegisterBatchRepository {
                 batch_id, court_centre_id, court_centre_ou_code, court_house, register_date,
                 file_name, payload_file_id, document_file_id, status, failure_reason, sdg_reason,
                 system_generated, completed_by, assembled_at, requested_at, generated_at,
-                notified_at, failed_at, attempts)
+                notified_at, failed_at, attempts, supplement_of, supplement_index)
             VALUES (
                 :batchId, :courtCentreId, :courtCentreOuCode, :courtHouse, :registerDate,
                 :fileName, :payloadFileId, :documentFileId, :status, :failureReason, :sdgReason,
                 :systemGenerated, :completedBy, :assembledAt, :requestedAt, :generatedAt,
-                :notifiedAt, :failedAt, :attempts)
+                :notifiedAt, :failedAt, :attempts, :supplementOf, :supplementIndex)
             """;
 
     private static final String SELECT_BATCH = """
             SELECT batch_id, court_centre_id, court_centre_ou_code, court_house, register_date,
                    file_name, payload_file_id, document_file_id, status, failure_reason, sdg_reason,
                    system_generated, completed_by, assembled_at, requested_at, generated_at,
-                   notified_at, failed_at, attempts
+                   notified_at, failed_at, attempts, supplement_of, supplement_index
               FROM register_batch
             """;
 
@@ -173,7 +173,9 @@ public class RegisterBatchRepository {
                 .param("fileName", batch.fileName())
                 .param("systemGenerated", batch.systemGenerated())
                 .param("assembledAt", offsetOf(batch.assembledAt()),
-                        Types.TIMESTAMP_WITH_TIMEZONE), batch)
+                        Types.TIMESTAMP_WITH_TIMEZONE)
+                .param("supplementOf", batch.supplementOf(), Types.OTHER)
+                .param("supplementIndex", batch.supplementIndex()), batch)
                 .update();
     }
 
@@ -314,7 +316,9 @@ public class RegisterBatchRepository {
                 instant(rs.getObject("generated_at", OffsetDateTime.class)),
                 instant(rs.getObject("notified_at", OffsetDateTime.class)),
                 instant(rs.getObject("failed_at", OffsetDateTime.class)),
-                rs.getInt("attempts"));
+                rs.getInt("attempts"),
+                rs.getObject("supplement_of", UUID.class),
+                rs.getInt("supplement_index"));
     }
 
     private static BatchFailureReason failureReason(final String value) {

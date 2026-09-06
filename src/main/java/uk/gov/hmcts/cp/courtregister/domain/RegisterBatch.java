@@ -19,6 +19,13 @@ import java.util.UUID;
  * after it: an event for a batch this service never recorded is unattributable, and an unattributed
  * document is a register nobody is told about.
  *
+ * <p><strong>{@code supplementOf} and {@code supplementIndex} are the day's second document
+ * (design Q27).</strong> A hearing re-shared after its key's batch has finished cannot join that
+ * batch - the document is rendered and the Youth Offending Teams have been told - so its rows are
+ * assembled into a batch of their own that names the batch it follows and counts up from it. A
+ * day's first batch follows nothing and carries index 0, which is what the two columns default to,
+ * so a writer that says nothing about them says something true.
+ *
  * @param batchId           identity minted at assembly, sent as {@code sourceCorrelationId}
  * @param courtCentreId     the court centre the register is for
  * @param courtCentreOuCode that court centre's OU code, or {@code null} where the records carried
@@ -49,6 +56,11 @@ import java.util.UUID;
  * @param failedAt          when the batch reached FAILED, or {@code null}
  * @param attempts          lifetime tally of render requests made for this batch, never a control
  *                          variable
+ * @param supplementOf      the batch this one follows for the same key, where a re-share arrived
+ *                          after that key's earlier batches had all finished (design Q27), and
+ *                          {@code null} on a day's first batch, which follows nothing
+ * @param supplementIndex   0 on a day's first batch and counting up from 1 on each supplementary
+ *                          one; the file name a supplement is rendered under is built from it
  */
 public record RegisterBatch(
         UUID batchId,
@@ -69,7 +81,9 @@ public record RegisterBatch(
         Instant generatedAt,
         Instant notifiedAt,
         Instant failedAt,
-        int attempts) {
+        int attempts,
+        UUID supplementOf,
+        int supplementIndex) {
 
     /**
      * How much of systemdocgenerator's message this service keeps.

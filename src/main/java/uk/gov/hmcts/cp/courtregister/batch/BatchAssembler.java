@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.batch;
 
 import java.util.List;
+import uk.gov.hmcts.cp.courtregister.domain.BatchAssembly;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 
@@ -37,13 +38,24 @@ public class BatchAssembler {
     /**
      * Groups the active records into the batches this run will ask to be rendered.
      *
+     * <p>The batches already recorded for the keys in play are an argument rather than a read of
+     * this class's own, so the grouping stays a function of what it was given: the same registers
+     * and the same history assemble the same way, in a test and at 18:00 (constitution Principle
+     * V). They are what the supplementary rule is decided from - the next index counts up from the
+     * highest one already recorded for the key, and a key with a batch still in flight is left for
+     * a later run rather than given a second live one.
+     *
      * @param active          the active unbatched records, as the store answered
+     * @param existing        every batch already recorded for the keys those records fall under,
+     *                        whatever state it reached; empty on a key being rendered for the first
+     *                        time
      * @param systemGenerated true where the nightly schedule asked, false where the operations CLI
      *                        did, which is progression's own flag and is written to the batch row
-     * @return one batch per key, each stamped onto the rows it was assembled from
+     * @return one batch per key it could assemble, each beside the registers it was assembled from,
+     *         and the keys it left waiting
      */
-    public List<RegisterBatch> assemble(final List<RegisterRecord> active,
-            final boolean systemGenerated) {
+    public BatchAssembly assemble(final List<RegisterRecord> active,
+            final List<RegisterBatch> existing, final boolean systemGenerated) {
         throw new UnsupportedOperationException("T043");
     }
 }

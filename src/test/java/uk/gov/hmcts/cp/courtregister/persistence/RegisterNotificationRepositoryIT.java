@@ -267,7 +267,7 @@ class RegisterNotificationRepositoryIT {
                 status, null, null, true,
                 status == BatchStatus.GENERATED ? CompletedBy.EVENT : null, ASSEMBLED_AT,
                 requestedAt, status == BatchStatus.GENERATED ? GENERATED_AT : null, null, null,
-                status == BatchStatus.PENDING ? 0 : 1);
+                status == BatchStatus.PENDING ? 0 : 1, null, 0);
     }
 
     /** One recipient's row as it stands the moment before its POST is made. */

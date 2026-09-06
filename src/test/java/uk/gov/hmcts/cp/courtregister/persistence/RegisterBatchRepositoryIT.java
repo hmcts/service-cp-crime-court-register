@@ -114,7 +114,7 @@ class RegisterBatchRepositoryIT {
         void inserting_a_batch_the_operations_cli_assembled_should_record_that_a_person_started_it() {
             final RegisterBatch byHand = new RegisterBatch(UUID.randomUUID(), courtCentre, OU_CODE,
                     COURT_HOUSE, MONDAY, fileName(MONDAY), null, null, BatchStatus.PENDING, null,
-                    null, false, null, ASSEMBLED_AT, null, null, null, null, 0);
+                    null, false, null, ASSEMBLED_AT, null, null, null, null, 0, null, 0);
 
             repository.insert(byHand);
 
@@ -208,7 +208,7 @@ class RegisterBatchRepositoryIT {
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId,
                     DOCUMENT_FILE_ID, BatchStatus.NOTIFIED, null, null, true,
                     CompletedBy.EVENT, ASSEMBLED_AT, REQUESTED_AT, GENERATED_AT,
-                    NOTIFIED_AT, null, 1);
+                    NOTIFIED_AT, null, 1, null, 0);
 
             final boolean moved = repository.compareAndSet(notified, BatchStatus.GENERATED);
 
@@ -230,7 +230,7 @@ class RegisterBatchRepositoryIT {
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, SDG_REASON, true,
                     CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null, null,
-                    FAILED_AT, 2);
+                    FAILED_AT, 2, null, 0);
 
             assertThat(repository.compareAndSet(failed, BatchStatus.PENDING)).isTrue();
 
@@ -254,7 +254,7 @@ class RegisterBatchRepositoryIT {
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, OVERSIZED_SDG_REASON,
                     true, CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null,
-                    null, FAILED_AT, 2);
+                    null, FAILED_AT, 2, null, 0);
 
             assertThat(repository.compareAndSet(failed, BatchStatus.PENDING))
                     .as("the row the renderer's verbosity would otherwise have refused")
@@ -295,7 +295,7 @@ class RegisterBatchRepositoryIT {
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, SDG_REASON, true,
                     CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null, null,
-                    FAILED_AT, 2);
+                    FAILED_AT, 2, null, 0);
             repository.compareAndSet(failed, BatchStatus.PENDING);
             final RegisterBatch revived = generating(assembled, payloadFileId, REQUESTED_AT);
 
@@ -347,7 +347,7 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch attributed = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.GENERATING, null, null, true, CompletedBy.RECONCILER, ASSEMBLED_AT,
-                    REQUESTED_AT, null, null, null, 1);
+                    REQUESTED_AT, null, null, null, 1, null, 0);
 
             assertThatThrownBy(() -> repository.compareAndSet(attributed, BatchStatus.PENDING))
                     .as("the render was asked for and no answer has come back, so there is no "
@@ -396,7 +396,8 @@ class RegisterBatchRepositoryIT {
         void inserting_a_batch_that_already_names_a_mechanism_should_be_refused() {
             final RegisterBatch attributed = new RegisterBatch(UUID.randomUUID(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), null, null, BatchStatus.PENDING,
-                    null, null, true, CompletedBy.EVENT, ASSEMBLED_AT, null, null, null, null, 0);
+                    null, null, true, CompletedBy.EVENT, ASSEMBLED_AT, null, null, null, null, 0,
+                    null, 0);
 
             assertThatThrownBy(() -> repository.insert(attributed))
                     .as("nothing has been asked of the renderer, so nothing can have reported "
@@ -414,7 +415,7 @@ class RegisterBatchRepositoryIT {
     private RegisterBatch assembled(final LocalDate registerDate) {
         return new RegisterBatch(UUID.randomUUID(), courtCentre, OU_CODE, COURT_HOUSE, registerDate,
                 fileName(registerDate), null, null, BatchStatus.PENDING, null, null, true, null,
-                ASSEMBLED_AT, null, null, null, null, 0);
+                ASSEMBLED_AT, null, null, null, null, 0, null, 0);
     }
 
     /** The same batch after systemdocgenerator accepted its render request. */
@@ -422,7 +423,7 @@ class RegisterBatchRepositoryIT {
             final Instant requestedAt) {
         return new RegisterBatch(batch.batchId(), courtCentre, OU_CODE, COURT_HOUSE,
                 batch.registerDate(), batch.fileName(), payloadFileId, null, BatchStatus.GENERATING,
-                null, null, true, null, ASSEMBLED_AT, requestedAt, null, null, null, 1);
+                null, null, true, null, ASSEMBLED_AT, requestedAt, null, null, null, 1, null, 0);
     }
 
     /** The same batch again once systemdocgenerator's document exists. */
@@ -430,7 +431,7 @@ class RegisterBatchRepositoryIT {
         return new RegisterBatch(batch.batchId(), courtCentre, OU_CODE, COURT_HOUSE,
                 batch.registerDate(), batch.fileName(), payloadFileId, DOCUMENT_FILE_ID,
                 BatchStatus.GENERATED, null, null, true, CompletedBy.EVENT,
-                ASSEMBLED_AT, REQUESTED_AT, GENERATED_AT, null, null, 1);
+                ASSEMBLED_AT, REQUESTED_AT, GENERATED_AT, null, null, 1, null, 0);
     }
 
     /** An inserted batch already GENERATING, which is the state the reconciler reads. */
