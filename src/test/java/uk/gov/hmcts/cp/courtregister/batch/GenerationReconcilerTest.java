@@ -609,10 +609,17 @@ class GenerationReconcilerTest {
         @Test
         void reconciliation_is_scheduled_independently_of_the_flag_gate()
                 throws NoSuchMethodException {
-            final Method reconcile = GenerationReconciler.class.getDeclaredMethod("reconcile");
-            final Scheduled schedule = reconcile.getAnnotation(Scheduled.class);
-            final SchedulerLock lock = reconcile.getAnnotation(SchedulerLock.class);
+            final Method scheduled =
+                    GenerationReconciler.class.getDeclaredMethod("reconcileScheduled");
+            final Scheduled schedule = scheduled.getAnnotation(Scheduled.class);
+            final SchedulerLock lock = scheduled.getAnnotation(SchedulerLock.class);
 
+            softly.assertThat(scheduled.getReturnType())
+                    .as("void, and not the count: ShedLock's interceptor refuses to lock a method "
+                            + "returning a primitive - LockingNotSupportedException, raised on "
+                            + "every call including the run's own - and a schedule has nobody to "
+                            + "return a count to anyway")
+                    .isEqualTo(void.class);
             softly.assertThat(schedule)
                     .as("the run calls this too, so its report can name what it fetched - but a "
                             + "safety net that only runs when the flag said the service may "
@@ -632,6 +639,51 @@ class GenerationReconcilerTest {
                             + "sixty-minute run holds is a reconciliation that never happens")
                     .isNotBlank()
                     .isNotEqualTo(RegisterGenerationJob.LOCK_NAME);
+        }
+
+        /**
+         * The run calls the counting method, and the counting method carries no lock.
+         *
+         * <p>Two entry points because they answer different callers. The schedule wants a locked,
+         * {@code void} pass; the run wants the count, for the report line that says how many of
+         * tonight's outcomes the topic failed to deliver - and it is already inside the run's own
+         * lock, so a second one on the same call would be a lock taken against itself.
+         */
+        @Test
+        void the_counting_entry_point_should_carry_no_lock_of_its_own()
+                throws NoSuchMethodException {
+            final Method reconcile = GenerationReconciler.class.getDeclaredMethod("reconcile");
+
+            softly.assertThat(reconcile.getAnnotation(SchedulerLock.class))
+                    .as("the run holds the generation lock already, and ShedLock cannot lock a "
+                            + "method returning a count in any case")
+                    .isNull();
+            softly.assertThat(reconcile.getAnnotation(Scheduled.class))
+                    .as("and it is not the schedule's entry point, or the pass would happen twice "
+                            + "every interval")
+                    .isNull();
+        }
+
+        /**
+         * And the scheduled pass is the same pass, not a second implementation of one.
+         *
+         * <p>What the schedule fires has to reach the same three collaborators the run's call does,
+         * or the safety net that runs every ten minutes would be a different net from the one every
+         * suite above pins.
+         */
+        @Test
+        void the_scheduled_pass_should_do_the_work_the_run_asks_for() {
+            final RegisterBatch batch = overdue();
+            generatingSince(batch);
+            saysNothingAbout(batch);
+
+            softly.assertThatCode(() -> reconciler.reconcileScheduled())
+                    .as("the schedule's entry point is the counting one with its answer dropped, "
+                            + "not a second reconciler")
+                    .doesNotThrowAnyException();
+
+            verify(store).markFailed(batch.batchId(), BatchFailureReason.GENERATION_TIMED_OUT, null,
+                    CompletedBy.RECONCILER);
         }
 
         @Test

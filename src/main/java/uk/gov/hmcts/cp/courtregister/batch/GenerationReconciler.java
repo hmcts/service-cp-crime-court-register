@@ -187,6 +187,16 @@ public class GenerationReconciler {
     }
 
     /**
+     * The schedule's own entry point.
+     *
+     * <p><strong>Seam.</strong> Not yet the schedule's, and not yet doing anything, which is what
+     * the three cases in {@code GenerationReconcilerTest.ItsOwnSchedule} fail on.
+     */
+    public void reconcileScheduled() {
+        throw new UnsupportedOperationException("the schedule's own pass is not wired yet");
+    }
+
+    /**
      * How long the batch that has been waiting longest has been waiting.
      *
      * <p>Taken off the read this pass already made, rather than from a second query: the overdue
