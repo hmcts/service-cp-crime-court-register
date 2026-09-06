@@ -55,6 +55,8 @@ public class GenerationMetrics {
     public static final String GENERATION_RECONCILED = "courtregister_generation_reconciled_total";
     public static final String GENERATION_SKIPPED = "courtregister_generation_skipped_total";
     public static final String NOTIFICATIONS = "courtregister_notifications_total";
+    public static final String PUBLIC_EVENTS_IGNORED =
+            "courtregister_public_events_ignored_total";
     public static final String OLDEST_RECORDED_UNBATCHED_AGE =
             "courtregister_oldest_recorded_unbatched_age";
     public static final String OLDEST_GENERATING_AGE = "courtregister_oldest_generating_age";
@@ -74,6 +76,14 @@ public class GenerationMetrics {
      * two series shapes.
      */
     public static final String NO_RESPONSE = "none";
+
+    /**
+     * The {@code reason} label of a public event another service asked for.
+     *
+     * <p>A bounded code, like every other label here: the event's own source is free text on the
+     * wire and would be an unbounded series if it were carried through.
+     */
+    public static final String FOREIGN_SOURCE = "foreign-source";
 
     private static final int READABLE = 1;
     private static final int UNREADABLE = 0;
@@ -154,6 +164,18 @@ public class GenerationMetrics {
      */
     public void reconciled() {
         counter(GENERATION_RECONCILED).increment();
+    }
+
+    /**
+     * Counts a public event that reached this service's subscription and belongs to somebody else.
+     *
+     * <p>The topic is the estate's, and progression's still-deployed leg renders through the same
+     * systemdocgenerator: an outcome carrying another {@code originatingSource} is acknowledged and
+     * dropped. It is counted rather than merely dropped because the number is how a subscription
+     * that is hearing nothing of its own is told apart from one that is hearing nothing at all.
+     */
+    public void foreignEventIgnored() {
+        counter(PUBLIC_EVENTS_IGNORED, REASON_TAG, FOREIGN_SOURCE).increment();
     }
 
     /**
