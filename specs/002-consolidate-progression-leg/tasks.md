@@ -21,6 +21,25 @@ commits record verification evidence instead of a red assertion.
 container, the differential audit). No implementation task follows them and no red run is required;
 the task records the initial observed result.
 
+### Approved TDD exceptions (Phase 3)
+
+One, and it is recorded here rather than argued for in a commit body:
+
+- **`22fe4b4`** "test(pipeline): pin the two golden shapes progression throws on" is an **[A]
+  characterisation of `c1786da`'s answer**, not the red half of a pair. T022 (`c1786da`) landed
+  `DefendantTypeResolver` under T019's red run and, in answering the shapes progression's
+  `getDefendantType` refuses, produced a behaviour no case then held down; `22fe4b4` states both
+  halves of that difference - what the goldens recorded progression doing, and what the port does
+  instead - so it passes on introduction by construction, exactly as an end-to-end characterisation
+  does. Its commit body records the passing run rather than a red one.
+  **Approved: design owner, 2026-09-06.**
+  From that approval on, the behaviour is owned by **row P10 of `doc/DEFECT-FIXES.md`**, which names
+  `DefendantTypeResolverTest.the_shapes_progression_throws_on_are_answered_applicant` as its pinning
+  test and carries the sign-off-before-cutover marker; the javadoc notes in `DefendantTypeResolver`
+  and its suite that said the row was owed describe how it was found, not where it lives.
+
+No other exception of this kind is pre-approved.
+
 **Conventions**: package root `uk.gov.hmcts.cp.courtregister`; production code under
 `src/main/java/uk/gov/hmcts/cp/courtregister/`, tests under
 `src/test/java/uk/gov/hmcts/cp/courtregister/`; progression sources referenced as `PROG` =
