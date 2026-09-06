@@ -1,0 +1,35 @@
+-- V3 - one active register per hearing, per court centre, per register day, kept by the database.
+--
+-- V2 gave `processed_output` the supersession pair and stated the invariant the whole batch half is
+-- written against: at most one RECORDED, unsuperseded, unbatched row per (hearing_id,
+-- court_centre_id, register_date). The recorder keeps it by reading the hearing's active row and
+-- superseding what it finds - and a read is exactly what two re-shares of one hearing can both do
+-- before either of them has committed. Both then find the same incumbent, both supersede it and
+-- both insert an active register, and the day is rendered with one hearing on it twice, under two
+-- different sets of results, with nothing in the store saying which of them the Youth Offending Team
+-- should believe. `RegisterStoreIT.two_concurrent_re_shares_leave_exactly_one_active_row` is that
+-- race, arranged rather than hoped for.
+--
+-- The index is where the invariant belongs, because the database is the only party that sees both
+-- writers. A statement can only act on the snapshot it was given; this refuses the second active row
+-- whichever snapshot it was decided on. The recorder meets the refusal as a duplicate-key failure,
+-- re-reads the incumbent the winner left and records against that instead
+-- (`JdbcRegisterStore.record`), so a re-share that loses the race is still recorded and the command
+-- that carried it still completes.
+--
+-- Partial on exactly the three predicates that decide what "active" means, which is the same
+-- predicate `idx_output_active_unbatched` sweeps on and the same one the recorder reads its
+-- incumbent with. A superseded row is kept as the evidence of what was assembled before the results
+-- were shared again; a batched row is on its way to a PDF and is nobody's to rewrite; and 001's
+-- PENDING and POSTED rows are records of a POST rather than registers at all. A total unique
+-- constraint would refuse the second register of every re-shared hearing, which is the ordinary
+-- case and the reason there are two rows in the first place.
+--
+-- Nothing is repaired on the way in, and nothing needs to be: only this service's recorder writes
+-- RECORDED rows, and it arrives with V2, in this release, so no deployed database can hold a pair
+-- this index would refuse. If one ever did, the migration failing to build the index is the right
+-- answer: two active registers for one hearing is a question for a person, not something a
+-- migration should settle by superseding whichever of them it happened to see second.
+CREATE UNIQUE INDEX idx_output_active_register_key
+    ON processed_output (hearing_id, court_centre_id, register_date)
+    WHERE status = 'RECORDED' AND superseded_at IS NULL AND batch_id IS NULL;

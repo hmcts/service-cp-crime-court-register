@@ -1,9 +1,9 @@
 # Data Model: Consolidate the progression court-register leg
 
 The 001 processed log (`processed_request`, `processed_output`) is unchanged in its role; this file
-records what 002 adds. All migrations are Flyway, service-owned Postgres, `V2__register_store.sql`.
-The second datasource (framework file service) is **not** migrated by this service — its DDL is
-vendored under `contracts/fileservice/` for tests only.
+records what 002 adds. All migrations are Flyway, service-owned Postgres: `V2__register_store.sql`
+and `V3__active_row_unique.sql`. The second datasource (framework file service) is **not** migrated
+by this service — its DDL is vendored under `contracts/fileservice/` for tests only.
 
 ## `processed_output` — becomes the register store
 
@@ -45,18 +45,27 @@ is exactly what a row written without reading the flag means.
 
 Indexes: `idx_output_active_unbatched ON processed_output (court_centre_id, register_date) WHERE
 status = 'RECORDED' AND superseded_at IS NULL AND batch_id IS NULL`; `idx_output_hearing ON
-processed_output (hearing_id)`.
+processed_output (hearing_id)`; and V3's `idx_output_active_register_key` below.
 
 Invariants (asserted by `RegisterStoreIT`):
 - At most one **active** row (RECORDED, unsuperseded) per `(hearing_id, court_centre_id, register_date)`.
 - A row with a `batch_id` is never superseded and never edited except by `mark*` for its own batch.
 - `superseded_by` points to a row with the same `hearing_id` and batch key and a later `register_time`.
 
-Enforcement: the "at most one active row" invariant is asserted by `RegisterStoreIT` but not yet
-enforced by the database; two concurrent re-shares of one hearing could both insert. V3 (task T024a,
-Phase 3) adds a partial unique index on `(hearing_id, court_centre_id, register_date) WHERE status =
-'RECORDED' AND superseded_at IS NULL AND batch_id IS NULL`, and `RegisterStore.record` handles the
-unique violation by re-reading and superseding.
+**Enforcement of "at most one active row" (V3).** The recorder keeps the invariant by reading the
+hearing's active row and superseding what it finds, and a read is what two re-shares of one hearing
+can both do before either has committed: both find the same incumbent, both supersede it and both
+insert an active register (`RegisterStoreIT.two_concurrent_re_shares_leave_exactly_one_active_row`).
+`V3__active_row_unique.sql` therefore adds `idx_output_active_register_key UNIQUE ON
+processed_output (hearing_id, court_centre_id, register_date) WHERE status = 'RECORDED' AND
+superseded_at IS NULL AND batch_id IS NULL` - the same predicate the sweep and the recorder read
+"active" with, so a superseded row, a batched row and 001's PENDING/POSTED rows are all outside it
+(`SchemaMigrationV3IT`). `JdbcRegisterStore.record` meets the refusal as a `DuplicateKeyException`,
+rolls the attempt back, re-reads the incumbent the winner left and records against that instead, up
+to three attempts; a losing re-share is therefore recorded rather than failed, and only a key that
+lost the race three times over raises a `ConcurrencyFailureException` (the store answering: the
+delivery is handed back, intake keeps running). The recording statement supersedes **before** it
+inserts, because the row being replaced holds the key until the update takes it out of the index.
 
 ## `register_batch`
 

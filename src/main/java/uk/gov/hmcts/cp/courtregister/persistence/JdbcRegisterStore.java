@@ -16,6 +16,8 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.dao.ConcurrencyFailureException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.support.TransactionOperations;
 import tools.jackson.databind.ObjectMapper;
@@ -47,18 +49,23 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * supersession therefore cannot see the row being inserted beside it, so a recording can never
  * supersede itself (research §8).
  *
- * <p><strong>Assembly is the exception, and it takes a transaction.</strong> Its statement is one
- * statement too, but the decision about it is not in the statement: whether the batch is the batch
- * that was asked for is a count compared in Java, and under autocommit that comparison happens
- * after the batch row and the stamps are already committed. A refusal would then leave a PENDING
- * batch holding {@code idx_register_batch_live_key} for that court centre and day, and the day
- * would never be rendered by any later run. So assembly runs inside a transaction and the refusal
- * rolls it back: the batch is assembled or it never existed.
+ * <p><strong>Two of them take a transaction as well, and for two different reasons.</strong>
+ * Assembly's statement is one statement too, but the decision about it is not in the statement:
+ * whether the batch is the batch that was asked for is a count compared in Java, and under
+ * autocommit that comparison happens after the batch row and the stamps are already committed. A
+ * refusal would then leave a PENDING batch holding {@code idx_register_batch_live_key} for that
+ * court centre and day, and the day would never be rendered by any later run. So assembly runs
+ * inside a transaction and the refusal rolls it back: the batch is assembled or it never existed.
+ * Recording runs inside one because it may be issued more than once - a re-share that loses the
+ * race for its key is refused by {@code idx_output_active_register_key} and tried again on a fresh
+ * snapshot - and the supersession the refused attempt had already made has to go with it.
  *
- * <p>The clauses are chained through their {@code RETURNING} output - {@code replaced} reads
- * {@code recorded}, {@code flipped} reads {@code generated} - which is what orders them. Postgres
- * does not otherwise say which clause runs first, and the superseded row points at the row being
- * inserted, so the insert has to have happened.
+ * <p>The clauses are chained through their output, which is what orders them: Postgres does not
+ * otherwise say which clause runs first. In the recording statement {@code recorded} counts
+ * {@code replaced}'s rows, because the row being replaced holds the key the insert is about to take
+ * and has to be out of the index before the insert asks for it; in {@code mark generated} and
+ * {@code mark notified}, {@code flipped} reads {@code generated} through {@code FROM}, because the
+ * rows that move are the rows of the batch the update just settled.
  *
  * <p><strong>Every {@code mark} is fenced on the status it read.</strong> The permitted moves belong
  * to {@link BatchStatus#canTransitionTo(BatchStatus)} and are asked there rather than re-encoded as
@@ -75,6 +82,17 @@ public class JdbcRegisterStore implements RegisterStore {
 
     /** The one statement a fenced batch write is expected to change. */
     private static final long ONE_BATCH = 1;
+
+    /**
+     * How many times a recording that lost the race for its key re-reads and tries again.
+     *
+     * <p>Three, and bounded rather than open-ended for the reason every retry in this service is
+     * bounded: a hearing being re-shared faster than the store can record it is a producer to look
+     * at, and a loop that never gives up would hold a broker thread against it for as long as it
+     * lasted. Each attempt loses only to a re-share that <em>committed</em> in between, so three of
+     * them is already two more collisions than the race the invariant exists for.
+     */
+    private static final int RECORD_ATTEMPTS = 3;
 
     /** How every refusal in this class names the batch it is about, and the only thing it names. */
     private static final String BATCH = "batch ";
@@ -104,6 +122,20 @@ public class JdbcRegisterStore implements RegisterStore {
      * is the invariant the whole batch half is written against; a predicate that only handled the
      * ordinary direction would leave two.
      *
+     * <p><strong>The supersession runs before the insert, and that order is the statement's to
+     * keep.</strong> {@code idx_output_active_register_key} (V3) admits one active row per key, and
+     * the row being replaced still holds that key until the update takes it out of the index: an
+     * insert issued first would collide with the register it is replacing, on the ordinary
+     * single-threaded re-share. So {@code replaced} is chained ahead of {@code recorded} - the
+     * insert's source counts {@code replaced}'s rows, which cannot be counted until every one of
+     * its updates has been made - and the supersession names the new row through {@code :outputId},
+     * which the caller minted, rather than through the insert's {@code RETURNING}. The foreign key
+     * to it is satisfied by the end of the statement, which is when Postgres checks it.
+     *
+     * <p>Reversing the chain costs nothing that research §8 asked for: {@code incumbent} is a read
+     * of rows that already existed on this statement's snapshot, so the supersession still cannot
+     * see the row being inserted beside it and a recording still cannot supersede itself.
+     *
      * <p>The scalar subquery is deliberate: it answers {@code NULL} where there is no incumbent and
      * <em>fails</em> where there is more than one, so a key that had already lost the invariant is
      * reported rather than silently added to.
@@ -118,6 +150,16 @@ public class JdbcRegisterStore implements RegisterStore {
                    AND status = 'RECORDED'
                    AND superseded_at IS NULL
                    AND batch_id IS NULL
+            ), replaced AS (
+                UPDATE processed_output superseded
+                   SET status = 'SUPERSEDED',
+                       superseded_at = now(),
+                       superseded_by = :outputId,
+                       updated_at = now()
+                 WHERE superseded.output_id IN (SELECT output_id
+                                                  FROM incumbent
+                                                 WHERE register_time <= :registerTime)
+                RETURNING superseded.output_id
             ), recorded AS (
                 INSERT INTO processed_output (
                     output_id, source, request_id, court_centre_id, court_centre_ou_code,
@@ -134,19 +176,9 @@ public class JdbcRegisterStore implements RegisterStore {
                     later.output_id, now(), now()
                   FROM (SELECT (SELECT output_id
                                   FROM incumbent
-                                 WHERE register_time > :registerTime) AS output_id) later
+                                 WHERE register_time > :registerTime) AS output_id,
+                               (SELECT count(*) FROM replaced) AS superseded_rows) later
                 RETURNING output_id
-            ), replaced AS (
-                UPDATE processed_output superseded
-                   SET status = 'SUPERSEDED',
-                       superseded_at = now(),
-                       superseded_by = recorded.output_id,
-                       updated_at = now()
-                  FROM recorded
-                 WHERE superseded.output_id IN (SELECT output_id
-                                                  FROM incumbent
-                                                 WHERE register_time <= :registerTime)
-                RETURNING superseded.output_id
             )
             SELECT (SELECT output_id FROM replaced) AS superseded_output_id
             """;
@@ -406,36 +438,86 @@ public class JdbcRegisterStore implements RegisterStore {
      * the batch's first row, and nothing between the transformation and the render payload knows it
      * otherwise: the document does not carry it.
      *
-     * @throws IllegalStateException if the key already carries more than one active row, or if the
-     *                               statement recorded nothing
+     * <p><strong>A recording that lost the race re-reads and records again.</strong> Which register
+     * a re-share replaces is decided by a read, so two re-shares of one hearing that both read
+     * before either has committed both find the same incumbent - and
+     * {@code idx_output_active_register_key} refuses the second of them rather than letting the day
+     * be rendered with one hearing on it twice. That refusal is not the caller's to carry: the
+     * losing re-share is a message the broker delivered and the pipeline completed, and handing the
+     * listener a duplicate-key failure would abandon a command whose register is safely recorded and
+     * turn an invariant the database keeps into an outage. So the attempt is made again, on a fresh
+     * transaction and therefore a fresh snapshot: it finds the register the winner left and either
+     * supersedes it or is recorded SUPERSEDED against it, exactly as an unraced re-share would.
+     *
+     * <p>Each attempt is its own transaction because a violated one cannot be continued: Postgres
+     * refuses every further statement on an aborted transaction, so a retry inside it would fail on
+     * the read rather than on the write. The identifier the caller is answered with is minted once
+     * and reused, which is safe precisely because a refused attempt committed nothing.
+     *
+     * @throws ConcurrencyFailureException if {@value #RECORD_ATTEMPTS} attempts all lost the race
+     *                                     for this key, which is the store answering rather than
+     *                                     the store being unreachable: the delivery is handed back
+     *                                     and intake keeps running
+     * @throws IllegalStateException       if the key already carries more than one active row, or if
+     *                                     the statement recorded nothing
      */
     @Override
     public RecordOutcome record(final DistributionCommand command,
             final CourtRegisterDocument document, final String courtCentreOuCode,
             final String defendantType, final RecordedFlagState flagState) {
-        final UUID outputId = UUID.randomUUID();
-        final String json = objectMapper.writeValueAsString(document);
+        final Recording recording = new Recording(UUID.randomUUID(), command, document,
+                objectMapper.writeValueAsString(document), courtCentreOuCode, defendantType,
+                flagState);
+        RecordOutcome outcome = null;
+        DuplicateKeyException lost = null;
+        for (int attempt = 0; outcome == null && attempt < RECORD_ATTEMPTS; attempt++) {
+            try {
+                outcome = insert(recording);
+            } catch (DuplicateKeyException collision) {
+                lost = collision;
+            }
+        }
+        if (outcome == null) {
+            throw new ConcurrencyFailureException("the register for this hearing and day was "
+                    + "re-recorded by another delivery on each of " + RECORD_ATTEMPTS
+                    + " attempts; source=" + command.source() + " requestId=" + command.requestId(),
+                    lost);
+        }
+        return outcome;
+    }
+
+    /**
+     * One attempt at the recording statement, inside the transaction that undoes a lost race.
+     *
+     * <p>The transaction is what makes the retry safe rather than what makes the write atomic - one
+     * statement is atomic on its own. A re-share that loses the race has already superseded the
+     * incumbent by the time its insert is refused, and without a transaction to roll back that
+     * supersession would stand: the register the winner replaced would carry the loser's identity in
+     * {@code superseded_by}, pointing support at a row that was never recorded.
+     */
+    private RecordOutcome insert(final Recording recording) {
+        final CourtRegisterDocument document = recording.document();
         final Instant registerTime = instantOf(document.registerDate(), "registerDate");
         final Instant hearingDate = instantOf(document.hearingDate(), "hearingDate");
-        return jdbcClient.sql(RECORD_REGISTER)
-                .param(OUTPUT_ID, outputId)
-                .param("source", command.source())
-                .param("requestId", command.requestId())
+        return transactions.execute(recorded -> jdbcClient.sql(RECORD_REGISTER)
+                .param(OUTPUT_ID, recording.outputId())
+                .param("source", recording.command().source())
+                .param("requestId", recording.command().requestId())
                 .param(COURT_CENTRE_ID, UUID.fromString(document.courtCentreId()))
-                .param("courtCentreOuCode", courtCentreOuCode, Types.VARCHAR)
+                .param("courtCentreOuCode", recording.courtCentreOuCode(), Types.VARCHAR)
                 .param(REGISTER_DATE, LocalDate.ofInstant(registerTime, LONDON))
                 .param("fileName", document.fileName())
-                .param("digest", digestOf(json))
-                .param("document", json)
+                .param("digest", digestOf(recording.json()))
+                .param("document", recording.json())
                 .param(HEARING_ID, UUID.fromString(document.hearingId()))
                 .param("hearingDate", offsetOf(hearingDate))
                 .param("courtHouse", courtHouseOf(document))
                 .param(REGISTER_TIME, offsetOf(registerTime))
-                .param("defendantType", defendantType)
-                .param("flagState", flagState.name())
-                .query((rs, rowNumber) ->
-                        new RecordOutcome(outputId, rs.getObject("superseded_output_id", UUID.class)))
-                .single();
+                .param("defendantType", recording.defendantType())
+                .param("flagState", recording.flagState().name())
+                .query((rs, rowNumber) -> new RecordOutcome(recording.outputId(),
+                        rs.getObject("superseded_output_id", UUID.class)))
+                .single());
     }
 
     @Override
@@ -679,6 +761,18 @@ public class JdbcRegisterStore implements RegisterStore {
 
     /** The batch the statement wrote, beside the count of rows it managed to stamp. */
     private record Assembled(RegisterBatch batch, long stampedRows) {
+    }
+
+    /**
+     * One register as it will be written, held so that a retry writes the same row again.
+     *
+     * <p>The identifier above all: the row a retry records is the row the first attempt would have
+     * recorded, under the identity the caller is answered with, so a re-share settled on the second
+     * attempt is indistinguishable from one that met no race at all.
+     */
+    private record Recording(UUID outputId, DistributionCommand command,
+            CourtRegisterDocument document, String json, String courtCentreOuCode,
+            String defendantType, RecordedFlagState flagState) {
     }
 
     /**
