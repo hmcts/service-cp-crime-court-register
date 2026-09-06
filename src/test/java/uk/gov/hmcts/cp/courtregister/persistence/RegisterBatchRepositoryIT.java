@@ -25,11 +25,12 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  *
  * <p>{@link JdbcRegisterStore} owns the writes that have to move {@code processed_output} in the
  * same statement; what is left is this repository, and it is the half every other collaborator
- * reaches the batch through - the reconciler's overdue read, the listener's fallback lookup by
- * payload, the operations CLI's own assembly, and the whole-row write that carries the facts the
- * port's {@code mark} signatures do not. Each of its six statements is round-tripped here, because
- * nothing else will: the phases that consume them mock the store, so a column dropped from one of
- * these statements would first be noticed by a batch that could not say what happened to it.
+ * reaches the batch through - the read by the identity every outcome is attributed by, the
+ * reconciler's two overdue reads, the operations CLI's own assembly, and the whole-row write that
+ * carries the facts the port's {@code mark} signatures do not. Each of its five statements is
+ * round-tripped here, because nothing else will: the phases that consume them mock the store, so a
+ * column dropped from one of these statements would first be noticed by a batch that could not say
+ * what happened to it.
  *
  * <p><strong>The first case is the insert in exactly the state assembly leaves it in</strong>: ten
  * of the row's columns empty, two of them {@code uuid}, bound as the typed nulls the statement
@@ -79,10 +80,9 @@ class RegisterBatchRepositoryIT {
     /**
      * This case's payload ids, minted per test for the same reason as the court centre.
      *
-     * <p>{@link RegisterBatchRepository#findByPayloadFileId(UUID)} answers for the whole table and
-     * insists on at most one row, so a payload id shared between cases - or with another suite -
-     * would make the lookup fail on how many batches the container held rather than on what the
-     * statement does.
+     * <p>The overdue reads below answer for the whole table, so a payload id shared between cases -
+     * or with another suite - would make a case fail on how many batches the container held rather
+     * than on what the statement does.
      */
     private final UUID payloadFileId = UUID.randomUUID();
     private final UUID secondPayloadFileId = UUID.randomUUID();
@@ -130,29 +130,6 @@ class RegisterBatchRepositoryIT {
             assertThat(repository.findById(UUID.randomUUID()))
                     .as("an event correlating on a batch nobody assembled is unattributable, and "
                             + "an empty answer is what lets the listener say so")
-                    .isEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("finding the batch an outcome names")
-    class Finding {
-
-        @Test
-        void finding_by_payload_file_id_should_answer_with_the_batch_rendered_from_it() {
-            final RegisterBatch requested = requested(MONDAY, payloadFileId, REQUESTED_AT);
-
-            assertThat(repository.findByPayloadFileId(payloadFileId))
-                    .as("an outcome names the payload as well as the correlation, so the batch is "
-                            + "still findable when only one of the two is trustworthy")
-                    .contains(requested);
-        }
-
-        @Test
-        void finding_by_a_payload_no_batch_owns_should_answer_that_it_has_none() {
-            assertThat(repository.findByPayloadFileId(UUID.randomUUID()))
-                    .as("a document rendered from a payload this service never stored belongs to "
-                            + "nothing here, and the fallback lookup has to be able to say so")
                     .isEmpty();
         }
     }

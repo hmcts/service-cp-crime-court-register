@@ -190,11 +190,11 @@ class DocumentOutcomeSinkTest {
     }
 
     /**
-     * A batch the renderer has been asked about and has not answered for, findable both ways.
+     * A batch the renderer has been asked about and has not answered for.
      *
-     * <p>Both lookups are stubbed, and the payload one deliberately: it is the store's read the
-     * reconciler makes for itself, and a sink that used it as a second way to a batch would be seen
-     * doing it here rather than left to be inferred from a stub that was never set up.
+     * <p>One lookup is stubbed because there is one lookup: a batch is found by the identity the
+     * render request carried, and the payload the event names is a cross-check on that answer
+     * rather than a second way to reach a batch.
      *
      * @param registerDate the register day this batch groups
      * @return the batch, GENERATING
@@ -202,7 +202,6 @@ class DocumentOutcomeSinkTest {
     private RegisterBatch inFlight(final LocalDate registerDate) {
         final RegisterBatch batch = generating(registerDate);
         when(batches.findById(batch.batchId())).thenReturn(Optional.of(batch));
-        when(batches.findByPayloadFileId(batch.payloadFileId())).thenReturn(Optional.of(batch));
         return batch;
     }
 
@@ -373,12 +372,13 @@ class DocumentOutcomeSinkTest {
         /**
          * The payload is a cross-check and never a way in.
          *
-         * <p>The batch is findable by the payload the outcome names - that read exists, and the
-         * reconciler makes it - so a sink that fell back to it would complete this batch on an
-         * event whose own account of which batch it is about names nothing this store holds. That
-         * is not a batch identified by a second means: it is an event whose correlation was lost or
-         * rewritten somewhere between the render request and the topic, and completing a night's
-         * registers on it is exactly the guess the correlation exists to make unnecessary.
+         * <p>The store this batch is held in knows the payload the outcome names, so a sink that
+         * went looking for a batch by it would complete this one on an event whose own account of
+         * which batch it is about names nothing this store holds. That is not a batch identified by
+         * a second means: it is an event whose correlation was lost or rewritten somewhere between
+         * the render request and the topic, and completing a night's registers on it is exactly the
+         * guess the correlation exists to make unnecessary. The repository offers no such read, and
+         * this is the case that says the sink does not want one.
          */
         @Test
         void an_unknown_correlation_should_not_be_rescued_by_a_payload_that_matches() {
@@ -501,8 +501,6 @@ class DocumentOutcomeSinkTest {
             final RegisterBatch afterwards = generated(batch, CompletedBy.EVENT);
             when(batches.findById(batch.batchId()))
                     .thenReturn(Optional.of(batch)).thenReturn(Optional.of(afterwards));
-            when(batches.findByPayloadFileId(batch.payloadFileId()))
-                    .thenReturn(Optional.of(batch)).thenReturn(Optional.of(afterwards));
 
             documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
             documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
@@ -523,8 +521,6 @@ class DocumentOutcomeSinkTest {
             final RegisterBatch batch = generating(MONDAY);
             final RegisterBatch afterwards = failed(batch, CompletedBy.EVENT);
             when(batches.findById(batch.batchId()))
-                    .thenReturn(Optional.of(batch)).thenReturn(Optional.of(afterwards));
-            when(batches.findByPayloadFileId(batch.payloadFileId()))
                     .thenReturn(Optional.of(batch)).thenReturn(Optional.of(afterwards));
 
             generationFailed(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);

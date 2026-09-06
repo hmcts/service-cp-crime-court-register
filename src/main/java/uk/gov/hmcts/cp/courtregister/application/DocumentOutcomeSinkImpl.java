@@ -38,10 +38,10 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * a cross-check on that lookup and never a second route to a batch: the vendored schemas make the
  * correlation optional and the payload required, but this service always sends a correlation, so an
  * outcome that carries none - or one this store has no batch for - is not an outcome to go looking
- * for a batch for by other means. Reaching for {@code findByPayloadFileId} there would take an
- * event whose own account of which batch it is about is missing or wrong and complete a night's
- * registers on it anyway. The lookup is also what makes a redelivery idempotent - a batch already
- * where the outcome would put it is recognised rather than re-stamped, which is the reading
+ * for a batch for by other means. A read by payload would take an event whose own account of which
+ * batch it is about is missing or wrong and complete a night's registers on it anyway, which is why
+ * the repository offers none. The lookup is also what makes a redelivery idempotent - a batch
+ * already where the outcome would put it is recognised rather than re-stamped, which is the reading
  * {@code BatchStatus} was narrowed to force.
  *
  * <p><strong>Four answers before a mark is made, and only one of them writes.</strong> An outcome

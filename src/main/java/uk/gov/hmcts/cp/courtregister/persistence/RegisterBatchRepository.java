@@ -31,9 +31,17 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
  * <p><strong>The single-table half of the batch's life.</strong> {@link JdbcRegisterStore} owns the
  * writes that have to move {@code processed_output} in the same statement - assembly and every
  * {@code mark} - because those are atomic or they are wrong. What is left is what the other
- * collaborators need and can do alone: the reconciler's two overdue reads, the listener's fallback
- * lookup, the operations CLI's own assembly, and the whole-row compare-and-set a caller that read a
- * batch and decided about it writes it back through.
+ * collaborators need and can do alone: the reconciler's two overdue reads, the read by the identity
+ * every outcome is attributed by, the operations CLI's own assembly, and the whole-row
+ * compare-and-set a caller that read a batch and decided about it writes it back through.
+ *
+ * <p><strong>A batch is read by its identity and by nothing else.</strong> There is no read by the
+ * payload a batch was rendered from, because there is no caller for one: the reconciler asks
+ * systemdocgenerator about the payload id it read off the batch row it already holds, and the sink
+ * finds a batch by {@code sourceCorrelationId} alone and treats the payload as a cross-check on
+ * that. A lookup by payload would only ever be reached by an outcome whose own account of which
+ * batch it is about was missing or wrong, and completing a night's registers on one of those is the
+ * guess the correlation exists to make unnecessary.
  *
  * <p><strong>Every state change here is a compare-and-set through the state machine.</strong> The
  * caller names the state it read the batch in and the state it decided on; {@code BatchStatus}
@@ -92,12 +100,8 @@ public class RegisterBatchRepository {
     /** Statement 2 - one batch by the identity every downstream call correlates on. */
     private static final String FIND_BY_ID = SELECT_BATCH + " WHERE batch_id = :batchId";
 
-    /** Statement 3 - one batch by the payload it was rendered from. */
-    private static final String FIND_BY_PAYLOAD_FILE_ID =
-            SELECT_BATCH + " WHERE payload_file_id = :payloadFileId";
-
     /**
-     * Statement 4 - the batches whose outcome is overdue, oldest first.
+     * Statement 3 - the batches whose outcome is overdue, oldest first.
      *
      * <p>Ordered so that a run that cannot reconcile all of them reconciles the ones that have been
      * waiting longest, which are the ones a Youth Offending Team is already missing a register for.
@@ -108,7 +112,7 @@ public class RegisterBatchRepository {
             """;
 
     /**
-     * Statement 5 - the batches that never reached the renderer, oldest first.
+     * Statement 4 - the batches that never reached the renderer, oldest first.
      *
      * <p>The other half of the safety net's read. A batch whose payload id was minted and whose
      * {@code markRequested} never landed - the pod died after the 202, or the store blipped on the
@@ -129,7 +133,7 @@ public class RegisterBatchRepository {
             """;
 
     /**
-     * Statement 6 - the batch as it should now stand, if it still stands where the caller left it.
+     * Statement 5 - the batch as it should now stand, if it still stands where the caller left it.
      *
      * <p>The whole mutable row, so a caller that read a batch, decided about it and writes it back
      * cannot leave half of its decision behind. The key and the assembly facts are not among the
@@ -214,27 +218,7 @@ public class RegisterBatchRepository {
     }
 
     /**
-     * Statement 3 - reads one batch by the payload it was rendered from.
-     *
-     * <p>The reconciler's read, and only the reconciler's. It asks systemdocgenerator about a batch
-     * by the payload id it read off that batch's own row, so this answers the question it started
-     * from. It is deliberately not a second way for an outcome to find a batch: the correlation is
-     * what a render request carried and what an outcome is attributed by, and an outcome whose
-     * correlation names nothing is one this service cannot attribute rather than one to go looking
-     * for a batch for.
-     *
-     * @param payloadFileId the file-service id the payload was stored under
-     * @return the batch, or empty where no batch owns that payload
-     */
-    public Optional<RegisterBatch> findByPayloadFileId(final UUID payloadFileId) {
-        return jdbcClient.sql(FIND_BY_PAYLOAD_FILE_ID)
-                .param("payloadFileId", payloadFileId)
-                .query((rs, rowNumber) -> batch(rs))
-                .optional();
-    }
-
-    /**
-     * Statement 4 - the batches that have been GENERATING since before the given instant.
+     * Statement 3 - the batches that have been GENERATING since before the given instant.
      *
      * @param requestedBefore the far edge of the grace period
      * @return every batch whose outcome is overdue, oldest first
@@ -247,7 +231,7 @@ public class RegisterBatchRepository {
     }
 
     /**
-     * Statement 5 - the batches that minted a payload before the given instant and got no further.
+     * Statement 4 - the batches that minted a payload before the given instant and got no further.
      *
      * @param assembledBefore the far edge of the grace period, measured from assembly
      * @return every stale PENDING batch that minted a payload, oldest first
@@ -260,7 +244,7 @@ public class RegisterBatchRepository {
     }
 
     /**
-     * Statement 6 - moves a batch from the state the caller read it in to the state it decided on.
+     * Statement 5 - moves a batch from the state the caller read it in to the state it decided on.
      *
      * <p>The move is asked of {@link BatchStatus} before it is attempted, so the state machine is
      * the domain's and not this statement's, and a move nobody drew is refused where it is made
