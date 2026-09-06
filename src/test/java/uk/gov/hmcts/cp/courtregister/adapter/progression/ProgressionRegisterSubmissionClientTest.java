@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.adapter.progression;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -37,8 +38,10 @@ import uk.gov.hmcts.cp.courtregister.application.SubmissionReceipt;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterAddress;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterCaseOrApplication;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDefendant;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterHearingVenue;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.ProcessedOutputClaim;
@@ -142,6 +145,17 @@ class ProgressionRegisterSubmissionClientTest {
     private RegisterSubmission submission(final Map<TransformationAnomaly, Integer> anomalies) {
         return new RegisterSubmission(
                 claim, DEADLINE, document(), OU_CODE, REGISTER_DAY, CALLER, anomalies);
+    }
+
+    /**
+     * A submission carrying the register named, and everything else as the ordinary case has it.
+     *
+     * @param document the register the run assembled
+     * @return the submission
+     */
+    private RegisterSubmission submissionOf(final CourtRegisterDocument document) {
+        return new RegisterSubmission(
+                claim, DEADLINE, document, OU_CODE, REGISTER_DAY, CALLER, Map.of());
     }
 
     private void claimGranted() {
@@ -270,6 +284,87 @@ class ProgressionRegisterSubmissionClientTest {
             assertThat(claimed().anomalies()).containsExactlyInAnyOrderEntriesOf(Map.of(
                     TransformationAnomaly.LETTER_DELIVERY_DROPPED, 2,
                     TransformationAnomaly.UNRESOLVABLE_YOUTH_DEFENDANT, 1));
+        }
+    }
+
+    /**
+     * What goes on the wire is the command, not the register this increment records.
+     *
+     * <p>Increment 002 attaches {@code defendantType} to the document after the contract check, so
+     * the register that reaches this adapter carries a field the {@code add-court-register} command
+     * does not declare - and that command is {@code additionalProperties: false}, so a POST carrying
+     * it is a 400 progression answers and, before defect fix C1, a register nobody ever learned was
+     * lost. The projection back to the command's own fields is this adapter's, because it is the
+     * only stage that knows what a POST body is; the record arm keeps the field, which is the whole
+     * reason it exists.
+     *
+     * <p>The two assertions are the two halves of that. The body is byte-identical to the register
+     * with no defendant type on it, which is exactly what 001 sent; and it satisfies the vendored
+     * command schema, read back through the same validator the transformation holds a document to,
+     * which is what says the projection is complete rather than merely one field shorter.
+     */
+    @Nested
+    @DisplayName("the body a progression-post deployment sends")
+    class TheCommandBody {
+
+        /** The side of the court application the register's defendants are on (FR-002). */
+        private static final String DEFENDANT_TYPE = "Appellant";
+
+        @Test
+        @DisplayName("carries the command's own fields and never the defendant type")
+        void the_body_posted_is_the_command_body_without_the_defendant_type() {
+            claimGranted();
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class)))
+                    .thenReturn(ACCEPTED);
+            when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(true);
+            final ArgumentCaptor<byte[]> sent = ArgumentCaptor.forClass(byte[].class);
+
+            client().submit(submissionOf(inContract(DEFENDANT_TYPE)));
+
+            verify(gateway).post(sent.capture(), any(CallerIdentity.class), any(Instant.class));
+            assertThat(MAPPER.readTree(sent.getValue()).at("/defendantType").isMissingNode())
+                    .as("the command schema is additionalProperties: false and declares no "
+                            + "defendantType, so a body carrying one is refused")
+                    .isTrue();
+            assertThat(new String(sent.getValue(), StandardCharsets.UTF_8))
+                    .as("and the rest of the body is the register unchanged, as 001 sent it")
+                    .isEqualTo(MAPPER.writeValueAsString(inContract(null)));
+        }
+
+        @Test
+        @DisplayName("satisfies the vendored add-court-register schema")
+        void the_body_posted_satisfies_the_vendored_command_schema() {
+            claimGranted();
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class)))
+                    .thenReturn(ACCEPTED);
+            when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(true);
+            final ArgumentCaptor<byte[]> sent = ArgumentCaptor.forClass(byte[].class);
+
+            client().submit(submissionOf(inContract(DEFENDANT_TYPE)));
+
+            verify(gateway).post(sent.capture(), any(CallerIdentity.class), any(Instant.class));
+            final CourtRegisterDocument received =
+                    MAPPER.readValue(sent.getValue(), CourtRegisterDocument.class);
+            assertThatCode(() -> new OutboundContractValidator(MAPPER).validate(received))
+                    .as("what was received is what progression's own contract is applied to")
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("writes the digest of the command body, which is what was sent")
+        void the_digest_written_is_the_digest_of_the_command_body() {
+            claimGranted();
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class)))
+                    .thenReturn(ACCEPTED);
+            when(outputs.recordPosted(claim, ACCEPTED)).thenReturn(true);
+            final ArgumentCaptor<byte[]> sent = ArgumentCaptor.forClass(byte[].class);
+
+            client().submit(submissionOf(inContract(DEFENDANT_TYPE)));
+
+            verify(gateway).post(sent.capture(), any(CallerIdentity.class), any(Instant.class));
+            assertThat(claimed().requestDigest())
+                    .as("a digest of something other than what went out is worse than none")
+                    .isEqualTo(sha256(sent.getValue()));
         }
     }
 
@@ -615,6 +710,45 @@ class ProgressionRegisterSubmissionClientTest {
         } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException(impossible);
         }
+    }
+
+    /**
+     * A register the frozen contract accepts, carrying the defendant type named.
+     *
+     * <p>The suite's other fixture is written for the privacy cases and is deliberately sparse - it
+     * carries empty lists where the schemas put {@code minItems: 1} - so it cannot be used to say
+     * anything about what a contract makes of the body. This one is populated to exactly the
+     * contract's required set, so the only difference between the two bodies below is the field
+     * this nested case is about.
+     *
+     * @param defendantType the side of the court application the register's defendants are on, or
+     *                      {@code null} for the 001 shape
+     * @return the register
+     */
+    private static CourtRegisterDocument inContract(final String defendantType) {
+        final CourtRegisterDefendant defendant = new CourtRegisterDefendant(
+                "b2b3f5a1-6c9d-4e21-8a7f-3d5c1e9b0426", DEFENDANT_NAME, "2008-04-11",
+                new CourtRegisterAddress(
+                        DEFENDANT_ADDRESS_LINE, null, null, null, null, "BS1 1AA"),
+                null, null, "MALE", "Not Applicable", null, null, null,
+                List.of(new CourtRegisterCaseOrApplication(
+                        "TFL4359536", null, null, null, null, null, null)),
+                null, null);
+        return new CourtRegisterDocument(
+                "2020-06-01T10:00:00Z",
+                "2020-01-20T00:00:00Z",
+                HEARING_ID,
+                COURT_CENTRE_ID,
+                FILE_NAME,
+                defendantType,
+                new CourtRegisterHearingVenue(
+                        "South West London Magistrates' Court",
+                        "Lavender Hill Magistrates' Court",
+                        new CourtRegisterAddress(
+                                "176A Lavender Hill", null, null, null, null, "SW11 1JU")),
+                List.of(new CourtRegisterRecipient(
+                        "Youth Offending Team", "yot@example.gov.uk", null, "cr_standard")),
+                List.of(defendant));
     }
 
     /** A register with a child on it, so the privacy cases have something real to look for. */

@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -14,11 +15,15 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -37,12 +42,19 @@ import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.dao.TransientDataAccessResourceException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.adapter.progression.ProgressionCommandGateway;
+import uk.gov.hmcts.cp.courtregister.adapter.progression.ProgressionRegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.config.OutputMode;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterAddress;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterCaseOrApplication;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDefendant;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterHearingVenue;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
 import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
@@ -50,6 +62,7 @@ import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.NoRegisterReason;
 import uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException;
+import uk.gov.hmcts.cp.courtregister.domain.ProcessedOutputClaim;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
@@ -57,6 +70,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
+import uk.gov.hmcts.cp.courtregister.persistence.ProcessedOutputRepository;
 import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
@@ -1225,6 +1239,133 @@ class DistributionPipelineTest {
                 new RecoverableDataAccessException("the register store dropped the connection"),
                 new TransientDataAccessResourceException("the register store timed out"),
             };
+        }
+    }
+
+    /**
+     * What a {@code progression-post} deployment actually puts on the wire, once 002's field is on
+     * the register.
+     *
+     * <p>The one case in this file that runs a real adapter under the pipeline, and it is here
+     * because the claim spans both: the core hands the submission port the register it built -
+     * {@code defendantType} and all - and only the adapter knows that a POST body is the
+     * {@code add-court-register} command, which is {@code additionalProperties: false} and declares
+     * no such field. A mocked submission port can say what the core handed over and can never say
+     * what left the pod, and the two suites either side of this one each see half of it. The
+     * repository and the transport are still doubles; what is real is the adapter between them.
+     *
+     * <p>The digest is asserted with the body because the row is claimed before the POST and is the
+     * evidence a timed-out submission leaves behind: a digest of anything but the bytes that went
+     * is worse than none.
+     */
+    @Nested
+    @DisplayName("the body a progression-post deployment sends")
+    class TheBodySent {
+
+        /** The side of the court application this register's defendants are on (FR-002). */
+        private static final String DEFENDANT_TYPE = "Appellant";
+
+        /** Progression's own success, and nothing else is one. */
+        private static final int ACCEPTED = 202;
+
+        private final ProcessedOutputRepository outputs = mock(ProcessedOutputRepository.class);
+        private final ProgressionCommandGateway gateway = mock(ProgressionCommandGateway.class);
+
+        @BeforeEach
+        void theRegisterCarriesItsDefendantType() {
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                        any(JsonNode.class), any()))
+                    .thenReturn(new TransformationResult.Register(
+                            inContract(DEFENDANT_TYPE), OU_CODE));
+            when(outputs.claimPending(any(RunClaim.class), any(ProcessedOutputClaim.class)))
+                    .thenReturn(true);
+            when(gateway.post(any(byte[].class), any(CallerIdentity.class), any(Instant.class)))
+                    .thenReturn(ACCEPTED);
+            when(outputs.recordPosted(any(RunClaim.class), anyInt())).thenReturn(true);
+        }
+
+        @Test
+        @DisplayName("is the add-court-register command body, digest and all")
+        void the_bytes_sent_are_the_command_body_and_the_digest_is_of_them() {
+            final ArgumentCaptor<byte[]> sent = ArgumentCaptor.forClass(byte[].class);
+            final ArgumentCaptor<ProcessedOutputClaim> claimed =
+                    ArgumentCaptor.forClass(ProcessedOutputClaim.class);
+
+            final GuardDecision decision = postingPipeline().process(command, delivery());
+
+            assertThat(decision).isInstanceOf(GuardDecision.Complete.class);
+            verify(gateway).post(sent.capture(), any(CallerIdentity.class), any(Instant.class));
+            verify(outputs).claimPending(any(RunClaim.class), claimed.capture());
+            assertThat(new String(sent.getValue(), StandardCharsets.UTF_8))
+                    .as("the command body is the register without the field the command does not "
+                            + "declare, which is byte for byte what 001 sent")
+                    .isEqualTo(mapper.writeValueAsString(inContract(null)));
+            assertThat(claimed.getValue().requestDigest())
+                    .as("the row claimed before the POST names exactly the bytes that went")
+                    .isEqualTo(sha256(sent.getValue()));
+        }
+
+        /**
+         * The pipeline under the 001 mode, over the real submission adapter.
+         *
+         * @return the pipeline
+         */
+        private DistributionPipeline postingPipeline() {
+            return new DistributionPipeline(guard, payloadSource, groupProceedings,
+                    subscriptionsSource, new Dates(), transformer, OutputMode.PROGRESSION_POST,
+                    registerStore,
+                    new ProgressionRegisterSubmissionClient(outputs, gateway, mapper),
+                    metrics, fixedClock(), RUN_DEADLINE);
+        }
+    }
+
+    /**
+     * A register the frozen contract accepts, carrying the defendant type named.
+     *
+     * <p>The suite's other document is a stand-in whose fields nothing reads; this one is populated
+     * to the contract's required set, because the case above compares a real serialisation with a
+     * real one.
+     *
+     * @param defendantType the side of the court application its defendants are on, or {@code null}
+     *                      for the 001 shape
+     * @return the register
+     */
+    private CourtRegisterDocument inContract(final String defendantType) {
+        final CourtRegisterDefendant defendant = new CourtRegisterDefendant(
+                "b2b3f5a1-6c9d-4e21-8a7f-3d5c1e9b0426", "SMITH, John", "2008-04-11",
+                new CourtRegisterAddress("1 High Street", null, null, null, null, "BS1 1AA"),
+                null, null, "MALE", "Not Applicable", null, null, null,
+                List.of(new CourtRegisterCaseOrApplication(
+                        "TFL4359536", null, null, null, null, null, null)),
+                null, null);
+        return new CourtRegisterDocument(
+                document.registerDate(),
+                document.hearingDate(),
+                document.hearingId(),
+                document.courtCentreId(),
+                document.fileName(),
+                defendantType,
+                new CourtRegisterHearingVenue(
+                        "South West London Magistrates' Court",
+                        "Lavender Hill Magistrates' Court",
+                        new CourtRegisterAddress(
+                                "176A Lavender Hill", null, null, null, null, "SW11 1JU")),
+                List.of(new CourtRegisterRecipient(
+                        "Youth Offending Team", "yot@example.gov.uk", null, "cr_standard")),
+                List.of(defendant));
+    }
+
+    /**
+     * The digest the submission adapter writes beside a claimed row.
+     *
+     * @param body the bytes that went out
+     * @return their SHA-256, hex-encoded
+     */
+    private static String sha256(final byte[] body) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body));
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
         }
     }
 
