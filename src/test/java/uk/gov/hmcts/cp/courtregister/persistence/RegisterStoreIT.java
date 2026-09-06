@@ -2,12 +2,18 @@ package uk.gov.hmcts.cp.courtregister.persistence;
 
 import static org.assertj.core.api.Assertions.tuple;
 
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -291,6 +297,23 @@ class RegisterStoreIT {
                             + "left to guess which register the batch dropped")
                     .extracting(RecordOutcome::supersededOutputId)
                     .isEqualTo(outputIdOf(first).orElse(null));
+            softly.assertThat(supersessionOf(first))
+                    .as("and the pair is on the row, not only in the answer: superseded_at is what "
+                            + "takes the register out of the nightly sweep, and superseded_by is "
+                            + "the only thing that leads from a dropped register to its replacement")
+                    .hasValueSatisfying(pair -> {
+                        softly.assertThat(pair.supersededAt()).isNotNull();
+                        softly.assertThat(pair.supersededBy())
+                                .isEqualTo(outputIdOf(second).orElse(null));
+                    });
+            softly.assertThat(supersessionOf(second))
+                    .as("the register that won carries neither, or the sweep that reads "
+                            + "superseded_at IS NULL would leave it out as well and the day would "
+                            + "be rendered without the hearing entirely")
+                    .hasValueSatisfying(pair -> {
+                        softly.assertThat(pair.supersededAt()).isNull();
+                        softly.assertThat(pair.supersededBy()).isNull();
+                    });
         }
 
         @Test
@@ -325,17 +348,25 @@ class RegisterStoreIT {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final DistributionCommand second = seededCommand(HEARING_ONE, MONDAY_RESHARED);
             final AtomicReference<RecordOutcome> reshare = new AtomicReference<>();
+            final AtomicReference<Map<String, String>> beforeTheReshare = new AtomicReference<>();
 
             softly.assertThatCode(() -> {
                 record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
                 store.assemble(new CourtCentreDay(courtCentre, MONDAY),
                         mine(store.activeUnbatched()));
+                beforeTheReshare.set(wholeRowOf(first));
                 reshare.set(record(second,
                         document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
                         RecordedFlagState.ON));
             }).as(PENDING).doesNotThrowAnyException();
 
+            softly.assertThat(wholeRowOf(first))
+                    .as("every column, read before the re-share and after it: the payload handed "
+                            + "to systemdocgenerator was built from this row, so anything at all "
+                            + "moving on it - a status, a stamp, updated_at - would mean the "
+                            + "document already asked for no longer matches the register it holds")
+                    .isEqualTo(beforeTheReshare.get());
             softly.assertThat(statusOf(first))
                     .as("a row on its way to a PDF is left exactly as the payload described it")
                     .contains(RECORDED);
@@ -1009,6 +1040,65 @@ class RegisterStoreIT {
                 .param("requestId", command.requestId())
                 .query(String.class)
                 .optional();
+    }
+
+    /**
+     * The supersession pair as the row holds it, rather than as the port reported it.
+     *
+     * @param supersededAt when the row stopped being the active register, or {@code null}
+     * @param supersededBy the register that replaced it, or {@code null}
+     */
+    private record SupersessionPair(Instant supersededAt, UUID supersededBy) {
+    }
+
+    private static Optional<SupersessionPair> supersessionOf(final DistributionCommand command) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT superseded_at, superseded_by
+                          FROM processed_output
+                         WHERE source = :source AND request_id = :requestId
+                        """)
+                .param("source", command.source())
+                .param("requestId", command.requestId())
+                .query((rs, rowNumber) -> new SupersessionPair(
+                        instant(rs.getObject("superseded_at", OffsetDateTime.class)),
+                        rs.getObject("superseded_by", UUID.class)))
+                .optional();
+    }
+
+    /**
+     * Every column of the row, by name, so "unchanged" means the whole row and not a chosen part.
+     *
+     * <p>Read through the result set's own metadata rather than as a list this suite maintains: a
+     * column added by a later migration is then compared too, which is exactly the column a
+     * later statement would be the first to move without anybody noticing. Values are compared as
+     * their printed form, because the point is that nothing about the row differs and not which
+     * driver type each column arrives as.
+     */
+    private static Map<String, String> wholeRowOf(final DistributionCommand command) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT *
+                          FROM processed_output
+                         WHERE source = :source AND request_id = :requestId
+                        """)
+                .param("source", command.source())
+                .param("requestId", command.requestId())
+                .query((rs, rowNumber) -> allColumnsOf(rs))
+                .single();
+    }
+
+    private static Instant instant(final OffsetDateTime value) {
+        return value == null ? null : value.toInstant();
+    }
+
+    private static Map<String, String> allColumnsOf(final ResultSet rs) throws SQLException {
+        final ResultSetMetaData columns = rs.getMetaData();
+        final Map<String, String> row = new LinkedHashMap<>();
+        for (int column = 1; column <= columns.getColumnCount(); column++) {
+            row.put(columns.getColumnLabel(column), String.valueOf(rs.getObject(column)));
+        }
+        return row;
     }
 
     private static Optional<String> ouCodeOf(final DistributionCommand command) {
