@@ -272,6 +272,25 @@ public class DistributionPipeline {
      */
     public GuardDecision process(
             final DistributionCommand command, final DeliveryIdentity delivery) {
+        return process(command, delivery, RecordedFlagState.UNKNOWN);
+    }
+
+    /**
+     * Runs one request under the flag state the delivery attached to it.
+     *
+     * <p>The state travels with the command because the transport is where it is learned: the intake
+     * side reads the one lever with the same reader the nightly job uses and labels an arriving
+     * command from the last reading, never waiting on one (research §12). The pipeline records what
+     * it was handed and reads no flag of its own.
+     *
+     * @param command   the validated request
+     * @param delivery  who is running it, and whether the queue will deliver it again
+     * @param flagState the cutover flag as the intake side last read it, which decides whether the
+     *                  recorded register is batched automatically at all
+     * @return the settlement the outcome calls for - a settlement, never a run
+     */
+    public GuardDecision process(final DistributionCommand command, final DeliveryIdentity delivery,
+            final RecordedFlagState flagState) {
         final GuardDecision admission = guard.admit(command, delivery);
         final GuardDecision decision;
         if (admission instanceof GuardDecision.Run admitted) {

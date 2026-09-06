@@ -932,13 +932,17 @@ class DistributionPipelineTest {
      * (FR-002); and the flag state is what the intake side last learned about the one lever. This
      * suite pins that the pipeline forwards all four and invents none of them.
      *
-     * <p><strong>The flag state a run with no reading records is {@code UNKNOWN}</strong>, which is
-     * a statement rather than a placeholder: recording never waits on a flag read, because a
-     * register that has been built is worth more than the label it carries, and {@code UNKNOWN} is
-     * exactly what "nobody read it" means (research §12). Attaching a fresh reading to a live
-     * delivery is T030's, and {@code RecordedFlagStateTest} (T028) holds it to the window and to
-     * the three answers; what belongs here is that the pipeline records the state it has rather
-     * than guessing at one, and that a row written without a read says so.
+     * <p><strong>The flag state is the delivery's to attach and the pipeline's to record.</strong>
+     * The intake side reads the one lever with the same reader the nightly job uses and hands the
+     * answer down with the command; the pipeline records that answer and invents none of its own.
+     * {@code RecordedFlagStateTest} (T028) holds the reading itself to its window and to its three
+     * answers - what belongs here is that what was attached is what is recorded, because a register
+     * recorded while the legacy was generating is one the nightly sweep must leave alone (FR-015).
+     *
+     * <p>A run with no reading attached records {@code UNKNOWN}, which is a statement rather than a
+     * placeholder: recording never waits on a flag read, because a register that has been built is
+     * worth more than the label it carries, and {@code UNKNOWN} is exactly what "nobody read it"
+     * means (research §12).
      *
      * <p><strong>Two failures are settled differently, and the difference is the point.</strong> A
      * register the frozen contract refuses is a document that must never become a row - the
@@ -1058,6 +1062,27 @@ class DistributionPipelineTest {
             assertThat(flagState.getValue())
                     .as("a row written without a flag read says so, rather than claiming ON or OFF")
                     .isEqualTo(RecordedFlagState.UNKNOWN);
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @EnumSource(value = RecordedFlagState.class, names = {"ON", "OFF"})
+        @DisplayName("records the flag state the delivery attached to the command")
+        void records_the_flag_state_the_delivery_attached(final RecordedFlagState attached) {
+            // FR-015 / US4 acceptance 5. The intake side reads the one lever and hands the answer
+            // down with the command; what is recorded is that answer and not a constant. A row
+            // recorded while the legacy was generating must say OFF, because a row that does not
+            // say so is a register the nightly sweep picks up and sends a second time.
+            final ArgumentCaptor<RecordedFlagState> flagState =
+                    ArgumentCaptor.forClass(RecordedFlagState.class);
+
+            recordingPipeline().process(command, delivery(), attached);
+
+            verify(registerStore).record(eqCommand(), any(CourtRegisterDocument.class), any(),
+                    any(), flagState.capture());
+            assertThat(flagState.getValue())
+                    .as("the row says what the delivery was told about the flag, not what a run "
+                            + "with no reading behind it would have to say")
+                    .isEqualTo(attached);
         }
 
         @Test
