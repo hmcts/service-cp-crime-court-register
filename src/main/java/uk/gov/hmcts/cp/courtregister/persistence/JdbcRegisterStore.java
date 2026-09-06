@@ -545,6 +545,23 @@ public class JdbcRegisterStore implements RegisterStore {
     public RecordOutcome record(final DistributionCommand command,
             final CourtRegisterDocument document, final String courtCentreOuCode,
             final String defendantType, final RecordedFlagState flagState) {
+        return StoreOutage.translating("record a register", () -> attemptedRecording(
+                command, document, courtCentreOuCode, defendantType, flagState));
+    }
+
+    /**
+     * The recording itself, inside the translation the public method wraps it in.
+     *
+     * @param command           the request being recorded
+     * @param document          the register the transformation produced
+     * @param courtCentreOuCode the court centre's OU code, which the document has no field for
+     * @param defendantType     the side of the court application the register's defendants are on
+     * @param flagState         the cutover flag as the intake side last read it
+     * @return what was written, and what it replaced
+     */
+    private RecordOutcome attemptedRecording(final DistributionCommand command,
+            final CourtRegisterDocument document, final String courtCentreOuCode,
+            final String defendantType, final RecordedFlagState flagState) {
         final Recording recording = new Recording(UUID.randomUUID(), command, document,
                 objectMapper.writeValueAsString(document), courtCentreOuCode, defendantType,
                 flagState);
@@ -677,9 +694,10 @@ public class JdbcRegisterStore implements RegisterStore {
 
     @Override
     public List<RegisterRecord> activeUnbatched() {
-        return jdbcClient.sql(ACTIVE_UNBATCHED)
-                .query((rs, rowNumber) -> registerRecord(rs))
-                .list();
+        return StoreOutage.translating("read the registers awaiting a batch",
+                () -> jdbcClient.sql(ACTIVE_UNBATCHED)
+                        .query((rs, rowNumber) -> registerRecord(rs))
+                        .list());
     }
 
     /**
@@ -703,7 +721,8 @@ public class JdbcRegisterStore implements RegisterStore {
                     throw new IllegalArgumentException("register " + foreign.outputId()
                             + " belongs to " + foreign.key() + ", not to " + key);
                 });
-        return transactions.execute(transaction -> stamp(outputIds)).batch();
+        return StoreOutage.translating("assemble a batch",
+                () -> transactions.execute(transaction -> stamp(outputIds)).batch());
     }
 
     /**
@@ -737,12 +756,14 @@ public class JdbcRegisterStore implements RegisterStore {
      */
     @Override
     public void markRequested(final UUID batchId, final UUID payloadFileId) {
-        final BatchStatus expected = permitted(batchId, BatchStatus.GENERATING);
-        settle(jdbcClient.sql(MARK_REQUESTED)
-                .param(BATCH_ID, batchId)
-                .param(EXPECTED, expected.name())
-                .param("payloadFileId", payloadFileId)
-                .update(), batchId, expected, BatchStatus.GENERATING);
+        StoreOutage.translatingUpdate("mark a batch requested", () -> {
+            final BatchStatus expected = permitted(batchId, BatchStatus.GENERATING);
+            settle(jdbcClient.sql(MARK_REQUESTED)
+                    .param(BATCH_ID, batchId)
+                    .param(EXPECTED, expected.name())
+                    .param("payloadFileId", payloadFileId)
+                    .update(), batchId, expected, BatchStatus.GENERATING);
+        });
     }
 
     /**
@@ -759,15 +780,17 @@ public class JdbcRegisterStore implements RegisterStore {
             throw new IllegalArgumentException(BATCH + batchId + " cannot be marked GENERATED "
                     + "without naming the mechanism that learned it");
         }
-        final BatchStatus expected = permitted(batchId, BatchStatus.GENERATED);
-        settle(jdbcClient.sql(MARK_GENERATED)
-                .param(BATCH_ID, batchId)
-                .param(EXPECTED, expected.name())
-                .param("documentFileId", documentFileId)
-                .param("generatedAt", offsetOf(generatedAt))
-                .param("completedBy", name(completedBy), Types.VARCHAR)
-                .query(Long.class)
-                .single(), batchId, expected, BatchStatus.GENERATED);
+        StoreOutage.translatingUpdate("mark a batch generated", () -> {
+            final BatchStatus expected = permitted(batchId, BatchStatus.GENERATED);
+            settle(jdbcClient.sql(MARK_GENERATED)
+                    .param(BATCH_ID, batchId)
+                    .param(EXPECTED, expected.name())
+                    .param("documentFileId", documentFileId)
+                    .param("generatedAt", offsetOf(generatedAt))
+                    .param("completedBy", name(completedBy), Types.VARCHAR)
+                    .query(Long.class)
+                    .single(), batchId, expected, BatchStatus.GENERATED);
+        });
     }
 
     /**
@@ -783,16 +806,18 @@ public class JdbcRegisterStore implements RegisterStore {
     public void markFailed(final UUID batchId, final BatchFailureReason reason,
             final String sdgReason, final CompletedBy completedBy) {
         attributionOf(batchId, reason, completedBy);
-        final BatchStatus expected = permitted(batchId, BatchStatus.FAILED);
-        settle(jdbcClient.sql(MARK_FAILED)
-                .param(BATCH_ID, batchId)
-                .param(EXPECTED, expected.name())
-                .param("reason", reason.name())
-                .param("sdgReason", RegisterBatch.boundedReason(sdgReason), Types.VARCHAR)
-                .param("completedBy", name(completedBy), Types.VARCHAR)
-                .param("releaseRows", RELEASING_REASONS.contains(reason))
-                .query(Long.class)
-                .single(), batchId, expected, BatchStatus.FAILED);
+        StoreOutage.translatingUpdate("mark a batch failed", () -> {
+            final BatchStatus expected = permitted(batchId, BatchStatus.FAILED);
+            settle(jdbcClient.sql(MARK_FAILED)
+                    .param(BATCH_ID, batchId)
+                    .param(EXPECTED, expected.name())
+                    .param("reason", reason.name())
+                    .param("sdgReason", RegisterBatch.boundedReason(sdgReason), Types.VARCHAR)
+                    .param("completedBy", name(completedBy), Types.VARCHAR)
+                    .param("releaseRows", RELEASING_REASONS.contains(reason))
+                    .query(Long.class)
+                    .single(), batchId, expected, BatchStatus.FAILED);
+        });
     }
 
     /**
@@ -809,13 +834,15 @@ public class JdbcRegisterStore implements RegisterStore {
             throw new IllegalArgumentException("a notification tally settles a batch NOTIFIED, "
                     + "PARTIALLY_NOTIFIED or NOTIFIED_NOBODY, not " + summary.outcome());
         }
-        final BatchStatus expected = permitted(batchId, summary.outcome());
-        settle(jdbcClient.sql(MARK_NOTIFIED)
-                .param(BATCH_ID, batchId)
-                .param(EXPECTED, expected.name())
-                .param("outcome", summary.outcome().name())
-                .query(Long.class)
-                .single(), batchId, expected, summary.outcome());
+        StoreOutage.translatingUpdate("mark a batch notified", () -> {
+            final BatchStatus expected = permitted(batchId, summary.outcome());
+            settle(jdbcClient.sql(MARK_NOTIFIED)
+                    .param(BATCH_ID, batchId)
+                    .param(EXPECTED, expected.name())
+                    .param("outcome", summary.outcome().name())
+                    .query(Long.class)
+                    .single(), batchId, expected, summary.outcome());
+        });
     }
 
     /**

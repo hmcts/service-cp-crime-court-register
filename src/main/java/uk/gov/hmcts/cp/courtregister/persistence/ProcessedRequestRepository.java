@@ -183,7 +183,8 @@ public class ProcessedRequestRepository {
             final DistributionCommand command,
             final String fingerprint,
             final RunClaim runClaim) {
-        return affected(jdbcClient.sql(INSERT_NEW)
+        return StoreOutage.translating("record a new request", () -> affected(jdbcClient
+                .sql(INSERT_NEW)
                 .param(SOURCE, command.source())
                 .param(REQUEST_ID, command.requestId())
                 .param("hearingId", command.hearingId())
@@ -194,7 +195,7 @@ public class ProcessedRequestRepository {
                 .param(OWNER, runClaim.owner())
                 .param(TOKEN, runClaim.token())
                 .param(LEASE_PARAM, lease())
-                .update());
+                .update()));
     }
 
     /**
@@ -205,7 +206,7 @@ public class ProcessedRequestRepository {
      * @return the record, or empty where there is none
      */
     public Optional<ProcessedRequestRecord> read(final String source, final UUID requestId) {
-        return jdbcClient.sql(READ_RECORD)
+        return StoreOutage.translating("read a request record", () -> jdbcClient.sql(READ_RECORD)
                 .param(SOURCE, source)
                 .param(REQUEST_ID, requestId)
                 .query((rs, rowNumber) -> new ProcessedRequestRecord(
@@ -216,7 +217,7 @@ public class ProcessedRequestRepository {
                         rs.getInt("attempts"),
                         rs.getString("claim_owner"),
                         instant(rs.getObject("claim_expires_at", OffsetDateTime.class))))
-                .optional();
+                .optional());
     }
 
     /**
@@ -230,13 +231,14 @@ public class ProcessedRequestRepository {
      *         delivery won, or the record turned terminal in between — all three are handed back.
      */
     public boolean reclaimStaleClaim(final RunClaim runClaim) {
-        return affected(jdbcClient.sql(RECLAIM_STALE_CLAIM)
+        return StoreOutage.translating("reclaim a stale claim", () -> affected(jdbcClient
+                .sql(RECLAIM_STALE_CLAIM)
                 .param(SOURCE, runClaim.source())
                 .param(REQUEST_ID, runClaim.requestId())
                 .param(OWNER, runClaim.owner())
                 .param(TOKEN, runClaim.token())
                 .param(LEASE_PARAM, lease())
-                .update());
+                .update()));
     }
 
     /**
@@ -247,9 +249,9 @@ public class ProcessedRequestRepository {
      * @return whether the write was admitted by the owner-and-token predicate
      */
     public boolean recordCompleted(final RunClaim runClaim, final String completionReason) {
-        return affected(outcome(RECORD_COMPLETED, runClaim)
+        return StoreOutage.translating("record a completed run", () -> affected(outcome(RECORD_COMPLETED, runClaim)
                 .param(REASON, completionReason)
-                .update());
+                .update()));
     }
 
     /**
@@ -260,9 +262,9 @@ public class ProcessedRequestRepository {
      * @return whether the write was admitted by the owner-and-token predicate
      */
     public boolean recordRetrying(final RunClaim runClaim, final String failureReason) {
-        return affected(outcome(RECORD_RETRYING, runClaim)
+        return StoreOutage.translating("record a transient failure", () -> affected(outcome(RECORD_RETRYING, runClaim)
                 .param(REASON, failureReason)
-                .update());
+                .update()));
     }
 
     /**
@@ -277,10 +279,11 @@ public class ProcessedRequestRepository {
      * @return whether the write was admitted by the owner-and-token predicate
      */
     public boolean recordFailed(final RunClaim runClaim, final String failureReason) {
-        return affected(outcome(RECORD_FAILED, runClaim)
+        return StoreOutage.translating("park a request", () -> affected(outcome(RECORD_FAILED,
+                runClaim)
                 .param(REASON, failureReason)
                 .param(MESSAGE_ID, runClaim.messageId())
-                .update());
+                .update()));
     }
 
     /**
@@ -292,7 +295,8 @@ public class ProcessedRequestRepository {
      *         this update; it never means the identity was the same one, which the read decides.
      */
     public boolean replayFailed(final RunClaim runClaim, final String auditNote) {
-        return affected(jdbcClient.sql(REPLAY_FAILED)
+        return StoreOutage.translating("replay a parked request", () -> affected(jdbcClient
+                .sql(REPLAY_FAILED)
                 .param(SOURCE, runClaim.source())
                 .param(REQUEST_ID, runClaim.requestId())
                 .param(OWNER, runClaim.owner())
@@ -300,7 +304,7 @@ public class ProcessedRequestRepository {
                 .param(LEASE_PARAM, lease())
                 .param(MESSAGE_ID, runClaim.messageId())
                 .param("note", auditNote)
-                .update());
+                .update()));
     }
 
     /** The three outcome writes differ only in what they set; the predicate is common to all. */

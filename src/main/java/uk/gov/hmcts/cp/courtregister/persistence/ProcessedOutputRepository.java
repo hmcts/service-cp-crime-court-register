@@ -227,7 +227,8 @@ public class ProcessedOutputRepository {
      *         has no request to speak for and must discard its result.
      */
     public boolean claimPending(final RunClaim runClaim, final ProcessedOutputClaim claim) {
-        return affected(jdbcClient.sql(CLAIM_PENDING)
+        return StoreOutage.translating("claim an output row", () -> affected(jdbcClient
+                .sql(CLAIM_PENDING)
                 .param("outputId", claim.outputId())
                 .param(SOURCE, runClaim.source())
                 .param(REQUEST_ID, runClaim.requestId())
@@ -239,7 +240,7 @@ public class ProcessedOutputRepository {
                 .param("fileName", claim.fileName())
                 .param("digest", claim.requestDigest(), Types.VARCHAR)
                 .param("anomalySummary", anomalySummary(claim.anomalies()), Types.VARCHAR)
-                .update());
+                .update()));
     }
 
     /**
@@ -252,7 +253,8 @@ public class ProcessedOutputRepository {
      *         no longer the one the request carries
      */
     public boolean recordPosted(final RunClaim runClaim, final int responseCode) {
-        return affected(outcome(RECORD_POSTED, runClaim, responseCode));
+        return StoreOutage.translating("record an accepted submission",
+                () -> affected(outcome(RECORD_POSTED, runClaim, responseCode)));
     }
 
     /**
@@ -266,7 +268,8 @@ public class ProcessedOutputRepository {
      *         longer the one the request carries
      */
     public boolean recordFailed(final RunClaim runClaim, final Integer responseCode) {
-        return affected(outcome(RECORD_FAILED, runClaim, responseCode));
+        return StoreOutage.translating("record a failed submission",
+                () -> affected(outcome(RECORD_FAILED, runClaim, responseCode)));
     }
 
     /** The two outcome writes differ only in the status they set; the key predicate is common. */

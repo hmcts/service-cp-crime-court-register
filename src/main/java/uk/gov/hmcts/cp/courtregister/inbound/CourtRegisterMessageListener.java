@@ -11,10 +11,6 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import org.springframework.dao.ConcurrencyFailureException;
-import org.springframework.dao.DataAccessResourceFailureException;
-import org.springframework.dao.RecoverableDataAccessException;
-import org.springframework.dao.TransientDataAccessException;
 import uk.gov.hmcts.cp.courtregister.application.DistributionPipeline;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.config.ServiceBusHealthIndicator;
@@ -27,6 +23,7 @@ import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 
 /**
  * One delivery in, exactly one settlement out.
@@ -297,42 +294,17 @@ public class CourtRegisterMessageListener {
         GuardDecision decision;
         try {
             decision = examine(message);
-        } catch (ConcurrencyFailureException contention) {
-            decision = lostContentionRace(contention);
-        } catch (TransientDataAccessException | RecoverableDataAccessException
-                | DataAccessResourceFailureException storeGone) {
-            // The outage classes, and deliberately not the whole DataAccessException hierarchy.
-            // Spring's own transient/non-transient split is the wrong knife here: the exception a
-            // dead store actually produces — DataAccessResourceFailureException, connection
-            // acquisition included — sits on the non-transient side, while a constraint violation
-            // or a broken statement is the store *answering*, over a connection that plainly
-            // worked. Only the store-went-away classes may stop the queue; a per-statement fault
-            // is handed back below without turning one poison message into an intake outage.
+        } catch (StoreUnavailableException storeGone) {
+            // A store that went away, said in the domain's own words. Which data-access failures
+            // mean that is the persistence layer's to decide and it decides it once: contention is
+            // deliberately not one of them, because a deadlock or a lost race for a key is the store
+            // *answering*, over a connection that plainly worked, and it reaches the catch-all below
+            // to be handed back without turning one contended row into an intake outage.
             decision = storeDiedMidRun();
         } catch (RuntimeException unexpected) {
             decision = unexpectedFailure(unexpected);
         }
         return decision;
-    }
-
-    /**
-     * The store answered by refusing a contended row, not by going away.
-     *
-     * <p>It has a branch of its own because it has to be caught <em>above</em> the outage classes,
-     * and the catch order is the behaviour. {@link ConcurrencyFailureException} extends
-     * {@link TransientDataAccessException}, so without this branch a deadlock would be read as an
-     * outage and stop intake — and a deadlock is the opposite of an outage. It is the store
-     * <em>answering</em>: two writers met on one row and this delivery lost. Suspending the whole
-     * queue for one contended row would stall every message behind it, for a fault that clears
-     * itself on the next delivery.
-     *
-     * <p>So the outcome is the ordinary one — handed back, reported, counted — and the branch exists
-     * for where it sits, not for what it does. Merging it into the catch-all below is not available
-     * even when the outcome is the same: a multi-catch may not name a type and its own supertype,
-     * and moving it below the outage classes is the very thing this branch prevents.
-     */
-    private GuardDecision lostContentionRace(final ConcurrencyFailureException contention) {
-        return unexpectedFailure(contention);
     }
 
     /**

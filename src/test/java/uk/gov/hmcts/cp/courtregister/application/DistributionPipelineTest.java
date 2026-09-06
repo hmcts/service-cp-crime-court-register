@@ -36,10 +36,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
-import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataAccessResourceFailureException;
-import org.springframework.dao.RecoverableDataAccessException;
-import org.springframework.dao.TransientDataAccessResourceException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.adapter.progression.ProgressionCommandGateway;
@@ -1142,33 +1139,6 @@ class DistributionPipelineTest {
                     any(CompletionReason.class));
         }
 
-        @Test
-        @DisplayName("lets a register store that went away out to the transport, which hands the "
-                + "delivery back and stops intake")
-        void a_store_that_went_away_is_left_for_the_transport_to_suspend_intake_on() {
-            // The same rule the claim has: nothing is recordable during a store outage, so the
-            // store's own refusal travels out of the run unclassified and the transport adapter
-            // decides. Classified here it would be an ordinary transient failure - delivery handed
-            // back, intake still running - and every message behind it would meet the same dead
-            // store until the broker parked recoverable work.
-            for (final DataAccessException outage : everyWayTheStoreCanGoAway()) {
-                when(registerStore.record(any(DistributionCommand.class),
-                            any(CourtRegisterDocument.class), any(), any(),
-                            any(RecordedFlagState.class)))
-                        .thenThrow(outage);
-
-                assertThatThrownBy(this::runRecording)
-                        .as("a %s was classified inside the run instead of reaching the transport",
-                                outage.getClass().getSimpleName())
-                        .isSameAs(outage);
-            }
-
-            verify(guard, never()).recordCompletion(any(RunClaim.class),
-                    any(CompletionReason.class));
-            verify(guard, never()).recordTransientFailure(any(RunClaim.class),
-                    any(ReasonCode.class));
-        }
-
         /**
          * The same rule as the case above, stated against the signal the core is allowed to know.
          *
@@ -1254,24 +1224,6 @@ class DistributionPipelineTest {
                     registerStore, submissionClient, metrics, fixedClock(), RUN_DEADLINE);
         }
 
-        /**
-         * Every way the register store can go away underneath a run, as the transport adapter
-         * names them.
-         *
-         * <p>The three classes {@code CourtRegisterMessageListener} treats as an outage, and
-         * deliberately not the whole {@code DataAccessException} hierarchy: a constraint violation
-         * or a broken statement is the store <em>answering</em>, over a connection that plainly
-         * worked, and must not stop the queue.
-         *
-         * @return one outage of each kind
-         */
-        private DataAccessException[] everyWayTheStoreCanGoAway() {
-            return new DataAccessException[] {
-                new DataAccessResourceFailureException("the register store cannot be reached"),
-                new RecoverableDataAccessException("the register store dropped the connection"),
-                new TransientDataAccessResourceException("the register store timed out"),
-            };
-        }
     }
 
     /**

@@ -7,10 +7,6 @@ import java.time.LocalDate;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.ConcurrencyFailureException;
-import org.springframework.dao.DataAccessResourceFailureException;
-import org.springframework.dao.RecoverableDataAccessException;
-import org.springframework.dao.TransientDataAccessException;
 import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.config.OutputMode;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
@@ -26,6 +22,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
@@ -120,7 +117,9 @@ import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
  * a suspension - the delivery back <em>and</em> intake stopped - which is the transport adapter's to
  * carry out and nobody else's (spec FR-015). So it leaves the run as it was thrown, by its own type
  * and never by where it was thrown, because this service's store is reached from more than one stage
- * and the answer is the same wherever it went away.
+ * and the answer is the same wherever it went away. That type is
+ * {@link StoreUnavailableException}, raised by the persistence layer: the outage is a JDBC fact
+ * there and a domain signal here, which is what lets this class name no data-access type at all.
  */
 public class DistributionPipeline {
 
@@ -319,16 +318,19 @@ public class DistributionPipeline {
      * throws out of the catch block itself, which is correct - nothing is recordable during a store
      * outage, and the transport adapter's own handling takes over.
      *
-     * <p><strong>Between them sit the two store branches, and the order they are written in is the
-     * behaviour.</strong> The store-went-away classes leave this frame untouched: there is nothing
-     * to record while the store is gone, and the transport adapter is the only place that can hand
-     * the delivery back <em>and</em> stop intake. Contention is caught above them and is not one of
-     * them: {@link ConcurrencyFailureException} extends {@link TransientDataAccessException}, and a
-     * re-share losing a race for its key is the store <em>answering</em> over a connection that
-     * plainly worked. It is recorded here, so the claim is released and the redelivery finds the row
-     * free; letting it out would stop the queue for a fault that clears itself on the next delivery.
-     * They are the same three classes {@code CourtRegisterMessageListener} tells apart, in the same
-     * order, because it is one rule about one store and a second copy of it would drift.
+     * <p><strong>Between them sits the one failure this frame refuses to touch.</strong>
+     * {@link StoreUnavailableException} leaves it untouched: there is nothing to record while the
+     * store is gone, and the transport adapter is the only place that can hand the delivery back
+     * <em>and</em> stop intake. It is a <em>domain</em> signal rather than a JDBC one, because this
+     * class may not import a JDBC type (constitution Principle V) - the persistence layer decides
+     * which failures are a store that went away and raises this for them, and the listener reads the
+     * same signal, so the rule is written once instead of twice.
+     *
+     * <p>Contention is not one of them and does not need a branch of its own here. A re-share losing
+     * a race for its key is the store <em>answering</em>, over a connection that plainly worked; the
+     * persistence layer lets it out as it came, and it falls to the catch-all below, which releases
+     * the claim so the redelivery finds the row free. Stopping the queue for it would stall every
+     * message behind a fault that clears itself on the next delivery.
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private GuardDecision runUnder(
@@ -340,37 +342,12 @@ public class DistributionPipeline {
         } catch (PayloadUnavailableException | ReferenceDataUnavailableException
                 | TransformationFailedException | SubmissionFailedException classified) {
             outcome = failed(claim, classified.classification(), classified.reason(), lastChance);
-        } catch (ConcurrencyFailureException contention) {
-            outcome = lostContentionRace(claim, contention, lastChance);
-        } catch (TransientDataAccessException | RecoverableDataAccessException
-                | DataAccessResourceFailureException storeGone) {
+        } catch (StoreUnavailableException storeGone) {
             throw storeGone;
         } catch (RuntimeException unexpected) {
             outcome = unexpectedFailure(claim, unexpected, lastChance);
         }
         return outcome;
-    }
-
-    /**
-     * The store answered by refusing a contended row, not by going away.
-     *
-     * <p>The branch exists for where it sits rather than for what it does, and it does the ordinary
-     * thing: two writers met on one register and this run lost, which is a fault that clears itself
-     * on the next delivery. Merging it into the catch-all below is not available even though the
-     * outcome is the same - a multi-catch may not name a type and its own supertype - and moving it
-     * under the store-went-away classes is the very thing it prevents, since
-     * {@link ConcurrencyFailureException} is one of them by inheritance and none of them by meaning.
-     *
-     * @param claim      the claim this run holds
-     * @param contention the refusal the store answered with
-     * @param lastChance whether the queue will deliver this message again
-     * @return the settlement the outcome calls for
-     */
-    private GuardDecision lostContentionRace(
-            final RunClaim claim,
-            final ConcurrencyFailureException contention,
-            final boolean lastChance) {
-        return unexpectedFailure(claim, contention, lastChance);
     }
 
     /**
