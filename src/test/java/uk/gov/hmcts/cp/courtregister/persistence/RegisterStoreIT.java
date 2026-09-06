@@ -144,7 +144,8 @@ class RegisterStoreIT {
     private final UUID courtCentre = UUID.randomUUID();
 
     private final RegisterStore store =
-            new JdbcRegisterStore(ProcessedLogTestSupport.jdbcClient());
+            new JdbcRegisterStore(ProcessedLogTestSupport.jdbcClient(),
+                    ProcessedLogTestSupport.transactions());
 
     @BeforeAll
     static void migrate() {
@@ -427,6 +428,65 @@ class RegisterStoreIT {
                             + "both are excluded, and both are surfaced by list-batches instead")
                     .extracting(RegisterRecord::hearingId)
                     .containsExactly(HEARING_ONE);
+        }
+    }
+
+    /**
+     * Assembly, which is all of it or none of it.
+     *
+     * <p>The batch row, the stamps and the count that judges them are one decision. Between the
+     * read that produced the list and the write that stamps it, a re-share can supersede a row or
+     * another run can stamp it, and a batch that quietly contained fewer registers than it was asked
+     * for would render a document missing a hearing nobody could name. The store refuses such a
+     * batch - and the refusal is only worth anything if the batch row goes with it, because
+     * {@code idx_register_batch_live_key} admits one unfailed batch per court centre and day: a
+     * PENDING row left behind by a refusal holds that key against every later run, and the day is
+     * never rendered at all.
+     */
+    @Nested
+    @DisplayName("assembling a batch")
+    class Assembly {
+
+        @Test
+        void a_batch_asked_for_a_register_that_moved_should_leave_no_trace_of_itself() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
+            final List<RegisterRecord> stale = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                stale.addAll(mine(store.activeUnbatched()));
+                // The re-share the run did not see: it lands after the list was read, supersedes
+                // the first hearing's row, and leaves the list the run is holding one register out
+                // of date.
+                record(seededCommand(HEARING_ONE, MONDAY_RESHARED),
+                        document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThatThrownBy(() ->
+                            store.assemble(new CourtCentreDay(courtCentre, MONDAY), stale))
+                    .as("a batch that would render one of the two registers it was asked for is "
+                            + "refused rather than sent")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("was asked for 2 registers and stamped 1");
+            softly.assertThat(batchOn(MONDAY))
+                    .as("and the batch row goes with the refusal, or it holds the day's live key "
+                            + "against every later run and the day is never rendered")
+                    .isEmpty();
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("the register that was stamped before the count came back is unstamped "
+                            + "again, and waits for the batch that does contain it")
+                    .isZero();
+
+            softly.assertThatCode(() -> store.assemble(new CourtCentreDay(courtCentre, MONDAY),
+                            mine(store.activeUnbatched())))
+                    .as("the next run assembles the day as it now stands, which is the whole point "
+                            + "of refusing the first one")
+                    .doesNotThrowAnyException();
         }
     }
 

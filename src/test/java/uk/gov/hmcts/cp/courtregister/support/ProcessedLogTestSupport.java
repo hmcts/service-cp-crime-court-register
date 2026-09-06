@@ -10,6 +10,9 @@ import java.util.UUID;
 import javax.sql.DataSource;
 import org.springframework.boot.jdbc.DataSourceBuilder;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.support.JdbcTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
@@ -60,6 +63,18 @@ public final class ProcessedLogTestSupport {
      */
     public static JdbcClient jdbcClient() {
         return JdbcClient.create(dataSource());
+    }
+
+    /**
+     * A transaction template over the pooled connection, for the writes whose decision is in Java.
+     *
+     * <p>Over {@link #dataSource()} and no other, because {@link #jdbcClient()} obtains its
+     * connections through {@code DataSourceUtils} against that same instance: a manager bound to a
+     * second data source would open a transaction the client never joins, and the suite would prove
+     * nothing while appearing to.
+     */
+    public static TransactionOperations transactions() {
+        return new TransactionTemplate(new JdbcTransactionManager(dataSource()));
     }
 
     /**

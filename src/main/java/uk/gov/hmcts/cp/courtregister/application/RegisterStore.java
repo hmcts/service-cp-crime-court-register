@@ -75,6 +75,11 @@ public interface RegisterStore {
     /**
      * Groups one court centre's day into a batch and stamps its identity onto the rows.
      *
+     * <p>All of it or none of it. A register that was superseded or batched elsewhere between the
+     * read and the stamp means this is not the batch that was asked for, and the batch is refused
+     * <em>and</em> undone: a refused batch that left its row behind would hold that court centre and
+     * day against every later run, and the day would never be rendered at all.
+     *
      * @param key     the court centre and register day being batched
      * @param records the registers that belong to it
      * @return the batch, carrying the identity every downstream call correlates on

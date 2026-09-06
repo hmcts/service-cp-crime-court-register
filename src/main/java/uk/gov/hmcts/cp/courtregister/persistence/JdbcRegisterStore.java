@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.support.TransactionOperations;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
@@ -41,9 +42,17 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * <p><strong>Every write that spans two tables is one statement.</strong> The recording and the
  * supersession it causes, and each {@code mark} and the row flip it implies, are written as a single
  * statement with data-modifying {@code WITH} clauses rather than as two statements inside a
- * transaction the port would have to be handed. One statement is atomic without a transaction
- * manager in the signature, and the clauses see one snapshot: the supersession therefore cannot see
- * the row being inserted beside it, so a recording can never supersede itself (research §8).
+ * transaction. One statement is atomic on its own, and the clauses see one snapshot: the
+ * supersession therefore cannot see the row being inserted beside it, so a recording can never
+ * supersede itself (research §8).
+ *
+ * <p><strong>Assembly is the exception, and it takes a transaction.</strong> Its statement is one
+ * statement too, but the decision about it is not in the statement: whether the batch is the batch
+ * that was asked for is a count compared in Java, and under autocommit that comparison happens
+ * after the batch row and the stamps are already committed. A refusal would then leave a PENDING
+ * batch holding {@code idx_register_batch_live_key} for that court centre and day, and the day
+ * would never be rendered by any later run. So assembly runs inside a transaction and the refusal
+ * rolls it back: the batch is assembled or it never existed.
  *
  * <p>The clauses are chained through their {@code RETURNING} output - {@code replaced} reads
  * {@code recorded}, {@code flipped} reads {@code generated} - which is what orders them. Postgres
@@ -175,7 +184,8 @@ public class JdbcRegisterStore implements RegisterStore {
      * <p>The stamp repeats the active-unbatched predicates. Between the read and the write a row can
      * have been superseded by a re-share or stamped by another run, and a batch that quietly
      * contained fewer rows than it was asked for would render a register missing a hearing nobody
-     * could name - so the count comes back and the caller refuses it.
+     * could name - so the count comes back, the caller refuses it, and the transaction the whole
+     * thing runs in takes the batch row and the partial stamps back out with the refusal.
      */
     private static final String ASSEMBLE_BATCH = """
             WITH assembled AS (
@@ -339,12 +349,24 @@ public class JdbcRegisterStore implements RegisterStore {
     private final ObjectMapper objectMapper;
 
     /**
+     * The one write in this class whose decision is made outside its statement.
+     *
+     * <p>Held rather than reached for, and over the same {@code DataSource} the client issues
+     * against, because a transaction manager bound to a second one would open a transaction nothing
+     * in this class ever joins.
+     */
+    private final TransactionOperations transactions;
+
+    /**
      * Binds the store to this service's own Postgres.
      *
-     * @param jdbcClient the client every statement in this class is issued through
+     * @param jdbcClient   the client every statement in this class is issued through
+     * @param transactions the transaction {@link #assemble(CourtCentreDay, List)} runs in, over the
+     *                     same data source as the client
      */
-    public JdbcRegisterStore(final JdbcClient jdbcClient) {
+    public JdbcRegisterStore(final JdbcClient jdbcClient, final TransactionOperations transactions) {
         this.jdbcClient = jdbcClient;
+        this.transactions = transactions;
         this.objectMapper = JacksonConfig.contractObjectMapper();
     }
 
@@ -421,6 +443,18 @@ public class JdbcRegisterStore implements RegisterStore {
                     throw new IllegalArgumentException("register " + foreign.outputId()
                             + " belongs to " + foreign.key() + ", not to " + key);
                 });
+        return transactions.execute(transaction -> stamp(outputIds)).batch();
+    }
+
+    /**
+     * The assembly statement and the count that judges it, inside the transaction that undoes both.
+     *
+     * <p>The refusal is thrown from here rather than from the caller precisely so that it is thrown
+     * <em>inside</em> the transaction: a check made after the transaction returned would be a check
+     * on a batch that is already committed, which is the state this method exists to make
+     * impossible.
+     */
+    private Assembled stamp(final List<UUID> outputIds) {
         final Assembled assembled = jdbcClient.sql(ASSEMBLE_BATCH)
                 .param(BATCH_ID, UUID.randomUUID())
                 .param("firstOutputId", outputIds.getFirst())
@@ -432,7 +466,7 @@ public class JdbcRegisterStore implements RegisterStore {
                     + outputIds.size() + " registers and stamped " + assembled.stampedRows()
                     + "; a register was superseded or batched elsewhere in between");
         }
-        return assembled.batch();
+        return assembled;
     }
 
     /**
