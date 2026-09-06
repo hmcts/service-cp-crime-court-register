@@ -171,6 +171,19 @@ class GenerationReconcilerTest {
                 null, null, 1, null, 0);
     }
 
+    /**
+     * A batch left where nothing else looks: PENDING, with a payload id and no request recorded.
+     *
+     * @param assembledAt when the batch was stamped onto its rows, which is all this batch has
+     * @return the batch as the stale-PENDING read returns it
+     */
+    private static RegisterBatch stalePending(final Instant assembledAt) {
+        return new RegisterBatch(UUID.randomUUID(), UUID.randomUUID(), "B01OU", "Court House",
+                REGISTER_DATE, "CourtRegister_B01OU_2026-03-02.pdf", UUID.randomUUID(), null,
+                BatchStatus.PENDING, null, null, true, null, assembledAt, null, null, null, null,
+                0, null, 0);
+    }
+
     /** A batch overdue by fifteen minutes, which is the ordinary subject of every case here. */
     private static RegisterBatch overdue() {
         return generating(UUID.randomUUID(), REQUESTED_AT);
@@ -179,6 +192,11 @@ class GenerationReconcilerTest {
     /** What the repository's overdue read answers this time. */
     private void generatingSince(final RegisterBatch... overdue) {
         when(batches.generatingSince(any())).thenReturn(List.of(overdue));
+    }
+
+    /** What the repository's stale-PENDING read answers this time. */
+    private void pendingSince(final RegisterBatch... stale) {
+        when(batches.pendingSince(any())).thenReturn(List.of(stale));
     }
 
     /** What systemdocgenerator says about one batch's payload. */
@@ -551,6 +569,155 @@ class GenerationReconcilerTest {
     }
 
     /**
+     * The batch that never reached the renderer at all, which nothing else in the flow revisits.
+     *
+     * <p>{@code RegisterGenerationService.storeAndRequest} mints the payload id, writes it down,
+     * stores the payload, POSTs, and only then marks the batch requested. A pod that dies between
+     * the 202 and that mark - or a store that blips on the mark itself - leaves the batch PENDING
+     * with a payload id and its registers stamped, and from there nothing moves it again: the
+     * overdue read above is GENERATING only, the stamped rows are outside {@code activeUnbatched},
+     * the partial unique index defers every later re-share of that key for ever, and no counter or
+     * gauge in the service is about it. It is the silent loss the constitution's Principle VI and
+     * defect P5 exist to remove, reached one step earlier than either of them looks.
+     *
+     * <p>So the net is widened to it, and the answer comes from the same three places: what
+     * systemdocgenerator says about the payload, applied through the sink; and, where it says
+     * nothing, this service's own RENDER_REQUEST_FAILED - the reason the run itself would have used
+     * for a request it could not get accepted, and the one an operator reads as "ask for it again".
+     */
+    @Nested
+    @DisplayName("a batch whose render request was never recorded")
+    class StillPending {
+
+        private final RegisterBatch batch = stalePending(ASSEMBLED_AT);
+
+        @Test
+        void the_stale_pending_read_should_be_the_grace_period_back_from_now() {
+            generatingSince();
+
+            reconcile();
+
+            final ArgumentCaptor<Instant> cutoff = ArgumentCaptor.forClass(Instant.class);
+            verify(batches).pendingSince(cutoff.capture());
+            softly.assertThat(cutoff.getValue())
+                    .as("the same grace the topic is given, measured from the assembly this batch "
+                            + "has instead of the request it never recorded")
+                    .isEqualTo(NOW.minus(GRACE));
+        }
+
+        @Test
+        void a_stale_pending_batch_should_be_asked_about_by_the_payload_it_minted() {
+            generatingSince();
+            pendingSince(batch);
+            saysNothingAbout(batch);
+
+            reconcile();
+
+            verify(renderer, times(1)).query(batch.payloadFileId(), CallerIdentity.SYSTEM);
+        }
+
+        @Test
+        void a_document_found_for_a_stale_pending_batch_should_be_applied_through_the_sink() {
+            generatingSince();
+            pendingSince(batch);
+            answers(batch, new DocumentStatus(DOCUMENT_FILE_ID, GENERATED_AT, null, null));
+
+            reconcile();
+
+            verify(sink).documentAvailable(batch.batchId(), batch.payloadFileId(), DOCUMENT_FILE_ID,
+                    GENERATED_AT, CompletedBy.RECONCILER);
+            verify(store, never()).markFailed(any(), any(), any(), any());
+        }
+
+        @Test
+        void a_refusal_found_for_a_stale_pending_batch_should_be_applied_through_the_sink() {
+            generatingSince();
+            pendingSince(batch);
+            answers(batch, new DocumentStatus(null, null, FAILED_AT, SDG_REASON));
+
+            reconcile();
+
+            verify(sink).generationFailed(batch.batchId(), batch.payloadFileId(), SDG_REASON,
+                    FAILED_AT, CompletedBy.RECONCILER);
+        }
+
+        @Test
+        void a_stale_pending_batch_nobody_has_a_record_of_should_be_failed_render_request_failed() {
+            generatingSince();
+            pendingSince(batch);
+            saysNothingAbout(batch);
+
+            reconcile();
+
+            verify(store).markFailed(batch.batchId(), BatchFailureReason.RENDER_REQUEST_FAILED,
+                    null, null);
+            verifyNoInteractions(sink);
+        }
+
+        @Test
+        void a_completed_stale_pending_batch_should_be_counted_and_reported_as_reconciled() {
+            generatingSince();
+            pendingSince(batch);
+            saysNothingAbout(batch);
+
+            final int completed = reconcile();
+
+            softly.assertThat(reconciled())
+                    .as("a batch this service had to go and settle is a completion the run made "
+                            + "rather than one the topic delivered, whichever state it was stuck in")
+                    .isEqualTo(1);
+            softly.assertThat(completed)
+                    .as("and the run report carries the same number")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void a_query_that_failed_should_leave_a_stale_pending_batch_where_it_is() {
+            generatingSince();
+            pendingSince(batch);
+            when(renderer.query(eq(batch.payloadFileId()), any()))
+                    .thenThrow(new GenerationFailedException(FailureClassification.TRANSIENT,
+                            BatchFailureReason.GENERATION_TIMED_OUT));
+
+            final int completed = reconcile();
+
+            verifyNoInteractions(sink);
+            verify(store, never()).markFailed(any(), any(), any(), any());
+            softly.assertThat(completed)
+                    .as("systemdocgenerator being unreachable says nothing about whether it holds "
+                            + "this payload, and failing the batch on the strength of that would "
+                            + "throw away a document that may exist")
+                    .isZero();
+        }
+
+        @Test
+        void the_oldest_pending_age_should_be_gauged_from_the_stale_pending_read() {
+            generatingSince();
+            pendingSince(stalePending(NOW.minus(Duration.ofMinutes(70))), batch);
+            when(renderer.query(any(), any())).thenReturn(Optional.empty());
+
+            reconcile();
+
+            softly.assertThat(oldestPendingAge())
+                    .as("the only reading in the service that moves for a batch stuck before the "
+                            + "renderer was ever told about it")
+                    .isEqualTo(Duration.ofMinutes(70).toSeconds());
+        }
+
+        @Test
+        void a_sweep_with_nothing_stuck_at_pending_should_bring_the_gauge_back_down() {
+            generatingSince();
+
+            reconcile();
+
+            softly.assertThat(oldestPendingAge())
+                    .as("a gauge that only ever moved up would need a batch to be lost before it "
+                            + "could come down again")
+                    .isZero();
+        }
+    }
+
+    /**
      * What the reconciler is allowed to write down.
      *
      * <p>It handles exactly one value that is not an identifier or a bounded code: systemdocgenerator's
@@ -715,6 +882,11 @@ class GenerationReconcilerTest {
 
     private double oldestGeneratingAge() {
         final Gauge gauge = registry.find(GenerationMetrics.OLDEST_GENERATING_AGE).gauge();
+        return gauge == null ? ABSENT : gauge.value();
+    }
+
+    private double oldestPendingAge() {
+        final Gauge gauge = registry.find(GenerationMetrics.OLDEST_PENDING_AGE).gauge();
         return gauge == null ? ABSENT : gauge.value();
     }
 }

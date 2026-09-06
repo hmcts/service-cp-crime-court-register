@@ -28,8 +28,8 @@ import org.junit.jupiter.params.provider.EnumSource;
  * a machine that permits everything records the same "somewhere in the middle" the leg did, one
  * column further on.
  *
- * <p><strong>The refusals are the test.</strong> The moves the data model draws are eight; the pairs
- * the enumeration admits are forty-nine. The other forty-one are the ones that would corrupt a
+ * <p><strong>The refusals are the test.</strong> The moves the data model draws are nine; the pairs
+ * the enumeration admits are forty-nine. The other forty are the ones that would corrupt a
  * register - a batch that generated and then failed on a notification, losing a document that
  * exists; a batch reopened out of FAILED under the identity systemdocgenerator already answered
  * about; a batch re-notified out of NOTIFIED, telling a Youth Offending Team twice.
@@ -47,7 +47,8 @@ class BatchStateTest {
 
     private static Map<BatchStatus, Set<BatchStatus>> drawnMoves() {
         final Map<BatchStatus, Set<BatchStatus>> drawn = new EnumMap<>(BatchStatus.class);
-        drawn.put(BatchStatus.PENDING, EnumSet.of(BatchStatus.GENERATING, BatchStatus.FAILED));
+        drawn.put(BatchStatus.PENDING, EnumSet.of(
+                BatchStatus.GENERATING, BatchStatus.GENERATED, BatchStatus.FAILED));
         drawn.put(BatchStatus.GENERATING, EnumSet.of(BatchStatus.GENERATED, BatchStatus.FAILED));
         drawn.put(BatchStatus.GENERATED, EnumSet.of(
                 BatchStatus.NOTIFIED, BatchStatus.PARTIALLY_NOTIFIED, BatchStatus.NOTIFIED_NOBODY));
@@ -79,12 +80,13 @@ class BatchStateTest {
     class Transitions {
 
         /**
-         * The eight arrows of the data-model diagram, one case each, named as the diagram names
+         * The nine arrows of the data-model diagram, one case each, named as the diagram names
          * them so a change to the design and a change to this list are the same edit.
          */
         @ParameterizedTest(name = "{0} -> {1} ({2})")
         @CsvSource({
             "PENDING,            GENERATING,         payload stored and the render request accepted",
+            "PENDING,            GENERATED,          the reconciler found a document for a batch whose markRequested never landed",
             "PENDING,            FAILED,             the payload store was unavailable or the request refused",
             "GENERATING,         GENERATED,          document-available by event or by the reconciler",
             "GENERATING,         FAILED,             generation-failed or the grace period passed",
@@ -189,9 +191,26 @@ class BatchStateTest {
 
         @Test
         void a_batch_should_not_skip_the_state_that_proves_the_document_exists() {
-            assertThat(BatchStatus.PENDING.canTransitionTo(BatchStatus.GENERATED)).isFalse();
             assertThat(BatchStatus.PENDING.canTransitionTo(BatchStatus.NOTIFIED)).isFalse();
             assertThat(BatchStatus.GENERATING.canTransitionTo(BatchStatus.NOTIFIED)).isFalse();
+        }
+
+        /**
+         * The one arrow out of PENDING that is not this service moving the batch itself.
+         *
+         * <p>PENDING to GENERATED is not a batch skipping GENERATING for convenience: it is the
+         * batch whose render request systemdocgenerator accepted and whose {@code markRequested}
+         * never landed - the pod died in the moment between the 202 and the mark, or the store
+         * blipped on it - so the document was rendered against a row that still says nobody asked.
+         * The reconciler's sweep finds it by the payload id the row does carry, and refusing the
+         * move would mean throwing away a document that exists rather than sending it.
+         */
+        @Test
+        void a_document_found_for_a_batch_whose_request_was_never_recorded_should_be_applicable() {
+            assertThat(BatchStatus.PENDING.canTransitionTo(BatchStatus.GENERATED))
+                    .as("the render was asked for and the mark was not; the safety net is what "
+                            + "reconciles the two, and it has to be able to")
+                    .isTrue();
         }
 
         /**

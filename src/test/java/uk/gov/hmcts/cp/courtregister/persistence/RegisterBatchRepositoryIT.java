@@ -1,12 +1,14 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -25,7 +27,7 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  * same statement; what is left is this repository, and it is the half every other collaborator
  * reaches the batch through - the reconciler's overdue read, the listener's fallback lookup by
  * payload, the operations CLI's own assembly, and the whole-row write that carries the facts the
- * port's {@code mark} signatures do not. Each of its five statements is round-tripped here, because
+ * port's {@code mark} signatures do not. Each of its six statements is round-tripped here, because
  * nothing else will: the phases that consume them mock the store, so a column dropped from one of
  * these statements would first be noticed by a batch that could not say what happened to it.
  *
@@ -188,6 +190,62 @@ class RegisterBatchRepositoryIT {
             assertThat(mine(repository.generatingSince(GRACE_EDGE)))
                     .as("a PENDING batch is waiting for this service, not for systemdocgenerator, "
                             + "and querying its outcome would ask about a render nobody requested")
+                    .isEmpty();
+        }
+    }
+
+    /**
+     * The batches that never reached the renderer, which the overdue read above cannot see.
+     *
+     * <p>A batch whose payload id was minted and whose {@code markRequested} never landed stays
+     * PENDING with its rows stamped, and nothing revisits it: {@code generatingSince} reads
+     * GENERATING, the stamped rows are outside {@code activeUnbatched}, and the live-key index
+     * defers every later re-share of that key behind it. This read is what the safety net finds it
+     * with, and the payload id is what makes it answerable at all.
+     */
+    @Nested
+    @DisplayName("the batches that never reached the renderer")
+    class NeverRequested {
+
+        @Test
+        void pending_since_should_answer_with_the_stale_pending_batches_oldest_first() {
+            final RegisterBatch first = minted(MONDAY, payloadFileId, ASSEMBLED_AT);
+            final RegisterBatch second =
+                    minted(TUESDAY, secondPayloadFileId, ASSEMBLED_AT.plusSeconds(90));
+
+            assertThat(pendingSince(GRACE_EDGE))
+                    .as("oldest first, for the same reason the overdue read is: the ones that have "
+                            + "been stuck longest are the registers already missing")
+                    .containsExactly(first, second);
+        }
+
+        @Test
+        void pending_since_should_exclude_a_batch_assembled_inside_the_grace_period() {
+            minted(MONDAY, payloadFileId, GRACE_EDGE.plusSeconds(1));
+
+            assertThat(pendingSince(GRACE_EDGE))
+                    .as("a batch assembled a moment ago is a batch the run is still working "
+                            + "through, not one it left behind")
+                    .isEmpty();
+        }
+
+        @Test
+        void pending_since_should_exclude_a_batch_whose_payload_was_never_minted() {
+            repository.insert(assembled(MONDAY));
+
+            assertThat(pendingSince(GRACE_EDGE))
+                    .as("systemdocgenerator is asked about a payload; a batch that minted none is "
+                            + "a batch there is nothing to ask about")
+                    .isEmpty();
+        }
+
+        @Test
+        void pending_since_should_exclude_a_batch_that_did_reach_the_renderer() {
+            requested(MONDAY, payloadFileId, REQUESTED_AT);
+
+            assertThat(pendingSince(GRACE_EDGE))
+                    .as("a GENERATING batch is the overdue read's, and asking about it twice would "
+                            + "apply one outcome through two passes")
                     .isEmpty();
         }
     }
@@ -432,6 +490,53 @@ class RegisterBatchRepositoryIT {
                 batch.registerDate(), batch.fileName(), payloadFileId, DOCUMENT_FILE_ID,
                 BatchStatus.GENERATED, null, null, true, CompletedBy.EVENT,
                 ASSEMBLED_AT, REQUESTED_AT, GENERATED_AT, null, null, 1, null, 0);
+    }
+
+    /**
+     * An inserted batch whose payload id was minted and whose render request was never recorded.
+     *
+     * <p>The mint is a statement of {@link JdbcRegisterStore}'s rather than this repository's, and
+     * it is not a transition, so it is written here directly: a compare-and-set from PENDING to
+     * PENDING is a move to itself and the state machine refuses it.
+     *
+     * @param registerDate the day the batch is for, which with the court centre is its key
+     * @param payload      the payload id the run minted before the file-service write
+     * @param assembledAt  when the batch was stamped onto its rows
+     * @return the batch as the stale-PENDING read should return it
+     */
+    private RegisterBatch minted(final LocalDate registerDate, final UUID payload,
+            final Instant assembledAt) {
+        final RegisterBatch assembled = new RegisterBatch(UUID.randomUUID(), courtCentre, OU_CODE,
+                COURT_HOUSE, registerDate, fileName(registerDate), null, null, BatchStatus.PENDING,
+                null, null, true, null, assembledAt, null, null, null, null, 0, null, 0);
+        repository.insert(assembled);
+        ProcessedLogTestSupport.jdbcClient()
+                .sql("UPDATE register_batch SET payload_file_id = :payloadFileId "
+                        + "WHERE batch_id = :batchId")
+                .param("payloadFileId", payload)
+                .param("batchId", assembled.batchId())
+                .update();
+        return new RegisterBatch(assembled.batchId(), courtCentre, OU_CODE, COURT_HOUSE,
+                registerDate, assembled.fileName(), payload, null, BatchStatus.PENDING, null, null,
+                true, null, assembledAt, null, null, null, null, 0, null, 0);
+    }
+
+    /**
+     * The stale-PENDING read, narrowed to the case that asked.
+     *
+     * <p>Made through {@code assertThatCode} so that a seam's refusal is recorded as a failing
+     * assertion rather than as the exception it is, which is what the red-run convention asks of a
+     * case written against a seam.
+     *
+     * @param cutoff the far edge of the grace period
+     * @return this case's stale PENDING batches, oldest first
+     */
+    private List<RegisterBatch> pendingSince(final Instant cutoff) {
+        final AtomicReference<List<RegisterBatch>> answered = new AtomicReference<>(List.of());
+        assertThatCode(() -> answered.set(repository.pendingSince(cutoff)))
+                .as("the stale-PENDING sweep implements this read; this is its red run")
+                .doesNotThrowAnyException();
+        return mine(answered.get());
     }
 
     /** An inserted batch already GENERATING, which is the state the reconciler reads. */

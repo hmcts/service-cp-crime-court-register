@@ -76,7 +76,7 @@ class GenerationMetricsContextTest {
     @DisplayName("put the flag gauge on the registry the service exports from")
     void the_flag_gauge_should_be_registered_before_anything_has_read_the_flag() {
         assertThat(registry.find(GenerationMetrics.FLAG_READ_OK).gauge())
-                .as("the four gauges are registered from construction, so a pod that has not run "
+                .as("the five gauges are registered from construction, so a pod that has not run "
                         + "tonight still answers the question the dashboard asks of it")
                 .isNotNull();
     }

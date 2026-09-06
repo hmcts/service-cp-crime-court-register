@@ -36,9 +36,10 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
  * work that happened. The skipped counter separates "the flag is off" from "the flag could not be
  * read", which look identical from outside and are not the same night. The reconciled counter
  * separates an outcome that arrived from one that had to be fetched, because a run whose outcomes
- * all come from the reconciler is a broker to look at rather than a renderer. And the two age
+ * all come from the reconciler is a broker to look at rather than a renderer. And the three age
  * gauges are the only reading that moves when nothing happens at all - a record that is never
- * batched, or a batch whose document never comes, touches no counter here, which is exactly the
+ * batched, a batch whose document never comes, or a batch whose render request was never recorded,
+ * touches no counter here, which is exactly the
  * silence the batches counter's {@code notified-nobody} outcome (defect fix P1) also ends.
  *
  * <p>Absences are asserted too: no instrument may carry an identifier as a label - every defendant
@@ -371,15 +372,36 @@ class GenerationMetricsTest {
      * nightly flow that stopped running moves none of the counters at all.
      */
     @Nested
-    @DisplayName("the four gauges")
+    @DisplayName("the five gauges")
     class Gauges {
 
         @Test
-        void all_four_should_be_registered_before_a_run_has_happened() {
+        void all_five_should_be_registered_before_a_run_has_happened() {
             assertThat(gauge(GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE)).isZero();
             assertThat(gauge(GenerationMetrics.OLDEST_GENERATING_AGE)).isZero();
+            assertThat(gauge(GenerationMetrics.OLDEST_PENDING_AGE)).isZero();
             assertThat(gauge(GenerationMetrics.PENDING_AFTER_DEADLINE)).isZero();
             assertThat(gauge(GenerationMetrics.FLAG_READ_OK)).isEqualTo(1);
+        }
+
+        /**
+         * The batch nothing else can see. A batch left PENDING with a payload id moves no counter
+         * and appears in no other gauge - the generating gauge reads GENERATING, and its registers
+         * are stamped and so outside {@code activeUnbatched} - which is exactly why it needs one.
+         */
+        @Test
+        void the_oldest_batch_that_never_reached_the_renderer_should_be_reported_in_seconds() {
+            metrics.oldestPendingAge(Duration.ofMinutes(45));
+
+            assertThat(gauge(GenerationMetrics.OLDEST_PENDING_AGE)).isEqualTo(2_700);
+        }
+
+        @Test
+        void a_sweep_with_nothing_stuck_at_pending_should_bring_that_gauge_back_down() {
+            metrics.oldestPendingAge(Duration.ofMinutes(45));
+            metrics.oldestPendingAge(Duration.ZERO);
+
+            assertThat(gauge(GenerationMetrics.OLDEST_PENDING_AGE)).isZero();
         }
 
         @Test
@@ -441,6 +463,7 @@ class GenerationMetricsTest {
         void none_of_them_should_carry_a_label() {
             assertThat(tagKeysOf(GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE)).isEmpty();
             assertThat(tagKeysOf(GenerationMetrics.OLDEST_GENERATING_AGE)).isEmpty();
+            assertThat(tagKeysOf(GenerationMetrics.OLDEST_PENDING_AGE)).isEmpty();
             assertThat(tagKeysOf(GenerationMetrics.PENDING_AFTER_DEADLINE)).isEmpty();
             assertThat(tagKeysOf(GenerationMetrics.FLAG_READ_OK)).isEmpty();
         }
@@ -458,6 +481,7 @@ class GenerationMetricsTest {
                     .containsExactlyInAnyOrder(
                             GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE,
                             GenerationMetrics.OLDEST_GENERATING_AGE,
+                            GenerationMetrics.OLDEST_PENDING_AGE,
                             GenerationMetrics.PENDING_AFTER_DEADLINE,
                             GenerationMetrics.FLAG_READ_OK);
         }
@@ -479,6 +503,7 @@ class GenerationMetricsTest {
                             GenerationMetrics.NOTIFICATIONS,
                             GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE,
                             GenerationMetrics.OLDEST_GENERATING_AGE,
+                            GenerationMetrics.OLDEST_PENDING_AGE,
                             GenerationMetrics.PENDING_AFTER_DEADLINE,
                             GenerationMetrics.FLAG_READ_OK);
         }
@@ -534,6 +559,7 @@ class GenerationMetricsTest {
             metrics.notificationSettled(NotificationStatus.ACCEPTED, 202);
             metrics.oldestRecordedUnbatchedAge(Duration.ofHours(1));
             metrics.oldestGeneratingAge(Duration.ofMinutes(20));
+            metrics.oldestPendingAge(Duration.ofMinutes(45));
             metrics.pendingAfterDeadline(1);
             metrics.flagRead(FlagDecision.OFF);
         }
@@ -618,12 +644,14 @@ class GenerationMetricsTest {
         }
 
         @Test
-        @DisplayName("all four gauges scrape from a pod that has not run a night")
+        @DisplayName("all five gauges scrape from a pod that has not run a night")
         void the_gauges_should_scrape_before_any_run_has_happened() {
             assertThat(samplesOf(GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE))
                     .containsExactly(GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE);
             assertThat(samplesOf(GenerationMetrics.OLDEST_GENERATING_AGE))
                     .containsExactly(GenerationMetrics.OLDEST_GENERATING_AGE);
+            assertThat(samplesOf(GenerationMetrics.OLDEST_PENDING_AGE))
+                    .containsExactly(GenerationMetrics.OLDEST_PENDING_AGE);
             assertThat(samplesOf(GenerationMetrics.PENDING_AFTER_DEADLINE))
                     .containsExactly(GenerationMetrics.PENDING_AFTER_DEADLINE);
             assertThat(samplesOf(GenerationMetrics.FLAG_READ_OK))

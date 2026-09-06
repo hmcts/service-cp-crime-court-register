@@ -60,6 +60,7 @@ public class GenerationMetrics {
     public static final String OLDEST_RECORDED_UNBATCHED_AGE =
             "courtregister_oldest_recorded_unbatched_age";
     public static final String OLDEST_GENERATING_AGE = "courtregister_oldest_generating_age";
+    public static final String OLDEST_PENDING_AGE = "courtregister_oldest_pending_age";
     public static final String PENDING_AFTER_DEADLINE = "courtregister_pending_after_deadline";
     public static final String FLAG_READ_OK = "courtregister_flag_read_ok";
 
@@ -97,6 +98,7 @@ public class GenerationMetrics {
      */
     private final AtomicLong oldestRecordedUnbatchedSeconds = new AtomicLong();
     private final AtomicLong oldestGeneratingSeconds = new AtomicLong();
+    private final AtomicLong oldestPendingSeconds = new AtomicLong();
     private final AtomicInteger pendingAfterDeadlineBatches = new AtomicInteger();
 
     /**
@@ -224,6 +226,22 @@ public class GenerationMetrics {
      */
     public void oldestGeneratingAge(final Duration age) {
         oldestGeneratingSeconds.set(age.toSeconds());
+    }
+
+    /**
+     * Reports how long the oldest batch that never reached the renderer has been waiting.
+     *
+     * <p>The seam the safety-net fix registers a gauge behind. A batch left PENDING with a payload
+     * id - the pod died between the render request and the mark that records it, or the mark itself
+     * failed - moves no counter and appears in no other gauge: {@link #OLDEST_GENERATING_AGE} reads
+     * GENERATING only, and its registers are already stamped, so they are outside
+     * {@code activeUnbatched} too. This is the reading that says so.
+     *
+     * @param age the age of the oldest stale PENDING batch, or {@link Duration#ZERO} where there is
+     *            none
+     */
+    public void oldestPendingAge(final Duration age) {
+        oldestPendingSeconds.set(age.toSeconds());
     }
 
     /**

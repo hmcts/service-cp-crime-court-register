@@ -222,6 +222,24 @@ public class RegisterBatchRepository {
     }
 
     /**
+     * The batches that never reached the renderer, oldest first.
+     *
+     * <p>The other half of the safety net's read, and a seam until the sweep behind it is written.
+     * A batch whose payload id was minted and whose {@code markRequested} never landed - the pod
+     * died after the 202, or the store blipped on the mark - stays PENDING for ever:
+     * {@link #generatingSince(Instant)} does not see it, its rows are stamped and so outside
+     * {@code activeUnbatched}, and the partial unique index keeps every later re-share of that key
+     * waiting behind it.
+     *
+     * @param assembledBefore the far edge of the grace period, measured from assembly
+     * @return every stale PENDING batch that minted a payload, oldest first
+     */
+    public List<RegisterBatch> pendingSince(final Instant assembledBefore) {
+        throw new UnsupportedOperationException(
+                "the stale-PENDING sweep implements this read; " + assembledBefore);
+    }
+
+    /**
      * Statement 5 - moves a batch from the state the caller read it in to the state it decided on.
      *
      * <p>The move is asked of {@link BatchStatus} before it is attempted, so the state machine is
