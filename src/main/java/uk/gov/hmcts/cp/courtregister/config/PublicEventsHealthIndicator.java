@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -36,12 +37,20 @@ import org.springframework.boot.health.contributor.HealthIndicator;
  *   <li>{@code lastDeliveryAgeSeconds} - how long ago that was, or {@code none}.</li>
  * </ul>
  *
- * <p><strong>Seam only.</strong> The rule lands with T051; until then {@link #health()} throws, so
- * that {@code PublicEventsHealthIndicatorTest} records a failing assertion rather than a compile
- * error. It is annotated with nothing, so no context registers a component that would answer by
- * throwing.
+ * <p>It is annotated with nothing and is registered by {@link GenerationHealth}, on a generating pod
+ * only: a deployment running the intake half alone holds no subscription, and a component reporting
+ * on one that was never meant to exist would put the whole health aggregate DOWN for a working pod.
  */
 public class PublicEventsHealthIndicator implements HealthIndicator {
+
+    /** What the details call a subscription whose container is running. */
+    private static final String RUNNING = "running";
+
+    /** What the details call a subscription whose container is not. */
+    private static final String STOPPED = "stopped";
+
+    /** What the details say where there is no delivery to report an instant or an age for. */
+    private static final String NONE = "none";
 
     /**
      * Whether the durable subscription's container is running.
@@ -49,11 +58,7 @@ public class PublicEventsHealthIndicator implements HealthIndicator {
      * <p>Asked rather than remembered: the listener container is the only thing that knows, it
      * already answers the question, and a copy of its state kept here would be a second answer to
      * drift from the first.
-     *
-     * <p>Suppressed only while this is a seam: {@link #health()} is the one thing that reads it, and
-     * {@link #health()} lands with T051. The suppression goes with the throw.
      */
-    @SuppressWarnings("PMD.UnusedPrivateField")
     private final BooleanSupplier subscriptionRunning;
 
     /** The clock the delivery age is measured against. */
@@ -86,8 +91,40 @@ public class PublicEventsHealthIndicator implements HealthIndicator {
         lastDelivery.set(clock.instant());
     }
 
+    /**
+     * The subscription's state, and how long ago it last received anything.
+     *
+     * <p>The status follows the subscription and nothing else. The age is a detail rather than a
+     * rule for the reason the class javadoc gives: a quiet night and a dead broker are the same
+     * observation from here, and only a reader who also knows whether a run started can tell them
+     * apart.
+     *
+     * @return what the subscription is doing, reported and never judged
+     */
     @Override
     public Health health() {
-        throw new UnsupportedOperationException("T051");
+        final boolean running = subscriptionRunning.getAsBoolean();
+        final Instant delivery = lastDelivery.get();
+        return (running ? Health.up() : Health.down())
+                .withDetail("subscription", running ? RUNNING : STOPPED)
+                .withDetail("lastDeliveryAt", delivery == null ? NONE : delivery.toString())
+                .withDetail("lastDeliveryAgeSeconds", ageSeconds(delivery))
+                .build();
+    }
+
+    /**
+     * How long ago the last delivery was, in whole seconds.
+     *
+     * <p>{@code none} rather than zero where nothing has arrived yet: a pod that has just started
+     * has no age to report, and a zero would read as a delivery that had just landed - which is the
+     * opposite of what it means.
+     *
+     * @param delivery when an event last arrived, or null if none ever has
+     * @return the age in seconds, or {@code none}
+     */
+    private Object ageSeconds(final Instant delivery) {
+        return delivery == null
+                ? NONE
+                : Duration.between(delivery, clock.instant()).toSeconds();
     }
 }

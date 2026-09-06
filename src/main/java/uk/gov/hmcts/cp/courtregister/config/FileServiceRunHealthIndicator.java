@@ -1,8 +1,11 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
+import org.springframework.boot.health.contributor.Status;
 
 /**
  * Whether the file service is reachable, which matters only while a run is in progress.
@@ -32,12 +35,24 @@ import org.springframework.boot.health.contributor.HealthIndicator;
  *       otherwise.</li>
  * </ul>
  *
- * <p><strong>Seam only.</strong> The rule lands with T051; until then {@link #health()} throws, so
- * that {@code FileServiceRunHealthIndicatorTest} records a failing assertion rather than a compile
- * error. It is annotated with nothing, so no context registers a component that would answer by
- * throwing.
+ * <p>It is annotated with nothing and is registered by {@link GenerationHealth}, which contributes it
+ * whether or not generation is enabled: Spring validates health-group membership at startup, so a
+ * readiness group naming a contributor a property had removed would fail the context with a message
+ * about health groups rather than about the setting somebody changed. On an intake-only pod no run
+ * ever starts, so it answers idle for ever and asks nothing of a datasource that does not exist.
  */
 public class FileServiceRunHealthIndicator implements HealthIndicator {
+
+    private static final Logger LOG = LoggerFactory.getLogger(FileServiceRunHealthIndicator.class);
+
+    /** What the details call the run while one is under way. */
+    private static final String IN_PROGRESS = "in-progress";
+
+    /** What the details call the run for the twenty-three hours a day there is not one. */
+    private static final String IDLE = "idle";
+
+    /** What the details say about a file service nothing has been asked of. */
+    private static final String NOT_PROBED = "not-probed";
 
     /**
      * The file-service datasource's own contributor, asked only while a run is in progress.
@@ -45,11 +60,7 @@ public class FileServiceRunHealthIndicator implements HealthIndicator {
      * <p>A {@link HealthIndicator} rather than the datasource, because "can this pool answer a
      * query" is a question Spring Boot's own datasource contributor already answers, and this class
      * has nothing to add to it beyond when it may be asked.
-     *
-     * <p>Suppressed only while this is a seam: {@link #health()} is the one thing that reads it, and
-     * {@link #health()} lands with T051. The suppression goes with the throw.
      */
-    @SuppressWarnings("PMD.UnusedPrivateField")
     private final HealthIndicator fileServiceProbe;
 
     /** Whether a generation run is in progress; the whole of when the probe may be asked. */
@@ -82,8 +93,54 @@ public class FileServiceRunHealthIndicator implements HealthIndicator {
         runInProgress.set(false);
     }
 
+    /**
+     * Idle, or whatever the file service answered while this run is going on.
+     *
+     * @return the file service's bearing on readiness, which is none unless a run is in progress
+     */
     @Override
     public Health health() {
-        throw new UnsupportedOperationException("T051");
+        final Health answer;
+        if (runInProgress.get()) {
+            final Status status = probed();
+            answer = (Status.UP.equals(status) ? Health.up() : Health.down())
+                    .withDetail("run", IN_PROGRESS)
+                    .withDetail("fileservice", status.getCode())
+                    .build();
+        } else {
+            answer = Health.up()
+                    .withDetail("run", IDLE)
+                    .withDetail("fileservice", NOT_PROBED)
+                    .build();
+        }
+        return answer;
+    }
+
+    /**
+     * What the datasource's contributor says, with a throw read as DOWN.
+     *
+     * <p>A contributor is entitled to throw at a pool that cannot hand out a connection; a health
+     * endpoint is not entitled to pass that on, because a component that throws takes down the very
+     * endpoint that would have reported the problem. The refusal is reported by what it is, never by
+     * what the driver said: a connection failure's message carries hosts, database names and
+     * sometimes credentials, so the type is logged and the message is not.
+     *
+     * @return UP, or DOWN however the probe failed to say so
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    // Deliberately total. Whatever a pool with no connection to give raises - a driver's own
+    // unchecked exception, a Hikari timeout, an unwrapped SQL failure - the answer is DOWN and the
+    // health endpoint has to survive it, because a component that throws takes with it the endpoint
+    // that would have reported the problem.
+    private Status probed() {
+        Status status;
+        try {
+            status = fileServiceProbe.health().getStatus();
+        } catch (RuntimeException refusal) {
+            LOG.warn("File-service health probe refused during a run. type={}",
+                    refusal.getClass().getName());
+            status = Status.DOWN;
+        }
+        return status;
     }
 }

@@ -380,9 +380,20 @@ management:
           # report ready, be sent traffic, count as a healthy replica in a rolling deployment, and
           # consume nothing while the queue grew.
           #
-          # The `servicebus` indicator is deliberately absent from both: a broker blip must never
-          # roll the pods, and the service cannot heal the queue by restarting (spec FR-011).
-          include: db,intakeStartup
+          # `fileServiceRun` is the third, and it is a narrower claim than the other two make. The
+          # file-service datasource is in use for a few seconds a night, so the component gates
+          # readiness only while a generation run is actually in progress, when an unreachable
+          # payload store is a run about to fail every batch PAYLOAD_STORE_UNAVAILABLE; between runs
+          # it answers UP without asking, and says that it did not ask. Naming it here is what lets
+          # that decision reach readiness at all, and the component itself is what keeps the group
+          # quiet for the other twenty-three hours. It is contributed whether or not generation is
+          # enabled, because Spring validates group membership at startup and a name a property had
+          # removed would fail the context.
+          #
+          # The two broker indicators, `servicebus` and `publicEvents`, are deliberately absent: a
+          # blip must never roll the pods, and the service cannot heal a broker by restarting
+          # (spec FR-011). Both are reported as their own components, outside every group.
+          include: db,intakeStartup,fileServiceRun
   health:
     jms:
       # Spring Boot auto-configures a `jms` health indicator as soon as a ConnectionFactory is on the
@@ -391,9 +402,11 @@ management:
       # service DOWN - the exact behaviour spec FR-011 forbids, for the same reason `servicebus` is
       # kept out of the readiness group above.
       #
-      # The broker is still reported, just not by this: Phase 2's `PublicEventsHealthIndicator`
-      # (tasks T041, wired in T051) reports the `public.event` subscription as its own detail, outside
-      # readiness, so an operator can see the broker state without a blip rolling the pods.
+      # The broker is still reported, just not by this: `PublicEventsHealthIndicator` reports the
+      # `public.event` subscription's own state and the age of its last delivery as its own
+      # component, outside readiness, so an operator can see the broker state without a blip rolling
+      # the pods - and silence on a running subscription is published as an age rather than called
+      # an outage, which is exactly the judgement the auto-configured indicator would make wrongly.
       enabled: false
 
 logging:

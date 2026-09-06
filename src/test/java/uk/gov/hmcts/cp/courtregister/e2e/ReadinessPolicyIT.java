@@ -78,6 +78,15 @@ class ReadinessPolicyIT {
     private static final String STARTUP_COMPONENT = "intakeStartup";
     private static final String BROKER_COMPONENT = "servicebus";
 
+    /**
+     * The file-service datasource's component, which is in the group and quiet outside a run.
+     *
+     * <p>Named here because the group's membership is the half of that rule this suite can see: what
+     * the component does with the membership - probe during a run, answer UP without asking between
+     * them - is {@code FileServiceRunHealthIndicatorTest}'s, and this pod is not generating.
+     */
+    private static final String FILE_SERVICE_COMPONENT = "fileServiceRun";
+
     private static final Duration OBSERVED_WITHIN = Duration.ofSeconds(120);
     private static final Duration POLL = Duration.ofSeconds(1);
 
@@ -206,8 +215,15 @@ class ReadinessPolicyIT {
     void should_gate_readiness_on_the_store_alone() {
         assertThat(readiness().getComponents())
                 .as("the store gates readiness, and so does this pod's own gated start — a database "
-                        + "that replies is not a service in a position to use it")
-                .containsOnlyKeys(STORE_COMPONENT, STARTUP_COMPONENT);
+                        + "that replies is not a service in a position to use it; the file-service "
+                        + "component is the third, and it decides for itself that it has nothing to "
+                        + "say outside a run")
+                .containsOnlyKeys(STORE_COMPONENT, STARTUP_COMPONENT, FILE_SERVICE_COMPONENT);
+
+        assertThat(readiness().getComponents().get(FILE_SERVICE_COMPONENT).getStatus())
+                .as("this pod is not generating and no run is in progress, so a datasource it does "
+                        + "not even hold cannot make it unready")
+                .isEqualTo(Status.UP);
 
         assertThat(overall().getComponents())
                 .as("the broker is still observable — as its own component, outside readiness")
