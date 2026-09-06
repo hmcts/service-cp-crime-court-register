@@ -823,6 +823,18 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * {@inheritDoc}
      *
+     * <p><strong>Seam only.</strong> The read-back statement lands with T049; until then this
+     * throws, so that {@code RegisterGenerationServiceTest} records a failing assertion rather than
+     * a compile error.
+     */
+    @Override
+    public List<RegisterRecord> batched(final UUID batchId) {
+        throw new UnsupportedOperationException("T049");
+    }
+
+    /**
+     * {@inheritDoc}
+     *
      * @throws IllegalArgumentException if the batch is empty or holds a record from another key
      * @throws IllegalStateException    if a record stopped being available between the read and the
      *                                  stamp, so the assembled batch would not be the one asked for
@@ -866,6 +878,18 @@ public class JdbcRegisterStore implements RegisterStore {
                     + "; a register was superseded or batched elsewhere in between");
         }
         return assembled;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><strong>Seam only.</strong> The statement that writes the minted id onto a still-PENDING
+     * batch lands with T049; until then this throws, so that
+     * {@code RegisterGenerationServiceTest} records a failing assertion rather than a compile error.
+     */
+    @Override
+    public void markPayloadMinted(final UUID batchId, final UUID payloadFileId) {
+        throw new UnsupportedOperationException("T049");
     }
 
     /**

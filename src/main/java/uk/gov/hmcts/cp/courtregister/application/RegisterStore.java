@@ -102,6 +102,24 @@ public interface RegisterStore {
     List<RegisterRecord> activeUnbatched();
 
     /**
+     * The registers one batch was assembled from, oldest first.
+     *
+     * <p>Read back by identity rather than carried through from the assembly, because the batch
+     * identity is the only thing that says which rows a document is built from once the run has
+     * stamped them - the same predicate {@link #markGenerated} moves rows under, asked in the other
+     * direction. A caller that kept the grouping in memory and rendered from that would be
+     * rendering from what it read before the stamp, and the stamp is the moment the batch became a
+     * fact.
+     *
+     * <p>The order is the assembly order, because the first record names the file and the render
+     * payload is progression's array of documents in the order the batch holds them.
+     *
+     * @param batchId the batch whose registers are wanted
+     * @return the registers stamped with this batch, in the order they were assembled
+     */
+    List<RegisterRecord> batched(UUID batchId);
+
+    /**
      * Groups one court centre's day into a batch and stamps its identity onto the rows.
      *
      * <p>All of it or none of it. A register that was superseded or batched elsewhere between the
@@ -116,7 +134,26 @@ public interface RegisterStore {
     RegisterBatch assemble(CourtCentreDay key, List<RegisterRecord> records);
 
     /**
+     * Records the file-service id this batch's payload is about to be written under.
+     *
+     * <p>Before the write, and that is the whole of why this is a separate mark. An id minted, used
+     * for an insert and only then written down is an id that exists in the file service and nowhere
+     * in this service if the pod dies in between - a payload nothing points at, and, if the render
+     * request got out first, a document that comes back attributable to nothing. The batch stays
+     * PENDING: the id says which payload the render will be about, not that one was asked for.
+     *
+     * @param batchId       the batch the payload belongs to
+     * @param payloadFileId the file-service id the caller minted for it
+     */
+    void markPayloadMinted(UUID batchId, UUID payloadFileId);
+
+    /**
      * Records that systemdocgenerator accepted the render request for this batch.
+     *
+     * <p>The payload id is named again rather than assumed from {@link #markPayloadMinted}, because
+     * this is the statement that moves the batch and a move that read a column it also depends on
+     * would be two reads of one fact. The two must be the same id; a run that passed a different one
+     * would be saying the render it just had accepted was about a payload it never stored.
      *
      * @param batchId       the batch that was requested
      * @param payloadFileId the file-service id the payload was stored under
