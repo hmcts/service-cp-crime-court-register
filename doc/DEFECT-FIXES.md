@@ -11,8 +11,9 @@ increment 002 appends here as that leg moves into this service, plus the one app
 (P10). Thirty-one of the catalogued `C`
 defects live in this service and are **fixed**, as are both appended ones; the other three (C18,
 C28, C34) are externally-owned remediations registered as PENDING with an owner and a trigger and
-tracked to conclusion before cutover. Of the `P` rows, three are FIXED, four are PLANNED for
-increment 002, two are RETIRED with the leg and one is MOOT. Every fix is recorded here - legacy
+tracked to conclusion before cutover. Of the `P` rows, five are FIXED (P2, P3, P5, P9, P10), two are
+PLANNED for increment 002 (P1, P4), two are RETIRED with the leg (P6, P7) and one is MOOT (P8).
+Every fix is recorded here - legacy
 behaviour, fixed behaviour, the test that pins the fix, and its sign-off state. The rules:
 
 - A fix merged without a register entry is itself the defect: revert it or register it.
