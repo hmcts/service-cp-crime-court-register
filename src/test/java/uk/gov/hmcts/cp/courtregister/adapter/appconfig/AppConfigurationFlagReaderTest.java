@@ -411,24 +411,34 @@ class AppConfigurationFlagReaderTest {
         /**
          * A store that answers so late the budget cannot be what brought the read back.
          *
-         * <p>Comfortably longer than {@link #SHORT_BUDGET} plus the margin below, and comfortably
-         * shorter than the suite's own patience: what it stands for is an endpoint that has
-         * accepted the connection and will not answer.
+         * <p>Comfortably longer than {@link #SHORT_BUDGET} and comfortably shorter than the suite's
+         * own patience: what it stands for is an endpoint that has accepted the connection and will
+         * not answer.
          */
         private static final int BLACK_HOLED_MS = 5000;
 
-        /** What the reader is allowed on top of the budget to turn a refusal into a decision. */
-        private static final Duration MARGIN = Duration.ofSeconds(1);
+        /**
+         * What two calls to a wall clock cost, and nothing else.
+         *
+         * <p>Not a margin the reader is allowed: {@code courtregister.feature.timeout} is the
+         * deadline the job is promised, so the only thing this may absorb is the cost of measuring
+         * it - handing the read to a thread, coming back off the wait, reading the clock twice.
+         * A tolerance large enough to hide a leg of the read would let the deadline be the budget
+         * plus whatever the reader felt like adding, which is the finding this case answers.
+         */
+        private static final Duration JITTER = Duration.ofMillis(150);
 
         /**
          * The nightly job asks this question first and does nothing until it is answered, so a read
          * that outlasts its budget is a run that has not started: at 18:00 the difference between a
-         * skipped run and a stalled one is an alert nobody gets. The budget is therefore the whole
-         * read and not the one leg of it the HTTP client happens to bound.
+         * skipped run and a stalled one is an alert nobody gets. The configured timeout is
+         * therefore the <em>outer</em> deadline - the credential, the handshake, the pool and the
+         * response are all inside it - and not the budget of whichever leg the HTTP client happens
+         * to bound.
          */
         @Test
-        @DisplayName("a black-holed store is unreadable inside the budget, not whenever the SDK "
-                + "gives up")
+        @DisplayName("a black-holed store is unreadable within the configured timeout, not the "
+                + "timeout plus a margin")
         void a_black_holed_store_answers_inside_the_budget() {
             answeringAfter(BLACK_HOLED_MS, settingCarrying(flagValue(true)));
             final FeatureFlagProperties properties =
@@ -444,8 +454,9 @@ class AppConfigurationFlagReaderTest {
                     .as("a read that did not answer in time is a skipped run with a cause on it")
                     .isEqualTo(unreadable(UnreadableReason.TIMED_OUT));
             assertThat(waited)
-                    .as("and it says so inside the budget the deployment set, plus a margin")
-                    .isLessThan(SHORT_BUDGET.plus(MARGIN));
+                    .as("and it says so within the timeout the deployment configured, which is "
+                            + "the deadline itself and not the first term of one")
+                    .isLessThan(properties.timeout().plus(JITTER));
         }
     }
 
