@@ -2,6 +2,7 @@ package uk.gov.hmcts.cp.courtregister.application;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -730,7 +731,10 @@ class RegisterGenerationServiceTest {
                             + "failure nobody is paged about")
                     .isEqualTo(1);
 
-            when(payloadMapper.mapPayload(any())).thenReturn(payload);
+            // doReturn, not when(...).thenReturn: the mapper is currently stubbed to throw, and
+            // when() would evaluate that stubbing here - in the arrangement of the second batch,
+            // where the throw belongs to the first.
+            doReturn(payload).when(payloadMapper).mapPayload(any());
             final BatchOutcome next = request(service, batch(OTHER_BATCH_ID), farDeadline());
 
             softly.assertThat(next)

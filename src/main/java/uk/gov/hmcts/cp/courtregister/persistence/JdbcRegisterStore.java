@@ -140,6 +140,9 @@ public class JdbcRegisterStore implements RegisterStore {
     private static final String SUPERSEDED_OUTPUT_ID = "superseded_output_id";
     private static final String OUTPUT_IDS = "outputIds";
     private static final String EXPECTED = "expected";
+
+    /** The bound parameter naming the file-service id a batch's payload is written under. */
+    private static final String PAYLOAD_FILE_ID = "payloadFileId";
     private static final String COURT_CENTRE_ID = "courtCentreId";
     private static final String REGISTER_DATE = "registerDate";
     private static final String REGISTER_TIME = "registerTime";
@@ -290,7 +293,27 @@ public class JdbcRegisterStore implements RegisterStore {
             """;
 
     /**
-     * Statement 3 - group a court centre's day into a batch and stamp it onto the rows.
+     * Statement 3 - the registers one batch was assembled from.
+     *
+     * <p>By the batch identity rather than by the court centre and day the batch is about, which is
+     * the predicate {@code mark generated} moves rows under asked in the other direction: the stamp
+     * is the moment the batch became a fact, and a read that went back to the grouping would be
+     * rendering what was true before it.
+     *
+     * <p>The assembly order, because it is part of what the document is: the first record names the
+     * file and the render payload is progression's array of documents in the order the batch holds
+     * them.
+     */
+    private static final String BATCH_REGISTERS = """
+            SELECT output_id, hearing_id, hearing_date, court_centre_id, register_date,
+                   register_time, file_name, defendant_type, recorded_flag_state, document
+              FROM processed_output
+             WHERE batch_id = :batchId
+             ORDER BY register_time, output_id
+            """;
+
+    /**
+     * Statement 4 - group a court centre's day into a batch and stamp it onto the rows.
      *
      * <p>The batch is inserted before the stamp because {@code processed_output.batch_id} carries a
      * foreign key to it, and both are one statement because a batch with no rows would hold the
@@ -336,13 +359,32 @@ public class JdbcRegisterStore implements RegisterStore {
               FROM assembled
             """;
 
-    /** Statement 4 - the status a transition is asked about and then fenced on. */
+    /** Statement 5 - the status a transition is asked about and then fenced on. */
     private static final String READ_BATCH_STATUS = """
             SELECT status FROM register_batch WHERE batch_id = :batchId
             """;
 
     /**
-     * Statement 5 - systemdocgenerator accepted the render request for this batch.
+     * Statement 6 - the payload id this batch's render will be about, written before it is used.
+     *
+     * <p>Nothing else moves. The batch stays PENDING because the id says which payload the render
+     * will be about and not that one was asked for, and {@code requested_at} and {@code attempts}
+     * belong to the statement that does move it.
+     *
+     * <p>Fenced on PENDING rather than on a status the caller read, because this is not a
+     * transition and there is no {@link BatchStatus} arrow for it to be judged against. PENDING is
+     * the only state a payload id may be minted for: a batch already GENERATING has had a render
+     * asked for about the id it already carries, and overwriting that would leave the outcome event
+     * for the first payload correlated to a row naming the second.
+     */
+    private static final String MARK_PAYLOAD_MINTED = """
+            UPDATE register_batch
+               SET payload_file_id = :payloadFileId
+             WHERE batch_id = :batchId AND status = 'PENDING'
+            """;
+
+    /**
+     * Statement 7 - systemdocgenerator accepted the render request for this batch.
      *
      * <p>{@code attempts} is a lifetime tally and never a control variable: the run deadline decides
      * when to stop trying, and the column records how often this batch has been asked for.
@@ -357,7 +399,7 @@ public class JdbcRegisterStore implements RegisterStore {
             """;
 
     /**
-     * Statement 6 - the document exists, and this batch's rows move with it.
+     * Statement 8 - the document exists, and this batch's rows move with it.
      *
      * <p><strong>Defect fix P3, stated as a predicate.</strong> The rows are found through the batch
      * the update just settled ({@code flipped} joins {@code generated}), so the only rows that can
@@ -393,7 +435,7 @@ public class JdbcRegisterStore implements RegisterStore {
             """;
 
     /**
-     * Statement 7 - the batch ended without a document, under one bounded reason.
+     * Statement 9 - the batch ended without a document, under one bounded reason.
      *
      * <p>{@code sdg_reason} is bounded on the way in, by the rule the domain states once
      * ({@link RegisterBatch#boundedReason(String)}). How long systemdocgenerator's message is is
@@ -438,7 +480,7 @@ public class JdbcRegisterStore implements RegisterStore {
             """;
 
     /**
-     * Statement 8 - every recipient of the batch has been attempted.
+     * Statement 10 - every recipient of the batch has been attempted.
      *
      * <p>The batch's own terminal state is the summary's verdict - NOTIFIED, PARTIALLY_NOTIFIED or
      * NOTIFIED_NOBODY - and its rows reach NOTIFIED under all three. A batch nobody subscribes to is
@@ -820,16 +862,13 @@ public class JdbcRegisterStore implements RegisterStore {
                         .list());
     }
 
-    /**
-     * {@inheritDoc}
-     *
-     * <p><strong>Seam only.</strong> The read-back statement lands with T049; until then this
-     * throws, so that {@code RegisterGenerationServiceTest} records a failing assertion rather than
-     * a compile error.
-     */
     @Override
     public List<RegisterRecord> batched(final UUID batchId) {
-        throw new UnsupportedOperationException("T049");
+        return StoreOutage.translating("read the registers of a batch",
+                () -> jdbcClient.sql(BATCH_REGISTERS)
+                        .param(BATCH_ID, batchId)
+                        .query((rs, rowNumber) -> registerRecord(rs))
+                        .list());
     }
 
     /**
@@ -883,13 +922,27 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * {@inheritDoc}
      *
-     * <p><strong>Seam only.</strong> The statement that writes the minted id onto a still-PENDING
-     * batch lands with T049; until then this throws, so that
-     * {@code RegisterGenerationServiceTest} records a failing assertion rather than a compile error.
+     * <p>The one write in this class that settles no transition, and it is fenced all the same. A
+     * batch that is no longer PENDING has already had a render asked for about the id it carries,
+     * and a second mint over the top of that would leave the outcome event for the first payload
+     * correlated to a row naming the second - which is the attribution this whole ordering exists
+     * to protect.
+     *
+     * @throws IllegalStateException if there is no such batch, if it is no longer PENDING, or if it
+     *                               changed under the statement
      */
     @Override
     public void markPayloadMinted(final UUID batchId, final UUID payloadFileId) {
-        throw new UnsupportedOperationException("T049");
+        StoreOutage.translatingUpdate("mint a batch's payload id", () -> {
+            final long batches = jdbcClient.sql(MARK_PAYLOAD_MINTED)
+                    .param(BATCH_ID, batchId)
+                    .param(PAYLOAD_FILE_ID, payloadFileId)
+                    .update();
+            if (batches != ONE_BATCH) {
+                throw new IllegalStateException(BATCH + batchId + " was not given a payload id; it "
+                        + "is not " + BatchStatus.PENDING + ", or it changed under the statement");
+            }
+        });
     }
 
     /**
@@ -905,7 +958,7 @@ public class JdbcRegisterStore implements RegisterStore {
             settle(jdbcClient.sql(MARK_REQUESTED)
                     .param(BATCH_ID, batchId)
                     .param(EXPECTED, expected.name())
-                    .param("payloadFileId", payloadFileId)
+                    .param(PAYLOAD_FILE_ID, payloadFileId)
                     .update(), batchId, expected, BatchStatus.GENERATING);
         });
     }
