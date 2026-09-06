@@ -1,6 +1,8 @@
 package uk.gov.hmcts.cp.courtregister.adapter.fileservice;
 
+import java.util.Objects;
 import java.util.UUID;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.PayloadMetadata;
@@ -34,9 +36,28 @@ import uk.gov.hmcts.cp.courtregister.domain.PayloadStoreUnavailableException;
  */
 public class FileServicePayloadStore implements PayloadFileStore {
 
+    /**
+     * The client the two inserts are issued through - the file service's, never the processed log's.
+     */
+    private final JdbcClient jdbcClient;
+
+    /**
+     * Binds the store to the file-service database and to no other.
+     *
+     * <p>The client arrives by name ({@code FileServiceDataSourceConfig.JDBC_CLIENT}) rather than by
+     * type, because the type is ambiguous: this service holds two, and the one found by type is the
+     * processed log's. A store that took that one would write a night's payloads into the register's
+     * own database, where nothing would ever read them and the two tables do not exist.
+     *
+     * @param jdbcClient the file-service client, qualified by name
+     */
+    public FileServicePayloadStore(final JdbcClient jdbcClient) {
+        this.jdbcClient = Objects.requireNonNull(jdbcClient, "the file-service client is required");
+    }
+
     @Override
     public void store(final UUID fileId, final JsonNode payload, final PayloadMetadata metadata)
             throws PayloadStoreUnavailableException {
-        throw new UnsupportedOperationException("T044");
+        throw new UnsupportedOperationException("T044 issues the two inserts through " + jdbcClient);
     }
 }
