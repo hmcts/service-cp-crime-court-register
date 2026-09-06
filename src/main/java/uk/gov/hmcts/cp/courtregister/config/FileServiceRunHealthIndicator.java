@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 
@@ -14,13 +15,72 @@ import org.springframework.boot.health.contributor.HealthIndicator;
  *
  * <p>That is a narrower rule than "in the readiness group" and a wider one than "never", and it is
  * stated here rather than by the group's membership because the condition is a fact about the run
- * rather than about the configuration.
+ * rather than about the configuration. The component <em>is</em> in the readiness group - it has to
+ * be, or it could gate nothing - and it is this class that keeps the group quiet for the twenty-three
+ * hours a day the datasource is not in use.
  *
- * <p><strong>Seam only.</strong> The indicator lands with T051; until then this throws, so that
- * {@code FileServiceRunHealthIndicatorTest} records a failing assertion rather than a compile error.
- * It is annotated with nothing, so no context registers a component that would answer by throwing.
+ * <p><strong>Nothing is asked between runs.</strong> The probe is a query on a pool this service
+ * opens for a few seconds a night, and a health poll every few seconds would keep a connection to
+ * somebody else's database alive all day to answer a question whose answer cannot matter until
+ * 18:00. Idle, the component answers UP and says it did not ask.
+ *
+ * <p>The details are two, and both are bounded words:
+ *
+ * <ul>
+ *   <li>{@code run} - {@code in-progress} or {@code idle};</li>
+ *   <li>{@code fileservice} - the probe's status while a run is in progress, {@code not-probed}
+ *       otherwise.</li>
+ * </ul>
+ *
+ * <p><strong>Seam only.</strong> The rule lands with T051; until then {@link #health()} throws, so
+ * that {@code FileServiceRunHealthIndicatorTest} records a failing assertion rather than a compile
+ * error. It is annotated with nothing, so no context registers a component that would answer by
+ * throwing.
  */
 public class FileServiceRunHealthIndicator implements HealthIndicator {
+
+    /**
+     * The file-service datasource's own contributor, asked only while a run is in progress.
+     *
+     * <p>A {@link HealthIndicator} rather than the datasource, because "can this pool answer a
+     * query" is a question Spring Boot's own datasource contributor already answers, and this class
+     * has nothing to add to it beyond when it may be asked.
+     *
+     * <p>Suppressed only while this is a seam: {@link #health()} is the one thing that reads it, and
+     * {@link #health()} lands with T051. The suppression goes with the throw.
+     */
+    @SuppressWarnings("PMD.UnusedPrivateField")
+    private final HealthIndicator fileServiceProbe;
+
+    /** Whether a generation run is in progress; the whole of when the probe may be asked. */
+    private final AtomicBoolean runInProgress = new AtomicBoolean();
+
+    /**
+     * Creates the indicator.
+     *
+     * @param fileServiceProbe the file-service datasource's own contributor
+     */
+    public FileServiceRunHealthIndicator(final HealthIndicator fileServiceProbe) {
+        this.fileServiceProbe = fileServiceProbe;
+    }
+
+    /**
+     * Records that a generation run has started, from which point the file service gates readiness.
+     */
+    public void recordRunStarted() {
+        runInProgress.set(true);
+    }
+
+    /**
+     * Records that a generation run has ended, however it ended.
+     *
+     * <p>However it ended is the point: a run that threw leaves the file service exactly as
+     * uninteresting to readiness as one that completed, and a flag left set by a failure would gate
+     * readiness on a database nothing is using until the pod restarts.
+     */
+    public void recordRunEnded() {
+        runInProgress.set(false);
+    }
 
     @Override
     public Health health() {
