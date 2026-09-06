@@ -39,6 +39,7 @@ import org.mockito.InOrder;
 import org.springframework.dao.DataAccessResourceFailureException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.adapter.progression.OutboundContractValidator;
 import uk.gov.hmcts.cp.courtregister.adapter.progression.ProgressionCommandGateway;
 import uk.gov.hmcts.cp.courtregister.adapter.progression.ProgressionRegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
@@ -127,6 +128,17 @@ class DistributionPipelineTest {
      * it.
      */
     private static final String OU_CODE = "B01LY00";
+
+    /**
+     * The register-document contract, for the cases whose subject is not the contract.
+     *
+     * <p>A permissive double rather than the real validator, because the registers those cases hand
+     * over are stand-ins whose fields nothing reads: holding them to a frozen schema would make
+     * every case about the recording stage's ordering fail for a reason it is not about. The
+     * contract itself is asserted with the real validator in {@link TheRecordedContract}.
+     */
+    private static final RegisterDocumentValidator ANY_DOCUMENT = document -> {
+    };
 
     private final ObjectMapper mapper = JacksonConfig.contractObjectMapper();
 
@@ -1204,9 +1216,7 @@ class DistributionPipelineTest {
          * @return the pipeline
          */
         private DistributionPipeline recordingPipeline() {
-            return new DistributionPipeline(guard, payloadSource, groupProceedings,
-                    subscriptionsSource, new Dates(), transformer, OutputMode.RECORD, registerStore,
-                    submissionClient, metrics, fixedClock(), RUN_DEADLINE);
+            return recordingPipelineHolding(ANY_DOCUMENT);
         }
 
         /**
@@ -1221,9 +1231,129 @@ class DistributionPipelineTest {
         private DistributionPipeline progressionPostPipeline() {
             return new DistributionPipeline(guard, payloadSource, groupProceedings,
                     subscriptionsSource, new Dates(), transformer, OutputMode.PROGRESSION_POST,
-                    registerStore, submissionClient, metrics, fixedClock(), RUN_DEADLINE);
+                    registerStore, ANY_DOCUMENT, submissionClient, metrics, fixedClock(),
+                    RUN_DEADLINE);
         }
 
+        /**
+         * A {@code record}-mode pipeline holding the register-document contract named.
+         *
+         * @param contract what the write is held to
+         * @return the pipeline
+         */
+        private DistributionPipeline recordingPipelineHolding(
+                final RegisterDocumentValidator contract) {
+            return new DistributionPipeline(guard, payloadSource, groupProceedings,
+                    subscriptionsSource, new Dates(), transformer, OutputMode.RECORD, registerStore,
+                    contract, submissionClient, metrics, fixedClock(), RUN_DEADLINE);
+        }
+
+    }
+
+    /**
+     * The contract the register is held to at the write, which is not the one it was assembled to.
+     *
+     * <p>The transformation validates against the {@code add-court-register} command and then
+     * attaches {@code defendantType}, so the register that reaches the store is one field larger
+     * than the register anything checked - and since 002 that stored document is what the nightly
+     * batch reads back and what the PDF payload is built from (constitution Principle III). These
+     * two cases run the real validator over the frozen register-document schema, because the claim
+     * is about <em>which</em> schema and a double could not tell one from the other.
+     *
+     * <p>Everywhere else in this file the port is a permissive double. Those cases are about the
+     * order the recording stage does things in, and their registers are stand-ins whose fields
+     * nothing reads.
+     */
+    @Nested
+    @DisplayName("the contract the recorded register is held to (US1)")
+    class TheRecordedContract {
+
+        /** The side of the court application this register's defendants are on (FR-002). */
+        private static final String DEFENDANT_TYPE = "Appellant";
+
+        /** Identity of the row the store answers with, so a recording has something to report. */
+        private static final UUID OUTPUT_ID =
+                UUID.fromString("0a5f6d31-6c2b-4c2e-9a8f-3d51b7e0c4a9");
+
+        @BeforeEach
+        void theStoreWouldAcceptAnything() {
+            when(registerStore.record(any(DistributionCommand.class),
+                        any(CourtRegisterDocument.class), any(), any(),
+                        any(RecordedFlagState.class)))
+                    .thenReturn(new RecordOutcome(OUTPUT_ID, null));
+        }
+
+        /**
+         * The C29 shape, met on the way into the store rather than on the way to progression.
+         *
+         * <p>The transformation would refuse this register too, which is exactly why the case drives
+         * the pipeline over a transformer that simply hands it over: what is asserted is that the
+         * write has a contract of its own and does not take the document it was passed on trust.
+         */
+        @Test
+        @DisplayName("a register the frozen document schema refuses is failed, and not recorded")
+        void a_register_the_document_schema_refuses_is_not_recorded() {
+            transformerProduces(withoutAHearingVenue(DEFENDANT_TYPE));
+
+            final GuardDecision decision =
+                    recordingOver(OutboundContractValidator.overTheRegisterDocument(mapper));
+
+            assertThat(decision)
+                    .as("a document nothing validated is a document nothing can rely on, so the "
+                            + "write refuses it explicitly rather than storing it")
+                    .isEqualTo(new GuardDecision.DeadLetter(
+                            DeadLetterReason.NON_TRANSIENT,
+                            ReasonCode.OUTBOUND_CONTRACT_VIOLATION));
+            verify(registerStore, never()).record(any(DistributionCommand.class),
+                    any(CourtRegisterDocument.class), any(), any(), any(RecordedFlagState.class));
+        }
+
+        /**
+         * The discriminator, and the reason the record arm cannot simply reuse the command
+         * validator: {@code defendantType} is a legal field of the register document and an unknown
+         * one to the {@code add-court-register} command, which is
+         * {@code additionalProperties: false}. Held to the command, every register 002 records would
+         * be refused under {@code UNKNOWN_FIELD [/defendantType]}.
+         */
+        @Test
+        @DisplayName("a register carrying its defendant type satisfies that schema and is recorded")
+        void a_register_carrying_its_defendant_type_is_recorded() {
+            transformerProduces(inContract(DEFENDANT_TYPE));
+
+            final GuardDecision decision =
+                    recordingOver(OutboundContractValidator.overTheRegisterDocument(mapper));
+
+            assertThat(decision).isInstanceOf(GuardDecision.Complete.class);
+            verify(registerStore).record(eqCommand(), any(CourtRegisterDocument.class), any(),
+                    any(), any(RecordedFlagState.class));
+        }
+
+        private void transformerProduces(final CourtRegisterDocument register) {
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                        any(JsonNode.class), any()))
+                    .thenReturn(new TransformationResult.Register(register, OU_CODE));
+        }
+
+        private GuardDecision recordingOver(final RegisterDocumentValidator contract) {
+            return new DistributionPipeline(guard, payloadSource, groupProceedings,
+                    subscriptionsSource, new Dates(), transformer, OutputMode.RECORD, registerStore,
+                    contract, submissionClient, metrics, fixedClock(), RUN_DEADLINE)
+                    .process(command, delivery());
+        }
+
+        /**
+         * The same register with one required field missing.
+         *
+         * @param defendantType the side of the court application its defendants are on
+         * @return a register the frozen document schema refuses
+         */
+        private CourtRegisterDocument withoutAHearingVenue(final String defendantType) {
+            final CourtRegisterDocument valid = inContract(defendantType);
+            return new CourtRegisterDocument(
+                    valid.registerDate(), valid.hearingDate(), valid.hearingId(),
+                    valid.courtCentreId(), valid.fileName(), valid.defendantType(),
+                    null, valid.recipients(), valid.defendants());
+        }
     }
 
     /**

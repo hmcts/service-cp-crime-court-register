@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.application.RegisterDocumentValidator;
 import uk.gov.hmcts.cp.courtregister.domain.ContractValidationException;
 import uk.gov.hmcts.cp.courtregister.domain.ContractViolation;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
@@ -44,15 +45,39 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
  * <p>It is also C26's authority: the record family is honest about the wire only if the wire agrees,
  * and a fully-populated document validating against a closed schema is what proves that every field
  * the records declare is a field progression accepts.
+ *
+ * <p><strong>Two instances, one for each frozen contract, and which one is which is decided by where
+ * the register is going.</strong> The transformation holds an assembled register to the
+ * {@code add-court-register} command, which is what a {@code progression-post} deployment sends; the
+ * record arm holds the <em>final</em> register - the one carrying {@code defendantType} - to
+ * {@code courtRegisterDocumentRequest.json} before it is written into this service's own store,
+ * because since increment 002 that stored document is the contract the batch and the PDF payload
+ * read back (constitution Principle III). Both are frozen, both are
+ * {@code additionalProperties: false}, and the second is reached through
+ * {@link #overTheRegisterDocument}. Everything below this line is common to both: the same vendored
+ * copies, the same resolution with no network in it, the same bounded refusal.
  */
-public final class OutboundContractValidator {
+public final class OutboundContractValidator implements RegisterDocumentValidator {
 
     /** Where the vendored contract lives on the classpath. */
     private static final String CONTRACT_ROOT = "contracts/progression/";
 
-    /** The command this service POSTs, and therefore the schema a document is held to. */
+    /** The command this service POSTs, and therefore the schema a POST body is held to. */
     private static final String COMMAND_SCHEMA =
             CONTRACT_ROOT + "progression.add-court-register.json";
+
+    /**
+     * The register document itself, and therefore the schema a <em>stored</em> register is held to.
+     *
+     * <p>The same family, one field wider: it declares {@code defendantType} and
+     * {@code courtApplicationId}, which the command does not, and requires exactly what the command
+     * requires. That difference is the whole reason there are two instances of this class - the
+     * document 002 records is the document plus the defendant type, so holding it to the command
+     * would refuse it under {@code UNKNOWN_FIELD [/defendantType]} and holding it to nothing would
+     * store a field no contract had ever been applied to.
+     */
+    private static final String REGISTER_DOCUMENT_SCHEMA =
+            CONTRACT_ROOT + "courtRegisterDocumentRequest.json";
 
     /**
      * Every identity the vendored schemas answer to, mapped to where the vendored copy sits.
@@ -105,15 +130,47 @@ public final class OutboundContractValidator {
     private final Schema contract;
 
     /**
-     * Creates the validator.
+     * Creates the validator over the {@code add-court-register} command.
+     *
+     * <p>The command is what a {@code progression-post} deployment sends and what the transformation
+     * holds every assembled register to, so it stays the constructor: an instance asked for without
+     * a schema is the one 001 asked for.
      *
      * @param objectMapper the service's contract mapper, which is what serialises the document on
      *                     the way out too — validating with a different one would validate a
      *                     document nobody sends
      */
     public OutboundContractValidator(final ObjectMapper objectMapper) {
+        this(objectMapper, COMMAND_SCHEMA);
+    }
+
+    /**
+     * Creates the validator over one of the two frozen schemas.
+     *
+     * @param objectMapper the service's contract mapper
+     * @param schema       the classpath resource the document is held to
+     */
+    private OutboundContractValidator(final ObjectMapper objectMapper, final String schema) {
         this.json = objectMapper;
-        this.contract = assembleContract();
+        this.contract = assembleContract(schema);
+    }
+
+    /**
+     * Creates the validator over the frozen register document, for the write into the store.
+     *
+     * <p>A second instance rather than a widened schema. The two contracts are both frozen and both
+     * real: what goes to progression must satisfy the command, and what is written into this
+     * service's store must satisfy the document the batch will read back. They differ by the fields
+     * the command does not declare, so one validator could only be built by relaxing the check that
+     * catches a POST body carrying one of them.
+     *
+     * @param objectMapper the service's contract mapper, which is what serialises the document into
+     *                     the store too
+     * @return a validator over {@code courtRegisterDocumentRequest.json}
+     */
+    public static OutboundContractValidator overTheRegisterDocument(
+            final ObjectMapper objectMapper) {
+        return new OutboundContractValidator(objectMapper, REGISTER_DOCUMENT_SCHEMA);
     }
 
     /**
@@ -123,6 +180,7 @@ public final class OutboundContractValidator {
      * @throws ContractValidationException where the document does not satisfy the vendored schemas,
      *         carrying the bounded violation and the JSON pointer of the offending field
      */
+    @Override
     public void validate(final CourtRegisterDocument document) {
         final JsonNode wire = json.valueToTree(document);
         final List<Error> refusals = contract.validate(wire);
@@ -175,8 +233,12 @@ public final class OutboundContractValidator {
      * <p>Formats are assertions rather than annotations, which is draft-04's own reading of them and
      * progression's: a {@code date-time} that is not one, or an email address that is not one, is a
      * document progression refuses, so it has to be a document this refuses first.
+     *
+     * @param schema the classpath resource of the root schema, which is one of the two above; the
+     *               references inside either of them resolve to the same vendored copies
+     * @return the assembled contract
      */
-    private Schema assembleContract() {
+    private Schema assembleContract(final String schema) {
         final SchemaRegistryConfig config = SchemaRegistryConfig.builder()
                 .formatAssertionsEnabled(Boolean.TRUE)
                 // JSON pointers, so a bounded reason can name the field the way the document is
@@ -191,7 +253,7 @@ public final class OutboundContractValidator {
                 builder -> builder
                         .schemaRegistryConfig(config)
                         .schemaIdResolvers(resolvers -> resolvers.mappings(VENDORED_SCHEMAS)));
-        return registry.getSchema(resourceText(COMMAND_SCHEMA));
+        return registry.getSchema(resourceText(schema));
     }
 
     /** The text of a committed classpath resource, or a failure that names which one is missing. */

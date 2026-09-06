@@ -142,6 +142,12 @@ public class DistributionPipeline {
     // settled in one place. Null under `progression-post`, where the last stage is the POST and a
     // deployment that never records has nothing to hand in.
     private final RegisterStore registerStore;
+    // The contract the register is held to at the write. Null under `progression-post`, where
+    // nothing is written, and under the skeleton the transport suites use.
+    // PMD.UnusedPrivateField: this commit lands the seam the red run needs to compile against; the
+    // implementation commit that reads it follows immediately and removes this suppression.
+    @SuppressWarnings("PMD.UnusedPrivateField")
+    private final RegisterDocumentValidator recordedDocument;
     private final RegisterSubmissionClient submissionClient;
     private final ProcessingMetrics metrics;
     private final Clock clock;
@@ -248,6 +254,52 @@ public class DistributionPipeline {
             final ProcessingMetrics metrics,
             final Clock clock,
             final Duration processingDeadline) {
+        this(guard, payloadSource, groupProceedings, subscriptionsSource, dates, transformer,
+                outputMode, registerStore, null, submissionClient, metrics, clock,
+                processingDeadline);
+    }
+
+    /**
+     * Creates the pipeline over both last stages, with the contract the recorded register is held to.
+     *
+     * <p>The validator belongs to the {@code record} arm and to nothing else: the submission arm's
+     * document was held to the {@code add-court-register} command by the transformation, and the
+     * body that goes on the wire is the adapter's projection of it. What this one answers for is the
+     * register as the store will hold it, {@code defendantType} included.
+     *
+     * @param guard               the {@code (source, requestId)} processed-log guard
+     * @param payloadSource       where the hearing payload comes from
+     * @param groupProceedings    whether the hearing's flag suppresses its register
+     * @param subscriptionsSource where the now-subscriptions a register is addressed with come from
+     * @param dates               the register's date handling, for the day the subscriptions are
+     *                            read on
+     * @param transformer         how a hearing payload and its subscriptions become a register
+     * @param outputMode          what this deployment does with a register that was built
+     * @param registerStore       this service's own register store, the {@code record} mode's last
+     *                            stage
+     * @param recordedDocument    the frozen register-document contract the write is held to
+     * @param submissionClient    where an assembled register is sent under {@code progression-post}
+     * @param metrics             the instrument surface every outcome is counted on
+     * @param clock               elapsed-time source for the run's own deadline
+     * @param processingDeadline  the enforced bound on a run, strictly shorter than the claim lease
+     */
+    // Seven ports, one policy, one date helper and three settings. The count is the core's
+    // dependency list, not a smell: see the note on the first mode-bearing constructor above.
+    public DistributionPipeline(
+            final IdempotencyGuard guard,
+            final HearingPayloadSource payloadSource,
+            final GroupProceedingsPolicy groupProceedings,
+            final NowSubscriptionsSource subscriptionsSource,
+            final Dates dates,
+            final RegisterTransformer transformer,
+            final OutputMode outputMode,
+            final RegisterStore registerStore,
+            final RegisterDocumentValidator recordedDocument,
+            final RegisterSubmissionClient submissionClient,
+            final ProcessingMetrics metrics,
+            final Clock clock,
+            final Duration processingDeadline) {
+        this.recordedDocument = recordedDocument;
         this.guard = guard;
         this.payloadSource = payloadSource;
         this.groupProceedings = groupProceedings;
