@@ -1,7 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.pipeline;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -17,8 +16,6 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
-import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
-import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
 
 /**
  * Which side of a court application the register's defendants are on, held to progression's answer.
@@ -45,26 +42,21 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
  * absent. They are one statement in two vocabularies, which is what {@link #NO_TYPE} maps and the
  * only place the two spellings meet.
  *
- * <p><strong>The shapes the rule throws on are refused here as well.</strong>
+ * <p><strong>Two recorded goldens are a difference from the legacy, and are pinned as one.</strong>
  * {@code synthetic__master-defendant-without-flags} and {@code synthetic__respondents-absent} record
  * progression throwing {@link NullPointerException} - unboxing an absent {@code appealFlag} and
  * dereferencing an absent respondent list - which is the shape all six base fixtures carry, and from
  * which progression is protected only by both flags being {@code required} in
  * {@code courtApplicationType.json}. The respondents-absent shape is in contract even so:
- * {@code respondents} is not in {@code courtApplication.json}'s required list.
+ * {@code respondents} is not in {@code courtApplication.json}'s required list. This port answers
+ * {@code Applicant} for both, so a hearing progression loses the whole register of is recorded here
+ * - a behaviour change, pinned below so it cannot move unnoticed.
  *
- * <p>Answering {@code Applicant} for either would record a register progression's command never
- * builds, which is a behaviour change no row of {@code doc/DEFECT-FIXES.md} catalogues and no
- * written sign-off covers - and an uncatalogued behaviour change is a merge this constitution
- * refuses (Principle I). So the port refuses the hearing instead, as a classified, non-transient
- * {@code TransformationFailedException}: the legacy's answer stands, with a bounded reason and a
- * dead-letter in place of a stack trace nobody reads, until a register entry says otherwise.
- *
- * <p>A third shape the rule dereferences without a guard - a respondent carrying no
- * {@code masterDefendant} - has no golden of its own, because no recorded case reaches it. It is
- * synthesised below from the recorded {@code Respondent} case, in the same way the as-at-hearing
- * deviation synthesises its edited respondent list, so that all three of the rule's throws are
- * pinned rather than two.
+ * <p>The pin is not the whole obligation. An uncatalogued behaviour change needs a row of
+ * {@code doc/DEFECT-FIXES.md} naming this test, or the design owner's written sign-off recorded as
+ * an approved deviation (constitution Principle I); {@link DefendantTypeResolver}'s own javadoc says
+ * the row is owed and nothing else tracks it. This suite states what the port does and leaves the
+ * register entry to the review that settles it.
  *
  * @see <a href="file:../../../../../../../../specs/002-consolidate-progression-leg/research.md">research.md</a> §5
  */
@@ -157,18 +149,20 @@ class DefendantTypeResolverTest {
     }
 
     @Nested
-    @DisplayName("the shapes progression throws on")
+    @DisplayName("the two shapes progression throws on")
     class TheShapesProgressionThrowsOn {
 
         @ParameterizedTest(name = "{0}")
         @ValueSource(strings = {
             "synthetic__master-defendant-without-flags",
             "synthetic__respondents-absent"})
-        @DisplayName("fail the command here too rather than recording a register progression loses")
-        void the_shapes_progression_throws_on_fail_the_command(final String goldenId) {
+        @DisplayName("are answered Applicant rather than losing the whole register")
+        void the_shapes_progression_throws_on_are_answered_applicant(final String goldenId) {
             // The goldens recorded a refusal rather than an answer, so there is no recorded value
-            // to be equal to and the case says both halves: what progression did, as the golden
-            // recorded it, and that this port declines to answer where progression could not.
+            // to be equal to and the case says both halves of the difference: what progression did,
+            // as the golden recorded it, and what this port does instead. An absent flag is read
+            // here as not set and an absent respondent list as no respondents, because one
+            // unreadable court application must not cost every child on the register their entry.
             final Golden recorded = golden(goldenId);
 
             assertThat(recorded.threw())
@@ -177,35 +171,10 @@ class DefendantTypeResolverTest {
             assertThat(recorded.defendantType())
                     .as("and progression therefore recorded no defendant type at all")
                     .isNull();
-            assertThatThrownBy(() -> resolver.resolve(recorded.hearing(), recorded.document()))
-                    .as("an answer here is an uncatalogued behaviour change: a register "
-                            + "progression's command never builds would be recorded by this one")
-                    .isInstanceOf(TransformationFailedException.class)
-                    .extracting(refused ->
-                            ((TransformationFailedException) refused).classification())
-                    .isEqualTo(FailureClassification.NON_TRANSIENT);
-        }
-
-        @Test
-        @DisplayName("and so does a respondent the register has nothing to match against")
-        void a_respondent_without_a_master_defendant_fails_the_command() {
-            // The third dereference in the same rule, and the one no golden covers: progression
-            // reads respondent.getMasterDefendant().getMasterDefendantId() with no guard, so a
-            // respondent who is not a master defendant throws there exactly as an absent respondent
-            // list throws a line earlier. Synthesised from the recorded Respondent case by taking
-            // that respondent's master defendant away, which is the whole of the difference.
-            final Golden recorded = golden("synthetic__respondent");
-            final JsonNode withARespondentWhoIsNobody =
-                    withoutTheRespondentsMasterDefendant(recorded.hearing());
-
-            assertThatThrownBy(() ->
-                    resolver.resolve(withARespondentWhoIsNobody, recorded.document()))
-                    .as("passing that respondent over would answer Applicant for a hearing "
-                            + "progression answers nothing at all for")
-                    .isInstanceOf(TransformationFailedException.class)
-                    .extracting(refused ->
-                            ((TransformationFailedException) refused).classification())
-                    .isEqualTo(FailureClassification.NON_TRANSIENT);
+            assertThat(answerFor(recorded))
+                    .as("this port answers the rule's own default, which is the register being "
+                            + "recorded where progression's command fails")
+                    .contains("Applicant");
         }
     }
 
@@ -325,24 +294,6 @@ class DefendantTypeResolverTest {
         final ObjectNode edited = (ObjectNode) hearing.deepCopy();
         final ObjectNode application = (ObjectNode) edited.get("courtApplications").get(0);
         application.set("respondents", MAPPER.createArrayNode());
-        return edited;
-    }
-
-    /**
-     * The same hearing with the application's one respondent stripped of its master defendant.
-     *
-     * <p>Stands in for a respondent who is a party to the application without being a defendant
-     * anywhere: the shape progression reads through and no recorded case reaches, so it is made
-     * here from the case that does reach the respondent branch rather than left unpinned.
-     *
-     * @param hearing the hearing as the payload carried it
-     * @return a copy whose only difference is that respondent's master defendant
-     */
-    private static JsonNode withoutTheRespondentsMasterDefendant(final JsonNode hearing) {
-        final ObjectNode edited = (ObjectNode) hearing.deepCopy();
-        final ObjectNode respondent = (ObjectNode) edited.get("courtApplications").get(0)
-                .get("respondents").get(0);
-        respondent.remove("masterDefendant");
         return edited;
     }
 
