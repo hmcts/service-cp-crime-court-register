@@ -1,9 +1,29 @@
 package uk.gov.hmcts.cp.courtregister.adapter.appconfig;
 
+import com.azure.core.credential.TokenCredential;
+import com.azure.core.exception.ClientAuthenticationException;
+import com.azure.core.exception.HttpResponseException;
+import com.azure.core.exception.ResourceNotFoundException;
+import com.azure.core.http.HttpClient;
+import com.azure.core.http.policy.FixedDelayOptions;
+import com.azure.core.http.policy.RetryOptions;
+import com.azure.core.util.HttpClientOptions;
 import com.azure.data.appconfiguration.ConfigurationClient;
+import com.azure.data.appconfiguration.ConfigurationClientBuilder;
+import com.azure.data.appconfiguration.models.ConfigurationSetting;
+import java.net.SocketTimeoutException;
+import java.time.Duration;
+import java.util.concurrent.TimeoutException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.config.FeatureFlagProperties;
+import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
+import uk.gov.hmcts.cp.courtregister.domain.FlagDecision.UnreadableReason;
 
 /**
  * The one lever, read from Azure App Configuration.
@@ -23,44 +43,64 @@ import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
  *
  * <p>The read is bounded by {@code courtregister.feature.timeout} and is made once per run with no
  * cache: a flag that was on an hour ago says nothing about a cutover that was rolled back ten
- * minutes ago.
+ * minutes ago. The budget is the whole of the read, so the client this class builds retries
+ * nothing: three SDK attempts inside a two-second budget would spend the run's decision on the
+ * first attempt's back-off and answer nothing.
  *
- * <p><strong>Seam.</strong> T029 replaces the refusal below with the SDK read - a
- * {@code ConfigurationClient} over {@code WorkloadIdentityCredential} - and the mapping from its
- * failures onto the bounded causes; its green run is {@code AppConfigurationFlagReaderTest} (T026),
- * which drives it over WireMock on the App Configuration {@code kv} endpoint.
+ * <p><strong>Only a boolean {@code enabled} generates.</strong> The value is parsed here rather
+ * than taken from the SDK's typed feature-flag view, because the shapes short of the contract are
+ * the ones that matter: a value with no verdict in it, and one whose verdict is the string
+ * {@code "true"}, are what a hand-edited setting produces, and a lenient reading of either
+ * generates a night of registers the legacy is also generating.
  */
+// PMD.OnlyOneReturn: every method below answers at the clause that decides it, because each clause
+// is a different thing to go and fix at 18:00 - a setting nobody wrote, a role assignment nobody
+// made, a store that was too slow, a value that is not a flag. One exit would collect them into a
+// variable and lose the correspondence between the answer and the reason for it.
+@SuppressWarnings("PMD.OnlyOneReturn")
 public class AppConfigurationFlagReader implements FeatureFlagReader {
 
-    /** The task that replaces the refusal in this class with the read. */
-    private static final String PENDING_TASK =
-            "T029 implements AppConfigurationFlagReader; AppConfigurationFlagReaderTest (T026) "
-                    + "guards it";
+    /** The member of App Configuration's feature-flag JSON that carries the verdict. */
+    private static final String ENABLED = "enabled";
 
-    // Read by T029: the endpoint, the key, the stack label and the read's budget all come from here.
-    @SuppressWarnings("PMD.UnusedPrivateField")
+    private static final Logger LOG = LoggerFactory.getLogger(AppConfigurationFlagReader.class);
+
+    /** The same mapper contract every other read in this service is parsed under. */
+    private static final ObjectMapper MAPPER = JacksonConfig.contractObjectMapper();
+
+    /** The read is the whole budget, so the SDK is asked once and never asked again. */
+    private static final RetryOptions NO_RETRIES =
+            new RetryOptions(new FixedDelayOptions(0, Duration.ZERO));
+
+    /** The endpoint, the key, the stack label and the read's budget all come from here. */
     private final FeatureFlagProperties properties;
 
     /**
-     * The client the setting is read through, or {@code null} where the deployment's own is meant.
+     * The client the setting is read through, or {@code null} where no store was configured.
      *
-     * <p>Read by T029, which asks it for {@code getConfigurationSetting(key, label)} and maps its
-     * answer - and each of its failures - onto a {@link FlagDecision}.
+     * <p>Null is not an oversight and not a failure to be raised at construction: a deployment that
+     * names no store is {@link UnreadableReason#NOT_CONFIGURED}, which is a skipped run with a cause
+     * on it, and {@code PropertiesValidator} has already refused the case that matters - generation
+     * enabled with no endpoint - before this class is built.
      */
-    @SuppressWarnings("PMD.UnusedPrivateField")
     private final ConfigurationClient client;
 
     /**
-     * Creates the reader over the store, the key and the label the deployment named.
+     * Creates the reader the deployed pod uses, over the identity that pod holds.
      *
-     * <p>T029 builds the client here from {@code properties.endpoint()}, the pod's
-     * {@code WorkloadIdentityCredential} and {@code properties.timeout()}; until then the field is
-     * null and {@link #read()} refuses before anything touches it.
+     * <p>The client is built here from {@code properties.endpoint()}, the credential and
+     * {@code properties.timeout()}, because the adapter owns the SDK types - that is what makes it
+     * the adapter. A deployment naming no endpoint gets no client and every read answers
+     * {@link UnreadableReason#NOT_CONFIGURED}; the credential itself, and the refusal to start
+     * without one, belong to {@code LiveFeatureFlagConfig}, which is the wiring that asked for a
+     * live reader.
      *
      * @param properties where the flag is read from, and under which key, label and budget
+     * @param credential the identity the store authorises the read against
      */
-    public AppConfigurationFlagReader(final FeatureFlagProperties properties) {
-        this(properties, null);
+    public AppConfigurationFlagReader(
+            final FeatureFlagProperties properties, final TokenCredential credential) {
+        this(properties, clientFor(properties, credential));
     }
 
     /**
@@ -82,8 +122,136 @@ public class AppConfigurationFlagReader implements FeatureFlagReader {
         this.client = client;
     }
 
+    /**
+     * The client the deployed pod reads through: this stack's store, on this pod's identity.
+     *
+     * <p>The budget lands on the HTTP client's response timeout, which is where the whole of it
+     * belongs: the read is one attempt, so the moment the store has not answered inside
+     * {@code courtregister.feature.timeout} the run has its decision.
+     */
+    private static ConfigurationClient clientFor(
+            final FeatureFlagProperties properties, final TokenCredential credential) {
+        if (properties.endpoint() == null || properties.endpoint().isBlank()) {
+            return null;
+        }
+        return new ConfigurationClientBuilder()
+                .endpoint(properties.endpoint())
+                .credential(credential)
+                .retryOptions(NO_RETRIES)
+                .httpClient(HttpClient.createDefault(
+                        new HttpClientOptions().setResponseTimeout(properties.timeout())))
+                .buildClient();
+    }
+
+    // PMD.AvoidCatchingGenericException: the port's contract is that this method never throws, and
+    // the SDK's failures are not a closed set - a status it maps to its own exception type, a
+    // serialiser that refused a body, a connection that died. It is a catch-and-record: the cause
+    // is turned into a bounded decision the caller acts on, and nothing is ignored (constitution
+    // Principle VI).
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     @Override
     public FlagDecision read() {
-        throw new UnsupportedOperationException(PENDING_TASK);
+        if (client == null) {
+            return refused(UnreadableReason.NOT_CONFIGURED);
+        }
+        try {
+            final ConfigurationSetting setting =
+                    client.getConfigurationSetting(properties.key(), properties.label());
+            return verdictOf(setting);
+        } catch (RuntimeException noAnswer) {
+            // Not swallowed and not carried: the cause is recorded as a bounded code and the
+            // failure's own type names what happened, while the SDK's message - which quotes the
+            // store's response body and its URL - reaches neither the log nor the counter label
+            // (constitution Principle VII).
+            return refused(causeOf(noAnswer));
+        }
+    }
+
+    /**
+     * The verdict in the setting the store returned, or why there is none in it.
+     *
+     * <p>The contract is the vendored value schema: an object carrying a boolean {@code enabled}.
+     * Everything short of that is {@link UnreadableReason#MALFORMED} and never on.
+     */
+    private static FlagDecision verdictOf(final ConfigurationSetting setting) {
+        final String value = setting == null ? null : setting.getValue();
+        if (value == null || value.isBlank()) {
+            return refused(UnreadableReason.MALFORMED);
+        }
+        final JsonNode flag;
+        try {
+            flag = MAPPER.readTree(value);
+        } catch (JacksonException notAFlag) {
+            return refused(UnreadableReason.MALFORMED);
+        }
+        final JsonNode enabled = flag.isObject() ? flag.get(ENABLED) : null;
+        if (enabled == null || !enabled.isBoolean()) {
+            return refused(UnreadableReason.MALFORMED);
+        }
+        return enabled.booleanValue() ? FlagDecision.ON : FlagDecision.OFF;
+    }
+
+    /**
+     * Which bounded cause a failed read is recorded under.
+     *
+     * <p>Four causes and four different things to go and fix at 18:00: a setting nobody has written,
+     * a role assignment this pod has not been given, a store that did not answer in time and
+     * everything else. The 401 and 403 the SDK reports as its own authentication type are the
+     * platform ask (design §8) not yet landed, and a store that is merely slow has to be legible as
+     * slowness rather than as an outage.
+     */
+    private static UnreadableReason causeOf(final RuntimeException failure) {
+        if (failure instanceof ResourceNotFoundException) {
+            return UnreadableReason.NOT_FOUND;
+        }
+        if (failure instanceof ClientAuthenticationException) {
+            return UnreadableReason.ACCESS_DENIED;
+        }
+        if (timedOut(failure)) {
+            return UnreadableReason.TIMED_OUT;
+        }
+        if (failure instanceof HttpResponseException answered
+                && answered.getResponse() != null) {
+            return causeOfStatus(answered.getResponse().getStatusCode());
+        }
+        return UnreadableReason.CALL_FAILED;
+    }
+
+    private static UnreadableReason causeOfStatus(final int status) {
+        return switch (status) {
+            case 401, 403 -> UnreadableReason.ACCESS_DENIED;
+            case 404 -> UnreadableReason.NOT_FOUND;
+            default -> UnreadableReason.CALL_FAILED;
+        };
+    }
+
+    /**
+     * Whether the read ran out of its budget rather than failing.
+     *
+     * <p>The budget is enforced by the HTTP client, which reports the abandonment from inside the
+     * SDK's own wrapping, so the chain is walked rather than only its head inspected. Bounded to a
+     * fixed depth because a cause chain that cycles must not become a flag read that never returns.
+     */
+    private static boolean timedOut(final Throwable failure) {
+        Throwable cause = failure;
+        for (int depth = 0; cause != null && depth < 10; depth++) {
+            if (cause instanceof TimeoutException || cause instanceof SocketTimeoutException) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
+    }
+
+    /**
+     * Records a read that produced no verdict, and says only what a bounded code says.
+     *
+     * <p>At WARN because the consequence is a night's registers not generated by this service, and
+     * the morning's question is which of the four causes it was.
+     */
+    private static FlagDecision refused(final UnreadableReason reason) {
+        LOG.warn("The CourtRegisterService flag could not be read; the run will be skipped and "
+                + "counted, and the legacy is presumed to be generating. reason={}", reason.code());
+        return new FlagDecision.Unreadable(reason);
     }
 }
