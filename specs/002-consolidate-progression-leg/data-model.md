@@ -115,13 +115,26 @@ contradictory `markGenerated` or `markFailed` before it issues a statement and
 is enforced twice and stated once (`BatchFailureReason.isGeneratorAttributed()`).
 
 **Supplementary batches for late re-shares (design Q27, decided 2026-09-06).** A same-day re-share
-recorded after its (court centre, register date) batch is terminal becomes a **supplementary batch
-for the same key**, assembled by the next run once **every** earlier batch for that key is terminal.
-The supplementary batch names the batch it follows in `supplement_of` and carries the next
+recorded after its (court centre, register date) batch has been **sent** becomes a **supplementary
+batch for the same key**, assembled by the next run once **every** earlier batch for that key is
+terminal. The supplementary batch names the batch it follows in `supplement_of` and carries the next
 `supplement_index` (1 for the first supplement, counting up); a day's first batch has `supplement_of`
 NULL and `supplement_index` 0. While any batch for the key is still in flight the rows simply wait,
 because the narrowed partial unique index above admits one PENDING / GENERATING / GENERATED batch per
 key and no more.
+
+**Which terminal predecessor is followed, and which is replaced.** All four terminal states free the
+key and they are alike only in that; the two halves of the sentence above are two different answers.
+A **FAILED** predecessor produced no document and told nobody, so its rows are re-assembled as the
+day's first document - `supplement_of` NULL, `supplement_index` 0, the register's own `fileName` -
+and a supplement that failed is re-assembled at the index it failed at rather than one past it.
+`BatchAssembler` therefore takes the next index over the key's NOTIFIED / PARTIALLY_NOTIFIED /
+NOTIFIED_NOBODY batches only (`BatchAssemblerTest
+.a_key_whose_only_earlier_batch_failed_should_be_re_assembled_not_supplemented`,
+`…a_failed_supplement_should_be_re_assembled_at_the_index_it_failed_at`). The distinction is visible
+outside this service: the file name is what the file-service `metadata` row records and what
+systemdocgenerator renders under, so counting a failure would name a day's first document
+`-supplementary-1` and leave nothing for it to be a supplement to.
 
 A supplementary batch's **file name** is the first row's `fileName` with `-supplementary-<index>`
 inserted before the extension - `courtregister_2026-08-20.json` becomes

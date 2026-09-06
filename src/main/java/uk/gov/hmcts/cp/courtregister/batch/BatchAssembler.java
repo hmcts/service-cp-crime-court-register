@@ -33,7 +33,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * not widen it.
  *
  * <p><strong>Supplementary batches (design Q27).</strong> A hearing re-shared after its key's batch
- * has finished is a fresh active row for a key that has already been rendered. Once every earlier
+ * has been sent is a fresh active row for a key that has already been rendered. Once every earlier
  * batch for that key is terminal, its rows are assembled into a supplementary batch that names the
  * batch it follows in {@code supplement_of} and carries the next {@code supplement_index}; while any
  * batch for the key is still in flight the rows wait, because the schema admits one in-flight batch
@@ -41,6 +41,18 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * {@code -supplementary-<index>} inserted before the extension, so
  * {@code courtregister_2026-08-20.json} is followed by
  * {@code courtregister_2026-08-20-supplementary-1.json}.
+ *
+ * <p><strong>Which predecessors a supplement follows, and which it replaces.</strong> All four
+ * terminal states free the key, and Q27 gives two different answers about what happens next: "a
+ * FAILED batch may be re-assembled (new {@code batch_id}, rows re-stamped), and a NOTIFIED /
+ * PARTIALLY_NOTIFIED / NOTIFIED_NOBODY one may be followed by a supplementary batch". Only the
+ * second of those produced a document, so only the second is counted: the index is taken over the
+ * key's {@link #SENT} predecessors alone. A day whose only batch failed is therefore re-assembled as
+ * that day's first document - index 0, following nothing, under the register's own file name - and a
+ * failed supplement is re-assembled at the index it failed at rather than one past it. The
+ * difference is not internal: the file name is written into the file-service metadata row
+ * systemdocgenerator reads, so counting a failure would name a first document
+ * {@code -supplementary-1} and leave a day with no {@code -supplementary-0} to be a supplement to.
  *
  * <p><strong>What is decided here and what the stamp decides.</strong> The batch this class answers
  * with is the grouping's own statement about itself: the identity every downstream call correlates
@@ -61,11 +73,22 @@ public class BatchAssembler {
     private static final Set<BatchStatus> IN_FLIGHT =
             Set.of(BatchStatus.PENDING, BatchStatus.GENERATING, BatchStatus.GENERATED);
 
+    /**
+     * The states a key's earlier batch produced a document in, and so the ones a supplement follows.
+     *
+     * <p>The three Q27 names on that side of its sentence. A FAILED batch is on the other side: it
+     * rendered nothing and told nobody, so the rows the next run assembles are the day's document
+     * rather than an addition to one, and the batch that carries them re-takes the index the failed
+     * one was going to have.
+     */
+    private static final Set<BatchStatus> SENT = Set.of(BatchStatus.NOTIFIED,
+            BatchStatus.PARTIALLY_NOTIFIED, BatchStatus.NOTIFIED_NOBODY);
+
     /** What a supplement's index is written into the day's file name as. */
     private static final String SUPPLEMENT_MARKER = "-supplementary-";
 
     /**
-     * Which of a key's earlier batches a supplement follows.
+     * Which of a key's sent batches a supplement follows.
      *
      * <p>The highest index, so the order the batches were read in decides nothing; the identity
      * breaks a tie the index cannot, so a history that somehow held two batches at one index still
@@ -158,6 +181,10 @@ public class BatchAssembler {
      * <p>PENDING and nothing else: a batch assembled further along the machine would carry stamps
      * for events that never happened.
      *
+     * <p>The batch it follows is the highest-indexed of the key's {@link #SENT} predecessors, not of
+     * its terminal ones: a failure produced no document to be a supplement to, and re-assembling its
+     * rows is the day's document being rendered for the first time.
+     *
      * @param key             the court centre and register day being assembled
      * @param records         the registers it groups, the first of which names the file
      * @param history         the batches already recorded for this key, all of them terminal
@@ -169,7 +196,10 @@ public class BatchAssembler {
             final boolean systemGenerated) {
 
         final RegisterRecord first = records.getFirst();
-        final RegisterBatch follows = history.stream().max(BY_SUPPLEMENT_INDEX).orElse(null);
+        final RegisterBatch follows = history.stream()
+                .filter(batch -> SENT.contains(batch.status()))
+                .max(BY_SUPPLEMENT_INDEX)
+                .orElse(null);
         final int index = follows == null ? 0 : follows.supplementIndex() + 1;
         final String fileName = index == 0
                 ? first.fileName()
