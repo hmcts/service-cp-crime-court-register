@@ -19,8 +19,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
+import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CourtCentreDay;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDefendant;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
@@ -43,6 +48,12 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  * is the right one: the recording is atomic with the supersession it causes, a row that is already
  * on its way to a PDF is never rewritten underneath the renderer, and a completion belongs to the
  * batch it was reported for and to no other.
+ *
+ * <p>The two endings a batch can have are asserted beside them, because both write
+ * {@code processed_output} as well as {@code register_batch} and neither is reachable from a mocked
+ * store: a failure gives its rows back to the next run only for the two reasons that say nothing
+ * ever left this service, and a notification tally moves the rows of the batch it settles and of no
+ * other, under all three of the endings a tally can produce.
  *
  * <p>The last of those is defect fix <strong>P3</strong>, pinned here by
  * {@link Generation#generation_flips_only_the_batchs_own_rows()}. Progression flips rows by court
@@ -89,11 +100,18 @@ class RegisterStoreIT {
 
     private static final UUID PAYLOAD_FILE_ID =
             UUID.fromString("5e08b6d1-92a7-4c33-8f10-6b4d3e79a281");
+    private static final UUID SECOND_PAYLOAD_FILE_ID =
+            UUID.fromString("0c6a4f18-b573-4d29-8e04-95f2a7c31b6e");
 
     private static final UUID DOCUMENT_FILE_ID =
             UUID.fromString("3a7f1c92-6d84-4b05-9e73-1c2b8a4e07d5");
+    private static final UUID SECOND_DOCUMENT_FILE_ID =
+            UUID.fromString("7b53d0e4-1a86-4f97-b2c0-48e6d9f13a52");
 
     private static final Instant GENERATED_AT = Instant.parse("2026-08-24T18:04:11Z");
+
+    /** systemdocgenerator's own words about a failure, which the row keeps and no log prints. */
+    private static final String SDG_REASON = "template OEE_Layout5 rendered no pages";
 
     private static final String OU_CODE = "B01LY00";
 
@@ -103,9 +121,21 @@ class RegisterStoreIT {
     private static final String RECORDED = "RECORDED";
     private static final String SUPERSEDED = "SUPERSEDED";
     private static final String GENERATED = "GENERATED";
+    private static final String NOTIFIED = "NOTIFIED";
+    private static final String FAILED = "FAILED";
 
     /** The refusal every port call makes until T015 replaces it with a statement. */
     private static final String PENDING = "T015 implements the register store; this is its red run";
+
+    /**
+     * What an unexpected refusal means in the suites written after T015 landed.
+     *
+     * <p>Their arrangements walk the ordinary path a batch walks - assemble, request, generate - so
+     * a refusal out of one of them is the statement under test saying no, not a fixture that needs
+     * fixing, and the description says which of the two the reader is looking at.
+     */
+    private static final String WALKED =
+            "the arrangement is the path every batch walks; a refusal here is the store's answer";
 
     @InjectSoftAssertions
     private SoftAssertions softly;
@@ -427,6 +457,227 @@ class RegisterStoreIT {
     }
 
     /**
+     * The ending where no document was ever produced, and what it does to the rows.
+     *
+     * <p>Six bounded reasons, and the store treats two of them differently from the other four. The
+     * two that say the batch never left this service - the payload was not stored, the assembly
+     * itself failed - release the stamp, so the registers become unbatched again and tonight's
+     * failure is tomorrow's first batch. The other four leave the stamp exactly where it is:
+     * systemdocgenerator was asked, a document may yet exist under that correlation, and re-rendering
+     * one is a decision a person makes through the operations CLI rather than one a schedule makes
+     * silently at 18:00.
+     *
+     * <p>The rows stay RECORDED under every reason. Nothing was ever sent about them, and a status
+     * that said otherwise would take a register out of the next run without anybody having received
+     * it.
+     */
+    @Nested
+    @DisplayName("failing a batch")
+    class Failure {
+
+        @Test
+        void a_failure_that_never_left_this_service_should_release_its_rows_for_the_next_run() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                store.record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                store.record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = store.assemble(
+                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                store.markFailed(monday.batchId(),
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the batch is finished under the bounded code the run report counts it by, "
+                            + "and systemdocgenerator said nothing because it was never asked")
+                    .contains(new BatchOutcome(FAILED, "PAYLOAD_STORE_UNAVAILABLE", null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("nothing was sent about these registers, so nothing about them moved on")
+                    .containsExactly(RECORDED, RECORDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("the stamp is released: a batch that never left this service holds no "
+                            + "register hostage to a document that will never exist")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("and the next run picks the same registers up, under a fresh batch identity")
+                    .extracting(RegisterRecord::hearingId)
+                    .containsExactlyInAnyOrder(HEARING_ONE, HEARING_TWO);
+        }
+
+        @Test
+        void a_failure_after_the_render_request_should_keep_the_stamp_on_its_rows() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                store.record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                store.record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = store.assemble(
+                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("what systemdocgenerator said is kept beside this service's own code, for "
+                            + "the person who has to decide whether to render the day again")
+                    .contains(new BatchOutcome(FAILED, "GENERATION_FAILED", SDG_REASON));
+            softly.assertThat(statusesOn(MONDAY)).containsExactly(RECORDED, RECORDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("the renderer was asked, so a document may yet exist under this batch: "
+                            + "re-assembling the same registers automatically could send the day "
+                            + "twice, and the stamp is what stops the next run doing it")
+                    .isEqualTo(2);
+            softly.assertThat(activeUnbatched())
+                    .as("nothing is waiting: these registers belong to a batch a person must look at")
+                    .isEmpty();
+        }
+    }
+
+    /**
+     * The ending where everybody who could be told has been, and what it does to the rows.
+     *
+     * <p>Three of the seven states settle a notification run, and the rows reach NOTIFIED under all
+     * three: everybody was told, somebody was not, or there was nobody to tell. The third is defect
+     * fix P1 - the progression leg leaves a batch nobody subscribes to sitting generated for ever,
+     * waiting for an event nobody publishes - and it is a state no count of failures can produce,
+     * which is why the verdict travels with the tally rather than being derived from it.
+     *
+     * <p>The flip is scoped to the batch for the same reason {@code markGenerated}'s is, and the
+     * scoping is asserted the same way: two days at one court centre, one of them notified, and the
+     * other day's rows still saying they are waiting.
+     */
+    @Nested
+    @DisplayName("settling a batch's notifications")
+    class Notification {
+
+        @Test
+        void notification_flips_only_the_batchs_own_rows() {
+            final DistributionCommand mondayFirst = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand mondaySecond = seededCommand(HEARING_TWO, MONDAY_SHARED);
+            final DistributionCommand tuesdayFirst = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+            final DistributionCommand tuesdaySecond = seededCommand(HEARING_FOUR, TUESDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                store.record(mondayFirst, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                store.record(mondaySecond, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                store.record(tuesdayFirst, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED),
+                        APPLICANT, RecordedFlagState.ON);
+                store.record(tuesdaySecond, document(HEARING_FOUR, TUESDAY, TUESDAY_SHARED),
+                        APPLICANT, RecordedFlagState.ON);
+                final List<RegisterRecord> waiting = mine(store.activeUnbatched());
+                final RegisterBatch monday = store.assemble(
+                        new CourtCentreDay(courtCentre, MONDAY), recordsOn(waiting, MONDAY));
+                final RegisterBatch tuesday = store.assemble(
+                        new CourtCentreDay(courtCentre, TUESDAY), recordsOn(waiting, TUESDAY));
+                generate(monday, PAYLOAD_FILE_ID, DOCUMENT_FILE_ID);
+                generate(tuesday, SECOND_PAYLOAD_FILE_ID, SECOND_DOCUMENT_FILE_ID);
+                store.markNotified(monday.batchId(), new NotificationSummary(1, 0,
+                        BatchStatus.NOTIFIED));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("the batch whose recipients were told is the batch whose rows move")
+                    .containsExactly(NOTIFIED, NOTIFIED);
+            softly.assertThat(statusesOn(TUESDAY))
+                    .as("Tuesday's register has been generated and nobody has been told about it "
+                            + "yet; a widened flip would say it had been sent")
+                    .containsExactly(GENERATED, GENERATED);
+            softly.assertThat(batchOn(TUESDAY))
+                    .as("and Tuesday's batch is still waiting for its own notification run")
+                    .contains(new BatchOutcome(GENERATED, null, null));
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = BatchStatus.class,
+                names = {"NOTIFIED", "PARTIALLY_NOTIFIED", "NOTIFIED_NOBODY"})
+        void every_notification_outcome_should_settle_the_batch_and_move_its_rows(
+                final BatchStatus outcome) {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                store.record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                store.record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = store.assemble(
+                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                generate(monday, PAYLOAD_FILE_ID, DOCUMENT_FILE_ID);
+                store.markNotified(monday.batchId(), tallyFor(outcome));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the verdict the tally carried is the state the batch ends in, and all "
+                            + "three of them are endings rather than somewhere in the middle")
+                    .contains(new BatchOutcome(outcome.name(), null, null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("the rows follow the batch under every ending, P1's included: a batch with "
+                            + "no recipients is finished, not generated for ever")
+                    .containsExactly(NOTIFIED, NOTIFIED);
+        }
+
+        @Test
+        void a_tally_that_settles_no_notification_should_be_refused_before_the_write() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                store.record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                store.record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                generate(store.assemble(new CourtCentreDay(courtCentre, MONDAY),
+                        mine(store.activeUnbatched())), PAYLOAD_FILE_ID, DOCUMENT_FILE_ID);
+            }).as(WALKED).doesNotThrowAnyException();
+            final UUID batchId = batchIdOn(MONDAY);
+
+            softly.assertThatThrownBy(() -> store.markNotified(batchId,
+                            new NotificationSummary(0, 0, BatchStatus.FAILED)))
+                    .as("a notification run ends in one of three states; a summary carrying any "
+                            + "other verdict is a caller that lost the tally it meant to write")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("NOTIFIED_NOBODY");
+            softly.assertThat(batchOn(MONDAY))
+                    .as("and the refusal is made before the statement, so the batch is exactly "
+                            + "where the document left it")
+                    .contains(new BatchOutcome(GENERATED, null, null));
+            softly.assertThat(statusesOn(MONDAY)).containsExactly(GENERATED, GENERATED);
+        }
+
+        /** The path from a stamped batch to a generated one, which every ending starts from. */
+        private void generate(final RegisterBatch batch, final UUID payloadFileId,
+                final UUID documentFileId) {
+            store.markRequested(batch.batchId(), payloadFileId);
+            store.markGenerated(batch.batchId(), documentFileId, GENERATED_AT);
+        }
+
+        /**
+         * The counts each ending is reached with, so the tally and its verdict agree.
+         *
+         * <p>Nought and nought is NOTIFIED_NOBODY and nothing else: a batch that had recipients and
+         * failed every one of them reports the failures, which is what makes the two tellable apart.
+         */
+        private NotificationSummary tallyFor(final BatchStatus outcome) {
+            return switch (outcome) {
+                case NOTIFIED -> new NotificationSummary(2, 0, outcome);
+                case PARTIALLY_NOTIFIED -> new NotificationSummary(1, 1, outcome);
+                case NOTIFIED_NOBODY -> new NotificationSummary(0, 0, outcome);
+                default -> throw new IllegalArgumentException(
+                        "no notification run ends in " + outcome);
+            };
+        }
+    }
+
+    /**
      * A command with its {@code processed_request} parent already written, holding the run claim.
      *
      * <p>{@code processed_output} carries a foreign key to the request, which is the schema saying
@@ -532,6 +783,62 @@ class RegisterStoreIT {
                 .param("registerDate", registerDate)
                 .query(String.class)
                 .list();
+    }
+
+    private long stampedRowsOn(final LocalDate registerDate) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT count(*)
+                          FROM processed_output
+                         WHERE court_centre_id = :courtCentre AND register_date = :registerDate
+                           AND batch_id IS NOT NULL
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("registerDate", registerDate)
+                .query(Long.class)
+                .single();
+    }
+
+    /**
+     * The three columns an ending is judged by, read straight back out of {@code register_batch}.
+     *
+     * <p>Read rather than taken from the {@link RegisterBatch} the port answered with: the port
+     * returns the batch as it stood at assembly, and what the endings are about is what the table
+     * says afterwards.
+     *
+     * @param status        where the batch ended
+     * @param failureReason this service's own bounded code, or {@code null}
+     * @param sdgReason     systemdocgenerator's own words, or {@code null} where it said nothing
+     */
+    private record BatchOutcome(String status, String failureReason, String sdgReason) {
+    }
+
+    private Optional<BatchOutcome> batchOn(final LocalDate registerDate) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT status, failure_reason, sdg_reason
+                          FROM register_batch
+                         WHERE court_centre_id = :courtCentre AND register_date = :registerDate
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("registerDate", registerDate)
+                .query((rs, rowNumber) -> new BatchOutcome(rs.getString("status"),
+                        rs.getString("failure_reason"), rs.getString("sdg_reason")))
+                .optional();
+    }
+
+    /** This case's batch for a day, insisting the arrangement wrote one. */
+    private UUID batchIdOn(final LocalDate registerDate) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT batch_id
+                          FROM register_batch
+                         WHERE court_centre_id = :courtCentre AND register_date = :registerDate
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("registerDate", registerDate)
+                .query(UUID.class)
+                .single();
     }
 
     private static Optional<String> statusOf(final DistributionCommand command) {
