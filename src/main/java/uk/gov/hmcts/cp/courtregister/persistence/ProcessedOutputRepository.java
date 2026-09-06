@@ -30,8 +30,18 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
  * that came back {@code PENDING} would already be stale by the time the caller acted on it; a
  * conditional upsert cannot be, because the database decides.
  *
- * <p><strong>Every statement here is fenced on the request's claim.</strong> The
- * {@code status <> 'POSTED'} predicate answers "has this register gone"; it does not answer "may
+ * <p><strong>Every statement here writes a POSTing row and only a POSTing row.</strong> Since V2
+ * this table is also the register store, and RECORDED, GENERATED, NOTIFIED and SUPERSEDED rows sit
+ * beside the PENDING/POSTED/FAILED ones these three statements own. So each one requires
+ * {@code status IN ('PENDING', 'FAILED')} - the two states a POST may be attempted from, POSTED
+ * being terminal - <em>and</em> {@code batch_id IS NULL}. A widened predicate such as
+ * {@code status <> 'POSTED'} would let a redelivery arriving in {@code progression-post} mode
+ * re-claim a recorded register back to PENDING, replace the digest of the document with the digest
+ * of a POST body, and settle it POSTED: the register would then be gone from {@code activeUnbatched}
+ * while still stamped into a batch built from it.
+ *
+ * <p><strong>Every statement here is fenced on the request's claim.</strong> The state predicate
+ * answers "has this register gone"; it does not answer "may
  * <em>this runner</em> speak for this request", and without that second question a runner whose
  * claim was reclaimed while it worked can still claim the output row, replace the digest of the body
  * the winner is about to send, and settle it POSTED or FAILED underneath the runner that holds the
@@ -63,12 +73,13 @@ public class ProcessedOutputRepository {
      * <p>The row is written <em>before</em> the POST so that an ambiguous outcome — a timeout, a
      * dropped connection — still leaves evidence that something was attempted and what was in it.
      *
-     * <p>The {@code DO UPDATE ... WHERE status <> 'POSTED'} is the skip rule of the design rules
-     * expressed as a predicate rather than as a branch in Java: a conflicting row that is already
-     * POSTED matches nothing, so the statement affects no rows and the caller is told, in the same
-     * breath, both that the row exists and that it must not send again. A row in any other state —
-     * PENDING left by a crash, FAILED left by a refusal — is re-claimed and its contents replaced,
-     * because they describe the body that is about to be sent rather than the one that was.
+     * <p>The {@code DO UPDATE ... WHERE} is the skip rule of the design rules expressed as a
+     * predicate rather than as a branch in Java: a conflicting row that is already POSTED matches
+     * nothing, so the statement affects no rows and the caller is told, in the same breath, both
+     * that the row exists and that it must not send again. Only PENDING left by a crash and FAILED
+     * left by a refusal are re-claimed, and their contents replaced, because they describe the body
+     * that is about to be sent rather than the one that was. A row in any of the register states,
+     * and any row already stamped with a batch, is not a POST at all and is left alone.
      * {@code response_code} is cleared with them: a PENDING row still carrying the status line of
      * the attempt before it would read as though this attempt had already been answered.
      *
@@ -124,16 +135,18 @@ public class ProcessedOutputRepository {
                    anomaly_summary = EXCLUDED.anomaly_summary,
                    response_code = NULL,
                    updated_at = now()
-             WHERE processed_output.status <> 'POSTED'
+             WHERE processed_output.status IN ('PENDING', 'FAILED')
+               AND processed_output.batch_id IS NULL
             """;
 
     /**
      * Statement 2 — the POST was accepted.
      *
-     * <p>The {@code status <> 'POSTED'} predicate is the same rule as the claim's, applied to the
-     * outcome: <strong>POSTED is terminal</strong>. It costs nothing on the ordinary path and it
-     * says, in the statement rather than in a comment, that no later write may move a row out of the
-     * state that stops it being sent again.
+     * <p>The state predicate is the same rule as the claim's, applied to the outcome:
+     * <strong>POSTED is terminal</strong>, and a register this service recorded was never a POST. It
+     * costs nothing on the ordinary path and it says, in the statement rather than in a comment,
+     * that no later write may move a row out of the state that stops it being sent again, nor into
+     * one it was never in.
      *
      * <p>The {@code EXISTS} is the other half, and the one the state predicate cannot stand in for:
      * a superseded runner writing POSTED before the winner's POST has happened would leave the log
@@ -144,7 +157,8 @@ public class ProcessedOutputRepository {
             UPDATE processed_output
                SET status = 'POSTED', response_code = :responseCode, updated_at = now()
              WHERE source = :source AND request_id = :requestId
-               AND status <> 'POSTED'
+               AND status IN ('PENDING', 'FAILED')
+               AND batch_id IS NULL
                AND EXISTS (SELECT 1
                              FROM processed_request claimed
                             WHERE claimed.source = processed_output.source
@@ -165,10 +179,10 @@ public class ProcessedOutputRepository {
      * an attempt happened without saying how it ended is exactly the state that warns a duplicate is
      * possible.
      *
-     * <p>The {@code status <> 'POSTED'} predicate is the one that has to be there. Two deliveries of
-     * a request can overlap — a runner whose claim was reclaimed while it worked is still running —
-     * and without the predicate that runner's late failure would move a register the winner had
-     * already POSTED back to FAILED. The next delivery would then re-claim it and POST a second,
+     * <p>The state predicate is the one that has to be there. Two deliveries of a request can
+     * overlap — a runner whose claim was reclaimed while it worked is still running — and without
+     * the predicate that runner's late failure would move a register the winner had already POSTED
+     * back to FAILED. The next delivery would then re-claim it and POST a second,
      * non-idempotent {@code add-court-register}: a duplicate register created by the very log that
      * exists to prevent one.
      *
@@ -181,7 +195,8 @@ public class ProcessedOutputRepository {
             UPDATE processed_output
                SET status = 'FAILED', response_code = :responseCode, updated_at = now()
              WHERE source = :source AND request_id = :requestId
-               AND status <> 'POSTED'
+               AND status IN ('PENDING', 'FAILED')
+               AND batch_id IS NULL
                AND EXISTS (SELECT 1
                              FROM processed_request claimed
                             WHERE claimed.source = processed_output.source

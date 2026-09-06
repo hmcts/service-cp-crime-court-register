@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.persistence;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.sql.Types;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -74,6 +75,11 @@ class ProcessedOutputRepositoryIT {
 
     private static final int ACCEPTED = 202;
     private static final int REFUSED = 400;
+
+    /** The state a register this service recorded is in, and the digest such a row carries. */
+    private static final String RECORDED = "RECORDED";
+    private static final String RECORDED_DIGEST =
+            "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae";
 
     @BeforeAll
     static void migrate() {
@@ -500,9 +506,9 @@ class ProcessedOutputRepositoryIT {
         /**
          * The second row, offered in full so that the uniqueness constraint is what refuses it.
          *
-         * <p>The register-store columns V2 adds are carried here because they are NOT NULL: a row
-         * without them is refused before it ever reaches {@code processed_output_unique_request},
-         * and the assertion above would then pass for the wrong reason. What they mean is pinned in
+         * <p>The register-store columns V2 adds are carried here as the recorder would write them,
+         * so that nothing but {@code processed_output_unique_request} can be what refuses the row
+         * and the assertion above cannot pass for the wrong reason. What they mean is pinned in
          * {@code SchemaMigrationV2IT} rather than repeated here.
          */
         private void insertSecondOutput(final RunClaim run) {
@@ -528,6 +534,126 @@ class ProcessedOutputRepositoryIT {
                     .param("hearingId", UUID.randomUUID())
                     .update();
         }
+    }
+
+    /**
+     * The rows this repository shares a table with and may not write.
+     *
+     * <p>Since V2 {@code processed_output} holds two kinds of row. These three statements write the
+     * one increment 001 wrote - what was POSTed to progression, PENDING then POSTED or FAILED - and
+     * the register store writes the other, RECORDED through GENERATED to NOTIFIED, with SUPERSEDED
+     * beside them. They are in one table because a command has at most one outcome, not because
+     * either half may edit the other's rows.
+     *
+     * <p>The predicates were {@code status <> 'POSTED'}, which is every state except one: a
+     * redelivery arriving in {@code progression-post} mode against a database whose registers are
+     * being recorded would re-claim a RECORDED row back to PENDING, replace the digest of the
+     * document with the digest of a POST body, and settle it POSTED or FAILED. The register would
+     * then be neither: gone from {@code activeUnbatched}, still stamped into a batch that was built
+     * from it, and carrying a digest that matches nothing.
+     */
+    @Nested
+    @DisplayName("the register rows these statements may not touch")
+    class RegisterRows {
+
+        @Test
+        void claiming_should_be_refused_on_a_register_this_service_recorded() {
+            final RunClaim recorded = seededRegisterRow(null);
+            final RunClaim batched = seededRegisterRow(seededBatch());
+
+            assertThat(repository().claimPending(recorded, claimFor(UUID.randomUUID(), DIGEST)))
+                    .as("a recorded register is not a POST that has not settled")
+                    .isFalse();
+            assertThat(repository().claimPending(batched, claimFor(UUID.randomUUID(), DIGEST)))
+                    .as("and a register already in a batch is on its way to a PDF")
+                    .isFalse();
+
+            assertThat(requireRow(recorded)).extracting(Row::status, Row::requestDigest)
+                    .containsExactly(RECORDED, RECORDED_DIGEST);
+            assertThat(requireRow(batched)).extracting(Row::status, Row::requestDigest)
+                    .containsExactly(RECORDED, RECORDED_DIGEST);
+        }
+
+        @Test
+        void recording_a_post_should_leave_a_recorded_register_exactly_as_it_was() {
+            final RunClaim recorded = seededRegisterRow(null);
+            final RunClaim batched = seededRegisterRow(seededBatch());
+
+            assertThat(repository().recordPosted(recorded, ACCEPTED)).isFalse();
+            assertThat(repository().recordPosted(batched, ACCEPTED)).isFalse();
+
+            assertThat(requireRow(recorded)).extracting(Row::status, Row::responseCode)
+                    .containsExactly(RECORDED, null);
+            assertThat(requireRow(batched)).extracting(Row::status, Row::responseCode)
+                    .containsExactly(RECORDED, null);
+        }
+
+        @Test
+        void recording_a_failure_should_leave_a_recorded_register_exactly_as_it_was() {
+            final RunClaim recorded = seededRegisterRow(null);
+            final RunClaim batched = seededRegisterRow(seededBatch());
+
+            assertThat(repository().recordFailed(recorded, REFUSED)).isFalse();
+            assertThat(repository().recordFailed(batched, REFUSED)).isFalse();
+
+            assertThat(requireRow(recorded)).extracting(Row::status, Row::responseCode)
+                    .containsExactly(RECORDED, null);
+            assertThat(requireRow(batched)).extracting(Row::status, Row::responseCode)
+                    .containsExactly(RECORDED, null);
+        }
+    }
+
+    /** A request whose output row is a recorded register, optionally already stamped with a batch. */
+    private static RunClaim seededRegisterRow(final UUID batchId) {
+        final RunClaim run = seededRequest();
+        ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        INSERT INTO processed_output (
+                            output_id, source, request_id, court_centre_id, register_date,
+                            file_name, status, request_digest, document, hearing_id, hearing_date,
+                            register_time, recorded_flag_state, batch_id)
+                        VALUES (
+                            :outputId, :source, :requestId, :courtCentreId, :registerDate,
+                            :fileName, 'RECORDED', :digest,
+                            CAST('{"documentType": "CourtRegister"}' AS jsonb), :hearingId,
+                            TIMESTAMPTZ '2026-08-20T09:00:00Z',
+                            TIMESTAMPTZ '2026-08-20T17:00:00Z', 'ON', :batchId)
+                        """)
+                .param("outputId", UUID.randomUUID())
+                .param("source", run.source())
+                .param("requestId", run.requestId())
+                .param("courtCentreId", COURT_CENTRE)
+                .param("registerDate", REGISTER_DATE)
+                .param("fileName", FILE_NAME)
+                .param("digest", RECORDED_DIGEST)
+                .param("hearingId", UUID.randomUUID())
+                .param("batchId", batchId, Types.OTHER)
+                .update();
+        return run;
+    }
+
+    /**
+     * A batch to stamp a register with, on a court centre of its own.
+     *
+     * <p>Its own court centre because {@code idx_register_batch_live_key} admits one unfailed batch
+     * per court centre and register day, and these cases want several.
+     */
+    private static UUID seededBatch() {
+        final UUID batchId = UUID.randomUUID();
+        ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        INSERT INTO register_batch (
+                            batch_id, court_centre_id, register_date, file_name, status,
+                            system_generated)
+                        VALUES (
+                            :batchId, :courtCentreId, :registerDate, :fileName, 'PENDING', true)
+                        """)
+                .param("batchId", batchId)
+                .param("courtCentreId", UUID.randomUUID())
+                .param("registerDate", REGISTER_DATE)
+                .param("fileName", FILE_NAME)
+                .update();
+        return batchId;
     }
 
     private record Row(
