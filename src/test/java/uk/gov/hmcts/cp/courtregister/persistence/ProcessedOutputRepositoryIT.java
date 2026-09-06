@@ -497,15 +497,27 @@ class ProcessedOutputRepositoryIT {
                     .hasMessageContaining("processed_output_unique_request");
         }
 
+        /**
+         * The second row, offered in full so that the uniqueness constraint is what refuses it.
+         *
+         * <p>The register-store columns V2 adds are carried here because they are NOT NULL: a row
+         * without them is refused before it ever reaches {@code processed_output_unique_request},
+         * and the assertion above would then pass for the wrong reason. What they mean is pinned in
+         * {@code SchemaMigrationV2IT} rather than repeated here.
+         */
         private void insertSecondOutput(final RunClaim run) {
             ProcessedLogTestSupport.jdbcClient()
                     .sql("""
                             INSERT INTO processed_output (
                                 output_id, source, request_id, court_centre_id, register_date,
-                                file_name, status)
+                                file_name, status, document, hearing_id, hearing_date,
+                                register_time, recorded_flag_state)
                             VALUES (
                                 :outputId, :source, :requestId, :courtCentreId, :registerDate,
-                                :fileName, 'PENDING')
+                                :fileName, 'PENDING',
+                                CAST('{"documentType": "CourtRegister"}' AS jsonb), :hearingId,
+                                TIMESTAMPTZ '2026-08-20T09:00:00Z',
+                                TIMESTAMPTZ '2026-08-20T17:00:00Z', 'UNKNOWN')
                             """)
                     .param("outputId", UUID.randomUUID())
                     .param("source", run.source())
@@ -513,6 +525,7 @@ class ProcessedOutputRepositoryIT {
                     .param("courtCentreId", COURT_CENTRE)
                     .param("registerDate", REGISTER_DATE)
                     .param("fileName", FILE_NAME)
+                    .param("hearingId", UUID.randomUUID())
                     .update();
         }
     }

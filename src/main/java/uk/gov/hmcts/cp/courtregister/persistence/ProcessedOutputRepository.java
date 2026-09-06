@@ -82,15 +82,30 @@ public class ProcessedOutputRepository {
      * nothing, reaches no conflict branch, and affects no rows. The key columns are taken from the
      * claim row itself, so the output can only ever be written against the request the runner
      * actually holds.
+     *
+     * <p><strong>The five V2 columns this statement fills say what a POST is.</strong> Since V2 the
+     * table is the register store, and five of its columns are NOT NULL; a submission has none of
+     * them to offer, because it records what was sent to progression rather than a register this
+     * service holds. The values are therefore the migration's own backfill, written for exactly the
+     * rows this statement writes: an empty JSON object no reader can mistake for a
+     * {@code CourtRegisterDocument} - which always carries at least a {@code documentType} - the
+     * hearing and the hearing day the claim already names, the instant of the claim as the nearest
+     * thing a POST has to a register instant, and UNKNOWN for a flag no submission ever reads.
+     * {@code request_digest} on such a row goes on being the digest of the bytes posted; only rows
+     * the recorder writes carry a digest of {@code document}.
      */
     private static final String CLAIM_PENDING = """
             INSERT INTO processed_output (
                 output_id, source, request_id, court_centre_id, court_centre_ou_code,
                 register_date, file_name, status, request_digest, anomaly_summary,
+                document, hearing_id, hearing_date, register_time, recorded_flag_state,
                 created_at, updated_at)
             SELECT
                 :outputId, claimed.source, claimed.request_id, :courtCentreId, :courtCentreOuCode,
                 :registerDate, :fileName, 'PENDING', :digest, :anomalySummary,
+                CAST('{}' AS jsonb), claimed.hearing_id,
+                CAST(claimed.hearing_day AS timestamp) AT TIME ZONE 'Europe/London', now(),
+                'UNKNOWN',
                 now(), now()
               FROM processed_request claimed
              WHERE claimed.source = :source
