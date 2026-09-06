@@ -45,10 +45,13 @@ import uk.gov.hmcts.cp.courtregister.domain.RunReport;
  * whatever the batch before it took; a batch it leaves no time for is left PENDING for the next run
  * rather than failed, because nothing has gone wrong with it.
  *
- * <p><strong>The reconciler runs whatever the night held.</strong> It is the safety net under the
- * public-event topic rather than a schedule of its own, so a run with nothing to assemble still
- * chases the batches an earlier run is waiting on - which is precisely the night on which the
- * subscription is most likely to be the thing that is broken.
+ * <p><strong>The reconciler runs whatever the night held, and on nights the run does not.</strong>
+ * A run with nothing to assemble still chases the batches an earlier run is waiting on - which is
+ * precisely the night on which the subscription is most likely to be the thing that is broken - and
+ * the run report names what it had to fetch. But the safety net is not this class's to provide:
+ * {@link GenerationReconciler} carries a schedule and a lock of its own, because a run the flag
+ * stopped touches nothing at all and the batches an earlier ON night left GENERATING would
+ * otherwise never be asked about.
  *
  * <p>Every run produces a {@link RunReport}, the skipped ones included: a report that only appeared
  * when work happened would make "the flag is off" and "the job did not fire" the same silence, and

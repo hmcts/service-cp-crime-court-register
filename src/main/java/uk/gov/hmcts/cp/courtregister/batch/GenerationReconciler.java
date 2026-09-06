@@ -3,9 +3,13 @@ package uk.gov.hmcts.cp.courtregister.batch;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
 import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
 import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
@@ -40,6 +44,24 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * reconciliation is a subscription to investigate, and the {@code reconciled} metric and the run
  * report are where that shows.
  *
+ * <p><strong>It has a schedule of its own, and not the flag gate's.</strong> Reconciliation is about
+ * batches this service already owns; whether it may generate tonight is a different question with a
+ * different answer, and hanging the net off the nightly run costs a night in both directions. Called
+ * only from the run, a batch requested at 18:00 is first asked about at 18:01 - inside its own grace
+ * period - and then not again until the next evening, so a lost public event costs about
+ * twenty-four hours rather than the ten minutes the grace period configures; and on a night the flag
+ * reads OFF or unreadable the run touches nothing, so a batch left GENERATING by an earlier ON night
+ * is never asked about at all. Before cutover that is every night. So the pass runs every grace
+ * period on the run's own single-threaded scheduler, under a lock of its own - the nightly run holds
+ * its lock for as long as seventy minutes, and a reconciliation queued behind that is a net that
+ * only ever ran when there was nothing to catch. The run still calls it, because the run report
+ * names what the night had to fetch.
+ *
+ * <p>Every pass also publishes {@code courtregister_oldest_generating_age} from the read it has just
+ * made: how long the batch that has been waiting longest for its document has been waiting. It is
+ * the reading a nightly flow cannot be understood without between runs, and until this schedule
+ * existed there was nowhere for it to be taken.
+ *
  * <p><strong>Collaborators, and why these.</strong> The overdue read is
  * {@link RegisterBatchRepository#generatingSince}, which is a single-table read the store has no
  * part in; the question is the renderer's query method, which exists for this class and nothing
@@ -52,6 +74,34 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * cannot be asserted on either side of its own boundary.
  */
 public class GenerationReconciler {
+
+    /**
+     * The lock's own name, which is what keeps it off the nightly run's.
+     *
+     * <p>Its own and not {@link RegisterGenerationJob#LOCK_NAME}: the run holds that one for as
+     * long as seventy minutes, and a reconciliation queued behind it would be a safety net that
+     * only ever ran when there was nothing to catch.
+     */
+    public static final String LOCK_NAME = "register-reconciliation";
+
+    /**
+     * How long the reconciliation lock is held for.
+     *
+     * <p>Shorter than the cadence it is taken at, because a lock outliving its own interval would
+     * skip the next reconciliation rather than protect it. Five minutes is more than a pass over
+     * tens of batches costs and less than the ten-minute grace period the schedule below runs at.
+     */
+    public static final String LOCK_AT_MOST_FOR = "PT5M";
+
+    /**
+     * The setting the schedule is written as, so the cadence and the grace period cannot drift.
+     *
+     * <p>An annotation attribute has to be a constant, and what this class is asked at is exactly
+     * how long a batch is given before it counts as overdue: reading the same key the grace period
+     * is configured under means a deployment that lengthens the grace lengthens the interval with
+     * it, rather than leaving a batch overdue for nine minutes out of every ten.
+     */
+    private static final String GRACE_PERIOD = "${courtregister.generation.grace-period}";
 
     private static final Logger LOG = LoggerFactory.getLogger(GenerationReconciler.class);
 
@@ -119,16 +169,44 @@ public class GenerationReconciler {
      *     {@code register_batch.completed_by} names RECONCILER, for the run report and the
      *     {@code reconciled} counter
      */
+    @Scheduled(initialDelayString = GRACE_PERIOD, fixedDelayString = GRACE_PERIOD)
+    @SchedulerLock(name = LOCK_NAME, lockAtMostFor = LOCK_AT_MOST_FOR)
     public int reconcile() {
-        final Instant cutoff = clock.instant().minus(gracePeriod);
+        final Instant now = clock.instant();
+        final List<RegisterBatch> overdue = batches.generatingSince(now.minus(gracePeriod));
+        metrics.oldestGeneratingAge(oldestOf(overdue, now));
+
         int completed = 0;
-        for (final RegisterBatch batch : batches.generatingSince(cutoff)) {
+        for (final RegisterBatch batch : overdue) {
             if (reconcileOne(batch)) {
                 metrics.reconciled();
                 completed++;
             }
         }
         return completed;
+    }
+
+    /**
+     * How long the batch that has been waiting longest has been waiting.
+     *
+     * <p>Taken off the read this pass already made, rather than from a second query: the overdue
+     * batches come back oldest first, so the first of them is the answer and a batch still inside
+     * its grace has nothing to report yet - nothing has gone wrong with it.
+     *
+     * <p>Zero where none is overdue, which is what brings the gauge back down: a reading that only
+     * ever moved up would need a batch to fail before it could fall.
+     *
+     * @param overdue the batches this pass read, oldest first
+     * @param now     the instant the pass was made at
+     * @return the age of the oldest, or {@link Duration#ZERO} where there is none
+     */
+    private static Duration oldestOf(final List<RegisterBatch> overdue, final Instant now) {
+        return overdue.stream()
+                .map(RegisterBatch::requestedAt)
+                .filter(Objects::nonNull)
+                .min(Instant::compareTo)
+                .map(oldest -> Duration.between(oldest, now))
+                .orElse(Duration.ZERO);
     }
 
     /**
