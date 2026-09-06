@@ -437,7 +437,7 @@ public class PropertiesValidator implements InitializingBean {
             final CourtRegisterProperties properties) {
         if (properties.payload().mode() == PayloadSourceMode.LIVE) {
             throw new IllegalStateException(
-                    SUBSCRIPTIONS_MODE + IS_STUB_WHILE + PAYLOAD_MODE + " is LIVE — real"
+                    SUBSCRIPTIONS_MODE + IS_STUB_WHILE + PAYLOAD_MODE + " is LIVE - real"
                             + " hearings would be fetched and every one of them completed"
                             + " no-subscriptions, because reference data was never asked");
         }
