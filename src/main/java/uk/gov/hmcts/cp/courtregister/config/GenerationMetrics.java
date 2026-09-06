@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import org.springframework.stereotype.Component;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision.Unreadable;
@@ -38,7 +39,14 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
  * was only supposed to describe, so every label is derived from a bounded enumeration - the
  * constant's own name, lower-cased and hyphenated, or the bounded code the decision carries - and
  * every state of every enumeration therefore has a series.
+ *
+ * <p>A component, exactly as {@link ProcessingMetrics} is, and unconditionally: the instruments
+ * describe the downstream half, but a class Spring never constructs declares nothing at all, and
+ * meters that appeared only once {@code courtregister.generation.enabled} was set would be an
+ * alerting surface that came and went with a deployment setting. {@code GenerationMetricsContextTest}
+ * is what says the bean is there and that its meters land on the registry the service exports from.
  */
+@Component
 public class GenerationMetrics {
 
     public static final String BATCHES = "courtregister_batches_total";
