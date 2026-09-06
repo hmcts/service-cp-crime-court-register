@@ -26,8 +26,9 @@ import java.util.List;
  * {@code RegisterTransformationChain} holds the assembled document to the command exactly as 001
  * did, and attaches the type afterwards - so the contract check is still the check of a POST body,
  * and the register that leaves the chain is the one 002 records. What a {@code progression-post}
- * deployment sends must therefore be the command's own fields rather than this record whole, which
- * is the retained fallback's obligation and not the chain's.
+ * deployment sends is therefore the command's own fields rather than this record whole, which is the
+ * retained fallback's obligation and not the chain's: {@code ProgressionRegisterSubmissionClient}
+ * projects the register back to the command body before it serialises anything.
  *
  * <p>Declaring the component moves no wire byte on its own: the record is serialised
  * {@code NON_NULL}, so every register without a court application leaves the field absent exactly

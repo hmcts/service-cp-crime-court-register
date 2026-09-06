@@ -55,6 +55,12 @@ import uk.gov.hmcts.cp.courtregister.persistence.ProcessedOutputRepository;
  * the crash-window trade this service makes deliberately — a duplicate the downstream sweep absorbs,
  * in preference to a loss nothing absorbs.
  *
+ * <p><strong>What goes on the wire is the command, not the register this service records.</strong>
+ * The body is projected back to the {@code add-court-register} command's own fields before anything
+ * is serialised - see {@link #commandBody} - so the field increment 002 attaches to the register
+ * after the contract check never reaches a POST the frozen command would refuse. The digest on the
+ * row is the digest of that body, because the row exists to say what was sent.
+ *
  * <p>Writing the row first is what makes an unknown outcome survivable. A POST that times out leaves
  * a PENDING row carrying the digest of exactly the bytes that were attempted and the bounded counts
  * of what the register was assembled without, so the next delivery re-sends and reconciliation can
@@ -106,7 +112,7 @@ public class ProgressionRegisterSubmissionClient implements RegisterSubmissionCl
 
     @Override
     public SubmissionReceipt submit(final RegisterSubmission submission) {
-        final byte[] body = objectMapper.writeValueAsBytes(submission.document());
+        final byte[] body = objectMapper.writeValueAsBytes(commandBody(submission.document()));
         final RunClaim claim = submission.claim();
 
         // One statement, two questions: may this delivery send, and record that it is about to. The
@@ -256,6 +262,42 @@ public class ProgressionRegisterSubmissionClient implements RegisterSubmissionCl
      */
     private static Integer answered(final SubmissionFailedException failure) {
         return failure.responseCode().isPresent() ? failure.responseCode().getAsInt() : null;
+    }
+
+    /**
+     * The register as the {@code add-court-register} command carries it.
+     *
+     * <p><strong>The command is not the register, and since increment 002 they differ by a
+     * field.</strong> {@code defendantType} is a legal, optional field of the frozen
+     * <em>register-document</em> schema ({@code courtRegisterDocumentRequest.json:30-32}) and is
+     * what a recorded register is batched and printed under; the command this adapter POSTs does
+     * <em>not</em> declare it and is {@code additionalProperties: false}, so a body carrying one is
+     * refused with a 400 - the answer defect C1 used to swallow, on a register that was assembled
+     * perfectly well.
+     *
+     * <p>The projection belongs here rather than in the chain because this is the only stage that
+     * knows what a POST body is. {@code RegisterTransformationChain} holds the assembled document to
+     * the command exactly as 001 did and attaches the type afterwards, so the register that leaves
+     * the transformation is the one 002 records; what a {@code progression-post} deployment sends is
+     * that register's command fields, and nothing else moves. A register with no defendant type on
+     * it is handed straight back, so the ordinary body is not rebuilt to be identical to itself.
+     *
+     * @param document the register the run assembled
+     * @return the command body: the same register, without the field the command does not declare
+     */
+    private static CourtRegisterDocument commandBody(final CourtRegisterDocument document) {
+        return document.defendantType() == null
+                ? document
+                : new CourtRegisterDocument(
+                        document.registerDate(),
+                        document.hearingDate(),
+                        document.hearingId(),
+                        document.courtCentreId(),
+                        document.fileName(),
+                        null,
+                        document.hearingVenue(),
+                        document.recipients(),
+                        document.defendants());
     }
 
     /**
