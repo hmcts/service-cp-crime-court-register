@@ -18,6 +18,7 @@ import com.github.tomakehurst.wiremock.stubbing.Scenario;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.api.StatefulRedisConnection;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -80,6 +81,14 @@ public final class RegisterStackSupport implements AutoCloseable {
 
     /** Reference data's answer when nobody is subscribed, which is a legitimate business outcome. */
     private static final String NOBODY_SUBSCRIBED = "{\"nowSubscriptions\":[]}";
+
+    /**
+     * The master defendant the surviving-youth hearing's register covers.
+     *
+     * <p>Named only by {@link #payloadOfAnAppealTheChildIsTheAppellantOn(UUID)}, which has to put
+     * that same child on the application's applicant for the appellant branch to be reached.
+     */
+    private static final String APPELLANT_CHILD = "6647df67-a065-4d07-90ba-a8daa064ecc4";
 
     private final WireMockServer contexts;
     private final RedisClient cacheClient;
@@ -560,6 +569,60 @@ public final class RegisterStackSupport implements AutoCloseable {
         hearing.putArray("prosecutionCases");
         hearing.putArray("courtApplications");
         hearing.putArray("defendantJudicialResults");
+        return envelope;
+    }
+
+    /**
+     * The surviving-youth hearing rebuilt as an appeal the child is the appellant on.
+     *
+     * <p>The one shape in reach of a whole-stack suite that resolves to a defendant type at all.
+     * None of the six base hearings does: {@code getCourtApplicationId} reads element zero of the
+     * register's first defendant's case-or-application list and nothing else, and on every base
+     * fixture element zero is a prosecution case — which is why all six of the recorded
+     * defendant-type goldens answer empty. A suite that asserted the recorded {@code defendant_type}
+     * against one of them would be asserting {@code null}, and a pipeline that had dropped the
+     * field entirely would satisfy it.
+     *
+     * <p>Three edits, each of them one the rule reads, and the same three
+     * {@code RegisterTransformationChainTest.anAppealTheChildIsTheAppellantOn} makes: the
+     * prosecution case goes, so the court application is the first entry the first defendant
+     * carries; the applicant gains the master defendant the register covers; and the application
+     * type gains the appeal and applicant-appellant flags, which is the branch the
+     * {@code synthetic__appellant} golden was recorded against.
+     *
+     * @param hearingId the hearing the request will name
+     * @return the claim-check envelope
+     */
+    public static JsonNode payloadOfAnAppealTheChildIsTheAppellantOn(final UUID hearingId) {
+        final JsonNode envelope = payload("hearing-with-surviving-youth-defendant.json", hearingId);
+        final ObjectNode hearing = (ObjectNode) envelope.get("hearing");
+        hearing.putArray("prosecutionCases");
+
+        final ObjectNode application = (ObjectNode) hearing.get("courtApplications").get(0);
+        final ObjectNode type = (ObjectNode) application.get("type");
+        type.put("appealFlag", true);
+        type.put("applicantAppellantFlag", true);
+        ((ObjectNode) application.get("applicant"))
+                .putObject("masterDefendant")
+                .put("masterDefendantId", APPELLANT_CHILD);
+        return envelope;
+    }
+
+    /**
+     * The same envelope, dated by a later share of the same results.
+     *
+     * <p>The register's own instant is read from the envelope's {@code sharedTime} and not from the
+     * command, so a re-share that is to supersede rather than tie has to move it — and has to move
+     * it inside the same London day, because the day is the batch key and a re-share landing on the
+     * next one is a register of its own rather than a replacement (C10, C12).
+     *
+     * @param payload    the envelope to re-date
+     * @param sharedTime the instant the results were shared again
+     * @return the re-dated envelope
+     */
+    public static JsonNode sharedAgainAt(final JsonNode payload, final Instant sharedTime) {
+        final JsonNode envelope = payload.deepCopy();
+        ((ObjectNode) envelope).put("sharedTime", sharedTime.toString());
         return envelope;
     }
 
