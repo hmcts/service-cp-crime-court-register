@@ -101,7 +101,10 @@ class DocumentEventListenerTest {
 
     private final GenerationMetrics metrics = new GenerationMetrics(registry);
 
-    private final DocumentEventListener listener = new DocumentEventListener(sink, metrics);
+    private final DeliveryObserver deliveries = mock(DeliveryObserver.class);
+
+    private final DocumentEventListener listener =
+            new DocumentEventListener(sink, metrics, deliveries);
 
     /**
      * The framework envelope itself: a name and the event beside it.
@@ -314,6 +317,58 @@ class DocumentEventListenerTest {
                     generationFailed(DocumentEventListener.ORIGINATING_SOURCE)));
 
             verifyNoInteractions(sink);
+        }
+    }
+
+    /**
+     * The reading that says the subscription is being served at all.
+     *
+     * <p>{@code PublicEventsHealthIndicator} publishes {@code lastDeliveryAt} and
+     * {@code lastDeliveryAgeSeconds}, and its own javadoc says what has to feed them: <em>every</em>
+     * delivery, not only the two this service acts on. Nothing else can feed them - the container
+     * knows only that it is running, and a service that had heard nothing all evening and a service
+     * whose broker had stopped serving it look identical from anywhere but here.
+     *
+     * <p>So the observation is made before any filter. progression's leg is still deployed, still
+     * subscribed and still renders through the same systemdocgenerator: on a night the legacy
+     * generates and this service does not, its documents are the only proof the subscription is
+     * alive, and an observer told only about our own events would report an outage every one of
+     * those nights.
+     */
+    @Nested
+    @DisplayName("the age of the last delivery")
+    class Deliveries {
+
+        @Test
+        void a_delivery_this_service_acts_on_should_be_recorded() throws JMSException {
+            listener.onPublicEvent(message(DocumentEventListener.DOCUMENT_AVAILABLE,
+                    ourDocumentAvailable()));
+
+            verify(deliveries).recordDelivery();
+        }
+
+        @Test
+        void a_delivery_for_another_services_document_should_be_recorded_too() throws JMSException {
+            listener.onPublicEvent(message(DocumentEventListener.DOCUMENT_AVAILABLE,
+                    documentAvailable(PROGRESSION_SOURCE)));
+
+            verify(deliveries).recordDelivery();
+        }
+
+        /**
+         * Before every filter, and this is the one that proves it: a message the listener cannot
+         * even read off the subscription still reached this pod, and a broker that is delivering
+         * rubbish is a broker that is delivering.
+         */
+        @Test
+        void a_delivery_that_could_not_be_read_should_still_be_recorded() throws JMSException {
+            final TextMessage unreadable = mock(TextMessage.class);
+            when(unreadable.getStringProperty(DocumentEventListener.EVENT_NAME_PROPERTY))
+                    .thenThrow(new JMSException("the broker could not hand the message over"));
+
+            listener.onPublicEvent(unreadable);
+
+            verify(deliveries).recordDelivery();
         }
     }
 

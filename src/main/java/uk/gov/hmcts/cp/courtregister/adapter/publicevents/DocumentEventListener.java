@@ -113,15 +113,20 @@ public class DocumentEventListener {
 
     private final GenerationMetrics metrics;
 
+    private final DeliveryObserver deliveries;
+
     /**
-     * Holds the outcome port and the instruments the routing uses.
+     * Holds the outcome port, the instruments the routing uses and the observer of every delivery.
      *
-     * @param sink    where a recognised outcome is applied, naming EVENT
-     * @param metrics where an event this service did not ask for is counted
+     * @param sink              where a recognised outcome is applied, naming EVENT
+     * @param metrics           where an event this service did not ask for is counted
+     * @param deliveryObserver  told that the broker served this subscription, before any filter
      */
-    public DocumentEventListener(final DocumentOutcomeSink sink, final GenerationMetrics metrics) {
+    public DocumentEventListener(final DocumentOutcomeSink sink, final GenerationMetrics metrics,
+            final DeliveryObserver deliveryObserver) {
         this.sink = sink;
         this.metrics = metrics;
+        this.deliveries = deliveryObserver;
     }
 
     /**

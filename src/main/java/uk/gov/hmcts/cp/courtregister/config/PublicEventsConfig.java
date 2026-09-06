@@ -10,6 +10,7 @@ import org.springframework.boot.jms.autoconfigure.JmsProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
+import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DeliveryObserver;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DocumentEventListener;
 import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
 
@@ -109,8 +110,9 @@ public class PublicEventsConfig {
             final ObjectProvider<DocumentOutcomeSink> outcomes, final GenerationMetrics metrics) {
 
         final DocumentOutcomeSink sink = outcomes.getIfAvailable();
-        final DocumentEventListener listener =
-                sink == null ? null : new DocumentEventListener(sink, metrics);
+        final DocumentEventListener listener = sink == null
+                ? null
+                : new DocumentEventListener(sink, metrics, DeliveryObserver.NONE);
         if (listener == null) {
             LOG.warn("No outcome sink is on this context, so no durable subscription to the "
                     + "public-event topic is held: an outcome has nowhere to be applied without "
