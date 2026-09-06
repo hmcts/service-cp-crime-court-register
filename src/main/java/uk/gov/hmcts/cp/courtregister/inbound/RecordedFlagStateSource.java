@@ -50,6 +50,14 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
  * not one per command: a second arrival during a read that has not come back yet joins the first
  * one's refresh rather than starting another. The pair is what keeps a busy queue from turning a
  * labelling rule into a load test of somebody else's store.
+ *
+ * <p><strong>Both refreshes are the same refresh.</strong> The renewal and an arrival's on-demand
+ * request take the one in-flight claim and release it the same way, so "at most one in flight" is a
+ * property of the mechanism rather than of who asked. A renewal that only released the claim would
+ * let every arrival during a periodic read hand over another, and each of those would release the
+ * claim for the arrival behind it - a queue of reads one thread deep, which is the load the pair
+ * exists to prevent. A renewal that finds a read already in flight has nothing to add and skips its
+ * turn: the read in flight is younger than the reading the renewal would have replaced.
  */
 public class RecordedFlagStateSource {
 
@@ -84,7 +92,13 @@ public class RecordedFlagStateSource {
      */
     private final AtomicReference<FlagStateSnapshot> reading = new AtomicReference<>();
 
-    /** Whether a refresh is already on its way, so that arrivals behind it do not start another. */
+    /**
+     * Whether a refresh is already on its way, so that nothing behind it starts another.
+     *
+     * <p>Taken by the renewal and by an arrival alike, and released by the read that took it. It is
+     * the whole of "one refresh in flight": a hand-over that does not take it does not happen, and
+     * a read that did not take it does not release it.
+     */
     private final AtomicBoolean refreshing = new AtomicBoolean();
 
     /** Whether the renewal is already running, so that {@link #start()} can only ask for one. */
@@ -110,7 +124,9 @@ public class RecordedFlagStateSource {
      *
      * <p>Called once, when the source is built. The first read is asked for immediately and every
      * later one at {@link #RENEWAL}, on the executor's thread as ever, so a command arriving on a
-     * quiet stack finds a reading that was taken for it rather than one it has to ask for.
+     * quiet stack finds a reading that was taken for it rather than one it has to ask for. Each
+     * tick goes through the same in-flight claim an arrival's refresh takes, so a renewal that
+     * comes round while a read is still in flight lets that read stand for its turn.
      *
      * <p>A refusal by the executor is reported and no more, exactly as an on-demand refresh's is: a
      * pod that cannot start the schedule still labels every command, from whatever the on-demand
@@ -121,7 +137,7 @@ public class RecordedFlagStateSource {
         if (scheduled.compareAndSet(false, true)) {
             try {
                 refreshes.scheduleAtFixedRate(
-                        this::refresh, 0L, RENEWAL.toMillis(), TimeUnit.MILLISECONDS);
+                        this::renew, 0L, RENEWAL.toMillis(), TimeUnit.MILLISECONDS);
             } catch (RejectedExecutionException notTaken) {
                 scheduled.set(false);
                 LOG.warn("The flag reading will not be renewed on a schedule, so a command is "
@@ -164,13 +180,30 @@ public class RecordedFlagStateSource {
     private void scheduleRefresh() {
         if (refreshing.compareAndSet(false, true)) {
             try {
-                refreshes.execute(this::refresh);
+                refreshes.execute(this::read);
             } catch (RejectedExecutionException notTaken) {
                 refreshing.set(false);
                 LOG.warn("A flag refresh could not be handed over, so the commands behind this one "
                         + "are labelled from what is already known. type={}",
                         notTaken.getClass().getName());
             }
+        }
+    }
+
+    /**
+     * One tick of the renewal, which reads only if no refresh is already in flight.
+     *
+     * <p>The claim is the same one an arrival's refresh takes, so the two are one mechanism rather
+     * than two that happen to share a reading. A tick that finds a read in flight has nothing to
+     * add - that read is younger than the reading this tick would have replaced - and skipping it
+     * is what stops an arrival during a periodic read from being free to hand over another.
+     */
+    private void renew() {
+        if (refreshing.compareAndSet(false, true)) {
+            read();
+        } else {
+            LOG.debug("A flag read was already in flight when the renewal came round; the reading "
+                    + "it produces is this renewal's own.");
         }
     }
 
@@ -182,8 +215,9 @@ public class RecordedFlagStateSource {
      * answered about a flag as it stood when it was asked, and stamping the return would let a slow
      * read quietly lengthen the window its answer speaks for.
      *
-     * <p>Both hand-overs run it and the executor has one thread, so two reads can never be in
-     * flight at once and a reading is replaced by one of them whole.
+     * <p>Reached only by a caller that took the in-flight claim, and it releases that claim however
+     * the read ends. Two reads can therefore never be in flight at once, whichever of the renewal
+     * and an arrival asked for them, and a reading is replaced by one of them whole.
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     // Total, and for the renewal's sake rather than this read's. A throw out of a fixed-rate task
@@ -191,7 +225,7 @@ public class RecordedFlagStateSource {
     // the life of the pod and label every row UNKNOWN from then on - a far larger failure than the
     // read that caused it. The port's contract is that it never throws; this is what happens if
     // that is ever untrue, and it is reported rather than absorbed.
-    private void refresh() {
+    private void read() {
         try {
             final Instant asked = clock.instant();
             reading.set(new FlagStateSnapshot(reader.read(), asked));
