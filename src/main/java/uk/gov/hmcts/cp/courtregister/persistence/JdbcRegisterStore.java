@@ -35,6 +35,7 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
+import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 
 /**
@@ -77,7 +78,9 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * POST path answers a re-claim through {@code ON CONFLICT (source, request_id)}. The two unique
  * keys a recording can meet are told apart for the same reason - only
  * {@code idx_output_active_register_key} is a lost race worth retrying, and
- * {@code processed_output_unique_request} is this command arriving twice.
+ * {@code processed_output_unique_request} is this command arriving twice. Each is recognised by
+ * name and nothing is recognised by elimination: a refusal that is neither of them is a constraint
+ * this recorder cannot act on, and it is raised as a classified non-transient failure.
  *
  * <p><strong>Every {@code mark} is fenced on the status it read.</strong> The permitted moves belong
  * to {@link BatchStatus#canTransitionTo(BatchStatus)} and are asked there rather than re-encoded as
@@ -111,6 +114,9 @@ public class JdbcRegisterStore implements RegisterStore {
 
     /** V1's key on the request a row is evidence about: one output row per command, ever. */
     private static final String COMMAND_KEY = "processed_output_unique_request";
+
+    /** V3's key on the day's active register: one RECORDED, unsuperseded, unbatched row per key. */
+    private static final String ACTIVE_ROW_KEY = "idx_output_active_register_key";
 
     /** The four statuses the recorder writes, and the only ones a recorded register can be in. */
     private static final Set<String> RECORDER_STATUSES =
@@ -530,9 +536,14 @@ public class JdbcRegisterStore implements RegisterStore {
      * {@code ON CONFLICT (source, request_id)}, and a recording that failed here instead would park a
      * command whose register is recorded and active. The two unique keys are told apart rather than
      * both read as contention - {@value #COMMAND_KEY} is this command arriving beside itself and is
-     * settled from the row that landed, and only {@code idx_output_active_register_key} is a race
-     * for the day's key worth trying again.
+     * settled from the row that landed, and only {@value #ACTIVE_ROW_KEY} is a race for the day's
+     * key worth trying again. A duplicate-key refusal that is neither of them is a rule nobody
+     * wrote this recording against, and trying it three times would report contention - a transient
+     * failure - for a register that meets the same rule on every delivery.
      *
+     * @throws uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException if the write was
+     *                                     refused by a unique key this store does not account for,
+     *                                     which no redelivery can change
      * @throws ConcurrencyFailureException if {@value #RECORD_ATTEMPTS} attempts all lost the race
      *                                     for this key, which is the store answering rather than
      *                                     the store being unreachable: the delivery is handed back
@@ -573,16 +584,17 @@ public class JdbcRegisterStore implements RegisterStore {
             } catch (DuplicateKeyException collision) {
                 if (violates(collision, COMMAND_KEY)) {
                     outcome = recorded(command).orElseThrow(() -> unrecorded(command, collision));
-                } else {
+                } else if (violates(collision, ACTIVE_ROW_KEY)) {
                     lost = collision;
+                } else {
+                    throw unaccountedFor(command, collision);
                 }
             }
         }
         if (outcome == null) {
             throw new ConcurrencyFailureException("the register for this hearing and day was "
                     + "re-recorded by another delivery on each of " + RECORD_ATTEMPTS
-                    + " attempts; source=" + command.source() + " requestId=" + command.requestId(),
-                    lost);
+                    + " attempts; " + identityOf(command), lost);
         }
         return outcome;
     }
@@ -630,9 +642,8 @@ public class JdbcRegisterStore implements RegisterStore {
             throws SQLException {
         final String status = rs.getString("status");
         if (!RECORDER_STATUSES.contains(status)) {
-            throw new IllegalStateException("source=" + command.source() + " requestId="
-                    + command.requestId() + " already holds a " + status + " output row, which a "
-                    + "submission wrote and no recording may replace");
+            throw new IllegalStateException(identityOf(command) + " already holds a " + status
+                    + " output row, which a submission wrote and no recording may replace");
         }
         return new RecordOutcome(rs.getObject("output_id", UUID.class),
                 rs.getObject(SUPERSEDED_OUTPUT_ID, UUID.class));
@@ -643,19 +654,54 @@ public class JdbcRegisterStore implements RegisterStore {
      *
      * <p>The two keys a recording can meet mean opposite things - one delivery of one command twice,
      * and two commands racing for one hearing's day - so which was violated decides whether the
-     * attempt is answered or made again. Spring reports both as {@link DuplicateKeyException}; the
-     * constraint's name survives only on the cause the driver raised.
+     * attempt is answered or made again, and a refusal that is neither of them is a third answer.
+     * Spring reports all of them as {@link DuplicateKeyException}; the constraint's name survives
+     * only on the cause the driver raised, so each key is asked for by name.
      */
     private static boolean violates(final DuplicateKeyException collision, final String key) {
         final Throwable cause = NestedExceptionUtils.getMostSpecificCause(collision);
         return cause.getMessage() != null && cause.getMessage().contains(key);
     }
 
+    /**
+     * A refusal that is neither of the two keys this recorder settles.
+     *
+     * <p>Reported as a classified, non-transient failure rather than tried again: the two keys the
+     * recorder knows mean something it can act on - this command arriving beside itself, and the
+     * race for the day's active register - and a constraint outside them is a rule nobody wrote
+     * this recording against. Retrying it would spend three attempts reaching the same refusal and
+     * then report contention, which is a transient failure: the broker would redeliver the same
+     * register into the same rule four more times and park it under an exhaustion that says the
+     * service ran out of tries rather than that the row was refused.
+     *
+     * <p>The message names the constraint through the cause and nothing about the register itself
+     * (constitution Principle VII).
+     */
+    private static RegisterNotRecordedException unaccountedFor(final DistributionCommand command,
+            final DuplicateKeyException collision) {
+        return new RegisterNotRecordedException("the recording was refused by a unique key this "
+                + "store does not account for, so no redelivery of it can be recorded either; "
+                + identityOf(command), collision);
+    }
+
+    /**
+     * The command a refusal is about, in the only vocabulary a message from this class may use.
+     *
+     * <p>The correlation set and nothing else: a refusal raised from a recording travels into an
+     * ERROR line and a dead-letter description, and a register is a document about children
+     * (constitution Principle VII).
+     *
+     * @param command the request being recorded
+     * @return the source and request id, as every refusal here names them
+     */
+    private static String identityOf(final DistributionCommand command) {
+        return "source=" + command.source() + " requestId=" + command.requestId();
+    }
+
     /** The state a redelivery cannot be in: refused by the command key, with no row behind it. */
     private static IllegalStateException unrecorded(final DistributionCommand command,
             final DuplicateKeyException collision) {
-        return new IllegalStateException("source=" + command.source() + " requestId="
-                + command.requestId() + " was refused by " + COMMAND_KEY
+        return new IllegalStateException(identityOf(command) + " was refused by " + COMMAND_KEY
                 + ", and the row that refused it is not there to be answered with", collision);
     }
 

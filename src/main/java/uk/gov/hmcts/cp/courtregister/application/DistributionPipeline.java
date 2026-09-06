@@ -22,6 +22,7 @@ import uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
+import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
 import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
@@ -357,9 +358,11 @@ public class DistributionPipeline {
     /**
      * The run itself, with every failure it can meet turned into an outcome.
      *
-     * <p>The first catch takes every failure whose throw site already classified it — the four ports
+     * <p>The first catch takes every failure whose throw site already classified it — the ports
      * answer "is this worth retrying" in the exception, and the pipeline never second-guesses them
-     * by reading the Java type. The second is total on purpose: this frame holds the claim, and it
+     * by reading the Java type. A register the store <em>refused</em> is one of them and is
+     * deliberately not the signal below it: the store was reached and declined to hold this row, so
+     * it is one register to park rather than a queue to suspend. The second is total on purpose: this frame holds the claim, and it
      * is the only frame that does. A failure that escaped it would leave {@code claim_owner} live
      * for the rest of the lease, so every redelivery would bounce off {@code CLAIM_NOT_ACQUIRED}
      * until the broker parked the message under its own reason with no FAILED record behind it —
@@ -391,7 +394,8 @@ public class DistributionPipeline {
         try {
             outcome = runToOutcome(command, claim, lastChance, flagState);
         } catch (PayloadUnavailableException | ReferenceDataUnavailableException
-                | TransformationFailedException | SubmissionFailedException classified) {
+                | TransformationFailedException | SubmissionFailedException
+                | RegisterNotRecordedException classified) {
             outcome = failed(claim, classified.classification(), classified.reason(), lastChance);
         } catch (StoreUnavailableException storeGone) {
             throw storeGone;
