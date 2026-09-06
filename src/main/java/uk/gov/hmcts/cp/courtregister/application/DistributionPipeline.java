@@ -12,6 +12,8 @@ import uk.gov.hmcts.cp.courtregister.config.OutputMode;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
+import uk.gov.hmcts.cp.courtregister.domain.ContractValidationException;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
@@ -144,9 +146,6 @@ public class DistributionPipeline {
     private final RegisterStore registerStore;
     // The contract the register is held to at the write. Null under `progression-post`, where
     // nothing is written, and under the skeleton the transport suites use.
-    // PMD.UnusedPrivateField: this commit lands the seam the red run needs to compile against; the
-    // implementation commit that reads it follows immediately and removes this suppression.
-    @SuppressWarnings("PMD.UnusedPrivateField")
     private final RegisterDocumentValidator recordedDocument;
     private final RegisterSubmissionClient submissionClient;
     private final ProcessingMetrics metrics;
@@ -666,6 +665,7 @@ public class DistributionPipeline {
         if (spent(budget)) {
             outcome = overran(claim, budget);
         } else {
+            validated(command, register.document());
             final RecordOutcome recording = registerStore.record(command, register.document(),
                     register.courtCentreOuCode(), register.document().defendantType(), flagState);
             // The identities of the two rows and nothing from inside either of them: a register is a
@@ -678,6 +678,52 @@ public class DistributionPipeline {
             outcome = completed(claim, CompletionReason.RECORDED);
         }
         return outcome;
+    }
+
+    /**
+     * Holds the register the store is about to hold to the contract the store's readers will read
+     * it under.
+     *
+     * <p><strong>The document that is validated has to be the document that is stored.</strong> The
+     * transformation validated the register against the {@code add-court-register} command and then
+     * attached {@code defendantType} (FR-002), so what arrives here is one field wider than anything
+     * checked it - and that field is printed on the PDF. Since increment 002 the stored document is
+     * the contract rather than a step towards one: the nightly batch reads it back, the payload
+     * mapper is written against it, and nothing between this write and the render looks at it again
+     * (constitution Principle III). Validating the final document is what makes "enforced at the
+     * write" true of the thing that is actually written.
+     *
+     * <p>It is the <em>register-document</em> schema and not the command's, which is the whole
+     * reason there are two validators: the command declares no {@code defendantType} and is
+     * {@code additionalProperties: false}, so it would refuse every register this increment records.
+     * The two are the same frozen family and the same vendored copies, one field apart.
+     *
+     * <p>The refusal is translated exactly as the chain's is, and for the same reasons: a bounded
+     * {@link ReasonCode#OUTBOUND_CONTRACT_VIOLATION} on the record, non-transient because the same
+     * hearing assembles the same register on every delivery, and the JSON pointer written to the log
+     * and to nothing else - it is a path built from schema vocabulary and this repository's own
+     * property names, never a value, and every defendant on this register is a child (constitution
+     * Principle VII).
+     *
+     * @param command  the validated request, for correlation
+     * @param document the register as the store will hold it
+     * @throws TransformationFailedException if the frozen register-document schema would refuse it
+     */
+    private void validated(
+            final DistributionCommand command, final CourtRegisterDocument document) {
+        try {
+            recordedDocument.validate(document);
+        } catch (ContractValidationException refused) {
+            LOG.warn("The assembled register does not satisfy the register-document contract, so "
+                            + "it is not recorded. source={} requestId={} hearingId={} "
+                            + "violation={} path={}",
+                    command.source(), command.requestId(), command.hearingId(),
+                    refused.violation(), refused.field());
+            throw new TransformationFailedException(
+                    "the assembled register does not satisfy the register-document contract: "
+                            + refused.violation() + " at " + refused.field(),
+                    ReasonCode.OUTBOUND_CONTRACT_VIOLATION);
+        }
     }
 
     /**

@@ -2,6 +2,7 @@ package uk.gov.hmcts.cp.courtregister.config;
 
 import java.time.Clock;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -12,6 +13,7 @@ import uk.gov.hmcts.cp.courtregister.application.GroupProceedingsPolicy;
 import uk.gov.hmcts.cp.courtregister.application.HearingPayloadSource;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
 import uk.gov.hmcts.cp.courtregister.application.NowSubscriptionsSource;
+import uk.gov.hmcts.cp.courtregister.application.RegisterDocumentValidator;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.application.RegisterTransformer;
@@ -77,6 +79,19 @@ import uk.gov.hmcts.cp.courtregister.pipeline.SubscriptionRules;
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
 public class PipelineConfig {
+
+    /**
+     * The bean name of the validator over the {@code add-court-register} command.
+     *
+     * <p>Both validators are instances of the same class and both implement the port, so every
+     * injection point names the one it means. Left to type alone the container would find two
+     * candidates for either question and refuse to start - which is the right refusal and the wrong
+     * moment to discover which contract a stage is held to.
+     */
+    private static final String COMMAND_CONTRACT = "outboundContractValidator";
+
+    /** The bean name of the validator over the frozen register document. */
+    private static final String REGISTER_DOCUMENT_CONTRACT = "registerDocumentValidator";
 
     /**
      * The clock the run's processing deadline is measured against, and the one the queue-health
@@ -168,6 +183,30 @@ public class PipelineConfig {
     }
 
     /**
+     * The contract the register is held to at the write into this service's own store.
+     *
+     * <p>A second instance of the same validator over the second frozen schema, and the two are not
+     * interchangeable. The bean above holds an assembled register to the
+     * {@code add-court-register} command, which is what a {@code progression-post} deployment sends;
+     * this one holds the final register - the one carrying {@code defendantType} - to
+     * {@code courtRegisterDocumentRequest.json}, which is what the batch reads back and what the PDF
+     * payload is built from (constitution Principle III). Held to the command instead, every
+     * register 002 records would be refused under {@code UNKNOWN_FIELD [/defendantType]}.
+     *
+     * <p>Declared unconditionally and built at startup for the same reason as the bean above: the
+     * schemas are read when it is constructed, so a build that cannot assemble the contract refuses
+     * to start rather than degrading to "nothing was checked".
+     *
+     * @param objectMapper the shared, contract-configured mapper, which is what serialises the
+     *                     document into the store too
+     * @return the validator
+     */
+    @Bean
+    public RegisterDocumentValidator registerDocumentValidator(final ObjectMapper objectMapper) {
+        return OutboundContractValidator.overTheRegisterDocument(objectMapper);
+    }
+
+    /**
      * The transformation port, served by the whole chain: build, address, assemble, hold to the
      * contract.
      *
@@ -183,7 +222,7 @@ public class PipelineConfig {
     public RegisterTransformer registerTransformer(
             final RegisterBuilder builder,
             final SubscriptionMatcher matcher,
-            final OutboundContractValidator validator) {
+            @Qualifier(COMMAND_CONTRACT) final OutboundContractValidator validator) {
         return new RegisterTransformationChain(builder, matcher, validator);
     }
 
@@ -210,14 +249,15 @@ public class PipelineConfig {
      * @param dates               the register's date handling, for the subscription day
      * @param transformer         how a hearing payload and its subscriptions become a register
      * @param registerStore       this service's own register store, where one is wired
+     * @param recordedDocument    the frozen register-document contract the write is held to
      * @param submissionClient    where an assembled register is sent under {@code progression-post}
      * @param metrics             the instrument surface every outcome is counted on
      * @param clock               the clock the run's deadline is measured against
      * @param properties          the typed settings, for the output mode and the processing deadline
      * @return the pipeline
      */
-    // Six ports, one policy, one date helper and three settings: the core's own dependencies, each
-    // injected as the port type it is asked for. See DistributionPipeline's own note on the count.
+    // Seven ports, one policy, one date helper and three settings: the core's own dependencies,
+    // each injected as the port type it is asked for. See DistributionPipeline's note on the count.
     @Bean
     public DistributionPipeline distributionPipeline(
             final IdempotencyGuard guard,
@@ -227,13 +267,14 @@ public class PipelineConfig {
             final Dates dates,
             final RegisterTransformer transformer,
             final ObjectProvider<RegisterStore> registerStore,
+            @Qualifier(REGISTER_DOCUMENT_CONTRACT) final RegisterDocumentValidator recordedDocument,
             final RegisterSubmissionClient submissionClient,
             final ProcessingMetrics metrics,
             final Clock clock,
             final CourtRegisterProperties properties) {
         return new DistributionPipeline(
                 guard, payloadSource, groupProceedings, subscriptionsSource, dates, transformer,
-                properties.output(), registerStore.getIfAvailable(), submissionClient, metrics,
-                clock, properties.claim().processingDeadline());
+                properties.output(), registerStore.getIfAvailable(), recordedDocument,
+                submissionClient, metrics, clock, properties.claim().processingDeadline());
     }
 }

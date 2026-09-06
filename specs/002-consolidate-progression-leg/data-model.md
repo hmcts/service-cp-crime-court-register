@@ -15,7 +15,7 @@ V2 adds:
 
 | Column | Type | Notes |
 |---|---|---|
-| `document` | `jsonb` | The validated `CourtRegisterDocument` as recorded (schema v17.103.13); `request_digest` is now its SHA-256. Nullable in the column, required of a recorded row by the shape check below |
+| `document` | `jsonb` | The `CourtRegisterDocument` as recorded, validated **as it is written** against the vendored `courtRegisterDocumentRequest.json` (schema v17.103.13) - the register-document schema rather than the `add-court-register` command's, because the recorded document carries `defendantType` and the command declares no such field; `request_digest` is now its SHA-256. Nullable in the column, required of a recorded row by the shape check below |
 | `hearing_id` | `uuid` | From the document; same nullability rule |
 | `hearing_date` | `timestamptz` | From the document; same nullability rule |
 | `court_house` | `text` | `hearingVenue.courtHouse` (as progression's column) |
@@ -177,6 +177,12 @@ DONE)`, recorded as the run report (log + gauges), not as a table.
 - `RenderRequest(payloadFileId, batchId, templateIdentifier, conversionFormat, originatingSource)`.
 - `DocumentStatus` (from the query API: `documentFileServiceId?`, `generatedTime?`, `failedTime?`,
   `reason?`).
+- `RegisterDocumentValidator` - the port the core asks before the write, served by a second
+  `OutboundContractValidator` instance over `courtRegisterDocumentRequest.json`. The document
+  the transformation validated is not the document that is stored: `defendantType` is attached
+  after the command check, and since 002 the stored document is what the batch reads back and
+  what the PDF payload is built from, so the final document is held to the schema that
+  describes it.
 - `FlagDecision` — `ON | OFF | UNREADABLE(reason)`.
 - `RunReport` — counts per outcome, flag decision, duration, reconciled count.
 
