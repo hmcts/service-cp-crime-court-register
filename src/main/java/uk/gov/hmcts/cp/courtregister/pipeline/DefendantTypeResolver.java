@@ -42,22 +42,24 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
  * which is a deviation recorded in the design (Q25) and pinned by
  * {@code DefendantTypeResolverTest.respondents_are_read_from_the_hearing_not_the_aggregate}.
  *
- * <p><strong>Two shapes progression throws on are answered here</strong>, and the difference is
- * owed a row of {@code doc/DEFECT-FIXES.md} that neither this task nor the goldens write. An
- * application type without the two flags unboxes {@code null} in progression and an application
- * without a respondent list dereferences {@code null} there - both recorded as
- * {@code NullPointerException} by the {@code synthetic__master-defendant-without-flags} and
- * {@code synthetic__respondents-absent} goldens, and both reachable only because the flags are
- * {@code required} in {@code courtApplicationType.json}. An absent flag is read here as not set and
- * an absent respondent list as no respondents, so each answers {@code Applicant}: one unreadable
- * application must not cost every child on the register their entry.
+ * <p><strong>Three shapes progression throws on are answered here, and they are defect fix P10</strong>
+ * ({@code doc/DEFECT-FIXES.md}). An application type without the two flags unboxes {@code null} in
+ * progression, an application without a respondent list dereferences {@code null} there, and a
+ * respondent carrying no {@code masterDefendant} dereferences {@code null} again. The first two are
+ * recorded as {@code NullPointerException} by the {@code synthetic__master-defendant-without-flags}
+ * and {@code synthetic__respondents-absent} goldens; the third reaches no recorded case and is
+ * synthesised from the one that does. An absent flag is read here as not set, an absent respondent
+ * list as no respondents, and a respondent who is nobody is passed over, so each answers
+ * {@code Applicant}: one unreadable application must not cost every child on the register their
+ * entry.
  *
  * <p>The respondents-absent shape is the one that matters: {@code respondents} is <em>not</em> in
  * {@code courtApplication.json}'s required list, so a hearing carrying it is in contract, and where
- * progression's command fails this service records a register. Both answers are pinned by
- * {@code DefendantTypeResolverTest.the_shapes_progression_throws_on_are_answered_applicant}, so the
- * deviation cannot move unnoticed; the register row naming that test, or the sign-off that stands in
- * for it, is still owed and is written neither by this class nor by that suite.
+ * progression's command fails this service records a register. The answers are pinned by
+ * {@code DefendantTypeResolverTest.the_shapes_progression_throws_on_are_answered_applicant} and
+ * {@code …a_respondent_without_a_master_defendant_is_answered_applicant}, which P10 names as its
+ * pinning tests; the row carries the sign-off-before-cutover marker, and this class no longer owes
+ * the register anything.
  *
  * <p>Pure, and a singleton for it: reference data is not consulted, no clock is read, and nothing it
  * is handed is edited (constitution Principle V).
@@ -196,6 +198,8 @@ public class DefendantTypeResolver {
      * <p>A respondent who is not a master defendant is passed over rather than matched against a
      * defendant who has no master id of their own: progression dereferences that respondent and
      * throws, and answering "matched" for two absent identities is the one reading it never gives.
+     * That is the third of the shapes P10 names, and it is pinned by
+     * {@code DefendantTypeResolverTest.a_respondent_without_a_master_defendant_is_answered_applicant}.
      *
      * @param application the application the register names
      * @param document    the assembled register, whose defendants carry the ids matched against

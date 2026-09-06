@@ -42,21 +42,22 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
  * absent. They are one statement in two vocabularies, which is what {@link #NO_TYPE} maps and the
  * only place the two spellings meet.
  *
- * <p><strong>Two recorded goldens are a difference from the legacy, and are pinned as one.</strong>
+ * <p><strong>Three shapes are a difference from the legacy, and they are defect fix P10.</strong>
  * {@code synthetic__master-defendant-without-flags} and {@code synthetic__respondents-absent} record
  * progression throwing {@link NullPointerException} - unboxing an absent {@code appealFlag} and
  * dereferencing an absent respondent list - which is the shape all six base fixtures carry, and from
  * which progression is protected only by both flags being {@code required} in
  * {@code courtApplicationType.json}. The respondents-absent shape is in contract even so:
- * {@code respondents} is not in {@code courtApplication.json}'s required list. This port answers
- * {@code Applicant} for both, so a hearing progression loses the whole register of is recorded here
- * - a behaviour change, pinned below so it cannot move unnoticed.
+ * {@code respondents} is not in {@code courtApplication.json}'s required list. The third shape is
+ * the same rule's third unguarded dereference - a respondent carrying no {@code masterDefendant} -
+ * which no recorded case reaches and which is therefore synthesised below from the one that does.
+ * This port answers {@code Applicant} for all three, so a hearing progression loses the whole
+ * register of is recorded here.
  *
- * <p>The pin is not the whole obligation. An uncatalogued behaviour change needs a row of
- * {@code doc/DEFECT-FIXES.md} naming this test, or the design owner's written sign-off recorded as
- * an approved deviation (constitution Principle I); {@link DefendantTypeResolver}'s own javadoc says
- * the row is owed and nothing else tracks it. This suite states what the port does and leaves the
- * register entry to the review that settles it.
+ * <p>The obligation the pin carries is {@code doc/DEFECT-FIXES.md} row <strong>P10</strong>, which
+ * names both cases below as its pinning tests and carries the sign-off-before-cutover marker
+ * (constitution Principle I). The javadoc notes here and on {@link DefendantTypeResolver} that once
+ * said a row was owed describe how the deviation was found, not where it now lives.
  *
  * @see <a href="file:../../../../../../../../specs/002-consolidate-progression-leg/research.md">research.md</a> §5
  */
@@ -149,7 +150,7 @@ class DefendantTypeResolverTest {
     }
 
     @Nested
-    @DisplayName("the two shapes progression throws on")
+    @DisplayName("the three shapes progression throws on (P10)")
     class TheShapesProgressionThrowsOn {
 
         @ParameterizedTest(name = "{0}")
@@ -174,6 +175,34 @@ class DefendantTypeResolverTest {
             assertThat(answerFor(recorded))
                     .as("this port answers the rule's own default, which is the register being "
                             + "recorded where progression's command fails")
+                    .contains("Applicant");
+        }
+
+        /**
+         * The third shape P10 names, and the one no golden covers.
+         *
+         * <p>Progression reads {@code respondent.getMasterDefendant().getMasterDefendantId()} with
+         * no guard, so a respondent who is a party to the application without being a defendant
+         * anywhere throws there exactly as an absent respondent list throws a line earlier. No
+         * recorded case reaches it - element zero of a register's first defendant is the
+         * prosecution case in all six base fixtures - so it is synthesised from the recorded
+         * {@code Respondent} case by taking that respondent's master defendant away, in the same
+         * way the as-at-hearing deviation synthesises its edited respondent list.
+         *
+         * <p>P10 specifies all three shapes and this is the third of them, so it is asserted here
+         * whether or not the resolver needed changing for it: a row's shapes are pinned by the
+         * row, not by whichever of them a previous commit happened to reach.
+         */
+        @Test
+        @DisplayName("and so is a respondent the register has nothing to match against")
+        void a_respondent_without_a_master_defendant_is_answered_applicant() {
+            final Golden recorded = golden("synthetic__respondent");
+            final JsonNode withARespondentWhoIsNobody =
+                    withoutTheRespondentsMasterDefendant(recorded.hearing());
+
+            assertThat(answerFor(withARespondentWhoIsNobody, recorded.document()))
+                    .as("the respondent is passed over rather than dereferenced, so the rule "
+                            + "falls back to its own default and the register is recorded")
                     .contains("Applicant");
         }
     }
@@ -294,6 +323,25 @@ class DefendantTypeResolverTest {
         final ObjectNode edited = (ObjectNode) hearing.deepCopy();
         final ObjectNode application = (ObjectNode) edited.get("courtApplications").get(0);
         application.set("respondents", MAPPER.createArrayNode());
+        return edited;
+    }
+
+    /**
+     * The same hearing with the application's one respondent stripped of its master defendant.
+     *
+     * <p>Stands in for a respondent who is a party to the application without being a defendant
+     * anywhere: the third shape P10 names, which progression reads through and no recorded case
+     * reaches, so it is made here from the case that does reach the respondent branch rather than
+     * left unpinned.
+     *
+     * @param hearing the hearing as the payload carried it
+     * @return a copy whose only difference is that respondent's master defendant
+     */
+    private static JsonNode withoutTheRespondentsMasterDefendant(final JsonNode hearing) {
+        final ObjectNode edited = (ObjectNode) hearing.deepCopy();
+        final ObjectNode respondent = (ObjectNode) edited.get("courtApplications").get(0)
+                .get("respondents").get(0);
+        respondent.remove("masterDefendant");
         return edited;
     }
 
