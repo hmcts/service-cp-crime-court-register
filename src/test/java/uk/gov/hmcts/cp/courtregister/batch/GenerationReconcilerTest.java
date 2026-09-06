@@ -1,0 +1,581 @@
+package uk.gov.hmcts.cp.courtregister.batch;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+import ch.qos.logback.classic.Level;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
+import org.assertj.core.api.SoftAssertions;
+import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
+import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
+import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
+import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
+import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
+import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
+import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
+import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
+import uk.gov.hmcts.cp.courtregister.domain.DocumentStatus;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.GenerationFailedException;
+import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
+import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
+import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
+import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
+
+/**
+ * The safety net, asserted as the only thing standing between a lost event and a lost night.
+ *
+ * <p>Completion normally arrives on the {@code public.event} topic, and everything about that path
+ * is somebody else's suite. This one is about the path that exists because that one can fail
+ * silently: a subscription that was down when the event was published, a broker that dropped it, a
+ * selector that was wrong for one deployment. In every one of those the batch sits in GENERATING and
+ * nothing ever says so, and the registers for that court centre and day are never sent to the Youth
+ * Offending Teams waiting for them.
+ *
+ * <p>So four things are pinned here, and they are the four the plan's test matrix names.
+ *
+ * <ul>
+ *   <li><strong>The grace period is measured back from now</strong>, and is the whole of the
+ *       selection: batches are read by {@code RegisterBatchRepository.generatingSince(cutoff)}, so
+ *       what this class decides is the cutoff and nothing else. A cutoff computed from a run's start
+ *       rather than from the clock would drift by however long the run before it took.</li>
+ *   <li><strong>An answer is applied through the sink</strong>, the same {@link DocumentOutcomeSink}
+ *       the listener drives, naming RECONCILER rather than EVENT. One code path for both mechanisms
+ *       is what makes a duplicate absorbable and what keeps defect P3's scoping in one place; a
+ *       reconciler that wrote the store itself would be a second implementation of the outcome
+ *       rules, and the second one is always the one that gets P3 wrong again.</li>
+ *   <li><strong>Silence is failed GENERATION_TIMED_OUT</strong>, through the store rather than the
+ *       sink, because it is this service's own verdict about a render nobody answered for and not an
+ *       answer anybody gave. It still names RECONCILER, which is what
+ *       {@link BatchFailureReason#isGeneratorAttributed()} requires of that reason and what
+ *       {@code register_batch_completed_by_shape_chk} enforces of the row.</li>
+ *   <li><strong>Every completion this class reaches is counted</strong> on {@code reconciled} and
+ *       returned to the run report. The counter's question is how many of tonight's outcomes the
+ *       topic failed to deliver, and a batch nobody ever answered for is the worst instance of that,
+ *       not an exception to it - which is also the set of rows {@code completed_by} names
+ *       RECONCILER, so the metric and the table cannot disagree.</li>
+ * </ul>
+ *
+ * <p>Two failure shapes are pinned alongside them because both are ways the safety net could quietly
+ * become the thing that loses a batch. A query that could not be answered is not a generation that
+ * failed, so the batch stays GENERATING and is asked again next time rather than being failed on the
+ * strength of an outage here; and one batch's trouble does not end the run, because the batches after
+ * it are exactly the ones that have been waiting longest.
+ *
+ * <p>The last case is the privacy one. systemdocgenerator's words about a failure are another
+ * system's free text about a document whose every defendant is a child, and this class is the one
+ * place in the flow that reads them outside the sink. They travel to {@code sdg_reason} and they do
+ * not travel into a log line an estate-wide index keeps for a year (constitution Principle VII).
+ */
+@ExtendWith(SoftAssertionsExtension.class)
+@DisplayName("the grace-period reconciler")
+class GenerationReconcilerTest {
+
+    /** Quoted by every case, so the red run names the seam it is waiting on. */
+    private static final String PENDING = "T048 implements the reconciler; this is its red run";
+
+    /** Returned when the seam refused, so an uncounted run fails as an assertion. */
+    private static final int NOT_RECONCILED = -1;
+
+    /** Returned when a meter is absent, so a missing instrument fails as an assertion. */
+    private static final double ABSENT = -1;
+
+    private static final Duration GRACE = Duration.ofMinutes(10);
+
+    private static final Instant NOW = Instant.parse("2026-03-02T19:30:00Z");
+    private static final Instant REQUESTED_AT = NOW.minus(Duration.ofMinutes(25));
+    private static final Instant ASSEMBLED_AT = NOW.minus(Duration.ofMinutes(30));
+    private static final Instant GENERATED_AT = NOW.minus(Duration.ofMinutes(20));
+    private static final Instant FAILED_AT = NOW.minus(Duration.ofMinutes(18));
+
+    private static final UUID DOCUMENT_FILE_ID =
+            UUID.fromString("6d1f1d8c-2b0e-4a51-9f2f-9b6e9d3a4c11");
+    private static final LocalDate REGISTER_DATE = LocalDate.of(2026, 3, 2);
+
+    /**
+     * systemdocgenerator's own words, carrying the marker no other value in this repository
+     * produces: the privacy case can then say the reason was never written down rather than that
+     * nothing recognisable was.
+     */
+    private static final String SDG_REASON =
+            "OEE_Layout5 refused the payload: no date of birth for "
+                    + PersonalDataMarkers.CHILD_NAME;
+
+    private final RegisterBatchRepository batches = mock(RegisterBatchRepository.class);
+    private final DocumentRenderer renderer = mock(DocumentRenderer.class);
+    private final DocumentOutcomeSink sink = mock(DocumentOutcomeSink.class);
+    private final RegisterStore store = mock(RegisterStore.class);
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    private final GenerationMetrics metrics = new GenerationMetrics(registry);
+    private final AdjustableClock clock = AdjustableClock.startingAt(NOW);
+
+    private final GenerationReconciler reconciler =
+            new GenerationReconciler(batches, renderer, sink, store, metrics, GRACE, clock);
+
+    @InjectSoftAssertions
+    private SoftAssertions softly;
+
+    /**
+     * Runs one reconciliation.
+     *
+     * <p>The call is made inside {@code assertThatCode(...).doesNotThrowAnyException()} so that the
+     * seam's refusal is recorded as an assertion rather than ending the case, and the count it did
+     * not produce is then asserted on as {@link #NOT_RECONCILED} - the red run is the count and the
+     * green run is the same assertions unchanged.
+     *
+     * @return how many batches the reconciler completed, or {@link #NOT_RECONCILED} where the seam
+     *     refused
+     */
+    private int reconcile() {
+        final AtomicInteger completed = new AtomicInteger(NOT_RECONCILED);
+        softly.assertThatCode(() -> completed.set(reconciler.reconcile()))
+                .as(PENDING)
+                .doesNotThrowAnyException();
+        return completed.get();
+    }
+
+    /** A batch in the state the reconciler reads: requested, and not answered for since. */
+    private static RegisterBatch generating(final UUID payloadFileId, final Instant requestedAt) {
+        return new RegisterBatch(UUID.randomUUID(), UUID.randomUUID(), "B01OU", "Court House",
+                REGISTER_DATE, "CourtRegister_B01OU_2026-03-02.pdf", payloadFileId, null,
+                BatchStatus.GENERATING, null, null, true, null, ASSEMBLED_AT, requestedAt, null,
+                null, null, 1);
+    }
+
+    /** A batch overdue by fifteen minutes, which is the ordinary subject of every case here. */
+    private static RegisterBatch overdue() {
+        return generating(UUID.randomUUID(), REQUESTED_AT);
+    }
+
+    /** What the repository's overdue read answers this time. */
+    private void generatingSince(final RegisterBatch... overdue) {
+        when(batches.generatingSince(any())).thenReturn(List.of(overdue));
+    }
+
+    /** What systemdocgenerator says about one batch's payload. */
+    private void answers(final RegisterBatch batch, final DocumentStatus status) {
+        when(renderer.query(eq(batch.payloadFileId()), any())).thenReturn(Optional.of(status));
+    }
+
+    /** systemdocgenerator with nothing to say about one batch's payload. */
+    private void saysNothingAbout(final RegisterBatch batch) {
+        when(renderer.query(eq(batch.payloadFileId()), any())).thenReturn(Optional.empty());
+    }
+
+    private double reconciled() {
+        final Counter counter = registry.find(GenerationMetrics.GENERATION_RECONCILED).counter();
+        return counter == null ? ABSENT : counter.count();
+    }
+
+    private static List<String> atInfoOrAbove(final CapturedLog log) {
+        final List<String> written = new ArrayList<>();
+        log.events().stream()
+                .filter(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
+                .forEach(event -> {
+                    written.add(event.getFormattedMessage());
+                    Stream.ofNullable(event.getArgumentArray())
+                            .flatMap(Stream::of)
+                            .filter(Objects::nonNull)
+                            .map(String::valueOf)
+                            .forEach(written::add);
+                });
+        return written;
+    }
+
+    /**
+     * Which batches are asked about at all, which is the only selection this class makes.
+     */
+    @Nested
+    @DisplayName("the batches it asks about")
+    class Selection {
+
+        @Test
+        void the_overdue_read_should_be_the_grace_period_back_from_now() {
+            generatingSince();
+
+            reconcile();
+
+            final ArgumentCaptor<Instant> cutoff = ArgumentCaptor.forClass(Instant.class);
+            verify(batches).generatingSince(cutoff.capture());
+            softly.assertThat(cutoff.getValue())
+                    .as("the grace period is how long a batch may wait for its event, so the far "
+                            + "edge of it is now minus the period and nothing else")
+                    .isEqualTo(NOW.minus(GRACE));
+        }
+
+        @Test
+        void a_later_run_should_move_the_cutoff_with_the_clock() {
+            generatingSince();
+
+            reconcile();
+            clock.advance(Duration.ofMinutes(5));
+            reconcile();
+
+            final ArgumentCaptor<Instant> cutoff = ArgumentCaptor.forClass(Instant.class);
+            verify(batches, times(2)).generatingSince(cutoff.capture());
+            softly.assertThat(cutoff.getAllValues())
+                    .as("measured from the clock and not from a run's own start: a cutoff carried "
+                            + "over from the last run would let a batch requested since then be "
+                            + "asked about before its grace period had passed")
+                    .containsExactly(NOW.minus(GRACE), NOW.plus(Duration.ofMinutes(5)).minus(GRACE));
+        }
+
+        @Test
+        void a_run_with_nothing_overdue_should_ask_the_renderer_nothing() {
+            generatingSince();
+
+            final int completed = reconcile();
+
+            softly.assertThat(completed)
+                    .as("the ordinary night: every outcome arrived on the topic and the safety net "
+                            + "had nothing to catch")
+                    .isZero();
+            verifyNoInteractions(renderer, sink, store);
+            softly.assertThat(reconciled())
+                    .as("and a counter that moved on a run that reconciled nothing would make "
+                            + "every night look like a broker to investigate")
+                    .isEqualTo(ABSENT);
+        }
+    }
+
+    /**
+     * The document existed all along and the event that said so never arrived.
+     */
+    @Nested
+    @DisplayName("a document the topic never delivered")
+    class DocumentFetched {
+
+        private final RegisterBatch batch = overdue();
+
+        private void generatedDocument() {
+            generatingSince(batch);
+            answers(batch, new DocumentStatus(DOCUMENT_FILE_ID, GENERATED_AT, null, null));
+        }
+
+        @Test
+        void an_overdue_batch_should_be_asked_about_once_by_the_payload_it_was_rendered_from() {
+            generatedDocument();
+
+            reconcile();
+
+            final ArgumentCaptor<UUID> asked = ArgumentCaptor.forClass(UUID.class);
+            verify(renderer, times(1)).query(asked.capture(), any());
+            softly.assertThat(asked.getValue())
+                    .as("the query API is addressed by the payload file id - the id this service "
+                            + "minted and sent as payloadFileServiceId - and not by the batch "
+                            + "identity, which is systemdocgenerator's correlation and nothing it "
+                            + "can be asked about")
+                    .isEqualTo(batch.payloadFileId());
+        }
+
+        @Test
+        void the_query_should_be_made_as_the_system_identity() {
+            generatedDocument();
+
+            reconcile();
+
+            final ArgumentCaptor<CallerIdentity> caller =
+                    ArgumentCaptor.forClass(CallerIdentity.class);
+            verify(renderer).query(eq(batch.payloadFileId()), caller.capture());
+            softly.assertThat(caller.getValue())
+                    .as("nobody asked for this call: it is the schedule making good on an event "
+                            + "that never arrived, so it is made under the configured system "
+                            + "identity rather than attributed to whichever user shared the "
+                            + "results hours earlier")
+                    .isEqualTo(CallerIdentity.SYSTEM);
+        }
+
+        @Test
+        void a_fetched_document_should_be_applied_through_the_sink_as_the_reconciler() {
+            generatedDocument();
+
+            reconcile();
+
+            verify(sink).documentAvailable(batch.batchId(), batch.payloadFileId(),
+                    DOCUMENT_FILE_ID, GENERATED_AT, CompletedBy.RECONCILER);
+        }
+
+        @Test
+        void a_fetched_document_should_not_reach_the_store_directly() {
+            generatedDocument();
+
+            reconcile();
+
+            verifyNoInteractions(store);
+        }
+
+        @Test
+        void a_fetched_document_should_be_counted_and_reported_as_reconciled() {
+            generatedDocument();
+
+            final int completed = reconcile();
+
+            softly.assertThat(reconciled())
+                    .as("an outcome this service had to go and fetch is the one reading that says "
+                            + "the event path needs looking at")
+                    .isEqualTo(1);
+            softly.assertThat(completed)
+                    .as("and the run report carries the same number, so an operator reading the "
+                            + "report and an operator reading the counter see one story")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void a_document_id_without_a_generated_time_should_not_be_taken_for_a_document() {
+            generatingSince(batch);
+            answers(batch, new DocumentStatus(DOCUMENT_FILE_ID, null, null, null));
+
+            reconcile();
+
+            verifyNoInteractions(sink);
+            verify(store).markFailed(batch.batchId(), BatchFailureReason.GENERATION_TIMED_OUT,
+                    null, CompletedBy.RECONCILER);
+        }
+    }
+
+    /**
+     * The generation failed and the event that said so never arrived, which is defect P2's shape
+     * reached by the other road.
+     */
+    @Nested
+    @DisplayName("a refusal the topic never delivered")
+    class RefusalFetched {
+
+        private final RegisterBatch batch = overdue();
+
+        @Test
+        void a_fetched_refusal_should_be_applied_through_the_sink_with_the_renderers_words() {
+            generatingSince(batch);
+            answers(batch, new DocumentStatus(null, null, FAILED_AT, SDG_REASON));
+
+            reconcile();
+
+            verify(sink).generationFailed(batch.batchId(), batch.payloadFileId(), SDG_REASON,
+                    FAILED_AT, CompletedBy.RECONCILER);
+        }
+
+        @Test
+        void a_refusal_with_no_words_should_still_be_applied_as_a_refusal() {
+            generatingSince(batch);
+            answers(batch, new DocumentStatus(null, null, FAILED_AT, null));
+
+            reconcile();
+
+            verify(sink).generationFailed(batch.batchId(), batch.payloadFileId(), null, FAILED_AT,
+                    CompletedBy.RECONCILER);
+            verify(store, never()).markFailed(any(), any(), any(), any());
+        }
+
+        @Test
+        void a_fetched_refusal_should_be_counted_and_reported_as_reconciled() {
+            generatingSince(batch);
+            answers(batch, new DocumentStatus(null, null, FAILED_AT, SDG_REASON));
+
+            final int completed = reconcile();
+
+            softly.assertThat(reconciled())
+                    .as("a refusal fetched here is an outcome the topic owed and did not deliver, "
+                            + "exactly as a document is")
+                    .isEqualTo(1);
+            softly.assertThat(completed)
+                    .as("and it is one of the batches this run completed rather than the topic")
+                    .isEqualTo(1);
+        }
+    }
+
+    /**
+     * Two systems have had their chance to say what happened and neither has anything to say.
+     */
+    @Nested
+    @DisplayName("a renderer with nothing to say")
+    class Silence {
+
+        private final RegisterBatch batch = overdue();
+
+        @Test
+        void a_batch_nothing_can_be_learned_about_should_be_failed_generation_timed_out() {
+            generatingSince(batch);
+            saysNothingAbout(batch);
+
+            reconcile();
+
+            verify(store).markFailed(batch.batchId(), BatchFailureReason.GENERATION_TIMED_OUT,
+                    null, CompletedBy.RECONCILER);
+        }
+
+        @Test
+        void a_status_that_says_neither_should_be_read_as_silence() {
+            generatingSince(batch);
+            answers(batch, new DocumentStatus(null, null, null, null));
+
+            reconcile();
+
+            verify(store).markFailed(batch.batchId(), BatchFailureReason.GENERATION_TIMED_OUT,
+                    null, CompletedBy.RECONCILER);
+            verifyNoInteractions(sink);
+        }
+
+        @Test
+        void a_timed_out_batch_should_not_be_applied_through_the_sink() {
+            generatingSince(batch);
+            saysNothingAbout(batch);
+
+            reconcile();
+
+            verifyNoInteractions(sink);
+        }
+
+        @Test
+        void a_timed_out_batch_should_be_asked_about_once_and_not_again() {
+            generatingSince(batch);
+            saysNothingAbout(batch);
+
+            reconcile();
+
+            verify(renderer, times(1)).query(batch.payloadFileId(), CallerIdentity.SYSTEM);
+        }
+
+        @Test
+        void a_timed_out_batch_should_be_counted_and_reported_as_reconciled() {
+            generatingSince(batch);
+            saysNothingAbout(batch);
+
+            final int completed = reconcile();
+
+            softly.assertThat(reconciled())
+                    .as("the set the counter reports is the set completed_by names RECONCILER, "
+                            + "and GENERATION_TIMED_OUT is one of the two reasons that carries it")
+                    .isEqualTo(1);
+            softly.assertThat(completed)
+                    .as("a night whose batches all timed out is the loudest broker problem there "
+                            + "is, and a report that counted none of them would be silent about it")
+                    .isEqualTo(1);
+        }
+    }
+
+    /**
+     * The question itself could not be asked, which is not an answer about the render.
+     */
+    @Nested
+    @DisplayName("a query that could not be answered")
+    class QueryUnavailable {
+
+        private final RegisterBatch batch = overdue();
+
+        private void queryFails(final RegisterBatch subject) {
+            when(renderer.query(eq(subject.payloadFileId()), any()))
+                    .thenThrow(new GenerationFailedException(FailureClassification.TRANSIENT,
+                            BatchFailureReason.GENERATION_TIMED_OUT));
+        }
+
+        @Test
+        void a_query_that_failed_should_leave_the_batch_generating() {
+            generatingSince(batch);
+            queryFails(batch);
+
+            final int completed = reconcile();
+
+            verifyNoInteractions(sink);
+            verify(store, never()).markFailed(any(), any(), any(), any());
+            softly.assertThat(completed)
+                    .as("systemdocgenerator being unreachable is not systemdocgenerator saying "
+                            + "the render failed; the batch keeps its grace and is asked again "
+                            + "next time rather than being failed on the strength of an outage "
+                            + "here")
+                    .isZero();
+        }
+
+        @Test
+        void a_query_that_failed_should_not_be_counted_as_a_reconciliation() {
+            generatingSince(batch);
+            queryFails(batch);
+
+            reconcile();
+
+            softly.assertThat(reconciled())
+                    .as("nothing was learned and nothing was decided, so there is no completion "
+                            + "for the counter to report")
+                    .isEqualTo(ABSENT);
+        }
+
+        @Test
+        void a_query_that_failed_should_not_stop_the_run() {
+            final RegisterBatch first = overdue();
+            final RegisterBatch second = overdue();
+            generatingSince(first, batch, second);
+            queryFails(batch);
+            answers(first, new DocumentStatus(DOCUMENT_FILE_ID, GENERATED_AT, null, null));
+            saysNothingAbout(second);
+
+            final int completed = reconcile();
+
+            verify(sink).documentAvailable(first.batchId(), first.payloadFileId(), DOCUMENT_FILE_ID,
+                    GENERATED_AT, CompletedBy.RECONCILER);
+            verify(store).markFailed(second.batchId(), BatchFailureReason.GENERATION_TIMED_OUT,
+                    null, CompletedBy.RECONCILER);
+            softly.assertThat(completed)
+                    .as("the overdue batches are read oldest first, so the ones after a batch that "
+                            + "could not be asked about are the ones a Youth Offending Team has "
+                            + "been waiting longest for")
+                    .isEqualTo(2);
+        }
+    }
+
+    /**
+     * What the reconciler is allowed to write down.
+     *
+     * <p>It handles exactly one value that is not an identifier or a bounded code: systemdocgenerator's
+     * own words about a refusal. Those go to {@code sdg_reason}, where support can read them, and
+     * nowhere near a log line that reaches an estate-wide index and is kept for a year - every
+     * defendant on the register they are about is a child (constitution Principle VII).
+     */
+    @Nested
+    @DisplayName("what the reconciler writes down")
+    class WhatItWritesDown {
+
+        @Test
+        void the_renderers_words_should_never_reach_a_line_at_info_or_above() {
+            final RegisterBatch batch = overdue();
+            generatingSince(batch);
+            answers(batch, new DocumentStatus(null, null, FAILED_AT, SDG_REASON));
+
+            try (CapturedLog log = CapturedLog.capturing(GenerationReconciler.class)) {
+                reconcile();
+
+                softly.assertThat(atInfoOrAbove(log))
+                        .as("another system's free text about a document whose every defendant is "
+                                + "a child; it is carried to sdg_reason and read at DEBUG, and an "
+                                + "INFO line is neither of those")
+                        .noneMatch(line -> line.contains(PersonalDataMarkers.CHILD_NAME));
+            }
+
+            verify(sink).generationFailed(batch.batchId(), batch.payloadFileId(), SDG_REASON,
+                    FAILED_AT, CompletedBy.RECONCILER);
+        }
+    }
+}
