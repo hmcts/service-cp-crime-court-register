@@ -101,18 +101,27 @@ public class PublicEventsConfig {
      * shape a context-load test with no database has, and the shape
      * {@code DocumentEventListenerIT} gives itself a sink to escape.
      *
-     * @param outcomes where a recognised outcome is applied, if this context has anywhere
-     * @param metrics  where an event this service did not ask for is counted
+     * <p>The delivery observer is asked for rather than required, because the component that serves
+     * it is {@link GenerationHealth}'s and that configuration is outside the {@code test} profile:
+     * a context-load suite with no health component still gets a listener, and gets it with the
+     * observer that tells nobody rather than with none at all.
+     *
+     * @param outcomes  where a recognised outcome is applied, if this context has anywhere
+     * @param metrics   where an event this service did not ask for is counted
+     * @param observers told that the broker served this subscription, if anything on this context
+     *                  is listening for that
      * @return the listener, or {@code null} where no outcome could be applied
      */
     @Bean
     public DocumentEventListener documentEventListener(
-            final ObjectProvider<DocumentOutcomeSink> outcomes, final GenerationMetrics metrics) {
+            final ObjectProvider<DocumentOutcomeSink> outcomes, final GenerationMetrics metrics,
+            final ObjectProvider<DeliveryObserver> observers) {
 
         final DocumentOutcomeSink sink = outcomes.getIfAvailable();
         final DocumentEventListener listener = sink == null
                 ? null
-                : new DocumentEventListener(sink, metrics, DeliveryObserver.NONE);
+                : new DocumentEventListener(sink, metrics,
+                        observers.getIfAvailable(() -> DeliveryObserver.NONE));
         if (listener == null) {
             LOG.warn("No outcome sink is on this context, so no durable subscription to the "
                     + "public-event topic is held: an outcome has nowhere to be applied without "

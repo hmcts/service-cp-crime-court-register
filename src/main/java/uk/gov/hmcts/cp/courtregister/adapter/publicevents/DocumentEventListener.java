@@ -147,6 +147,11 @@ public class DocumentEventListener {
             selector = "${courtregister.publicevents.selector}",
             containerFactory = PublicEventsConfig.LISTENER_CONTAINER_FACTORY)
     public void onPublicEvent(final TextMessage message) {
+        // First, and before every filter below it. What is being recorded is that the broker served
+        // this subscription, which is as true of progression's still-deployed leg announcing its own
+        // document as it is of one of ours - and on a night the legacy generates and this service
+        // does not, its events are the only proof the subscription is alive.
+        deliveries.recordDelivery();
         final String eventName;
         final String body;
         try {

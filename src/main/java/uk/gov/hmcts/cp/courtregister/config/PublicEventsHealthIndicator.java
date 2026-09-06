@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
+import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DeliveryObserver;
 
 /**
  * Whether outcomes are still arriving, reported loudly and never allowed to gate readiness.
@@ -41,7 +42,7 @@ import org.springframework.boot.health.contributor.HealthIndicator;
  * only: a deployment running the intake half alone holds no subscription, and a component reporting
  * on one that was never meant to exist would put the whole health aggregate DOWN for a working pod.
  */
-public class PublicEventsHealthIndicator implements HealthIndicator {
+public class PublicEventsHealthIndicator implements HealthIndicator, DeliveryObserver {
 
     /** What the details call a subscription whose container is running. */
     private static final String RUNNING = "running";
@@ -86,7 +87,11 @@ public class PublicEventsHealthIndicator implements HealthIndicator {
      * progression's still-deployed leg arriving here is proof the subscription is being served, and
      * a component that counted only our own events would report a broker outage every evening the
      * legacy generated and this service did not.
+     *
+     * <p>The listener is what calls it, through {@link DeliveryObserver}, at the top of its handler
+     * and before any of its three filters.
      */
+    @Override
     public void recordDelivery() {
         lastDelivery.set(clock.instant());
     }
