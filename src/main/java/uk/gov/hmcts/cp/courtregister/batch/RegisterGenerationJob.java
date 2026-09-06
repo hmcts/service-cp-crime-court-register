@@ -72,21 +72,29 @@ import uk.gov.hmcts.cp.courtregister.domain.RunReport;
  * GMT alike, and the legacy fires in the scheduling JVM's default zone because its Quartz trigger
  * was built without one (research §4). The lock is the same argument about replicas rather than
  * hours: one replica today is a deployment fact and not a code guarantee, and the cost of being
- * wrong is two documents and two e-mails for every court centre in the country.
+ * wrong is two documents and two e-mails for every court centre in the country. Its duration is
+ * named the same way the schedule is, as the setting that states it, because it is the run deadline
+ * plus a fixed margin and a literal here would be that relationship written down twice.
  */
 public class RegisterGenerationJob {
 
     /**
-     * How long the lock is held for, which has to outlast the requesting the deadline permits.
+     * How long the lock is held for, named as the setting that says it rather than as a value.
      *
-     * <p>Ten minutes more than the sixty {@code courtregister.generation.run-deadline} ships with,
-     * so a run still inside its hour cannot be joined by the replica that took the lock it had
-     * already lost. It is a literal because an annotation's attribute has to be a constant, which
-     * is also why a deployment that lengthens the run deadline has to lengthen this with it - the
-     * two are one setting written twice, and the day they disagree is the day two pods generate the
-     * same night.
+     * <p>An annotation's attribute has to be a constant, but it does not have to be a duration:
+     * ShedLock resolves a property placeholder here through the context's own value resolver, so
+     * the lock reads {@code courtregister.generation.lock-at-most-for} and there is one place the
+     * duration is written. That matters because {@code run-deadline} is configurable and this has
+     * to outlast it - a deployment that lengthened the run past a literal seventy minutes would
+     * leave a window in which a run still inside its hour has already lost the lock, and the
+     * replica that takes it generates the same night a second time.
+     *
+     * <p>{@code application.yaml} ships it as the deadline plus the fixed
+     * {@link uk.gov.hmcts.cp.courtregister.config.PropertiesValidator#SCHEDULER_LOCK_MARGIN}, and
+     * {@code PropertiesValidator} refuses startup on any pair that does not hold - so the two
+     * settings cannot drift apart in a deployment either.
      */
-    public static final String LOCK_AT_MOST_FOR = "PT70M";
+    public static final String LOCK_AT_MOST_FOR = "${courtregister.generation.lock-at-most-for}";
 
     /** The lock's own name, which is what makes it this job's lock and not the estate's. */
     public static final String LOCK_NAME = "register-generation";

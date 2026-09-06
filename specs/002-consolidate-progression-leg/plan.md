@@ -74,6 +74,7 @@ NN delivery events, PCR, history migration, C18.
 | `courtregister.generation.enabled` | `false` locally, `true` deployed | Master switch for the job, listener, second datasource and their validators |
 | `courtregister.generation.cron` / `.zone` | `0 0 18 * * MON-FRI` / `Europe/London` | Zone MUST be `Europe/London` unless `courtregister.generation.zone-override-acknowledged=true` |
 | `courtregister.generation.run-deadline` / `.grace-period` | `60m` / `10m` | Requesting deadline; time a batch may stay GENERATING before the reconciler asks SDG |
+| `courtregister.generation.lock-at-most-for` | `70m` | How long the job's ShedLock lock is held. The job's `@SchedulerLock` reads this key as a placeholder rather than a literal, so the one configurable duration is written once; startup refuses any value below `run-deadline` plus the fixed `PropertiesValidator.SCHEDULER_LOCK_MARGIN` (10m), because a lock that expires inside a run is the replica that generates the same night twice |
 | `courtregister.generation.completion` | `event` | `event` (default) or `poll-only` (escape hatch, logged loudly) |
 | `courtregister.feature.endpoint` / `.key` / `.label` / `.timeout` | `${APPCONFIG_ENDPOINT:}` / `.appconfig.featureflag/CourtRegisterService` / `${STACK_LABEL:}` / `2s` | The third reader of the flag; required when generation is enabled |
 | `courtregister.fileservice.url` / `.username` / `.password` | `${FILESERVICE_DATASOURCE_URL:}` … | Write-only datasource; required when generation is enabled |

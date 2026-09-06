@@ -24,11 +24,11 @@ import org.springframework.stereotype.Component;
  * exactly that kind is what this service was commissioned to end, so it is not permitted to start.
  *
  * <p>The downstream half is held to the same standard, and its failures are quieter still: a
- * schedule read in the wrong zone, a run with no payload store, no flag, no renderer or no
- * notifier, an event-driven completion with no broker to hear from, a stub reachable where
- * registers are really produced, and a blank or malformed e-mail template id (fix P9). None of them
- * is discovered before 18:00, and by then the night's registers are already not going out
- * (research §11).
+ * schedule read in the wrong zone, a lock that expires before the run it locks is allowed to end, a
+ * run with no payload store, no flag, no renderer or no notifier, an event-driven completion with
+ * no broker to hear from, a stub reachable where registers are really produced, and a blank or
+ * malformed e-mail template id (fix P9). None of them is discovered before 18:00, and by then the
+ * night's registers are already not going out (research §11).
  */
 @Component
 // The properties records are registered here, explicitly, rather than left to a scan: without them
@@ -104,6 +104,8 @@ public class PropertiesValidator implements InitializingBean {
 
     private static final String GENERATION = "courtregister.generation";
     private static final String GENERATION_ENABLED = GENERATION + ".enabled";
+    private static final String RUN_DEADLINE = GENERATION + ".run-deadline";
+    private static final String LOCK_AT_MOST_FOR = GENERATION + ".lock-at-most-for";
     private static final String GENERATION_COMPLETION = GENERATION + ".completion";
     private static final String NN_MODE = GENERATION + ".nn-mode";
     private static final String FILESERVICE_URL = "courtregister.fileservice.url";
@@ -202,6 +204,7 @@ public class PropertiesValidator implements InitializingBean {
                                 final String brokerUrl) {
         validate(properties);
         generation.validate();
+        validateTheSchedulerLockOutlivesTheRun(generation);
         feature.validate();
         validateTheStubsAreNotWhereRegistersAreProduced(properties, generation);
         validateGenerationHasTheDownstreamsItNeeds(properties, generation, feature);
@@ -737,6 +740,41 @@ public class PropertiesValidator implements InitializingBean {
                     VALIDATE_OUTBOUND + " is false while " + NAMESPACE + " is set, which is a"
                             + " deployed environment — without the pre-send check an invalid"
                             + " document is a 400 nobody sees and a register nobody can find");
+        }
+    }
+
+    /**
+     * The nightly run's lock has to outlast the run it locks, by a margin nothing can set to zero.
+     *
+     * <p>The ShedLock lock expires on its own after {@code lock-at-most-for} whether the run has
+     * finished or not, which is what makes it safe against a pod that dies mid-run and is exactly
+     * why it cannot be shorter than a run is allowed to be. A deployment that lengthens
+     * {@code run-deadline} and leaves the lock where it was gets a window in which a run is still
+     * inside its hour and the lock is free for another replica to take; the second run assembles
+     * nothing (the first run's stamps are already on the rows) but it does read, request and notify
+     * for every batch the first has not reached, which is two documents and two e-mails for every
+     * court centre in the country.
+     *
+     * <p>Unconditional, like the zone rule: a job that happens to be disabled in this deployment is
+     * not a reason to accept a lock that cannot cover the run in the next one. The margin is fixed
+     * for the reason {@link #RUN_OVERHEAD_MARGIN} is - a lock expiring the instant the deadline
+     * does is a lock the last batch of a run races - and it is what
+     * {@code application.yaml} ships the two settings apart by.
+     *
+     * @param generation the downstream half's settings
+     * @throws IllegalStateException if the lock cannot cover the run deadline plus the margin
+     */
+    private static void validateTheSchedulerLockOutlivesTheRun(
+            final GenerationProperties generation) {
+
+        final Duration required = generation.runDeadline().plus(SCHEDULER_LOCK_MARGIN);
+        if (generation.lockAtMostFor().compareTo(required) < 0) {
+            throw new IllegalStateException(
+                    LOCK_AT_MOST_FOR + " (" + generation.lockAtMostFor() + MUST_BE_AT_LEAST
+                            + RUN_DEADLINE + " (" + generation.runDeadline() + ") plus the "
+                            + SCHEDULER_LOCK_MARGIN + " margin (" + required + "), so a run still"
+                            + " inside its hour cannot be joined by the replica that took the lock"
+                            + " it had already lost");
         }
     }
 
