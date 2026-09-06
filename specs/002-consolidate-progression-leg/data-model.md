@@ -15,17 +15,33 @@ V2 adds:
 
 | Column | Type | Notes |
 |---|---|---|
-| `document` | `jsonb NOT NULL` | The validated `CourtRegisterDocument` as recorded (schema v17.103.13); `request_digest` is now its SHA-256 |
-| `hearing_id` | `uuid NOT NULL` | From the document |
-| `hearing_date` | `timestamptz NOT NULL` | From the document |
+| `document` | `jsonb` | The validated `CourtRegisterDocument` as recorded (schema v17.103.13); `request_digest` is now its SHA-256. Nullable in the column, required of a recorded row by the shape check below |
+| `hearing_id` | `uuid` | From the document; same nullability rule |
+| `hearing_date` | `timestamptz` | From the document; same nullability rule |
 | `court_house` | `text` | `hearingVenue.courtHouse` (as progression's column) |
-| `register_time` | `timestamptz NOT NULL` | The document's `registerDate` instant (progression's `register_time`); `register_date` stays the London date part |
+| `register_time` | `timestamptz` | The document's `registerDate` instant (progression's `register_time`); `register_date` stays the London date part. Same nullability rule |
 | `defendant_type` | `text` | `Applicant` / `Appellant` / `Respondent` / null (no court application) |
 | `batch_id` | `uuid` FK → `register_batch` | NULL until assembled |
 | `superseded_at` | `timestamptz` | Set in the recording transaction that superseded this row |
 | `superseded_by` | `uuid` FK → `processed_output(output_id)` | The newer row |
-| `recorded_flag_state` | `text NOT NULL` | `ON` / `OFF` / `UNKNOWN` — the flag as last read when recorded |
+| `recorded_flag_state` | `text NOT NULL DEFAULT 'UNKNOWN'` | `ON` / `OFF` / `UNKNOWN` — the flag as last read when recorded. The default is what an unread flag means, so a writer that omits the column states something true |
 | `status` | widened | `RECORDED` → `GENERATED` → `NOTIFIED`; `SUPERSEDED`; `FAILED` (001's `PENDING`/`POSTED` remain valid for `progression-post` mode) |
+
+Check: `processed_output_recorded_shape_chk CHECK (status NOT IN ('RECORDED','GENERATED','NOTIFIED',
+'SUPERSEDED') OR (document IS NOT NULL AND hearing_id IS NOT NULL AND hearing_date IS NOT NULL AND
+register_time IS NOT NULL))` — the four register columns are required of every row the recorder
+writes and of no other.
+
+**Rollout (expand now, contract later).** The four register columns are deliberately nullable rather
+than `NOT NULL`. Flyway runs deferred, at the new pod's startup, so for the length of a rolling
+deployment a pod on the previous release is still serving the queue against a schema that has
+already moved, and it writes the old `progression-post` shape: no `document`, no `hearing_id`, no
+`hearing_date`, no `register_time`. `NOT NULL` on those columns would fail every one of those
+inserts and lose every register in flight until the rollout completed. The shape check carries the
+invariant instead, and binds only the four statuses the recorder produces. A later **contract**
+migration may tighten the four to `NOT NULL` and drop the check, once no pre-002 release can still
+be running. `recorded_flag_state` needs no such treatment: a default is safe there because `UNKNOWN`
+is exactly what a row written without reading the flag means.
 
 Indexes: `idx_output_active_unbatched ON processed_output (court_centre_id, register_date) WHERE
 status = 'RECORDED' AND superseded_at IS NULL AND batch_id IS NULL`; `idx_output_hearing ON
@@ -56,7 +72,7 @@ unique violation by re-reading and superseding.
 | `document_file_id` | `uuid` | From `document-available` (`documentFileServiceId`) or the query API |
 | `status` | `text NOT NULL` | `PENDING` → `GENERATING` → `GENERATED` → `NOTIFIED` \| `PARTIALLY_NOTIFIED` \| `NOTIFIED_NOBODY` \| `FAILED` |
 | `failure_reason` | `text` | `PAYLOAD_STORE_UNAVAILABLE` \| `RENDER_REQUEST_FAILED` \| `RENDER_REQUEST_REJECTED` \| `GENERATION_FAILED` \| `GENERATION_TIMED_OUT` \| `ASSEMBLY_FAILED` |
-| `sdg_reason` | `text` | SDG's `reason` from `generation-failed` / query (bounded length, never logged at INFO) |
+| `sdg_reason` | `varchar(512)` | SDG's `reason` from `generation-failed` / query (bounded length, never logged at INFO) |
 | `system_generated` | `boolean NOT NULL` | true from the schedule, false from the CLI (progression's flag) |
 | `completed_by` | `text` | `EVENT` \| `RECONCILER` — feeds the `reconciled` metric |
 | `assembled_at`, `requested_at`, `generated_at`, `notified_at`, `failed_at` | `timestamptz` | |

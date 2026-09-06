@@ -59,12 +59,16 @@ import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
  * of V1's thirteen were taken away; the "and nothing else" half remains a single pin in one place,
  * and widens there when V2 lands.
  *
- * <p><strong>Note for the migration author (T012).</strong> Four of the added columns are NOT NULL
- * and a V1 database may already hold rows written in {@code progression-post} mode, which carry no
- * document and no register instant. The migration therefore has to add, backfill and only then
- * constrain, rather than add-with-a-default: this suite requires that no default survives on any of
- * the ten, because a default on {@code recorded_flag_state} or {@code document} would let a later
- * writer omit the very fact the column exists to record.
+ * <p><strong>Note for the migration author (T012).</strong> A V1 database may already hold rows
+ * written in {@code progression-post} mode, which carry no document and no register instant, and
+ * during a rolling deployment a pod on the previous release goes on writing that shape after this
+ * migration has run - Flyway is deferred to the new pod's startup, so the old pod is still live and
+ * still inserting. The four register columns are therefore left NULLABLE and the new shape is
+ * required by {@code processed_output_recorded_shape_chk}, which binds only the statuses the
+ * recorder writes. {@code recorded_flag_state} is the one exception: it keeps NOT NULL with a
+ * DEFAULT of UNKNOWN, which is safe for an old insert precisely because UNKNOWN is what the backfill
+ * chooses for a row that never read the flag. This suite asserts both halves - the nullability the
+ * rollout needs and the check that makes it an invariant anyway.
  */
 class SchemaMigrationV2IT {
 
@@ -265,6 +269,35 @@ class SchemaMigrationV2IT {
     }
 
     /**
+     * The row the <em>previous</em> release writes: V1's columns and not one of V2's ten.
+     *
+     * <p>Word for word the shape {@code ProcessedOutputRepository} carried before this increment,
+     * because that is what a pod that has not been replaced yet is still executing while V2 is
+     * already applied.
+     */
+    private static String insertV1ShapedOutput(final UUID requestId) {
+        return "INSERT INTO " + OUTPUT_TABLE
+                + " (output_id, source, request_id, court_centre_id, register_date, file_name, "
+                + "status, request_digest, response_code) VALUES ('"
+                + UUID.randomUUID() + "', 'RESULTS', '" + requestId + "', '" + UUID.randomUUID()
+                + "', DATE '2026-08-20', 'courtregister_2026-08-20.json', 'POSTED', "
+                + "'fingerprint', 202)";
+    }
+
+    /**
+     * A RECORDED row that names every register column except the register itself.
+     */
+    private static String insertOutputWithoutDocument(final UUID requestId) {
+        return "INSERT INTO " + OUTPUT_TABLE
+                + " (output_id, source, request_id, court_centre_id, register_date, file_name, "
+                + "status, hearing_id, hearing_date, register_time, recorded_flag_state) VALUES ('"
+                + UUID.randomUUID() + "', 'RESULTS', '" + requestId + "', '" + UUID.randomUUID()
+                + "', DATE '2026-08-20', 'courtregister_2026-08-20.json', 'RECORDED', '"
+                + UUID.randomUUID() + "', TIMESTAMPTZ '2026-08-20T09:00:00Z', "
+                + "TIMESTAMPTZ '2026-08-20T17:00:00Z', 'ON')";
+    }
+
+    /**
      * The smallest valid {@code register_batch} row for the given key and state.
      */
     private static String insertBatch(final UUID batchId, final UUID courtCentreId,
@@ -314,27 +347,31 @@ class SchemaMigrationV2IT {
         }
 
         @Test
-        void document_should_be_non_null_jsonb_holding_the_register_as_recorded() throws SQLException {
-            // The validated CourtRegisterDocument itself, not a reference to one: this row is now
-            // the only place the register exists, and `request_digest` is its SHA-256.
+        void document_should_be_nullable_jsonb_the_recorded_shape_check_requires()
+                throws SQLException {
+            // The validated CourtRegisterDocument itself, not a reference to one: on a recorded row
+            // this is the only place the register exists, and `request_digest` is its SHA-256. The
+            // column is nullable so that a pod on the previous release can still insert the old
+            // shape while this migration is already applied; the shape check is what requires it of
+            // every row the recorder writes.
             assertThat(columnsOf(OUTPUT_TABLE).get("document"))
-                    .isEqualTo(new Column("jsonb", false, null));
+                    .isEqualTo(new Column("jsonb", true, null));
         }
 
         @Test
-        void hearing_facts_should_be_non_null_columns_taken_from_the_document() throws SQLException {
+        void hearing_facts_should_be_nullable_columns_taken_from_the_document() throws SQLException {
             final Map<String, Column> columns = columnsOf(OUTPUT_TABLE);
-            assertThat(columns.get("hearing_id")).isEqualTo(new Column("uuid", false, null));
-            assertThat(columns.get("hearing_date")).isEqualTo(new Column(TIMESTAMPTZ, false, null));
+            assertThat(columns.get("hearing_id")).isEqualTo(new Column("uuid", true, null));
+            assertThat(columns.get("hearing_date")).isEqualTo(new Column(TIMESTAMPTZ, true, null));
         }
 
         @Test
-        void register_time_should_be_the_non_null_instant_beside_the_london_register_date()
+        void register_time_should_be_the_nullable_instant_beside_the_london_register_date()
                 throws SQLException {
             // progression's `register_time`. `register_date` stays the London date part and stays
             // the batch key; the instant is what supersession orders rows by.
             assertThat(columnsOf(OUTPUT_TABLE).get("register_time"))
-                    .isEqualTo(new Column(TIMESTAMPTZ, false, null));
+                    .isEqualTo(new Column(TIMESTAMPTZ, true, null));
         }
 
         @Test
@@ -363,11 +400,55 @@ class SchemaMigrationV2IT {
         }
 
         @Test
-        void recorded_flag_state_should_be_non_null_with_no_default() throws SQLException {
-            // Deliberately no default: UNKNOWN is a statement the recorder makes, not an absence
-            // the database fills in (research §12).
+        void recorded_flag_state_should_be_non_null_defaulting_to_the_backfills_own_value()
+                throws SQLException {
+            // The one added column that keeps NOT NULL, because the only value a default could
+            // choose is the value the backfill already chooses for a row that never read the flag.
+            // A pod on the previous release inserts without naming the column and inherits UNKNOWN,
+            // which is true of it; the recorder always states its own answer (research §12).
             assertThat(columnsOf(OUTPUT_TABLE).get("recorded_flag_state"))
-                    .isEqualTo(new Column("text", false, null));
+                    .isEqualTo(new Column("text", false, "'UNKNOWN'::text"));
+        }
+
+        @Test
+        void recorded_shape_check_should_require_the_register_columns_of_a_recorded_row()
+                throws SQLException {
+            // The invariant the four nullable columns lost when they stopped being NOT NULL, put
+            // back where it binds only the statuses this service's recorder writes. PENDING,
+            // POSTED and FAILED are outside it, which is what leaves the previous release's
+            // progression-post insert legal during a rolling deployment.
+            assertThat(constraintsOf(OUTPUT_TABLE).get("processed_output_recorded_shape_chk"))
+                    .isNotNull()
+                    .contains("RECORDED", "GENERATED", "NOTIFIED", "SUPERSEDED")
+                    .contains("document IS NOT NULL", "hearing_id IS NOT NULL",
+                            "hearing_date IS NOT NULL", "register_time IS NOT NULL");
+        }
+
+        @Test
+        void a_pre_002_pod_should_still_be_able_to_insert_the_v1_shaped_posted_row() {
+            // The rollout case. Flyway runs at the new pod's startup while the old pod is still
+            // serving the queue, so for the length of the deployment the previous release goes on
+            // writing this exact statement against a schema that has already moved. If V2 made the
+            // register columns NOT NULL, every one of those inserts would fail and every register
+            // in flight would be lost for as long as the rollout took.
+            final UUID requestId = UUID.randomUUID();
+            assertThatCode(() -> inRolledBackTransaction(
+                    insertValidRequest(requestId),
+                    insertV1ShapedOutput(requestId)))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        void a_recorded_row_without_its_document_should_be_refused_by_the_shape_check() {
+            // And the other half: nullable columns are not a licence to record a register that is
+            // not there. A row this service's own recorder writes carries all four or it is not a
+            // row at all.
+            final UUID requestId = UUID.randomUUID();
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    insertValidRequest(requestId),
+                    insertOutputWithoutDocument(requestId)))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("processed_output_recorded_shape_chk");
         }
 
         @Test
@@ -534,7 +615,16 @@ class SchemaMigrationV2IT {
             // words about a document whose every defendant is a child, and is never logged at INFO.
             final Map<String, Column> columns = columnsOf(BATCH_TABLE);
             assertThat(columns.get("failure_reason")).isEqualTo(new Column("text", true, null));
-            assertThat(columns.get("sdg_reason")).isEqualTo(new Column("text", true, null));
+            assertThat(columns.get("sdg_reason"))
+                    .isEqualTo(new Column("character varying", true, null));
+        }
+
+        @Test
+        void sdg_reason_should_be_bounded_at_the_length_the_data_model_states() throws SQLException {
+            // Bounded because it is the one column here holding somebody else's free text, and an
+            // unbounded one is a row of any size at all written from a message this service does
+            // not author. The domain truncates to the same bound before the write.
+            assertThat(declaredLengthOf(BATCH_TABLE, "sdg_reason")).hasValue(512);
         }
 
         @Test

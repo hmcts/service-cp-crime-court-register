@@ -84,10 +84,12 @@ public class ProcessedOutputRepository {
      * actually holds.
      *
      * <p><strong>The five V2 columns this statement fills say what a POST is.</strong> Since V2 the
-     * table is the register store, and five of its columns are NOT NULL; a submission has none of
-     * them to offer, because it records what was sent to progression rather than a register this
-     * service holds. The values are therefore the migration's own backfill, written for exactly the
-     * rows this statement writes: an empty JSON object no reader can mistake for a
+     * table is the register store, and five of its columns exist to hold a register; a submission
+     * has none of them to offer, because it records what was sent to progression rather than a
+     * register this service holds. They are nullable and {@code processed_output_recorded_shape_chk}
+     * does not bind a PENDING row, so the statement could leave them empty - it fills them anyway,
+     * with the migration's own backfill values, so that a {@code progression-post} row says the same
+     * thing however it arrived: an empty JSON object no reader can mistake for a
      * {@code CourtRegisterDocument} - which always carries at least a {@code documentType} - the
      * hearing and the hearing day the claim already names, the instant of the claim as the nearest
      * thing a POST has to a register instant, and UNKNOWN for a flag no submission ever reads.

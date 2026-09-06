@@ -14,13 +14,25 @@
 -- of the stored document rather than of the bytes posted - are what the 001 differential audit
 -- reads.
 --
--- Add, backfill, then constrain - deliberately, rather than ADD COLUMN ... DEFAULT. A deployed V1
--- database may already hold rows written in `courtregister.output=progression-post` mode, and four
--- of the ten added columns are NOT NULL, so the values those rows get have to be chosen. Choosing
--- them in the backfill statement below states them once, for the rows that existed; a surviving
--- column default would go on stating them for every row written afterwards, and a default on
--- `document` or on `recorded_flag_state` would let a later writer omit the very fact the column
--- exists to record. No default is left on any of the ten.
+-- Add, backfill, then constrain what can safely be constrained - and no more. Two different writers
+-- have to survive this migration. A deployed V1 database may already hold rows written in
+-- `courtregister.output=progression-post` mode, and the backfill below is what gives those rows the
+-- values they never had. But the previous release also goes on *writing* that shape after V2 has
+-- run: Flyway here is deferred to the new pod's startup, so for the length of a rolling deployment
+-- the old pod is still serving the queue against a schema that has already moved. Four of the ten
+-- added columns are therefore left NULLABLE, and the shape the recorder writes is required instead
+-- by `processed_output_recorded_shape_chk`, which binds only the statuses this service's recorder
+-- produces. PENDING, POSTED and FAILED are outside it, which is exactly the previous release's
+-- insert.
+--
+-- `recorded_flag_state` is the one exception and keeps NOT NULL, because the only value a default
+-- could choose is the value the backfill already chooses: UNKNOWN, which is true of any row written
+-- without reading the flag and is therefore honest for an old pod's insert as well as for a V1 row.
+-- The recorder always states its own answer, so the default is never what a register is recorded
+-- under. No other default is left on any of the ten.
+--
+-- This is the expand half of an expand/contract pair. A later migration may tighten the four to NOT
+-- NULL and drop the check, once no release that writes the old shape can still be running.
 
 -- One batch: the registers for one court centre on one register day, rendered as one PDF and
 -- e-mailed to that court centre's Youth Offending Teams. The batch_id is minted at assembly and
@@ -53,9 +65,10 @@ CREATE TABLE register_batch (
     -- This service's bounded code for why the batch ended without a document. Kept apart from
     -- `sdg_reason`, which is systemdocgenerator's own words about a document whose every defendant
     -- is a child: the bounded code is what the batches counter labels its outcome with and what the
-    -- run report prints, and the free text is never logged at INFO.
+    -- run report prints, and the free text is never logged at INFO. Bounded at 512 characters
+    -- because it is the one column here holding words this service did not author.
     failure_reason        text,
-    sdg_reason            text,
+    sdg_reason            varchar(512),
 
     -- progression's own flag: true from the nightly schedule, false from the operations CLI.
     system_generated      boolean     NOT NULL,
@@ -180,7 +193,9 @@ ALTER TABLE processed_output
     ADD COLUMN superseded_by       uuid,
 
     -- The cutover flag as last read when the row was recorded. Recording never waits on a read it
-    -- does not need, so UNKNOWN is a statement the recorder makes rather than an absence.
+    -- does not need, so UNKNOWN is a statement the recorder makes rather than an absence - and the
+    -- same statement is what the default below says on behalf of a writer that never read the flag
+    -- at all.
     ADD COLUMN recorded_flag_state text;
 
 -- The backfill for rows a deployed V1 database may already hold. Every `processed_output` row has a
@@ -203,11 +218,14 @@ UPDATE processed_output o
  WHERE r.source = o.source
    AND r.request_id = o.request_id;
 
+-- The one column the rollout lets us constrain outright, for the reason given at the top of this
+-- file: UNKNOWN is what an unread flag means, so a writer that omits the column gets a true answer
+-- rather than a guess. The default goes on before the NOT NULL so that no insert can fall between
+-- the two.
 ALTER TABLE processed_output
-    ALTER COLUMN document            SET NOT NULL,
-    ALTER COLUMN hearing_id          SET NOT NULL,
-    ALTER COLUMN hearing_date        SET NOT NULL,
-    ALTER COLUMN register_time       SET NOT NULL,
+    ALTER COLUMN recorded_flag_state SET DEFAULT 'UNKNOWN';
+
+ALTER TABLE processed_output
     ALTER COLUMN recorded_flag_state SET NOT NULL;
 
 -- RECORDED -> GENERATED -> NOTIFIED with SUPERSEDED and FAILED beside them. PENDING and POSTED stay
@@ -222,6 +240,16 @@ ALTER TABLE processed_output
                           'PENDING', 'POSTED')),
     ADD CONSTRAINT processed_output_flag_state_chk
         CHECK (recorded_flag_state IN ('ON', 'OFF', 'UNKNOWN')),
+    -- The invariant the four nullable register columns would otherwise have lost. A row in any of
+    -- the four states the recorder writes carries the register it recorded; a row in one of the
+    -- three states a POST writes is not about a register at all and is left alone, which is what
+    -- keeps the previous release's insert legal for the length of a rolling deployment.
+    ADD CONSTRAINT processed_output_recorded_shape_chk
+        CHECK (status NOT IN ('RECORDED', 'GENERATED', 'NOTIFIED', 'SUPERSEDED')
+            OR (document IS NOT NULL
+            AND hearing_id IS NOT NULL
+            AND hearing_date IS NOT NULL
+            AND register_time IS NOT NULL)),
     -- The batch is minted and persisted before anything is asked of another system, so a row can
     -- only ever be stamped with a batch this service already recorded.
     ADD CONSTRAINT processed_output_batch_fk
