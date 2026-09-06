@@ -74,7 +74,7 @@ unique violation by re-reading and superseding.
 | `failure_reason` | `text` | `PAYLOAD_STORE_UNAVAILABLE` \| `RENDER_REQUEST_FAILED` \| `RENDER_REQUEST_REJECTED` \| `GENERATION_FAILED` \| `GENERATION_TIMED_OUT` \| `ASSEMBLY_FAILED` |
 | `sdg_reason` | `varchar(512)` | SDG's `reason` from `generation-failed` / query, never logged at INFO. Bounded before the write by `RegisterBatch.boundedReason`: a longer message is stored as its first 500 characters plus the marker ` [truncated]`, so the row is exactly 512 and a reader can tell there is more |
 | `system_generated` | `boolean NOT NULL` | true from the schedule, false from the CLI (progression's flag) |
-| `completed_by` | `text` | `EVENT` \| `RECONCILER` — feeds the `reconciled` metric |
+| `completed_by` | `text` | `EVENT` \| `RECONCILER`, feeds the `reconciled` metric. Written by the `mark` that learned the outcome, in that mark's own statement: a batch state change is a compare-and-set, so there is no moment either side of the transition in which this could be set on its own. NULL where nobody outside this service answered, which is four of the six failure reasons |
 | `assembled_at`, `requested_at`, `generated_at`, `notified_at`, `failed_at` | `timestamptz` | |
 | `attempts` | `int NOT NULL DEFAULT 0` | Lifetime tally, never a control variable |
 

@@ -246,16 +246,20 @@ public class JdbcRegisterStore implements RegisterStore {
      * instead, which marks another day's rows generated and leaves that day's register never
      * assembled, rendered or sent.
      *
-     * <p>{@code completed_by} is not written here: which mechanism learned the outcome is the sink's
-     * knowledge, not the store's, and it reaches the row through
-     * {@link RegisterBatchRepository#compareAndSet(RegisterBatch, BatchStatus)}.
+     * <p>{@code completed_by} is set here, in this statement, because there is nowhere else left to
+     * set it. The move is fenced on the status the caller read, so a write before it would be
+     * claiming an outcome about a batch that is still GENERATING and a write after it would need
+     * GENERATED to GENERATED, which {@link BatchStatus#canTransitionTo(BatchStatus)} refuses. Which
+     * mechanism learned the outcome is still the sink's knowledge; it arrives as the mark's own
+     * argument and is written by the mark's own statement.
      */
     private static final String MARK_GENERATED = """
             WITH generated AS (
                 UPDATE register_batch
                    SET status = 'GENERATED',
                        document_file_id = :documentFileId,
-                       generated_at = :generatedAt
+                       generated_at = :generatedAt,
+                       completed_by = :completedBy
                  WHERE batch_id = :batchId AND status = :expected
                 RETURNING batch_id
             ), flipped AS (
@@ -283,6 +287,12 @@ public class JdbcRegisterStore implements RegisterStore {
      * released: the rows become unbatched again and the next run re-assembles them under a fresh
      * batch identity (data-model.md). The other four leave the stamp in place - systemdocgenerator
      * was asked, so a document may yet exist, and re-rendering it is a decision a person makes.
+     *
+     * <p>{@code completed_by} is written here for the same reason it is written by statement 6, and
+     * it is null for most of these endings: only a {@code generation-failed} event and a reconciled
+     * query are somebody else's answer about the render. The other four are this service's own
+     * verdict about a render it could not ask for or could not hear about, and naming a completion
+     * mechanism for those would credit a decision nobody outside this service made.
      */
     private static final String MARK_FAILED = """
             WITH failed AS (
@@ -290,6 +300,7 @@ public class JdbcRegisterStore implements RegisterStore {
                    SET status = 'FAILED',
                        failure_reason = :reason,
                        sdg_reason = :sdgReason,
+                       completed_by = :completedBy,
                        failed_at = now()
                  WHERE batch_id = :batchId AND status = :expected
                 RETURNING batch_id
@@ -507,6 +518,7 @@ public class JdbcRegisterStore implements RegisterStore {
                 .param(EXPECTED, expected.name())
                 .param("documentFileId", documentFileId)
                 .param("generatedAt", offsetOf(generatedAt))
+                .param("completedBy", name(completedBy), Types.VARCHAR)
                 .query(Long.class)
                 .single(), batchId, expected, BatchStatus.GENERATED);
     }
@@ -526,6 +538,7 @@ public class JdbcRegisterStore implements RegisterStore {
                 .param(EXPECTED, expected.name())
                 .param("reason", reason.name())
                 .param("sdgReason", RegisterBatch.boundedReason(sdgReason), Types.VARCHAR)
+                .param("completedBy", name(completedBy), Types.VARCHAR)
                 .param("releaseRows", RELEASING_REASONS.contains(reason))
                 .query(Long.class)
                 .single(), batchId, expected, BatchStatus.FAILED);
@@ -627,6 +640,16 @@ public class JdbcRegisterStore implements RegisterStore {
 
     /** The batch the statement wrote, beside the count of rows it managed to stamp. */
     private record Assembled(RegisterBatch batch, long stampedRows) {
+    }
+
+    /**
+     * The constant name a bounded column holds, and nothing where there is no constant.
+     *
+     * <p>Typed as VARCHAR at every call site: an untyped {@code null} leaves the driver to guess a
+     * type from a parameter it can see nothing about, which Postgres refuses rather than guesses.
+     */
+    private static String name(final Enum<?> value) {
+        return value == null ? null : value.name();
     }
 
     /**

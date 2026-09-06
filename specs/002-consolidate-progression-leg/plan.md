@@ -183,8 +183,11 @@ public interface RegisterStore {
     List<RegisterRecord> activeUnbatched();                                     // RECORDED, unsuperseded, ON
     RegisterBatch assemble(CourtCentreDay key, List<RegisterRecord> records);   // stamps batch_id
     void markRequested(UUID batchId, UUID payloadFileId);
-    void markGenerated(UUID batchId, UUID documentFileId, Instant generatedAt); // this batch's rows only (P3)
-    void markFailed(UUID batchId, BatchFailureReason reason, String sdgReason);
+    void markGenerated(UUID batchId, UUID documentFileId, Instant generatedAt,
+                       CompletedBy completedBy);                                // this batch's rows only (P3);
+                                                                                // completed_by in the same statement
+    void markFailed(UUID batchId, BatchFailureReason reason, String sdgReason,
+                    CompletedBy completedBy);                                   // null unless somebody answered
     void markNotified(UUID batchId, NotificationSummary summary);
 }
 
@@ -198,8 +201,10 @@ public interface DocumentRenderer {
 }
 
 public interface DocumentOutcomeSink {                                          // driven by the listener AND the reconciler
-    void documentAvailable(UUID correlationId, UUID payloadFileId, UUID documentFileId, Instant generatedAt);
-    void generationFailed(UUID correlationId, UUID payloadFileId, String reason, Instant failedAt);
+    void documentAvailable(UUID correlationId, UUID payloadFileId, UUID documentFileId, Instant generatedAt,
+                           CompletedBy completedBy);                            // EVENT from the listener,
+    void generationFailed(UUID correlationId, UUID payloadFileId, String reason, Instant failedAt,
+                          CompletedBy completedBy);                             // RECONCILER from the reconciler
 }
 
 public interface RegisterNotifier {

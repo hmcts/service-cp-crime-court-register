@@ -31,8 +31,8 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
  * writes that have to move {@code processed_output} in the same statement - assembly and every
  * {@code mark} - because those are atomic or they are wrong. What is left is what the other
  * collaborators need and can do alone: the reconciler's overdue read, the listener's fallback
- * lookup, the operations CLI's own assembly, and the whole-row compare-and-set that carries the
- * facts the port's {@code mark} signatures do not, {@code completed_by} above all.
+ * lookup, the operations CLI's own assembly, and the whole-row compare-and-set a caller that read a
+ * batch and decided about it writes it back through.
  *
  * <p><strong>Every state change here is a compare-and-set through the state machine.</strong> The
  * caller names the state it read the batch in and the state it decided on; {@code BatchStatus}
