@@ -331,6 +331,20 @@ courtregister:
     # refuses without them.
     systemdocgenerator: ${SYSTEMDOCGENERATOR_BASE_URL:}
     notificationnotify: ${NOTIFICATIONNOTIFY_BASE_URL:}
+    # The CJSCPPUID both downstream calls are made under. One identity, because the nightly run is
+    # one caller: it asks systemdocgenerator to render a batch and notificationnotify to e-mail it,
+    # inside one run. The same service identity the results and reference-data reads already use;
+    # empty locally, because a run that has no endpoints to call needs nobody to call them as.
+    system-user-id: ${COURT_REGISTER_SYSTEM_USER_ID:}
+    # The transport the two clients share, at the estate's own defaults. Both timeouts are set
+    # deliberately: a render request with no read timeout can outlive the run deadline that was
+    # supposed to bound it, and a night that never returns from one POST is a night that generates
+    # nothing behind it.
+    max-attempts: 3
+    initial-backoff: 1s
+    max-backoff: 2s
+    connect-timeout: 5s
+    read-timeout: 10s
 
   email:
     templates:

@@ -762,7 +762,8 @@ class TelemetryPrivacyTest {
                 // The downstream half is absent from this suite's subject: it logs nothing here,
                 // and the credential these cases are about is the broker's.
                 new CourtRegisterProperties.Fileservice(null, null, null),
-                new CourtRegisterProperties.Endpoints(null, null),
+                new CourtRegisterProperties.Endpoints(null, null, null, 3, Duration.ofSeconds(1),
+                        Duration.ofSeconds(2), Duration.ofSeconds(5), Duration.ofSeconds(10)),
                 new CourtRegisterProperties.Email(
                         new CourtRegisterProperties.Templates(null)));
     }

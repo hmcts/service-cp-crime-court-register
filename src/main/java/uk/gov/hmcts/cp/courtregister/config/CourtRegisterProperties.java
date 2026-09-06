@@ -313,10 +313,32 @@ public record CourtRegisterProperties(
      * replaced. Neither has a default: an endpoint this service invents is an endpoint a deployment
      * can forget to set and still start.
      *
+     * <p>The identity and the transport settings are shared by the two clients, because they are one
+     * caller: the nightly run asks systemdocgenerator to render a batch and then notificationnotify
+     * to e-mail it, under one {@code CJSCPPUID} and inside one run. The defaults are the estate's -
+     * the same three attempts, the same waits and the same two timeouts the reference-data client
+     * ships with - so a deployment states an endpoint and inherits the rest.
+     *
      * @param systemdocgenerator scheme, host and port of systemdocgenerator, no path
      * @param notificationnotify scheme, host and port of notificationnotify, no path
+     * @param systemUserId       the {@code CJSCPPUID} both calls are made under; a secret, never
+     *                           logged
+     * @param maxAttempts        total attempts including the first
+     * @param initialBackoff     the first wait between retryable attempts; doubled each time
+     * @param maxBackoff         the ceiling on any wait, a server-supplied {@code Retry-After}
+     *                           included
+     * @param connectTimeout     how long to wait for a connection
+     * @param readTimeout        how long to wait for a response once connected
      */
-    public record Endpoints(String systemdocgenerator, String notificationnotify) {
+    public record Endpoints(
+            String systemdocgenerator,
+            String notificationnotify,
+            String systemUserId,
+            @DefaultValue("3") int maxAttempts,
+            @DefaultValue("1s") Duration initialBackoff,
+            @DefaultValue("2s") Duration maxBackoff,
+            @DefaultValue("5s") Duration connectTimeout,
+            @DefaultValue("10s") Duration readTimeout) {
     }
 
     /**
