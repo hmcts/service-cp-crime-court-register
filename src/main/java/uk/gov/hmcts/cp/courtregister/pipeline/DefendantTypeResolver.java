@@ -1,7 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.pipeline;
 
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterCaseOrApplication;
@@ -42,22 +41,28 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
  * which is a deviation recorded in the design (Q25) and pinned by
  * {@code DefendantTypeResolverTest.respondents_are_read_from_the_hearing_not_the_aggregate}.
  *
- * <p><strong>Two shapes progression throws on are answered here</strong>, and the difference is
- * owed a row of {@code doc/DEFECT-FIXES.md} that neither this task nor the goldens write. An
- * application type without the two flags unboxes {@code null} in progression and an application
- * without a respondent list dereferences {@code null} there - both recorded as
- * {@code NullPointerException} by the {@code synthetic__master-defendant-without-flags} and
- * {@code synthetic__respondents-absent} goldens, and both reachable only because the flags are
- * {@code required} in {@code courtApplicationType.json}. An absent flag is read here as not set and
- * an absent respondent list as no respondents, so each answers {@code Applicant}: one unreadable
- * application must not cost every child on the register their entry.
+ * <p><strong>Where progression throws, this refuses.</strong> The rule reads three things without a
+ * guard, and each of them is absent in shapes the contract admits: an application type carrying
+ * neither flag unboxes {@code null}; an application with no {@code respondents} at all dereferences
+ * {@code null}; and a respondent who is not a master defendant dereferences {@code null} again. The
+ * first two are recorded as {@code NullPointerException} by the
+ * {@code synthetic__master-defendant-without-flags} and {@code synthetic__respondents-absent}
+ * goldens, and the respondents-absent one is the shape that matters: {@code respondents} is
+ * <em>not</em> in {@code courtApplication.json}'s required list, so a hearing carrying it is in
+ * contract.
  *
- * <p>The respondents-absent shape is the one that matters: {@code respondents} is <em>not</em> in
- * {@code courtApplication.json}'s required list, so a hearing carrying it is in contract, and where
- * progression's command fails this service records a register. Both answers are pinned by
- * {@code DefendantTypeResolverTest.the_shapes_progression_throws_on_are_answered_applicant}, so the
- * deviation cannot move unnoticed; the register row naming that test, or the sign-off that stands in
- * for it, is still owed and is written neither by this class nor by that suite.
+ * <p>Reading an absent flag as not set and an absent respondent list as no respondents would answer
+ * {@code Applicant} for all three and record a register progression's command never builds. That is
+ * a behaviour change, and an uncatalogued behaviour change may not merge (constitution Principle I):
+ * it needs a row of {@code doc/DEFECT-FIXES.md} naming the test that pins it, or the design owner's
+ * written sign-off. So this port refuses instead, through {@link Json#dereferenced} and
+ * {@link Json#dereferencedArray} - the same vocabulary the rest of the transformation says "the
+ * legacy reads through here" in. The command fails non-transiently with a bounded reason and a
+ * dead-letter rather than a stack trace nobody reads, the legacy's own outcome stands, and the three
+ * refusals are pinned by
+ * {@code DefendantTypeResolverTest.the_shapes_progression_throws_on_fail_the_command} and
+ * {@code …a_respondent_without_a_master_defendant_fails_the_command}. Answering any of them is a
+ * decision for the register entry that catalogues it, not for this class.
  *
  * <p>Pure, and a singleton for it: reference data is not consulted, no clock is read, and nothing it
  * is handed is edited (constitution Principle V).
@@ -113,6 +118,8 @@ public class DefendantTypeResolver {
      *                 defendant and carries the master defendant ids a respondent is matched against
      * @return {@code Applicant}, {@code Appellant} or {@code Respondent}, or empty where the hearing
      *         carried no court application for this register
+     * @throws uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException if the application
+     *         is one of the shapes progression's own rule reads through and throws on
      */
     public Optional<String> resolve(final JsonNode hearing, final CourtRegisterDocument document) {
         return courtApplicationId(document)
@@ -182,24 +189,43 @@ public class DefendantTypeResolver {
     /**
      * Whether the application is an appeal whose applicant is its appellant.
      *
+     * <p>Both the type and each flag are read through rather than around: progression writes
+     * {@code c.getType().getAppealFlag() && c.getType().getApplicantAppellantFlag()}, so an absent
+     * type or an absent first flag is a hearing it produces no register for at all. The
+     * short-circuit is the legacy's too - an appeal flag that is present and {@code false} settles
+     * the question, and the second flag is never asked for, absent or not.
+     *
      * @param application the application the register names
      * @return whether both flags are set
+     * @throws uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException if the application
+     *         carries no type, or the type carries no flag the rule needs to read
      */
     private static boolean appeal(final JsonNode application) {
-        final JsonNode type = Json.at(application, TYPE);
-        return Json.truthy(type, APPEAL_FLAG) && Json.truthy(type, APPLICANT_APPELLANT_FLAG);
+        final JsonNode type = Json.dereferenced(application, TYPE);
+        return Json.truthy(Json.dereferenced(type, APPEAL_FLAG))
+                && Json.truthy(Json.dereferenced(type, APPLICANT_APPELLANT_FLAG));
     }
 
     /**
      * Whether one of the application's respondents is a master defendant this register covers.
      *
-     * <p>A respondent who is not a master defendant is passed over rather than matched against a
-     * defendant who has no master id of their own: progression dereferences that respondent and
-     * throws, and answering "matched" for two absent identities is the one reading it never gives.
+     * <p>The respondent list and each respondent's master defendant are read through, because
+     * progression reads them through: {@code courtApplication.getRespondents().stream()} throws on
+     * an application that carries no respondents, and
+     * {@code respondent.getMasterDefendant().getMasterDefendantId()} throws on a respondent who is
+     * not a master defendant. An <em>empty</em> respondent list is not either of those - iterating
+     * one is legal there and matches nobody here.
+     *
+     * <p>The dereference is inside the match rather than a pass before it, so it happens exactly as
+     * often as progression's does: {@code anyMatch} stops at the first respondent this register
+     * covers, and a respondent behind that one is never read.
      *
      * @param application the application the register names
      * @param document    the assembled register, whose defendants carry the ids matched against
      * @return whether any respondent is on the register
+     * @throws uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException if the application
+     *         carries no respondent list, or a respondent the match reaches is not a master
+     *         defendant
      */
     private static boolean respondsOnThisRegister(final JsonNode application,
                                                   final CourtRegisterDocument document) {
@@ -207,10 +233,9 @@ public class DefendantTypeResolver {
         final List<String> onTheRegister = document.defendants().stream()
                 .map(CourtRegisterDefendant::masterDefendantId)
                 .toList();
-        return Json.array(application, RESPONDENTS).stream()
-                .map(respondent -> Json.text(Json.at(respondent, MASTER_DEFENDANT),
-                        MASTER_DEFENDANT_ID))
-                .filter(Objects::nonNull)
-                .anyMatch(onTheRegister::contains);
+        return Json.dereferencedArray(application, RESPONDENTS).stream()
+                .anyMatch(respondent -> onTheRegister.contains(
+                        Json.text(Json.dereferenced(respondent, MASTER_DEFENDANT),
+                                MASTER_DEFENDANT_ID)));
     }
 }
