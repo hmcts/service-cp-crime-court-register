@@ -202,9 +202,13 @@ public interface DocumentRenderer {
 
 public interface DocumentOutcomeSink {                                          // driven by the listener AND the reconciler
     void documentAvailable(UUID correlationId, UUID payloadFileId, UUID documentFileId, Instant generatedAt,
-                           CompletedBy completedBy);                            // EVENT from the listener,
+                           CompletedBy completedBy);                            // caller-supplied: EVENT from the
+                                                                                // listener, RECONCILER from the
+                                                                                // grace-period reconciler
     void generationFailed(UUID correlationId, UUID payloadFileId, String reason, Instant failedAt,
-                          CompletedBy completedBy);                             // RECONCILER from the reconciler
+                          CompletedBy completedBy);                             // caller-supplied: EVENT from the
+                                                                                // listener, RECONCILER from the
+                                                                                // grace-period reconciler
 }
 
 public interface RegisterNotifier {
