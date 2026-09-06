@@ -32,29 +32,33 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * carrying systemdocgenerator's own words in {@code sdg_reason} for support and never logging them
  * at INFO.
  *
- * <p><strong>Which batch an outcome is about is looked up, not assumed.</strong> The vendored
- * schemas make {@code sourceCorrelationId} optional and {@code payloadFileServiceId} required on
- * both events, so the correlation alone is not enough to find a batch by:
- * {@link RegisterBatchRepository#findByPayloadFileId(UUID)} is the fallback its own javadoc names,
- * and an outcome that neither identifier finds a batch for is the unattributed one below. The
- * lookup is also what makes a redelivery idempotent - a batch already where the outcome would put
- * it is recognised rather than re-stamped, which is the reading {@code BatchStatus} was narrowed to
- * force.
+ * <p><strong>The correlation is authoritative, and the payload has to agree with it.</strong>
+ * {@code sourceCorrelationId} is the batch's own identity and is what the render request carried,
+ * so it is the only identifier a batch is ever looked up by here. {@code payloadFileServiceId} is
+ * a cross-check on that lookup and never a second route to a batch: the vendored schemas make the
+ * correlation optional and the payload required, but this service always sends a correlation, so an
+ * outcome that carries none - or one this store has no batch for - is not an outcome to go looking
+ * for a batch for by other means. Reaching for {@code findByPayloadFileId} there would take an
+ * event whose own account of which batch it is about is missing or wrong and complete a night's
+ * registers on it anyway. The lookup is also what makes a redelivery idempotent - a batch already
+ * where the outcome would put it is recognised rather than re-stamped, which is the reading
+ * {@code BatchStatus} was narrowed to force.
  *
- * <p><strong>Three answers before a mark is made, and only one of them writes.</strong> An outcome
- * no batch answers to is counted and ignored; an outcome for a batch already standing where it
- * would put it has nothing left to record; and an outcome that would move a batch along an arrow
- * the data-model diagram does not draw - a document arriving for a batch the reconciler has already
- * given up on, say - leaves that batch exactly where it is and is reported here instead. None of
- * the three is silent: each says at what level it is worth reading, and only the last two of them
- * describe a batch this service actually holds.
+ * <p><strong>Four answers before a mark is made, and only one of them writes.</strong> An outcome
+ * naming a correlation no batch answers to is counted and ignored; an outcome whose payload is not
+ * the one its batch was requested for is counted and ignored, because an event that contradicts
+ * itself is the one shape that could complete the wrong batch; an outcome for a batch already
+ * standing where it would put it has nothing left to record; and an outcome that would move a batch
+ * along an arrow the data-model diagram does not draw - a document arriving for a batch the
+ * reconciler has already given up on, say - leaves that batch exactly where it is and is reported
+ * here instead. None of the four is silent: each says at what level it is worth reading, and only
+ * the last three of them describe a batch this service actually holds.
  *
- * <p>An outcome for a correlation this service never recorded is counted and ignored: it is another
- * consumer's document, or one from a batch that predates this store, and neither is something to
- * invent a row for. Counted on this class rather than on {@code GenerationMetrics}, because the
- * documented instrument surface is a closed list that {@code GenerationMetricsTest} holds shut, and
- * a series is not what this reading is for: it is read by the person asking why a night's outcomes
- * went nowhere, beside the subscription's own health.
+ * <p>The two that are ignored are counted on
+ * {@code courtregister_public_events_ignored_total{reason}} beside the listener's own
+ * {@code foreign-source}, because together the three answer the question a night whose outcomes
+ * went nowhere is read by: how many announcements reached this subscription and were applied to
+ * nothing, and which of the three ways it happened.
  *
  * <p><strong>The mark is still the decision.</strong> The state read here is a read, and two
  * mechanisms can make it about one batch at the same moment; the store's own compare-and-set is
@@ -146,9 +150,34 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
     private void apply(final UUID correlationId, final UUID payloadFileId,
             final BatchStatus outcome, final Consumer<RegisterBatch> mark) {
 
-        find(correlationId, payloadFileId).ifPresentOrElse(
-                batch -> applyTo(batch, outcome, mark),
+        find(correlationId).ifPresentOrElse(
+                batch -> applyToTheBatchItNamed(batch, payloadFileId, outcome, mark),
                 () -> countUnattributed(correlationId, payloadFileId));
+    }
+
+    /**
+     * Applies the outcome to the batch the correlation named, if the payload agrees that it is
+     * about it.
+     *
+     * <p>The batch's stored {@code payload_file_id} is what the render request asked
+     * systemdocgenerator for, and the event's {@code payloadFileServiceId} is what it says it
+     * rendered. Where they differ - including where the batch has no payload id at all, because it
+     * never reached the renderer - the event is not this batch's, and there is nothing in it worth
+     * believing about any other batch either. It moves nothing and is counted.
+     *
+     * @param batch         the batch the correlation named, as it stood when it was read
+     * @param payloadFileId the payload the outcome is about
+     * @param outcome       the state this outcome would put the batch in
+     * @param mark          the store call that puts it there
+     */
+    private void applyToTheBatchItNamed(final RegisterBatch batch, final UUID payloadFileId,
+            final BatchStatus outcome, final Consumer<RegisterBatch> mark) {
+
+        if (batch.payloadFileId() == null || !batch.payloadFileId().equals(payloadFileId)) {
+            countPayloadMismatch(batch, payloadFileId);
+        } else {
+            applyTo(batch, outcome, mark);
+        }
     }
 
     /**
@@ -196,30 +225,45 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
         metrics.unknownCorrelationIgnored();
         LOG.warn("An outcome arrived for correlation {} and payload {}, which this service has no "
                 + "batch for, so it is counted and ignored: it is another consumer's document, or "
-                + "one from a batch that predates this store.", correlationId, payloadFileId);
+                + "one from a batch that predates this store. The payload is a cross-check on the "
+                + "correlation and not a second way to a batch, so no other lookup is made.",
+                correlationId, payloadFileId);
     }
 
     /**
-     * The batch an outcome is about, by the identity it named or by the payload it was rendered
-     * from.
+     * Counts and reports an outcome whose two identifiers do not describe one batch.
      *
-     * <p>The correlation first, because it is the batch's own identity and is what the render
-     * request carried as {@code sourceCorrelationId}. The payload second, because the vendored
-     * schemas make the correlation optional and the payload required, so a message that carries only
-     * the payload is contract-legal and is still some batch's outcome - and because a correlation
-     * that finds nothing is exactly the case the fallback exists for.
+     * <p>At WARN because it is not an ordinary event: the correlation is a batch this service
+     * really did ask for, so this is not somebody else's document reaching the subscription - it is
+     * this service's own render being announced against the wrong artefact, or an event whose
+     * fields have been crossed between the renderer and the topic. Both identifiers are in the
+     * line, and both are file-service and batch identities rather than anything about a person
+     * (constitution Principle VII).
+     *
+     * @param batch         the batch the correlation named
+     * @param payloadFileId the payload the outcome says it is about
+     */
+    private void countPayloadMismatch(final RegisterBatch batch, final UUID payloadFileId) {
+        metrics.payloadMismatchIgnored();
+        LOG.warn("An outcome named batch {}, which was requested for payload {}, and says it is "
+                + "about payload {}; the two disagree, so the batch is left where it is and the "
+                + "outcome is counted rather than applied.",
+                batch.batchId(), batch.payloadFileId(), payloadFileId);
+    }
+
+    /**
+     * The batch an outcome is about, by the identity it named and by nothing else.
+     *
+     * <p>{@code sourceCorrelationId} is the batch's own identity and is what this service put in
+     * the render request, so it is the whole of the lookup. The vendored schemas make it optional,
+     * which is why {@code null} is answered rather than refused - an outcome carrying no
+     * correlation is contract-legal and is still not one this service can attribute, because it
+     * always sends one.
      *
      * @param correlationId the batch identity the outcome named, or {@code null}
-     * @param payloadFileId the payload the outcome is about, or {@code null}
-     * @return the batch, or empty where neither identifier finds one
+     * @return the batch, or empty where the correlation is absent or names none
      */
-    private Optional<RegisterBatch> find(final UUID correlationId, final UUID payloadFileId) {
-        Optional<RegisterBatch> found = correlationId == null
-                ? Optional.empty()
-                : batches.findById(correlationId);
-        if (found.isEmpty() && payloadFileId != null) {
-            found = batches.findByPayloadFileId(payloadFileId);
-        }
-        return found;
+    private Optional<RegisterBatch> find(final UUID correlationId) {
+        return correlationId == null ? Optional.empty() : batches.findById(correlationId);
     }
 }

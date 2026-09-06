@@ -216,8 +216,12 @@ public class RegisterBatchRepository {
     /**
      * Statement 3 - reads one batch by the payload it was rendered from.
      *
-     * <p>The reconciler's read, and the listener's fallback: an outcome names the payload as well as
-     * the correlation, so a batch is still findable when only one of the two is trustworthy.
+     * <p>The reconciler's read, and only the reconciler's. It asks systemdocgenerator about a batch
+     * by the payload id it read off that batch's own row, so this answers the question it started
+     * from. It is deliberately not a second way for an outcome to find a batch: the correlation is
+     * what a render request carried and what an outcome is attributed by, and an outcome whose
+     * correlation names nothing is one this service cannot attribute rather than one to go looking
+     * for a batch for.
      *
      * @param payloadFileId the file-service id the payload was stored under
      * @return the batch, or empty where no batch owns that payload
