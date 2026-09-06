@@ -50,13 +50,15 @@ import uk.gov.hmcts.cp.courtregister.domain.FlagDecision.UnreadableReason;
  * nothing: three SDK attempts inside a two-second budget would spend the run's decision on the
  * first attempt's back-off and answer nothing.
  *
- * <p><strong>"The whole of the read" is meant literally, and is enforced twice.</strong> Every leg
- * the HTTP client can see - connect, write, read, response - carries the budget, and the call itself
- * is then made under an outer bound of the budget plus a small margin, because the legs it cannot
- * see are real: a credential the identity endpoint answers slowly, a handshake that stalls after the
- * connection is accepted. The job asks this question before it does anything else and waits on the
- * answer, so a read that outlasts the budget is not a slow read, it is a nightly run that never
- * started - and at 18:00 that is indistinguishable from a healthy stack with nothing to generate.
+ * <p><strong>"The whole of the read" is meant literally, and the budget is the outer
+ * deadline.</strong> Every leg the HTTP client can see - connect, write, read, response - carries
+ * the budget, and the call itself is made under an outer bound of exactly the budget, because the
+ * legs the client cannot see are real: a credential the identity endpoint answers slowly, a
+ * handshake that stalls after the connection is accepted, a pool with nothing free in it. The job
+ * asks this question before it does anything else and waits on the answer, so a read that outlasts
+ * the budget is not a slow read, it is a nightly run that never started - and at 18:00 that is
+ * indistinguishable from a healthy stack with nothing to generate. Whichever of the two bounds ends
+ * it, the answer is the same decision and the deadline is the one the deployment configured.
  *
  * <p><strong>Only a boolean {@code enabled} generates.</strong> The value is parsed here rather
  * than taken from the SDK's typed feature-flag view, because the shapes short of the contract are
@@ -82,16 +84,6 @@ public class AppConfigurationFlagReader implements FeatureFlagReader {
     /** The read is the whole budget, so the SDK is asked once and never asked again. */
     private static final RetryOptions NO_RETRIES =
             new RetryOptions(new FixedDelayOptions(0, Duration.ZERO));
-
-    /**
-     * What the outer bound allows the client on top of the budget before it answers for it.
-     *
-     * <p>Small, and deliberately not a setting: it exists so that an ordinary slow read is ended by
-     * the client, which knows which leg it was waiting on, rather than by a stopwatch that only
-     * knows the read did not finish. A budget that has been overrun by this much has not been
-     * overrun by a leg the client is bounding.
-     */
-    private static final Duration MARGIN = Duration.ofMillis(500);
 
     /** The endpoint, the key, the stack label and the read's budget all come from here. */
     private final FeatureFlagProperties properties;
@@ -151,8 +143,10 @@ public class AppConfigurationFlagReader implements FeatureFlagReader {
      * that is never established, a request that cannot be written, or a body that arrives a byte at
      * a time. Each of those is a way the one lever's read can hang, and each of them at 18:00 is a
      * run that has not started rather than a run that was skipped, so all four take
-     * {@code courtregister.feature.timeout}. The read is one attempt - the client retries nothing -
-     * so there is no schedule for the four to add up across.
+     * {@code courtregister.feature.timeout}. None of them is set longer than that, because the same
+     * value is the outer deadline the whole read is bounded at: a leg allowed more than the deadline
+     * could only ever be ended by the bound outside it. The read is one attempt - the client retries
+     * nothing - so there is no schedule for the four to add up across.
      */
     private static ConfigurationClient clientFor(
             final FeatureFlagProperties properties, final TokenCredential credential) {
@@ -189,10 +183,13 @@ public class AppConfigurationFlagReader implements FeatureFlagReader {
      * consequence is not a slow read but a nightly run that has not started - which at 18:00 looks
      * exactly like a healthy stack with nothing to generate.
      *
-     * <p>The wait is the budget plus {@link #MARGIN}, so the client's own timeout is what normally
-     * ends a slow read and reports the leg it ended: this is the outer bound, and a decision it made
-     * rather than the client is still {@link UnreadableReason#TIMED_OUT}, which is what happened.
-     * The abandoned read is interrupted and left to unwind on its own thread - a virtual one, so
+     * <p>The wait is the budget itself, and no more: the configured timeout is the deadline the job
+     * is promised rather than the first term of one, so a read that has not answered by then is
+     * ended here. The client's own timeouts are set to the same budget, so an ordinary slow leg is
+     * still usually ended by the client, which knows which leg it was waiting on; a decision made
+     * here rather than there is still {@link UnreadableReason#TIMED_OUT}, which is what happened
+     * either way. The abandoned read is interrupted and left to unwind on its own thread - a
+     * virtual one, so
      * abandoning it costs a platform thread nothing - and its answer, if one ever arrives, is
      * dropped: the run has already been given its decision, and a second one would be a flag read
      * for a run that is over.
@@ -211,7 +208,7 @@ public class AppConfigurationFlagReader implements FeatureFlagReader {
                 .unstarted(() -> answer.complete(attempted()));
         read.start();
         try {
-            return answer.get(properties.timeout().plus(MARGIN).toMillis(), TimeUnit.MILLISECONDS);
+            return answer.get(properties.timeout().toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException late) {
             read.interrupt();
             return refused(UnreadableReason.TIMED_OUT);
