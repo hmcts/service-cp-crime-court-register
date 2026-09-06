@@ -42,14 +42,21 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
  * absent. They are one statement in two vocabularies, which is what {@link #NO_TYPE} maps and the
  * only place the two spellings meet.
  *
- * <p><strong>Two recorded goldens are deliberately not pinned here.</strong>
+ * <p><strong>Two recorded goldens are a difference from the legacy, and are pinned as one.</strong>
  * {@code synthetic__master-defendant-without-flags} and {@code synthetic__respondents-absent} record
  * progression throwing {@link NullPointerException} - unboxing an absent {@code appealFlag} and
  * dereferencing an absent respondent list - which is the shape all six base fixtures carry, and from
  * which progression is protected only by both flags being {@code required} in
- * {@code courtApplicationType.json}. Whatever the port answers instead is a difference from the
- * legacy needing its own row in {@code doc/DEFECT-FIXES.md}; neither T004 nor this task writes rows,
- * so those two goldens are left to the row that settles them.
+ * {@code courtApplicationType.json}. The respondents-absent shape is in contract even so:
+ * {@code respondents} is not in {@code courtApplication.json}'s required list. This port answers
+ * {@code Applicant} for both, so a hearing progression loses the whole register of is recorded here
+ * - a behaviour change, pinned below so it cannot move unnoticed.
+ *
+ * <p>The pin is not the whole obligation. An uncatalogued behaviour change needs a row of
+ * {@code doc/DEFECT-FIXES.md} naming this test, or the design owner's written sign-off recorded as
+ * an approved deviation (constitution Principle I); {@link DefendantTypeResolver}'s own javadoc says
+ * the row is owed and nothing else tracks it. This suite states what the port does and leaves the
+ * register entry to the review that settles it.
  *
  * @see <a href="file:../../../../../../../../specs/002-consolidate-progression-leg/research.md">research.md</a> §5
  */
@@ -142,6 +149,36 @@ class DefendantTypeResolverTest {
     }
 
     @Nested
+    @DisplayName("the two shapes progression throws on")
+    class TheShapesProgressionThrowsOn {
+
+        @ParameterizedTest(name = "{0}")
+        @ValueSource(strings = {
+            "synthetic__master-defendant-without-flags",
+            "synthetic__respondents-absent"})
+        @DisplayName("are answered Applicant rather than losing the whole register")
+        void the_shapes_progression_throws_on_are_answered_applicant(final String goldenId) {
+            // The goldens recorded a refusal rather than an answer, so there is no recorded value
+            // to be equal to and the case says both halves of the difference: what progression did,
+            // as the golden recorded it, and what this port does instead. An absent flag is read
+            // here as not set and an absent respondent list as no respondents, because one
+            // unreadable court application must not cost every child on the register their entry.
+            final Golden recorded = golden(goldenId);
+
+            assertThat(recorded.threw())
+                    .as("the oracle for this shape is a stack trace, not an answer")
+                    .startsWith("java.lang.NullPointerException");
+            assertThat(recorded.defendantType())
+                    .as("and progression therefore recorded no defendant type at all")
+                    .isNull();
+            assertThat(answerFor(recorded))
+                    .as("this port answers the rule's own default, which is the register being "
+                            + "recorded where progression's command fails")
+                    .contains("Applicant");
+        }
+    }
+
+    @Nested
     @DisplayName("the application is the hearing's, not the aggregate's")
     class TheAsAtHearingDeviation {
 
@@ -206,10 +243,12 @@ class DefendantTypeResolverTest {
      * @param id            the golden's identifier, as {@code INDEX.json} names it
      * @param hearing       the hearing the application is looked up in
      * @param document      the assembled register
-     * @param defendantType progression's own answer, {@code ""} where it found no application
+     * @param defendantType progression's own answer, {@code ""} where it found no application and
+     *                      {@code null} where it produced no answer at all
+     * @param threw         what progression threw instead of answering, or {@code null}
      */
     private record Golden(String id, JsonNode hearing, CourtRegisterDocument document,
-                          String defendantType) {
+                          String defendantType, String threw) {
     }
 
     /**
@@ -229,7 +268,19 @@ class DefendantTypeResolverTest {
         final JsonNode documentSource =
                 read(classpath(recorded.get("documentSource").stringValue()));
         return new Golden(goldenId, hearingOf(hearingSource), documentOf(documentSource),
-                recorded.get("defendantType").stringValue());
+                text(recorded, "defendantType"), text(recorded, "threw"));
+    }
+
+    /**
+     * One recorded field, where a golden that recorded a refusal carries nothing under it.
+     *
+     * @param recorded the golden
+     * @param field    the field to read
+     * @return its text, or {@code null} where the golden recorded none
+     */
+    private static String text(final JsonNode recorded, final String field) {
+        final JsonNode value = recorded.get(field);
+        return value == null || value.isNull() ? null : value.stringValue();
     }
 
     /**

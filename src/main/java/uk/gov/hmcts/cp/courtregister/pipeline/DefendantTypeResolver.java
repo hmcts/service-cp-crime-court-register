@@ -52,6 +52,13 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
  * an absent respondent list as no respondents, so each answers {@code Applicant}: one unreadable
  * application must not cost every child on the register their entry.
  *
+ * <p>The respondents-absent shape is the one that matters: {@code respondents} is <em>not</em> in
+ * {@code courtApplication.json}'s required list, so a hearing carrying it is in contract, and where
+ * progression's command fails this service records a register. Both answers are pinned by
+ * {@code DefendantTypeResolverTest.the_shapes_progression_throws_on_are_answered_applicant}, so the
+ * deviation cannot move unnoticed; the register row naming that test, or the sign-off that stands in
+ * for it, is still owed and is written neither by this class nor by that suite.
+ *
  * <p>Pure, and a singleton for it: reference data is not consulted, no clock is read, and nothing it
  * is handed is edited (constitution Principle V).
  */
