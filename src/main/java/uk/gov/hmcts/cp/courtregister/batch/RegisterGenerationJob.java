@@ -290,12 +290,31 @@ public class RegisterGenerationJob {
      * they carry the same identity, and the stored one also carries what only the rows knew - the
      * OU code and the court house the day is described by.
      *
+     * <p><strong>A batch that could not be stamped does not end the run.</strong> The stamp is
+     * refused when a register was superseded or batched between the read and the write, and the
+     * refusal takes the batch row with it - so there is no row to fail and nothing to record. Its
+     * registers are still active and unbatched, which is exactly the state the next run picks them
+     * up in, so the batch is counted PENDING and the night carries on to the court centres behind
+     * it. That isolation is defect fix P5's other half: one court centre's trouble is not a night's.
+     *
      * @param assembled the batch the assembler decided on, beside the registers it groups
      * @param deadline  the run's requesting bound
      * @return the state this batch ended the requesting leg in
      */
+    // PMD.AvoidCatchingGenericException: the stamp refuses through IllegalStateException and the
+    // store translates an outage into its own unchecked type; both mean the same thing here - this
+    // batch was not written down - and a narrower catch would leave one of them ending the run.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private BatchStatus requested(final AssembledBatch assembled, final Deadline deadline) {
-        final RegisterBatch batch = store.assemble(assembled.batch(), assembled.records());
+        final RegisterBatch batch;
+        try {
+            batch = store.assemble(assembled.batch(), assembled.records());
+        } catch (RuntimeException notStamped) {
+            LOG.error("Batch {} could not be written down, so no render is asked for and its "
+                            + "registers are left for the next run. cause={}",
+                    assembled.batch().batchId(), notStamped.getClass().getName(), notStamped);
+            return BatchStatus.PENDING;
+        }
         return service.request(batch, deadline).status();
     }
 
