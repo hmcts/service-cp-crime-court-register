@@ -75,6 +75,16 @@ public final class GeneratedRegisters {
     }
 
     /**
+     * The file name every register this fixture records carries, and therefore the batch's.
+     *
+     * @param registerDate the day the register falls on
+     * @return the name the day's document is filed under
+     */
+    public static String fileNameFor(final LocalDate registerDate) {
+        return "court-register_" + registerDate + '_' + OU_CODE + ".pdf";
+    }
+
+    /**
      * Records one hearing's register, RECORDED and recorded while the flag said ON.
      *
      * @param hearingId    the hearing the register is about
@@ -191,8 +201,7 @@ public final class GeneratedRegisters {
                 HEARING_DATE.toString(),
                 hearingId.toString(),
                 courtCentre.toString(),
-                "court-register_" + LocalDate.ofInstant(registerTime, LONDON) + '_' + OU_CODE
-                        + ".pdf",
+                fileNameFor(LocalDate.ofInstant(registerTime, LONDON)),
                 null,
                 new CourtRegisterHearingVenue("Lavender Hill LJA", "Lavender Hill Youth Court",
                         null),
