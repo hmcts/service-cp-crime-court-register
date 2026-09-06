@@ -43,4 +43,8 @@ CREATE TABLE metadata (
 );
 
 -- The framework's own repositories insert content before metadata, which the foreign key above
--- requires; `FileServicePayloadStore` does the same, in one transaction.
+-- requires; `FileServicePayloadStore` does the same, as two statements under autocommit rather than
+-- in one transaction. It holds a JdbcClient over this pool and nothing else, so it has no
+-- transaction manager of its own to open a boundary with; a metadata insert that fails behind a
+-- content insert that succeeded therefore leaves one orphan `content` row here, which nothing reads
+-- because no `metadata` row names it.

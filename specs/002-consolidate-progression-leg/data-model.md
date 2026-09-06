@@ -267,12 +267,21 @@ From `contracts/fileservice/` (changesets 001–006): `metadata(file_id uuid PK,
 deleted_at timestamp with time zone)`. The timestamp column is named `deleted_at`, not
 `date_deleted`: only the changeset file (`006-add-date-deleted-column-to-content-table.xml`) carries
 the older name, and the column it adds is `deleted_at`.
-This service issues exactly:
+This service issues exactly, and in this order:
 
 ```sql
-INSERT INTO metadata(metadata, file_id) VALUES (to_json(?::json), ?);
 INSERT INTO content(file_id, content, deleted) VALUES (?, ?, false);
+INSERT INTO metadata(metadata, file_id) VALUES (to_json(?::json), ?);
 ```
+
+**Content first: `metadata.file_id` references `content(file_id)`.** Changeset 001 makes the metadata
+row's key a foreign key onto the content row's, so the order is the schema's requirement and not a
+preference - the metadata insert refuses until the content row it names exists.
+`FileServicePayloadStoreIT` pins both the statements and the order they are prepared in. They are two
+statements under autocommit rather than one transaction, because the store is handed a `JdbcClient`
+over somebody else's pool and nothing else: a metadata write that fails behind a content write that
+succeeded leaves one orphan `content` row carrying an id no batch is waiting on, the batch fails
+PAYLOAD_STORE_UNAVAILABLE, and the next run mints a fresh id.
 
 with metadata `{"fileName": …, "conversionFormat": "pdf", "templateName": "OEE_Layout5",
 "numberOfPages": 1, "fileSize": <bytes>}`. No reads, no updates, no deletes (role permits INSERT only).
