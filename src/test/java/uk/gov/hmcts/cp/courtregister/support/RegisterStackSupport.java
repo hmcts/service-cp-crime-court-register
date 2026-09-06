@@ -578,7 +578,7 @@ public final class RegisterStackSupport implements AutoCloseable {
      * <p>The one shape in reach of a whole-stack suite that resolves to a defendant type at all.
      * None of the six base hearings does: {@code getCourtApplicationId} reads element zero of the
      * register's first defendant's case-or-application list and nothing else, and on every base
-     * fixture element zero is a prosecution case — which is why all six of the recorded
+     * fixture element zero is a prosecution case - which is why all six of the recorded
      * defendant-type goldens answer empty. A suite that asserted the recorded {@code defendant_type}
      * against one of them would be asserting {@code null}, and a pipeline that had dropped the
      * field entirely would satisfy it.
@@ -612,7 +612,7 @@ public final class RegisterStackSupport implements AutoCloseable {
      * The same envelope, dated by a later share of the same results.
      *
      * <p>The register's own instant is read from the envelope's {@code sharedTime} and not from the
-     * command, so a re-share that is to supersede rather than tie has to move it — and has to move
+     * command, so a re-share that is to supersede rather than tie has to move it - and has to move
      * it inside the same London day, because the day is the batch key and a re-share landing on the
      * next one is a register of its own rather than a replacement (C10, C12).
      *

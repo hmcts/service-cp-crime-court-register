@@ -139,7 +139,7 @@ class MessageListenerSettlementTest {
     }
 
     /**
-     * The same listener over a source of flag readings — for the cases whose subject is the label.
+     * The same listener over a source of flag readings - for the cases whose subject is the label.
      */
     private CourtRegisterMessageListener listenerLabelling(
             final RecordedFlagStateSource flagStates) {

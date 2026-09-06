@@ -48,14 +48,14 @@ import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
  *
  * <p>{@code CourtRegisterEndToEndIT} is the same sequence under {@code progression-post}, the
  * documented fallback shape. This is the sequence under {@code courtregister.output=record}, which
- * is the default and therefore what a deployed pod does — so this suite takes
+ * is the default and therefore what a deployed pod does - so this suite takes
  * {@link RegisterStackSupport#settings()} plain, and the mode it runs in is the one nobody had to
  * choose.
  *
  * <p><strong>The whole middle is real.</strong> The bean graph is the one {@code PipelineConfig}
  * assembles, the payload comes out of a Redis container under the key the producer writes, the
  * subscriptions come over HTTP from something answering the reference-data contract, and the
- * register is serialised, validated against the vendored progression schemas and — here — written
+ * register is serialised, validated against the vendored progression schemas and, here, written
  * into this service's own store. {@code DistributionPipelineTest} proves the recording stage with
  * every port doubled; what it cannot prove is that the adapters behind those ports agree with the
  * graph, which is the only thing that fails in a deployment.
@@ -63,12 +63,12 @@ import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
  * <p><strong>The assertion the doubles cannot make is the negative one.</strong> "Progression was
  * not called" is a claim about a socket, and only a suite that owns the socket can make it. The
  * stack's WireMock answers {@code add-court-register} with a 202 throughout, exactly as it does for
- * the POST suites, so a pipeline that had kept the 001 last stage would succeed rather than fail —
+ * the POST suites, so a pipeline that had kept the 001 last stage would succeed rather than fail -
  * and be caught here by the count, which is the only place the count is zero on purpose.
  *
  * <p><strong>What a RECORDED row has to carry.</strong> After 002 this row <em>is</em> the register:
  * nothing downstream re-derives it, so the payload mapper, the file name and the recipient union all
- * read what was written here. The five facts asserted are the five nothing else can supply — the
+ * read what was written here. The five facts asserted are the five nothing else can supply: the
  * document itself, the court centre's OU code (which the document does not carry), the defendant
  * type the hearing's own court application resolved to, the cutover flag as it stood, and the digest
  * of the stored document, which is what reconciliation compares.
@@ -96,7 +96,7 @@ class RecordEndToEndIT {
      * The day the base hearings' own share instant falls on.
      *
      * <p>{@code 2020-06-01T10:00:00Z}, which is the register's day and therefore the day the
-     * subscriptions were read for — and, after 002, the day the batch groups by.
+     * subscriptions were read for - and, after 002, the day the batch groups by.
      */
     private static final LocalDate REGISTER_DAY = LocalDate.parse("2020-06-01");
 
@@ -164,7 +164,7 @@ class RecordEndToEndIT {
                         + "is nobody left to accept it")
                 .isEqualTo(CompletionReason.RECORDED.value());
         assertThat(stack.registersPosted())
-                .as("not one request reached progression — which the stack would have answered 202, "
+                .as("not one request reached progression - which the stack would have answered 202, "
                         + "so a pipeline still POSTing would pass every other assertion here")
                 .isZero();
 
@@ -253,7 +253,7 @@ class RecordEndToEndIT {
      * <p>Progression takes the greatest {@code register_time} per hearing at generation time, which
      * gets the same answer most nights and cannot say, between two reads, which of two registers
      * will not be sent. Here the recording that replaces a register is the event that says so, and
-     * the row it replaced names its replacement — which is the only thing that leads from a dropped
+     * the row it replaced names its replacement - which is the only thing that leads from a dropped
      * register to the one that went instead.
      *
      * <p>Two requests, because a re-share is a request of its own: the guard is keyed on the
