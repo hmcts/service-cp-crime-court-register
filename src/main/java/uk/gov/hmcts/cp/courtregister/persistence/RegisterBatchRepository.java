@@ -30,8 +30,14 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
  * writes that have to move {@code processed_output} in the same statement - assembly and every
  * {@code mark} - because those are atomic or they are wrong. What is left is what the other
  * collaborators need and can do alone: the reconciler's overdue read, the listener's fallback
- * lookup, the operations CLI's own assembly, and the whole-row write that carries the facts the
- * port's {@code mark} signatures do not, {@code completed_by} above all.
+ * lookup, the operations CLI's own assembly, and the whole-row compare-and-set that carries the
+ * facts the port's {@code mark} signatures do not, {@code completed_by} above all.
+ *
+ * <p><strong>Every state change here is a compare-and-set through the state machine.</strong> The
+ * caller names the state it read the batch in and the state it decided on; {@code BatchStatus}
+ * refuses the moves the data-model diagram does not draw, and the state read is the predicate the
+ * update carries. Insertion is restricted to PENDING for the same reason, which is where the two
+ * writers of {@link #insert} both begin.
  */
 public class RegisterBatchRepository {
 
@@ -44,6 +50,10 @@ public class RegisterBatchRepository {
      * FAILED batch under a fresh identity. Nothing is defaulted here: a row this repository writes
      * says what its caller decided, which is what makes it possible to tell a run started by the
      * schedule from one a person started.
+     *
+     * <p>Both of those writers are assembling, so both start at PENDING and {@link #insert} admits
+     * nothing else. A row inserted further along the machine is a batch that skipped the states it
+     * should have been moved through, carrying stamps for events that never happened.
      */
     private static final String INSERT_BATCH = """
             INSERT INTO register_batch (
@@ -85,12 +95,21 @@ public class RegisterBatchRepository {
             """;
 
     /**
-     * Statement 5 - the batch as it should now stand.
+     * Statement 5 - the batch as it should now stand, if it still stands where the caller left it.
      *
      * <p>The whole mutable row, so a caller that read a batch, decided about it and writes it back
      * cannot leave half of its decision behind. The key and the assembly facts are not among the
      * columns set: what a batch is for was decided when it was assembled, and only where it has got
      * to changes afterwards.
+     *
+     * <p><strong>Fenced on the state the caller read.</strong> A whole-row write keyed on the batch
+     * identity alone would let anything overwrite anything: a FAILED batch - terminal, and reported
+     * to an operator as such - would be revived by a late reconciliation, keeping
+     * systemdocgenerator's verdict about that identity attached to a batch being rendered again;
+     * and two runs deciding about one batch would each believe they had moved it. The status the
+     * caller read is therefore the predicate the update carries, and a batch that moved in between
+     * changes no rows and is reported rather than overwritten - the same shape
+     * {@link JdbcRegisterStore}'s {@code mark} statements are written in.
      */
     private static final String UPDATE_BATCH = """
             UPDATE register_batch
@@ -105,7 +124,7 @@ public class RegisterBatchRepository {
                    notified_at = :notifiedAt,
                    failed_at = :failedAt,
                    attempts = :attempts
-             WHERE batch_id = :batchId
+             WHERE batch_id = :batchId AND status = :expected
             """;
 
     private final JdbcClient jdbcClient;
@@ -123,8 +142,13 @@ public class RegisterBatchRepository {
      * Statement 1 - inserts a newly assembled batch.
      *
      * @param batch the batch, carrying the identity minted at assembly
+     * @throws IllegalArgumentException if the batch does not start where a batch starts
      */
     public void insert(final RegisterBatch batch) {
+        if (batch.status() != BatchStatus.PENDING) {
+            throw new IllegalArgumentException("a batch enters the table at PENDING and is moved "
+                    + "from there; " + batch.batchId() + " was offered as " + batch.status());
+        }
         mutable(jdbcClient.sql(INSERT_BATCH)
                 .param(BATCH_ID, batch.batchId())
                 .param("courtCentreId", batch.courtCentreId())
@@ -181,18 +205,28 @@ public class RegisterBatchRepository {
     }
 
     /**
-     * Statement 5 - writes a batch's new state.
+     * Statement 5 - moves a batch from the state the caller read it in to the state it decided on.
      *
-     * <p>The transition itself is refused before the write, by {@code BatchStatus}: the state
-     * machine belongs to the domain, and a caller that got here has already been told whether the
-     * move it is making is one the machine draws.
+     * <p>The move is asked of {@link BatchStatus} before it is attempted, so the state machine is
+     * the domain's and not this statement's, and a move nobody drew is refused where it is made
+     * rather than discovered afterwards from a row that already changed. The state the caller read
+     * is then the predicate: a batch some other run moved in between changes no rows, and this
+     * answers false rather than letting the caller believe a transition that did not happen.
      *
-     * @param batch the batch as it should now stand
-     * @return how many rows the statement changed, which is the decision and never a read-back
+     * @param batch    the batch as it should now stand; its status is the state moved to
+     * @param expected the state the caller read the batch in, and the state the write is fenced on
+     * @return whether a row changed
+     * @throws IllegalStateException if the state machine does not draw the move
      */
-    public int update(final RegisterBatch batch) {
-        return mutable(jdbcClient.sql(UPDATE_BATCH).param(BATCH_ID, batch.batchId()), batch)
-                .update();
+    public boolean compareAndSet(final RegisterBatch batch, final BatchStatus expected) {
+        if (!expected.canTransitionTo(batch.status())) {
+            throw new IllegalStateException("batch " + batch.batchId() + " may not move from "
+                    + expected + " to " + batch.status());
+        }
+        return mutable(jdbcClient.sql(UPDATE_BATCH)
+                .param(BATCH_ID, batch.batchId())
+                .param("expected", expected.name()), batch)
+                .update() > 0;
     }
 
     /**

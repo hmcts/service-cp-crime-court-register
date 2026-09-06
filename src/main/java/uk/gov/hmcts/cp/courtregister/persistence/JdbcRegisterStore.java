@@ -247,7 +247,7 @@ public class JdbcRegisterStore implements RegisterStore {
      *
      * <p>{@code completed_by} is not written here: which mechanism learned the outcome is the sink's
      * knowledge, not the store's, and it reaches the row through
-     * {@link RegisterBatchRepository#update(RegisterBatch)}.
+     * {@link RegisterBatchRepository#compareAndSet(RegisterBatch, BatchStatus)}.
      */
     private static final String MARK_GENERATED = """
             WITH generated AS (

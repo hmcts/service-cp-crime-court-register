@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -33,18 +34,17 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  * rendered at all, and the round trip is what says the empty columns come back empty rather than
  * defaulted by the table.
  *
- * <p>The three cases in {@code Updating} between them write every column the update statement
- * names, because that is the only way a dropped column is visible: the statement is a whole-row
- * write, so a column left out of it silently keeps whatever the row already held.
+ * <p>The cases in {@code Moving} between them write every column the update statement names,
+ * because that is the only way a dropped column is visible: the statement is a whole-row write, so
+ * a column left out of it silently keeps whatever the row already held. They also walk the batch
+ * through the states the diagram draws rather than jumping to the one under test, because the write
+ * is a compare-and-set and the state machine is what it is set against.
  *
  * <p>Every case mints its own court centre, so the suites sharing one container share no rows;
  * {@link #mine(List)} narrows the one read that answers for the whole table.
  */
 @DisplayName("register_batch repository")
 class RegisterBatchRepositoryIT {
-
-    /** The single row a write of one batch is expected to change. */
-    private static final int ONE_ROW = 1;
 
     private static final LocalDate MONDAY = LocalDate.of(2026, 8, 24);
     private static final LocalDate TUESDAY = LocalDate.of(2026, 8, 25);
@@ -189,33 +189,37 @@ class RegisterBatchRepositoryIT {
     }
 
     @Nested
-    @DisplayName("writing where a batch has got to")
-    class Updating {
+    @DisplayName("moving a batch from the state it was read in")
+    class Moving {
 
         @Test
-        void updating_a_generated_batch_should_write_every_column_the_outcome_settled() {
+        void moving_a_batch_to_notified_should_write_every_column_the_outcome_settled() {
             final RegisterBatch assembled = assembled(MONDAY);
             repository.insert(assembled);
-            final RegisterBatch generated = new RegisterBatch(assembled.batchId(), courtCentre,
+            final RegisterBatch requested = generating(assembled, payloadFileId, REQUESTED_AT);
+            repository.compareAndSet(requested, BatchStatus.PENDING);
+            final RegisterBatch generated = generated(assembled);
+            repository.compareAndSet(generated, BatchStatus.GENERATING);
+            final RegisterBatch notified = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId,
                     DOCUMENT_FILE_ID, BatchStatus.NOTIFIED, null, null, true,
                     RegisterBatch.CompletedBy.EVENT, ASSEMBLED_AT, REQUESTED_AT, GENERATED_AT,
                     NOTIFIED_AT, null, 1);
 
-            final int changed = repository.update(generated);
+            final boolean moved = repository.compareAndSet(notified, BatchStatus.GENERATED);
 
-            assertThat(changed)
-                    .as("the affected-row count is the decision, and never a read-back")
-                    .isEqualTo(ONE_ROW);
+            assertThat(moved)
+                    .as("whether a row changed is the decision, and never a read-back")
+                    .isTrue();
             assertThat(repository.findById(assembled.batchId()))
                     .as("a caller that read a batch, decided about it and wrote it back cannot "
                             + "leave half of its decision behind - completed_by above all, which "
                             + "is what the reconciled metric counts and nothing else records")
-                    .contains(generated);
+                    .contains(notified);
         }
 
         @Test
-        void updating_a_failed_batch_should_keep_this_services_code_and_the_renderers_words_apart() {
+        void moving_a_batch_to_failed_should_keep_this_services_code_and_the_renderers_words_apart() {
             final RegisterBatch assembled = assembled(MONDAY);
             repository.insert(assembled);
             final RegisterBatch failed = new RegisterBatch(assembled.batchId(), courtCentre,
@@ -224,7 +228,7 @@ class RegisterBatchRepositoryIT {
                     RegisterBatch.CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null, null,
                     FAILED_AT, 2);
 
-            assertThat(repository.update(failed)).isEqualTo(ONE_ROW);
+            assertThat(repository.compareAndSet(failed, BatchStatus.PENDING)).isTrue();
 
             assertThat(repository.findById(assembled.batchId()))
                     .as("the bounded code is what the batches counter labels its outcome with and "
@@ -234,13 +238,90 @@ class RegisterBatchRepositoryIT {
         }
 
         @Test
-        void updating_a_batch_this_service_never_recorded_should_change_nothing() {
-            final RegisterBatch absent = assembled(MONDAY);
+        void moving_a_batch_this_service_never_recorded_should_change_nothing() {
+            final RegisterBatch absent = generating(assembled(MONDAY), payloadFileId, REQUESTED_AT);
 
-            assertThat(repository.update(absent))
-                    .as("nought rows changed is a batch that is not there, which is a caller "
-                            + "acting on a correlation this service never minted")
-                    .isZero();
+            assertThat(repository.compareAndSet(absent, BatchStatus.PENDING))
+                    .as("no row changed is a batch that is not there, which is a caller acting on "
+                            + "a correlation this service never minted")
+                    .isFalse();
+        }
+
+        /**
+         * FAILED is terminal, and the diagram's {@code FAILED -> PENDING} is the re-assembly CLI
+         * minting a <em>new</em> batch identity rather than reviving this one.
+         *
+         * <p>A whole-row write with no expected state would revive it: systemdocgenerator's verdict
+         * about the old identity stays attached to a batch that is being rendered again, and the
+         * failure that was reported to an operator quietly stops being true.
+         */
+        @Test
+        void reviving_a_failed_batch_should_be_refused_by_the_state_machine() {
+            final RegisterBatch assembled = assembled(MONDAY);
+            repository.insert(assembled);
+            final RegisterBatch failed = new RegisterBatch(assembled.batchId(), courtCentre,
+                    OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
+                    BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, SDG_REASON, true,
+                    RegisterBatch.CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null, null,
+                    FAILED_AT, 2);
+            repository.compareAndSet(failed, BatchStatus.PENDING);
+            final RegisterBatch revived = generating(assembled, payloadFileId, REQUESTED_AT);
+
+            assertThatThrownBy(() -> repository.compareAndSet(revived, BatchStatus.FAILED))
+                    .as("the move is refused where it is attempted, not discovered afterwards "
+                            + "from a row that already changed")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("FAILED")
+                    .hasMessageContaining("GENERATING");
+            assertThat(repository.findById(assembled.batchId()))
+                    .as("and the batch is still the failure it was")
+                    .contains(failed);
+        }
+
+        /**
+         * The other half: a move the machine draws, made against a state the batch has left.
+         */
+        @Test
+        void a_stale_expected_status_should_change_nothing_and_say_so() {
+            final RegisterBatch assembled = assembled(MONDAY);
+            repository.insert(assembled);
+            final RegisterBatch requested = generating(assembled, payloadFileId, REQUESTED_AT);
+            repository.compareAndSet(requested, BatchStatus.PENDING);
+            final RegisterBatch again = generating(assembled, secondPayloadFileId,
+                    REQUESTED_AT.plusSeconds(90));
+
+            assertThat(repository.compareAndSet(again, BatchStatus.PENDING))
+                    .as("a second run that still believes the batch is PENDING changes nothing, "
+                            + "and is told so rather than being left to assume it requested a "
+                            + "render that another run had already requested")
+                    .isFalse();
+            assertThat(repository.findById(assembled.batchId()))
+                    .as("the payload the first run actually stored is still the batch's")
+                    .contains(requested);
+        }
+    }
+
+    @Nested
+    @DisplayName("a batch enters this table at the beginning")
+    class Insertion {
+
+        /**
+         * Every writer of this statement is assembling: the operations CLI, and the re-assembly of a
+         * FAILED batch under a fresh identity. Both start at PENDING, and a row inserted anywhere
+         * else in the machine is a batch that skipped the states it should have been moved through
+         * - and whose earlier stamps therefore describe events that never happened.
+         */
+        @Test
+        void inserting_a_batch_anywhere_but_pending_should_be_refused() {
+            final RegisterBatch midway =
+                    generating(assembled(MONDAY), payloadFileId, REQUESTED_AT);
+
+            assertThatThrownBy(() -> repository.insert(midway))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("GENERATING");
+            assertThat(repository.findById(midway.batchId()))
+                    .as("and nothing is written")
+                    .isEmpty();
         }
     }
 
@@ -259,13 +340,21 @@ class RegisterBatchRepositoryIT {
                 null, null, true, null, ASSEMBLED_AT, requestedAt, null, null, null, 1);
     }
 
+    /** The same batch again once systemdocgenerator's document exists. */
+    private RegisterBatch generated(final RegisterBatch batch) {
+        return new RegisterBatch(batch.batchId(), courtCentre, OU_CODE, COURT_HOUSE,
+                batch.registerDate(), batch.fileName(), payloadFileId, DOCUMENT_FILE_ID,
+                BatchStatus.GENERATED, null, null, true, RegisterBatch.CompletedBy.EVENT,
+                ASSEMBLED_AT, REQUESTED_AT, GENERATED_AT, null, null, 1);
+    }
+
     /** An inserted batch already GENERATING, which is the state the reconciler reads. */
     private RegisterBatch requested(final LocalDate registerDate, final UUID payloadFileId,
             final Instant requestedAt) {
         final RegisterBatch assembled = assembled(registerDate);
         repository.insert(assembled);
         final RegisterBatch requested = generating(assembled, payloadFileId, requestedAt);
-        repository.update(requested);
+        repository.compareAndSet(requested, BatchStatus.PENDING);
         return requested;
     }
 
