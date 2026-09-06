@@ -970,7 +970,7 @@ class SchemaMigrationV2IT {
         }
 
         @Test
-        @DisplayName("V2 backfills the four NOT NULL columns and leaves the POST's own evidence alone")
+        @DisplayName("V2 backfills the four register columns and leaves the POST's own evidence alone")
         void a_progression_post_row_should_survive_the_widening_with_the_documented_values()
                 throws SQLException {
             // The migration's own promise, made in V2__register_store.sql's backfill comment and in
