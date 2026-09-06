@@ -169,8 +169,6 @@ public class GenerationReconciler {
      *     {@code register_batch.completed_by} names RECONCILER, for the run report and the
      *     {@code reconciled} counter
      */
-    @Scheduled(initialDelayString = GRACE_PERIOD, fixedDelayString = GRACE_PERIOD)
-    @SchedulerLock(name = LOCK_NAME, lockAtMostFor = LOCK_AT_MOST_FOR)
     public int reconcile() {
         final Instant now = clock.instant();
         final List<RegisterBatch> overdue = batches.generatingSince(now.minus(gracePeriod));
@@ -187,13 +185,24 @@ public class GenerationReconciler {
     }
 
     /**
-     * The schedule's own entry point.
+     * The schedule's own pass, every grace period, under a lock of its own.
      *
-     * <p><strong>Seam.</strong> Not yet the schedule's, and not yet doing anything, which is what
-     * the three cases in {@code GenerationReconcilerTest.ItsOwnSchedule} fail on.
+     * <p><strong>{@code void}, and that is ShedLock's rule rather than a preference.</strong> Its
+     * interceptor refuses to lock a method returning a primitive - {@code
+     * LockingNotSupportedException}, raised on every call through the proxy, the run's own
+     * included - so the annotations cannot live on {@link #reconcile()}. A schedule has nobody to
+     * return a count to in any case: the count is for the run report, and the run asks for it
+     * directly.
+     *
+     * <p>The cadence is the grace period, written as the same property key so a deployment that
+     * lengthens the one lengthens the other; the first pass waits one interval, because a pod that
+     * has only just started has a database that may not be migrated yet and a batch that became
+     * overdue during the restart is overdue for a while longer.
      */
+    @Scheduled(initialDelayString = GRACE_PERIOD, fixedDelayString = GRACE_PERIOD)
+    @SchedulerLock(name = LOCK_NAME, lockAtMostFor = LOCK_AT_MOST_FOR)
     public void reconcileScheduled() {
-        throw new UnsupportedOperationException("the schedule's own pass is not wired yet");
+        reconcile();
     }
 
     /**

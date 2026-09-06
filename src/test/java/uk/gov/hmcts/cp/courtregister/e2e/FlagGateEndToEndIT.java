@@ -1,10 +1,13 @@
 package uk.gov.hmcts.cp.courtregister.e2e;
 
+import static org.assertj.core.api.Assertions.as;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -126,13 +129,32 @@ class FlagGateEndToEndIT {
         assertThat(report.gateDecision())
                 .as("the reading the whole downstream half waits for")
                 .isEqualTo(new GateDecision.Proceed(false));
-        assertThat(stack.renderRequests())
-                .as("one batch for one court centre and day, asked for over the endpoint the "
-                        + "deployment configured")
+        assertThat(registers.batches())
+                .as("one batch for this court centre and day")
                 .hasSize(1);
+        assertThat(requestsNaming(registers.batches().getFirst()))
+                .as("asked for over the endpoint the deployment configured, correlated on the batch "
+                        + "identity - the shared store holds other suites' registers too, so what "
+                        + "is counted here is this night's own batch and not the traffic")
+                .hasSize(1)
+                .first(as(InstanceOfAssertFactories.STRING))
+                .contains("\"templateIdentifier\":\"OEE_Layout5\"")
+                .contains("\"originatingSource\":\"CourtRegisterService\"");
         assertThat(registers.batchStatuses())
                 .as("GENERATING says a render was asked for and not that a document exists")
                 .containsExactly(BatchStatus.GENERATING.name());
+    }
+
+    /**
+     * The render requests this stack received that name one batch.
+     *
+     * @param batchId the batch the render was requested for
+     * @return the bodies naming it, in arrival order
+     */
+    private static List<String> requestsNaming(final UUID batchId) {
+        return stack.renderRequests().stream()
+                .filter(body -> body.contains(batchId.toString()))
+                .toList();
     }
 
     /**
