@@ -449,6 +449,36 @@ class RegisterGenerationJobTest {
             verify(assembler).assemble(any(), eq(List.of(earlier)), anyBoolean());
         }
 
+        /**
+         * A court centre whose registers moved is one court centre, not the night.
+         *
+         * <p>The stamp is refused where a register was superseded or batched between the read and
+         * the write, and the refusal takes the batch row with it - so there is no row to fail and
+         * nothing to record about it. Its registers are still active and unbatched, which is exactly
+         * the state the next run finds them in, so the batch is counted PENDING and the court
+         * centres behind it are still asked for. That isolation is the other half of defect fix P5:
+         * progression's leg caught the stream exception and walked on, and what it got wrong was
+         * leaving no trace, not the walking on.
+         */
+        @Test
+        void a_batch_that_could_not_be_written_down_should_not_stop_the_batches_behind_it() {
+            final RegisterBatch unstampable = batch();
+            final RegisterBatch following = batch();
+            aNightHolding(unstampable, following);
+            everyRequestIsAccepted();
+            when(store.assemble(eq(unstampable), any())).thenThrow(new IllegalStateException(
+                    "batch " + unstampable.batchId() + " was asked for 2 registers and stamped 1"));
+
+            final RunReport report = run();
+
+            verify(service, never()).request(eq(unstampable), any());
+            verify(service).request(eq(following), any());
+            softly.assertThat(reported(report, RunReport::outcomes))
+                    .as("PENDING rather than FAILED, because there is no batch row to have failed: "
+                            + "the registers are where the next run will look for them")
+                    .isEqualTo(Map.of(BatchStatus.GENERATING, 1, BatchStatus.PENDING, 1));
+        }
+
         @Test
         void a_night_with_nothing_waiting_should_ask_the_renderer_for_nothing() {
             aNightHolding();
