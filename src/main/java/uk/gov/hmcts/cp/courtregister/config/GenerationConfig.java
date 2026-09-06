@@ -109,12 +109,13 @@ public class GenerationConfig {
      *
      * @param store   where the batch and its rows are moved
      * @param batches the {@code register_batch} table, read to correlate an outcome to a batch
+     * @param metrics where an outcome no batch takes is counted, by the reason it was not taken
      * @return the port
      */
     @Bean
-    public DocumentOutcomeSink documentOutcomeSink(
-            final RegisterStore store, final RegisterBatchRepository batches) {
-        return new DocumentOutcomeSinkImpl(store, batches);
+    public DocumentOutcomeSink documentOutcomeSink(final RegisterStore store,
+            final RegisterBatchRepository batches, final GenerationMetrics metrics) {
+        return new DocumentOutcomeSinkImpl(store, batches, metrics);
     }
 
     /**

@@ -3,10 +3,10 @@ package uk.gov.hmcts.cp.courtregister.application;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
@@ -72,25 +72,21 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
     /** The {@code register_batch} reads that say which batch an outcome is about. */
     private final RegisterBatchRepository batches;
 
-    /**
-     * Outcomes that named a batch this service never recorded, counted for the life of the pod.
-     *
-     * <p>Atomic because the two drivers are not one thread: the listener's deliveries arrive on the
-     * container's threads and the reconciler runs on the job's, and a tally that lost increments
-     * would under-report the one thing it exists to report.
-     */
-    private final AtomicLong unattributed = new AtomicLong();
+    /** Where an outcome that is applied to nothing is counted, under its own bounded reason. */
+    private final GenerationMetrics metrics;
 
     /**
      * Creates the sink over the store it writes through and the batches it correlates against.
      *
      * @param store   where a batch's outcome is written, one batch at a time
      * @param batches the {@code register_batch} reads that say which batch an outcome is about
+     * @param metrics where an outcome no batch takes is counted, by the reason it was not taken
      */
     public DocumentOutcomeSinkImpl(final RegisterStore store,
-            final RegisterBatchRepository batches) {
+            final RegisterBatchRepository batches, final GenerationMetrics metrics) {
         this.store = store;
         this.batches = batches;
+        this.metrics = metrics;
     }
 
     /**
@@ -132,20 +128,6 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
         apply(correlationId, payloadFileId, BatchStatus.FAILED,
                 batch -> store.markFailed(batch.batchId(), BatchFailureReason.GENERATION_FAILED,
                         RegisterBatch.boundedReason(reason), completedBy));
-    }
-
-    /**
-     * How many outcomes named a batch this service has no record of.
-     *
-     * <p>Zero is the expected reading. Anything else says that either another consumer's documents
-     * are reaching this subscription - the {@code originatingSource} filter is the listener's answer
-     * to that - or that documents are coming back for batches this store never wrote, which is a
-     * correlation that was lost between the render request and the event.
-     *
-     * @return the tally since this pod started
-     */
-    public long unattributedOutcomes() {
-        return unattributed.get();
     }
 
     /**
@@ -211,7 +193,7 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      * @param payloadFileId the payload the outcome is about
      */
     private void countUnattributed(final UUID correlationId, final UUID payloadFileId) {
-        unattributed.incrementAndGet();
+        metrics.unknownCorrelationIgnored();
         LOG.warn("An outcome arrived for correlation {} and payload {}, which this service has no "
                 + "batch for, so it is counted and ignored: it is another consumer's document, or "
                 + "one from a batch that predates this store.", correlationId, payloadFileId);

@@ -87,6 +87,25 @@ public class GenerationMetrics {
      */
     public static final String FOREIGN_SOURCE = "foreign-source";
 
+    /**
+     * The {@code reason} label of an outcome naming a batch this service never recorded.
+     *
+     * <p>Another consumer's document that carried this service's own source, or one from a batch
+     * that predates this store. Zero is the expected reading, and anything else is a correlation
+     * lost between the render request and the event.
+     */
+    public static final String UNKNOWN_CORRELATION = "unknown-correlation";
+
+    /**
+     * The {@code reason} label of an outcome whose two identifiers disagree.
+     *
+     * <p>The correlation names a batch this service does hold and the payload the event was
+     * rendered from is not the payload that batch was requested for. Nothing is inferred from
+     * either half: an inconsistent event is the one shape that could complete the wrong night's
+     * registers, so it is counted here and applied nowhere.
+     */
+    public static final String PAYLOAD_MISMATCH = "payload-mismatch";
+
     private static final int READABLE = 1;
     private static final int UNREADABLE = 0;
 
@@ -182,6 +201,31 @@ public class GenerationMetrics {
      */
     public void foreignEventIgnored() {
         counter(PUBLIC_EVENTS_IGNORED, REASON_TAG, FOREIGN_SOURCE).increment();
+    }
+
+    /**
+     * Counts an outcome for a batch identity this service has no record of.
+     *
+     * <p>The same counter the foreign source is counted on, under its own bounded reason, because
+     * the question they answer together is the one a night's outcomes going nowhere is read by:
+     * how many announcements reached this subscription and were applied to nothing, and which of
+     * the three ways it happened.
+     */
+    public void unknownCorrelationIgnored() {
+        counter(PUBLIC_EVENTS_IGNORED, REASON_TAG, UNKNOWN_CORRELATION).increment();
+    }
+
+    /**
+     * Counts an outcome whose payload is not the payload its batch was requested for.
+     *
+     * <p>The reading that says an event contradicted itself. It is separate from
+     * {@link #UNKNOWN_CORRELATION} because the two are different faults: the first is an
+     * announcement about somebody else's work, and this one is an announcement about work this
+     * service did that names the wrong artefact - which is a systemdocgenerator or a broker to
+     * investigate rather than a subscription to widen.
+     */
+    public void payloadMismatchIgnored() {
+        counter(PUBLIC_EVENTS_IGNORED, REASON_TAG, PAYLOAD_MISMATCH).increment();
     }
 
     /**

@@ -9,6 +9,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Optional;
@@ -23,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
@@ -61,14 +64,17 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * learned the outcome would make the {@code reconciled} reading a description of the code rather
  * than of the night.
  *
- * <p><strong>The two arrivals that are not news.</strong> The vendored event schemas make
- * {@code sourceCorrelationId} optional and {@code payloadFileServiceId} required on both events, so
- * an outcome that names no correlation is a contract-legal message and is found by the payload it
- * was rendered from instead; an outcome neither identifier finds a batch for is counted and ignored,
- * because it is another consumer's document or one from before this store existed and neither is
- * something to invent a row for. A redelivery - which a durable subscription guarantees and a
- * reconciler racing an in-flight event produces - moves the batch once and is not counted as
- * unattributed: it is attributable, and it is already applied.
+ * <p><strong>The correlation is the batch's identity, and the payload has to agree with it.</strong>
+ * {@code sourceCorrelationId} is what the render request carried and it is the only identifier this
+ * service ever asks a batch by; {@code payloadFileServiceId} is the cross-check and never a second
+ * way in. So an outcome naming a correlation this store has no batch for is counted and ignored
+ * whatever payload it names - reaching for the payload instead would let an event that has lost its
+ * correlation complete a batch it was never about - and an outcome whose correlation and payload
+ * name different batches is counted and ignored too, because an event that contradicts itself is
+ * the one shape that could complete the wrong night's registers. A redelivery - which a durable
+ * subscription guarantees and a reconciler racing an in-flight event produces - carries both
+ * identifiers of one batch, moves it once and is counted nowhere: it is attributable, and it is
+ * already applied.
  *
  * <p>Nothing here reaches a defendant, a recipient or a register. The one piece of free text in the
  * suite is systemdocgenerator's own message about a document, which is carried into
@@ -82,6 +88,9 @@ class DocumentOutcomeSinkTest {
 
     /** Quoted by every case, so the red run names the seam it is waiting on. */
     private static final String PENDING = "T047 implements the sink; this is its red run";
+
+    /** Returned when a meter is absent, so a missing count fails as an assertion. */
+    private static final double ABSENT = -1;
 
     private static final UUID COURT_CENTRE =
             UUID.fromString("0f3f4a52-4a3f-4a1b-9c4e-6c2f1e7a5b31");
@@ -105,10 +114,30 @@ class DocumentOutcomeSinkTest {
 
     private final RegisterStore store = mock(RegisterStore.class);
     private final RegisterBatchRepository batches = mock(RegisterBatchRepository.class);
-    private final DocumentOutcomeSinkImpl sink = new DocumentOutcomeSinkImpl(store, batches);
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    private final GenerationMetrics metrics = new GenerationMetrics(registry);
+    private final DocumentOutcomeSinkImpl sink =
+            new DocumentOutcomeSinkImpl(store, batches, metrics);
 
     @InjectSoftAssertions
     private SoftAssertions softly;
+
+    /**
+     * How many outcomes were ignored for one bounded reason.
+     *
+     * <p>The documented instrument rather than a tally of the sink's own, because the number is
+     * read beside the subscription's own health by whoever is asking why a night's outcomes went
+     * nowhere, and a field on one bean is not something a dashboard can ask.
+     *
+     * @param reason the {@code reason} label
+     * @return the count, or {@link #ABSENT} where the series does not exist
+     */
+    private double ignored(final String reason) {
+        final Counter counter = registry.find(GenerationMetrics.PUBLIC_EVENTS_IGNORED)
+                .tag(GenerationMetrics.REASON_TAG, reason)
+                .counter();
+        return counter == null ? ABSENT : counter.count();
+    }
 
     /**
      * Hands the sink a document and records the seam's refusal rather than ending the case.
@@ -163,9 +192,9 @@ class DocumentOutcomeSinkTest {
     /**
      * A batch the renderer has been asked about and has not answered for, findable both ways.
      *
-     * <p>Both lookups are stubbed because both are contract-legal routes to the same batch, and a
-     * case that stubbed only the one it expected the sink to use would be asserting the
-     * implementation rather than the outcome.
+     * <p>Both lookups are stubbed, and the payload one deliberately: it is the store's read the
+     * reconciler makes for itself, and a sink that used it as a second way to a batch would be seen
+     * doing it here rather than left to be inferred from a stub that was never set up.
      *
      * @param registerDate the register day this batch groups
      * @return the batch, GENERATING
@@ -319,7 +348,7 @@ class DocumentOutcomeSinkTest {
         void an_unknown_correlation_should_be_counted_and_ignored() {
             documentAvailable(UUID.randomUUID(), UUID.randomUUID(), CompletedBy.EVENT);
 
-            softly.assertThat(sink.unattributedOutcomes())
+            softly.assertThat(ignored(GenerationMetrics.UNKNOWN_CORRELATION))
                     .as("another consumer's document, or one from a batch that predates this "
                             + "store; zero is the expected reading and anything else is a "
                             + "correlation lost between the render request and the event")
@@ -333,7 +362,7 @@ class DocumentOutcomeSinkTest {
         void an_unattributable_failure_should_be_counted_and_ignored() {
             generationFailed(UUID.randomUUID(), UUID.randomUUID(), CompletedBy.EVENT);
 
-            softly.assertThat(sink.unattributedOutcomes())
+            softly.assertThat(ignored(GenerationMetrics.UNKNOWN_CORRELATION))
                     .as("the failure half of the same reading, because a failure this service "
                             + "cannot attribute is exactly as unattributable as a document")
                     .isEqualTo(1);
@@ -341,20 +370,121 @@ class DocumentOutcomeSinkTest {
                     () -> verifyNoInteractions(store));
         }
 
+        /**
+         * The payload is a cross-check and never a way in.
+         *
+         * <p>The batch is findable by the payload the outcome names - that read exists, and the
+         * reconciler makes it - so a sink that fell back to it would complete this batch on an
+         * event whose own account of which batch it is about names nothing this store holds. That
+         * is not a batch identified by a second means: it is an event whose correlation was lost or
+         * rewritten somewhere between the render request and the topic, and completing a night's
+         * registers on it is exactly the guess the correlation exists to make unnecessary.
+         */
         @Test
-        void an_outcome_without_a_correlation_should_be_found_by_the_payload_it_names() {
+        void an_unknown_correlation_should_not_be_rescued_by_a_payload_that_matches() {
+            final RegisterBatch batch = inFlight(MONDAY);
+
+            documentAvailable(UUID.randomUUID(), batch.payloadFileId(), CompletedBy.EVENT);
+
+            told("the correlation names no batch this service holds, so nothing is marked - the "
+                            + "payload is the cross-check on a correlation, not a second way to a "
+                            + "batch",
+                    () -> verifyNoInteractions(store));
+            softly.assertThat(ignored(GenerationMetrics.UNKNOWN_CORRELATION))
+                    .as("and it is counted under the reason that is true of it: this service has "
+                            + "no batch by that identity, whatever payload the event names")
+                    .isEqualTo(1);
+        }
+
+        /**
+         * {@code sourceCorrelationId} is optional on both vendored schemas, and this service always
+         * sends one, so an outcome carrying none answers a request that was not ours. The listener
+         * already drops it before the sink is reached; the sink says the same thing on its own
+         * account, because the reconciler is the other caller and a port that behaved differently
+         * for its two drivers would have two answers to one question.
+         */
+        @Test
+        void an_outcome_without_a_correlation_should_be_counted_and_ignored() {
             final RegisterBatch batch = inFlight(MONDAY);
 
             documentAvailable(null, batch.payloadFileId(), CompletedBy.EVENT);
 
-            told("sourceCorrelationId is optional on both vendored event schemas and "
-                            + "payloadFileServiceId is required, so a message that carries only "
-                            + "the payload is contract-legal and is still this batch's outcome",
-                    () -> verify(store).markGenerated(
-                            batch.batchId(), DOCUMENT_FILE_ID, GENERATED_AT, CompletedBy.EVENT));
-            softly.assertThat(sink.unattributedOutcomes())
-                    .as("and a batch found by its payload is attributed, not unattributed")
-                    .isZero();
+            told("an outcome that names no batch is applied to none",
+                    () -> verifyNoInteractions(store));
+            softly.assertThat(ignored(GenerationMetrics.UNKNOWN_CORRELATION))
+                    .as("counted, so a subscription whose events have stopped carrying the "
+                            + "correlation is legible rather than silently idle")
+                    .isEqualTo(1);
+        }
+    }
+
+    /**
+     * The outcome named a batch this service holds, and a payload that batch was never rendered
+     * from.
+     *
+     * <p>The two identifiers are one fact told twice, and an event where they disagree is an event
+     * this service cannot believe either half of. Applying the correlation's half anyway would
+     * complete a batch on somebody else's document; applying the payload's half would complete a
+     * different batch than the event claims to be about. Neither is a guess worth making about a
+     * night's registers, so the event moves nothing and is counted.
+     */
+    @Nested
+    @DisplayName("an outcome whose two identifiers disagree")
+    class AnOutcomeThatContradictsItself {
+
+        @Test
+        void a_document_naming_the_wrong_payload_should_complete_nothing() {
+            final RegisterBatch batch = inFlight(MONDAY);
+
+            documentAvailable(batch.batchId(), UUID.randomUUID(), CompletedBy.EVENT);
+
+            told("the correlation names this batch and the payload is not the one it was "
+                            + "requested for, so the event is not about it and nothing is marked",
+                    () -> verifyNoInteractions(store));
+            softly.assertThat(ignored(GenerationMetrics.PAYLOAD_MISMATCH))
+                    .as("counted under its own reason, because an event that contradicts itself "
+                            + "is a renderer or a broker to investigate rather than a correlation "
+                            + "this service never had")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void a_refusal_naming_the_wrong_payload_should_fail_nothing() {
+            final RegisterBatch batch = inFlight(MONDAY);
+
+            generationFailed(batch.batchId(), UUID.randomUUID(), CompletedBy.EVENT);
+
+            told("the failure half of the same rule: a batch is not failed on a refusal about "
+                            + "some other payload",
+                    () -> verifyNoInteractions(store));
+            softly.assertThat(ignored(GenerationMetrics.PAYLOAD_MISMATCH))
+                    .as("and the refusal is counted rather than dropped in silence")
+                    .isEqualTo(1);
+        }
+
+        /**
+         * The reconciler asks systemdocgenerator about a payload it read off the batch row, so its
+         * two identifiers always agree; the listener's come off the wire and are the ones that can
+         * disagree. The rule is the sink's rather than the listener's because there is one code
+         * path for what an outcome means, and a check that lived in one driver would be a check the
+         * other did not make.
+         */
+        @Test
+        void a_batch_whose_payload_is_not_yet_known_should_take_no_outcome_at_all() {
+            final RegisterBatch pending = new RegisterBatch(UUID.randomUUID(), COURT_CENTRE,
+                    OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), null, null,
+                    BatchStatus.PENDING, null, null, true, null, ASSEMBLED_AT, null, null, null,
+                    null, 1, null, 0);
+            when(batches.findById(pending.batchId())).thenReturn(Optional.of(pending));
+
+            documentAvailable(pending.batchId(), UUID.randomUUID(), CompletedBy.EVENT);
+
+            told("a batch that never reached the renderer has no payload for an outcome to agree "
+                            + "with, so an outcome claiming to be about one is not about this batch",
+                    () -> verifyNoInteractions(store));
+            softly.assertThat(ignored(GenerationMetrics.PAYLOAD_MISMATCH))
+                    .as("and it is the same disagreement, counted the same way")
+                    .isEqualTo(1);
         }
     }
 
@@ -381,11 +511,11 @@ class DocumentOutcomeSinkTest {
                             + "re-stamped, which is the reading BatchStatus was narrowed to force: "
                             + "GENERATED to GENERATED is a move the machine does not draw",
                     () -> verify(store, times(1)).markGenerated(any(), any(), any(), any()));
-            softly.assertThat(sink.unattributedOutcomes())
+            softly.assertThat(ignored(GenerationMetrics.UNKNOWN_CORRELATION))
                     .as("a redelivery is attributable and already applied; counting it as "
                             + "unattributed would report a lost correlation every time the broker "
                             + "did what a durable subscription is for")
-                    .isZero();
+                    .isEqualTo(ABSENT);
         }
 
         @Test
