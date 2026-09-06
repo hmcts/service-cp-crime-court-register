@@ -164,7 +164,7 @@ class RegisterStoreIT {
         void recording_a_register_should_write_one_recorded_row_for_the_command() {
             final DistributionCommand command = seededCommand(HEARING_ONE, MONDAY_SHARED);
 
-            softly.assertThatCode(() -> store.record(
+            softly.assertThatCode(() -> record(
                             command,
                             document(HEARING_ONE, MONDAY, MONDAY_SHARED),
                             APPLICANT,
@@ -194,7 +194,7 @@ class RegisterStoreIT {
             final DistributionCommand command = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final CourtRegisterDocument document = document(HEARING_ONE, MONDAY, MONDAY_SHARED);
 
-            softly.assertThatCode(() -> store.record(
+            softly.assertThatCode(() -> record(
                             command, document, RESPONDENT, RecordedFlagState.ON))
                     .as(PENDING)
                     .doesNotThrowAnyException();
@@ -215,6 +215,36 @@ class RegisterStoreIT {
                             + "instant, and the document is stored exactly as it will be rendered")
                     .containsExactly(tuple(new CourtCentreDay(courtCentre, MONDAY),
                             fileName(HEARING_ONE, MONDAY), document));
+        }
+
+        /**
+         * The one fact the batch reads off a row that the document does not carry.
+         *
+         * <p>{@code assemble} copies the OU code from the batch's first row into
+         * {@code register_batch}, where the render payload and the file name are built from it. The
+         * recorder is the only writer that ever knows it - the transformation resolves it from
+         * reference data and 001 carries it on {@code ProcessedOutputClaim} for exactly this reason
+         * - so a recording that dropped it would leave every batch of the new shape addressed under
+         * a court centre nothing downstream can name.
+         */
+        @Test
+        void a_recorded_register_should_carry_the_court_centre_ou_code_the_batch_needs() {
+            final DistributionCommand command = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                store.record(command, document(HEARING_ONE, MONDAY, MONDAY_SHARED), OU_CODE,
+                        APPLICANT, RecordedFlagState.ON);
+                store.assemble(new CourtCentreDay(courtCentre, MONDAY),
+                        mine(store.activeUnbatched()));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(ouCodeOf(command))
+                    .as("the OU code the transformation resolved, on the row that recorded it")
+                    .contains(OU_CODE);
+            softly.assertThat(batchOuCodeOn(MONDAY))
+                    .as("and therefore on the batch, which takes it from its first row and has "
+                            + "nowhere else to get it from")
+                    .contains(OU_CODE);
         }
     }
 
@@ -237,9 +267,9 @@ class RegisterStoreIT {
             final AtomicReference<RecordOutcome> reshare = new AtomicReference<>();
 
             softly.assertThatCode(() -> {
-                store.record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                reshare.set(store.record(second,
+                reshare.set(record(second,
                         document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
                         RecordedFlagState.ON));
             }).as(PENDING).doesNotThrowAnyException();
@@ -265,9 +295,9 @@ class RegisterStoreIT {
             final DistributionCommand second = seededCommand(HEARING_ONE, MONDAY_RESHARED);
 
             softly.assertThatCode(() -> {
-                store.record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.record(second, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                record(second, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
                         RecordedFlagState.ON);
             }).as(PENDING).doesNotThrowAnyException();
 
@@ -293,11 +323,11 @@ class RegisterStoreIT {
             final AtomicReference<RecordOutcome> reshare = new AtomicReference<>();
 
             softly.assertThatCode(() -> {
-                store.record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
                 store.assemble(new CourtCentreDay(courtCentre, MONDAY),
                         mine(store.activeUnbatched()));
-                reshare.set(store.record(second,
+                reshare.set(record(second,
                         document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
                         RecordedFlagState.ON));
             }).as(PENDING).doesNotThrowAnyException();
@@ -323,9 +353,9 @@ class RegisterStoreIT {
             final DistributionCommand tuesday = seededCommand(HEARING_ONE, TUESDAY_SHARED);
 
             softly.assertThatCode(() -> {
-                store.record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.record(tuesday, document(HEARING_ONE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                record(tuesday, document(HEARING_ONE, TUESDAY, TUESDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
             }).as(PENDING).doesNotThrowAnyException();
 
@@ -359,11 +389,11 @@ class RegisterStoreIT {
             final DistributionCommand waiting = seededCommand(HEARING_TWO, MONDAY_SHARED);
 
             softly.assertThatCode(() -> {
-                store.record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
                 store.assemble(new CourtCentreDay(courtCentre, MONDAY),
                         mine(store.activeUnbatched()));
-                store.record(waiting, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(waiting, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
             }).as(PENDING).doesNotThrowAnyException();
 
@@ -381,11 +411,11 @@ class RegisterStoreIT {
             final DistributionCommand unknown = seededCommand(HEARING_THREE, MONDAY_SHARED);
 
             softly.assertThatCode(() -> {
-                store.record(on, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(on, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.record(off, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(off, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.OFF);
-                store.record(unknown, document(HEARING_THREE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(unknown, document(HEARING_THREE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.UNKNOWN);
             }).as(PENDING).doesNotThrowAnyException();
 
@@ -426,13 +456,13 @@ class RegisterStoreIT {
             final DistributionCommand tuesdaySecond = seededCommand(HEARING_FOUR, TUESDAY_SHARED);
 
             softly.assertThatCode(() -> {
-                store.record(mondayFirst, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(mondayFirst, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.record(mondaySecond, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(mondaySecond, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.record(tuesdayFirst, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED),
+                record(tuesdayFirst, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED),
                         APPLICANT, RecordedFlagState.ON);
-                store.record(tuesdaySecond, document(HEARING_FOUR, TUESDAY, TUESDAY_SHARED),
+                record(tuesdaySecond, document(HEARING_FOUR, TUESDAY, TUESDAY_SHARED),
                         APPLICANT, RecordedFlagState.ON);
                 final List<RegisterRecord> waiting = mine(store.activeUnbatched());
                 final RegisterBatch monday = store.assemble(
@@ -481,9 +511,9 @@ class RegisterStoreIT {
             final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
 
             softly.assertThatCode(() -> {
-                store.record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
                 final RegisterBatch monday = store.assemble(
                         new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
@@ -514,9 +544,9 @@ class RegisterStoreIT {
             final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
 
             softly.assertThatCode(() -> {
-                store.record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
                 final RegisterBatch monday = store.assemble(
                         new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
@@ -565,13 +595,13 @@ class RegisterStoreIT {
             final DistributionCommand tuesdaySecond = seededCommand(HEARING_FOUR, TUESDAY_SHARED);
 
             softly.assertThatCode(() -> {
-                store.record(mondayFirst, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(mondayFirst, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.record(mondaySecond, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(mondaySecond, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.record(tuesdayFirst, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED),
+                record(tuesdayFirst, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED),
                         APPLICANT, RecordedFlagState.ON);
-                store.record(tuesdaySecond, document(HEARING_FOUR, TUESDAY, TUESDAY_SHARED),
+                record(tuesdaySecond, document(HEARING_FOUR, TUESDAY, TUESDAY_SHARED),
                         APPLICANT, RecordedFlagState.ON);
                 final List<RegisterRecord> waiting = mine(store.activeUnbatched());
                 final RegisterBatch monday = store.assemble(
@@ -605,9 +635,9 @@ class RegisterStoreIT {
             final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
 
             softly.assertThatCode(() -> {
-                store.record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
                 final RegisterBatch monday = store.assemble(
                         new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
@@ -631,9 +661,9 @@ class RegisterStoreIT {
             final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
 
             softly.assertThatCode(() -> {
-                store.record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
                 generate(store.assemble(new CourtCentreDay(courtCentre, MONDAY),
                         mine(store.activeUnbatched())), PAYLOAD_FILE_ID, DOCUMENT_FILE_ID);
@@ -698,6 +728,19 @@ class RegisterStoreIT {
                 new RunClaim(command.source(), command.requestId(), "runner-1", UUID.randomUUID(),
                         "msg-1"));
         return command;
+    }
+
+    /**
+     * The recording every case makes, under this suite's court centre OU code.
+     *
+     * <p>The code is a fact about the court centre rather than about any one case, so it is named
+     * once here instead of at each of the thirty call sites. The case that is <em>about</em> the OU
+     * code calls the port directly, so the port's own shape is still asserted somewhere.
+     */
+    private RecordOutcome record(final DistributionCommand command,
+            final CourtRegisterDocument document, final String defendantType,
+            final RecordedFlagState flagState) {
+        return store.record(command, document, OU_CODE, defendantType, flagState);
     }
 
     /** One hearing's register for this case's court centre, as the pipeline would hand it over. */
@@ -827,6 +870,20 @@ class RegisterStoreIT {
                 .optional();
     }
 
+    /** The OU code the batch was assembled under, read back out of {@code register_batch}. */
+    private Optional<String> batchOuCodeOn(final LocalDate registerDate) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT court_centre_ou_code
+                          FROM register_batch
+                         WHERE court_centre_id = :courtCentre AND register_date = :registerDate
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("registerDate", registerDate)
+                .query(String.class)
+                .optional();
+    }
+
     /** This case's batch for a day, insisting the arrangement wrote one. */
     private UUID batchIdOn(final LocalDate registerDate) {
         return ProcessedLogTestSupport.jdbcClient()
@@ -845,6 +902,19 @@ class RegisterStoreIT {
         return ProcessedLogTestSupport.jdbcClient()
                 .sql("""
                         SELECT status
+                          FROM processed_output
+                         WHERE source = :source AND request_id = :requestId
+                        """)
+                .param("source", command.source())
+                .param("requestId", command.requestId())
+                .query(String.class)
+                .optional();
+    }
+
+    private static Optional<String> ouCodeOf(final DistributionCommand command) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT court_centre_ou_code
                           FROM processed_output
                          WHERE source = :source AND request_id = :requestId
                         """)

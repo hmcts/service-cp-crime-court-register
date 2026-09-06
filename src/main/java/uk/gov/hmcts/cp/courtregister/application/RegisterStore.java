@@ -40,16 +40,25 @@ public interface RegisterStore {
      * it is on its way to a PDF, and rewriting it would take a register out of a batch the renderer
      * has already been asked about.
      *
-     * @param document      the validated register document, stored exactly as it will be rendered
-     * @param command       the request this register was produced for
-     * @param defendantType {@code Applicant} / {@code Appellant} / {@code Respondent}, or
-     *                      {@code null} where the hearing carried no court application
-     * @param flagState     the cutover flag as last read, which decides whether the row is batched
-     *                      automatically at all (research §12)
+     * <p>The court centre's OU code is an argument because it is the one fact the batch needs that
+     * the document does not carry: the transformation resolves it from reference data (001 carries
+     * it on {@code ProcessedOutputClaim} for the same reason), {@code assemble} copies it from the
+     * batch's first row, and the render payload and the file name are built from it. Nothing
+     * downstream can re-derive it from a row that did not record it.
+     *
+     * @param document           the validated register document, stored exactly as it will be
+     *                           rendered
+     * @param command            the request this register was produced for
+     * @param courtCentreOuCode  the court centre's OU code as the transformation resolved it, or
+     *                           {@code null} where reference data named none
+     * @param defendantType      {@code Applicant} / {@code Appellant} / {@code Respondent}, or
+     *                           {@code null} where the hearing carried no court application
+     * @param flagState          the cutover flag as last read, which decides whether the row is
+     *                           batched automatically at all (research §12)
      * @return the row that was written and the row it superseded, if any
      */
     RecordOutcome record(DistributionCommand command, CourtRegisterDocument document,
-            String defendantType, RecordedFlagState flagState);
+            String courtCentreOuCode, String defendantType, RecordedFlagState flagState);
 
     /**
      * The registers waiting to be batched.

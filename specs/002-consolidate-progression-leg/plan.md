@@ -178,6 +178,7 @@ docker-compose.yml                             # + artemis, fileservice-postgres
 ```java
 public interface RegisterStore {
     RecordOutcome record(DistributionCommand command, CourtRegisterDocument document,
+                         String courtCentreOuCode,                              // the batch's copy
                          String defendantType, RecordedFlagState flagState);   // supersedes in-txn
     List<RegisterRecord> activeUnbatched();                                     // RECORDED, unsuperseded, ON
     RegisterBatch assemble(CourtCentreDay key, List<RegisterRecord> records);   // stamps batch_id

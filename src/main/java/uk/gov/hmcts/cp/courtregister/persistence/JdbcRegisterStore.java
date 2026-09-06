@@ -5,6 +5,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -106,12 +107,13 @@ public class JdbcRegisterStore implements RegisterStore {
                    AND batch_id IS NULL
             ), recorded AS (
                 INSERT INTO processed_output (
-                    output_id, source, request_id, court_centre_id, register_date, file_name,
-                    status, request_digest, document, hearing_id, hearing_date, court_house,
-                    register_time, defendant_type, recorded_flag_state, superseded_at,
-                    superseded_by, created_at, updated_at)
+                    output_id, source, request_id, court_centre_id, court_centre_ou_code,
+                    register_date, file_name, status, request_digest, document, hearing_id,
+                    hearing_date, court_house, register_time, defendant_type, recorded_flag_state,
+                    superseded_at, superseded_by, created_at, updated_at)
                 SELECT
-                    :outputId, :source, :requestId, :courtCentreId, :registerDate, :fileName,
+                    :outputId, :source, :requestId, :courtCentreId, :courtCentreOuCode,
+                    :registerDate, :fileName,
                     CASE WHEN later.output_id IS NULL THEN 'RECORDED' ELSE 'SUPERSEDED' END,
                     :digest, CAST(:document AS jsonb), :hearingId, :hearingDate, :courtHouse,
                     :registerTime, :defendantType, :flagState,
@@ -355,13 +357,17 @@ public class JdbcRegisterStore implements RegisterStore {
      * instant is what orders two re-shares of one hearing and the day it falls on is what the batch
      * groups by.
      *
+     * <p>The OU code is written here because {@link #assemble(CourtCentreDay, List)} reads it off
+     * the batch's first row, and nothing between the transformation and the render payload knows it
+     * otherwise: the document does not carry it.
+     *
      * @throws IllegalStateException if the key already carries more than one active row, or if the
      *                               statement recorded nothing
      */
     @Override
     public RecordOutcome record(final DistributionCommand command,
-            final CourtRegisterDocument document, final String defendantType,
-            final RecordedFlagState flagState) {
+            final CourtRegisterDocument document, final String courtCentreOuCode,
+            final String defendantType, final RecordedFlagState flagState) {
         final UUID outputId = UUID.randomUUID();
         final String json = objectMapper.writeValueAsString(document);
         final Instant registerTime = instantOf(document.registerDate(), "registerDate");
@@ -371,6 +377,7 @@ public class JdbcRegisterStore implements RegisterStore {
                 .param("source", command.source())
                 .param("requestId", command.requestId())
                 .param(COURT_CENTRE_ID, UUID.fromString(document.courtCentreId()))
+                .param("courtCentreOuCode", courtCentreOuCode, Types.VARCHAR)
                 .param(REGISTER_DATE, LocalDate.ofInstant(registerTime, LONDON))
                 .param("fileName", document.fileName())
                 .param("digest", digestOf(json))
