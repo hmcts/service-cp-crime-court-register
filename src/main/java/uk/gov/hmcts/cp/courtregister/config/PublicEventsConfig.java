@@ -1,6 +1,17 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
+import jakarta.jms.ConnectionFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.jms.ConnectionFactoryUnwrapper;
+import org.springframework.boot.jms.autoconfigure.JmsProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
+import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DocumentEventListener;
+import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
 
 /**
  * The listener container the public-event subscription runs in.
@@ -11,24 +22,100 @@ import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
  * {@code subscription-durable} with a {@code client-id}, because a document rendered while this pod
  * was restarting must still be delivered, which is the whole of what
  * {@code DocumentEventListenerIT} proves; and the {@code CPPNAME} selector, so the broker filters
- * the topic rather than this service filtering it after delivery.
+ * the topic rather than this service filtering it after delivery. The selector, the destination and
+ * the subscription's name are on the listener itself, read from {@code courtregister.publicevents.*};
+ * the three settings above are Spring's own {@code spring.jms.*} keys and are read from there.
  *
- * <p><strong>Its auto-startup is tied to {@code courtregister.generation.enabled}.</strong> A
- * deployment running the intake half alone has no use for outcomes and should hold no durable
- * subscription: an unread durable subscription accumulates every matching event on the broker until
- * somebody notices.
+ * <p><strong>The container is given the native connection factory.</strong> Boot's shared
+ * {@code jmsConnectionFactory} is a caching one, and a container that carries the client id cannot
+ * set it on a shared connection - {@code setClientID call not supported on proxy for shared
+ * Connection}. The durable subscription's identity therefore has to be established where the
+ * connection is, so the container is handed the unwrapped factory and opens a connection of its own,
+ * which is in any case the arrangement {@code DefaultMessageListenerContainer} is built for: it
+ * caches the connection, the session and the consumer itself.
  *
- * <p><strong>Seam only.</strong> The configuration lands with T046; until then this is annotated
- * with nothing and creates no beans, so a context that loads today is the context 001 left.
+ * <p><strong>Its auto-startup is tied to {@code courtregister.generation.enabled} and to
+ * {@code completion=event}.</strong> A deployment running the intake half alone has no use for
+ * outcomes and should hold no durable subscription: an unread durable subscription accumulates every
+ * matching event on the broker until somebody notices. The first half of the rule is this class's
+ * own condition, so an intake-only pod builds none of this at all; the second is the
+ * {@code poll-only} escape hatch, which asks for no broker and must therefore subscribe to nothing.
+ *
+ * <p><strong>One consumer, deliberately.</strong> A non-shared durable subscription admits exactly
+ * one, and a second would be refused by the broker rather than double the throughput. Outcomes
+ * arrive at the rate court centres are rendered at, which is tens a night.
  */
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
 public class PublicEventsConfig {
+
+    /**
+     * The container factory the listener names, held as a constant because the listener names it in
+     * an annotation and a bean name that only agreed by convention would be a subscription nothing
+     * created.
+     */
+    public static final String LISTENER_CONTAINER_FACTORY = "publicEventListenerContainerFactory";
+
+    private static final Logger LOG = LoggerFactory.getLogger(PublicEventsConfig.class);
+
+    /** The concurrency a non-shared durable subscription permits, which is one. */
+    private static final String ONE_CONSUMER = "1";
 
     /**
      * The container factory the listener's subscription is created from.
      *
+     * @param connectionFactory the broker connection, unwrapped to the native factory so the
+     *                          container may establish the client id on its own connection
+     * @param jms               Spring's own JMS settings: the topic domain, the durable flag and the
+     *                          client id that is half the subscription's identity
+     * @param generation        the downstream half's settings, for the completion mechanism
      * @return the factory, durable and topic-scoped
      */
-    public DefaultJmsListenerContainerFactory publicEventListenerContainerFactory() {
-        throw new UnsupportedOperationException("T046");
+    @Bean(LISTENER_CONTAINER_FACTORY)
+    public DefaultJmsListenerContainerFactory publicEventListenerContainerFactory(
+            final ConnectionFactory connectionFactory,
+            final JmsProperties jms,
+            final GenerationProperties generation) {
+
+        final DefaultJmsListenerContainerFactory factory =
+                new DefaultJmsListenerContainerFactory();
+        factory.setConnectionFactory(ConnectionFactoryUnwrapper.unwrap(connectionFactory));
+        factory.setPubSubDomain(jms.isPubSubDomain());
+        factory.setSubscriptionDurable(jms.isSubscriptionDurable());
+        factory.setClientId(jms.getClientId());
+        factory.setConcurrency(ONE_CONSUMER);
+        factory.setAutoStartup(
+                GenerationProperties.COMPLETION_EVENT.equals(generation.completion()));
+        return factory;
+    }
+
+    /**
+     * The listener the subscription delivers to.
+     *
+     * <p>Declared here rather than annotated as a component for the same reason
+     * {@link ProcessedLogConfig}'s beans are: the sink it writes through is the register store's
+     * neighbour and exists only where a database does, and a subscription with nowhere to apply an
+     * outcome is a durable subscription filling up on the broker. Where there is no sink there is
+     * therefore no listener, no {@code @JmsListener} to register and no subscription - which is the
+     * shape a context-load test with no database has, and the shape
+     * {@code DocumentEventListenerIT} gives itself a sink to escape.
+     *
+     * @param outcomes where a recognised outcome is applied, if this context has anywhere
+     * @param metrics  where an event this service did not ask for is counted
+     * @return the listener, or {@code null} where no outcome could be applied
+     */
+    @Bean
+    public DocumentEventListener documentEventListener(
+            final ObjectProvider<DocumentOutcomeSink> outcomes, final GenerationMetrics metrics) {
+
+        final DocumentOutcomeSink sink = outcomes.getIfAvailable();
+        final DocumentEventListener listener =
+                sink == null ? null : new DocumentEventListener(sink, metrics);
+        if (listener == null) {
+            LOG.warn("No outcome sink is on this context, so no durable subscription to the "
+                    + "public-event topic is held: an outcome has nowhere to be applied without "
+                    + "the register store.");
+        }
+        return listener;
     }
 }
