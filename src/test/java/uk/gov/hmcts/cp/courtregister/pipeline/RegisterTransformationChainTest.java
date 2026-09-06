@@ -8,11 +8,14 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ArrayNode;
@@ -29,6 +32,9 @@ import uk.gov.hmcts.cp.courtregister.domain.NoRegisterReason;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
+import uk.gov.hmcts.cp.courtregister.support.DifferentialCorpus;
+import uk.gov.hmcts.cp.courtregister.support.DifferentialCorpus.RecordedCase;
+import uk.gov.hmcts.cp.courtregister.support.JsonParity;
 import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
 
 /**
@@ -63,6 +69,12 @@ import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
  *   <li><strong>It is pure.</strong> Reference data's answer is an argument, not something the chain
  *       fetches (constitution Principle V), the payload it is handed comes back unedited, and two
  *       runs over the same inputs agree — there is no clock anywhere behind it.</li>
+ *   <li><strong>The register says which side of a court application it covers</strong>, and adds
+ *       nothing else. Increment 002 records the document instead of posting it, and the batch's PDF
+ *       payload prints its defendants under a {@code defendantType} progression used to resolve
+ *       after the POST. It is resolved here, where the hearing and the assembled document meet, and
+ *       it is the <em>only</em> thing 002 adds: the 001 recordings come back through the golden
+ *       comparison differing exactly where they differed before.</li>
  * </ul>
  *
  * @see <a href="file:../../../../../../../../doc/DEFECT-FIXES.md">doc/DEFECT-FIXES.md</a> rows C6,
@@ -79,6 +91,43 @@ class RegisterTransformationChainTest {
     private static final String COURT_CENTRE_ID = "853b1ff8-fc2a-44d1-a621-0cd16419f54a";
 
     private static final String YOUTH = "6647df67-a065-4d07-90ba-a8daa064ecc4";
+
+    /** The 001 recording of the base hearing whose child survives every filter. */
+    private static final String SURVIVING_YOUTH_RECORDING = "base__surviving-youth-defendant";
+
+    /** The 001 recording of the base hearing C22's non-prosecuting applicant is on. */
+    private static final String NON_PROSECUTING_AUTHORITY_RECORDING =
+            "base__non-prosecuting-authority-application";
+
+    /**
+     * Where each 001 recording already differs from this port, and the whole of where it does.
+     *
+     * <p>Four rows between them, every one of them a {@code doc/DEFECT-FIXES.md} claim the
+     * differential audit reconciles: {@code fileName} is C11, the legacy datetime name with the
+     * colons Windows refuses; the two {@code /hearing/} fields are C9, where an attendance day is
+     * compared against a register datetime and so never matches, leaving the appearance column
+     * empty; {@code verdictCode} is C23, prose in a field the platform model gives a code; and the
+     * dropped {@code prosecutionCasesOrApplications} entry is C22, the defence-initiated
+     * application the legacy admits to a register of the court's prosecutions.
+     *
+     * <p>Two components the fixes also move are deliberately <em>not</em> here, and their absence
+     * is the point: {@code registerDate} (C10) and the offence {@code wording} (C24) are registered
+     * as <em>derivations</em>, so {@link JsonParity} re-renders the recorded value and demands
+     * exactly it rather than reporting a difference. A derivation that stopped deriving would
+     * appear in this list, which is what makes the list a statement about the whole document.
+     */
+    private static final Map<String, List<String>> RECONCILED_IN_001 = Map.of(
+            SURVIVING_YOUTH_RECORDING,
+            List.of("/fileName",
+                    "/defendants/0/hearing/defendantPresent",
+                    "/defendants/0/hearing/defendantAppearanceDetails",
+                    "/defendants/0/prosecutionCasesOrApplications/0/offences/0/verdictCode"),
+            NON_PROSECUTING_AUTHORITY_RECORDING,
+            List.of("/fileName",
+                    "/defendants/0/hearing/defendantPresent",
+                    "/defendants/0/hearing/defendantAppearanceDetails",
+                    "/defendants/0/prosecutionCasesOrApplications",
+                    "/defendants/0/prosecutionCasesOrApplications/0/offences/0/verdictCode"));
 
     private final ObjectMapper mapper = JacksonConfig.contractObjectMapper();
 
@@ -300,6 +349,64 @@ class RegisterTransformationChainTest {
     }
 
     @Nested
+    @DisplayName("the side of the court application the register covers")
+    class TheDefendantType {
+
+        @Test
+        @DisplayName("an appeal the child is the appellant on is recorded as Appellant")
+        void an_appeal_the_child_is_the_appellant_on_is_recorded_as_appellant() {
+            // The rule progression applies after the POST, applied here instead: an application
+            // whose applicant is a master defendant and whose type carries both the appeal and the
+            // applicant-appellant flags puts its defendants on the appellant side
+            // (`CourtRegisterHandler.java:131-153`, recorded as the `synthetic__appellant` golden).
+            final CourtRegisterDocument document = register(
+                    transform(anAppealTheChildIsTheAppellantOn(), answering(youthSubscription())));
+
+            assertThat(document.defendantType()).isEqualTo("Appellant");
+        }
+
+        @Test
+        @DisplayName("and a register naming no court application carries no type at all")
+        void a_register_naming_no_court_application_carries_no_type() {
+            // Not the empty string progression leaves (`CourtRegisterHandler:84` writes
+            // `StringUtils.EMPTY` when there is no application to read): the field is optional in
+            // the frozen register-document schema and the record is serialised NON_NULL, so a
+            // hearing without one leaves it absent exactly as 001 did.
+            final CourtRegisterDocument document = register(
+                    transform(survivingYouth(), answering(youthSubscription())));
+
+            assertThat(document.defendantType()).isNull();
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @ValueSource(strings = {SURVIVING_YOUTH_RECORDING, NON_PROSECUTING_AUTHORITY_RECORDING})
+        @DisplayName("and the 001 recordings are otherwise byte-identical")
+        void the_001_recordings_are_otherwise_byte_identical(final String caseId) {
+            final RecordedCase recorded = DifferentialCorpus.load(caseId);
+            final ObjectNode ported = (ObjectNode) mapper.valueToTree(
+                    register(transform(recorded.payload(), recorded.subscriptions())));
+
+            // The golden comparison the differential audit runs, with the one field this increment
+            // adds taken out of the tree first: everything else has to land where 001 left it. The
+            // paths below are the defect-fix rows those two recordings already reconcile, and a
+            // path arriving that is not one of them is 002 having moved something it was not asked
+            // to move.
+            final JsonNode addedByThisIncrement = ported.remove("defendantType");
+            assertThat(JsonParity.differences(recorded.expected(), ported))
+                    .extracting(JsonParity.Difference::path)
+                    .containsExactlyInAnyOrderElementsOf(RECONCILED_IN_001.get(caseId));
+
+            // Neither recording's first defendant names a court application on its first
+            // case-or-application entry, which is the only one progression's `getCourtApplicationId`
+            // (`:226-235`) reads, so both T004 goldens record the empty string and this port writes
+            // nothing: for the 001 corpus the recorded register is the posted one, byte for byte.
+            assertThat(addedByThisIncrement)
+                    .describedAs("%s names no court application, so no type is added", caseId)
+                    .isNull();
+        }
+    }
+
+    @Nested
     @DisplayName("pure, by contract")
     class PureByContract {
 
@@ -425,6 +532,35 @@ class RegisterTransformationChainTest {
         hearing.set("prosecutionCases", mapper.createArrayNode());
         hearing.set("courtApplications", mapper.createArrayNode());
         hearing.set("defendantJudicialResults", mapper.createArrayNode());
+        return payload;
+    }
+
+    /**
+     * The surviving-youth hearing rebuilt as an appeal the child is the appellant on.
+     *
+     * <p>Three edits, and each of them is what the rule reads. The prosecution case goes, because
+     * the court application has to be the <em>first</em> case-or-application the register's first
+     * defendant carries: {@code getCourtApplicationId} ({@code CourtRegisterHandler.java:226-235})
+     * reads element zero and nothing else, which is why all six base hearings resolve to no
+     * application at all and why not one of them can reach a type. The applicant gains the master
+     * defendant the register covers, and the application type gains the appeal and
+     * applicant-appellant flags - the branch the {@code synthetic__appellant} golden was recorded
+     * against, no base fixture carrying either flag.
+     *
+     * @return the payload
+     */
+    private JsonNode anAppealTheChildIsTheAppellantOn() {
+        final JsonNode payload = survivingYouth();
+        final ObjectNode hearing = (ObjectNode) payload.get("hearing");
+        hearing.set("prosecutionCases", mapper.createArrayNode());
+
+        final ObjectNode application = (ObjectNode) hearing.get("courtApplications").get(0);
+        final ObjectNode type = (ObjectNode) application.get("type");
+        type.put("appealFlag", true);
+        type.put("applicantAppellantFlag", true);
+        ((ObjectNode) application.get("applicant"))
+                .putObject("masterDefendant")
+                .put("masterDefendantId", YOUTH);
         return payload;
     }
 
