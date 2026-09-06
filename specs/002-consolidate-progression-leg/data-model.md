@@ -92,9 +92,15 @@ inserts, because the row being replaced holds the key until the update takes it 
 | `completed_by` | `text` | `EVENT` \| `RECONCILER`, feeds the `reconciled` metric. Written by the `mark` that learned the outcome, in that mark's own statement: a batch state change is a compare-and-set, so there is no moment either side of the transition in which this could be set on its own. NOT NULL on `GENERATED` and on the three notified states it is reached through; on `FAILED`, set exactly for the two generator-attributed reasons (`GENERATION_FAILED`, `GENERATION_TIMED_OUT`, which is `BatchFailureReason.isGeneratorAttributed()`) and NULL for the other four, which are this service's own verdict about a render nobody outside it answered for |
 | `assembled_at`, `requested_at`, `generated_at`, `notified_at`, `failed_at` | `timestamptz` | |
 | `attempts` | `int NOT NULL DEFAULT 0` | Lifetime tally, never a control variable |
+| `supplement_of` | `uuid` FK → `register_batch(batch_id)` | The batch this one follows for the same key; NULL on a day's first batch |
+| `supplement_index` | `int NOT NULL DEFAULT 0` | 0 on a day's first batch, counting up from 1 on each supplementary one; the file name is built from it |
 
-Constraint: `UNIQUE (court_centre_id, register_date) WHERE status <> 'FAILED'` (partial unique) — one
-live batch per key; a FAILED batch may be re-assembled (new `batch_id`, rows re-stamped).
+Constraint: `UNIQUE (court_centre_id, register_date) WHERE status IN ('PENDING','GENERATING',
+'GENERATED')` (partial unique) — one **in-flight** batch per key, those being the three states in
+which a batch is still owed something (a render request, a render outcome, an e-mail). The four
+terminal states are alike: a FAILED batch may be re-assembled (new `batch_id`, rows re-stamped), and
+a NOTIFIED / PARTIALLY_NOTIFIED / NOTIFIED_NOBODY one may be followed by a supplementary batch
+(below).
 
 Check: `register_batch_completed_by_shape_chk`, the `completed_by` rule above as a shape the row
 keeps, for the writers that do not go through the store (the CLI's whole-row write): NULL on
@@ -108,12 +114,24 @@ contradictory `markGenerated` or `markFailed` before it issues a statement and
 `RegisterBatchRepository` refuses an attribution on a batch that has not finished, so the same rule
 is enforced twice and stated once (`BatchFailureReason.isGeneratorAttributed()`).
 
-**Open design question (before T043/T050).** A same-day re-share recorded after that day's batch is
-GENERATED or NOTIFIED becomes a fresh active unbatched row whose key already has a live batch, so the
-partial unique constraint above blocks a second batch for that key. The options are (a) permit a
-second live batch once the first is terminal, (b) a supplementary batch attached to the first, or
-(c) surface such rows via list-batches for CLI generation. The decision is recorded in the design as
-Q27 and is needed before `BatchAssembler` (T043) and the job (T050).
+**Supplementary batches for late re-shares (design Q27, decided 2026-09-06).** A same-day re-share
+recorded after its (court centre, register date) batch is terminal becomes a **supplementary batch
+for the same key**, assembled by the next run once **every** earlier batch for that key is terminal.
+The supplementary batch names the batch it follows in `supplement_of` and carries the next
+`supplement_index` (1 for the first supplement, counting up); a day's first batch has `supplement_of`
+NULL and `supplement_index` 0. While any batch for the key is still in flight the rows simply wait,
+because the narrowed partial unique index above admits one PENDING / GENERATING / GENERATED batch per
+key and no more.
+
+A supplementary batch's **file name** is the first row's `fileName` with `-supplementary-<index>`
+inserted before the extension - `courtregister_2026-08-20.json` becomes
+`courtregister_2026-08-20-supplementary-1.json`. `BatchAssembler` (T043) builds it; the schema only
+records the index it is built from.
+
+The alternatives Q27 weighed were a second unrelated live batch for the key, which records nothing
+about why a day has two documents, and surfacing such rows through list-batches for CLI generation,
+which makes a routine re-share an operator's job. The link keeps the day's documents ordered and
+attributable, and leaves the nightly job able to send them without being asked.
 
 ## `register_notification`
 

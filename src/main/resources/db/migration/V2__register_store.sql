@@ -89,8 +89,24 @@ CREATE TABLE register_batch (
     -- when to stop trying, exactly as the broker delivery count does on the intake half.
     attempts              integer     NOT NULL DEFAULT 0,
 
+    -- The supplementary link (design Q27). A hearing re-shared after its (court centre, register
+    -- date) batch has finished is recorded as a fresh active row for a key that has already been
+    -- rendered and e-mailed, and it still has to reach the Youth Offending Teams. Once every
+    -- earlier batch for the key is terminal, the next run assembles those rows into a
+    -- supplementary batch that names the batch it follows.
+    --
+    -- Null and 0 on a day's first batch, which supplements nothing; `supplement_index` counts up
+    -- from 1 on each later one and is what its file name is built from - the first row's fileName
+    -- with "-supplementary-<index>" inserted before the extension. Self-referential because a
+    -- supplement is a relationship between two batches for one key, not a state one of them holds
+    -- alone, which is the shape `processed_output.superseded_by` already has for the same reason.
+    supplement_of         uuid,
+    supplement_index      integer     NOT NULL DEFAULT 0,
+
     CONSTRAINT register_batch_pkey
         PRIMARY KEY (batch_id),
+    CONSTRAINT register_batch_supplement_of_fk
+        FOREIGN KEY (supplement_of) REFERENCES register_batch (batch_id),
     CONSTRAINT register_batch_status_chk
         CHECK (status IN ('PENDING', 'GENERATING', 'GENERATED', 'NOTIFIED', 'PARTIALLY_NOTIFIED',
                           'NOTIFIED_NOBODY', 'FAILED')),
@@ -142,12 +158,20 @@ CREATE TABLE register_batch (
         CHECK (attempts >= 0)
 );
 
--- One live batch per (court centre, register day). Partial rather than a plain unique constraint
--- because a FAILED batch is re-assemblable under a new batch_id, and a total constraint would make
--- the first failure permanent for that day.
+-- One *in-flight* batch per (court centre, register day). PENDING, GENERATING and GENERATED are
+-- the states in which a batch is still owed something - a render request, a render outcome, an
+-- e-mail - and two of those for one key would render and send one day's registers twice.
+--
+-- The predicate names those three rather than excluding FAILED, because the four terminal states
+-- are all alike here: a FAILED batch is re-assemblable under a new batch_id, and a NOTIFIED,
+-- PARTIALLY_NOTIFIED or NOTIFIED_NOBODY one has to be followable by the supplementary batch a late
+-- re-share is assembled into (design Q27). Excluding only FAILED made every other ending as
+-- permanent for the day as the first failure would have been, which is the whole of what Q27 had
+-- to decide: a register re-shared after 18:00 could not be assembled at all until the next day's
+-- key opened.
 CREATE UNIQUE INDEX idx_register_batch_live_key
     ON register_batch (court_centre_id, register_date)
-    WHERE status <> 'FAILED';
+    WHERE status IN ('PENDING', 'GENERATING', 'GENERATED');
 
 -- One row per recipient of one batch: the de-duplicated union of the batch's subscribers, so a
 -- Youth Offending Team on ten of the day's hearings is told once (defect fix P4).
