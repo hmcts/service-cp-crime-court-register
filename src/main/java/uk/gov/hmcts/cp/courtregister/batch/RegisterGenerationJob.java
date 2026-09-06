@@ -59,9 +59,11 @@ import uk.gov.hmcts.cp.courtregister.domain.RunReport;
  * <p>Every run produces a {@link RunReport}, the skipped ones included: a report that only appeared
  * when work happened would make "the flag is off" and "the job did not fire" the same silence, and
  * before cutover the first of those is every night. The report is written as one structured line at
- * INFO and as the two gauges a nightly flow is read by between runs; every value in it is a count, a
- * duration or a bounded code, and no register, defendant or recipient reaches it (constitution
- * Principle VII).
+ * INFO and as the three gauges a nightly flow is read by between runs; every value in it is a count,
+ * a duration or a bounded code, and no register, defendant or recipient reaches it (constitution
+ * Principle VII). The keys the assembler deferred are among those counts, and they have to be: a
+ * court centre whose day was passed over has no batch in the outcomes and no document tonight, so a
+ * report without that number describes the night as if it had not happened.
  *
  * <p><strong>18:00 in the courts' own zone, and one of it.</strong> The schedule names the two
  * settings rather than repeating their values, so the hour this class runs at and the hour
@@ -228,9 +230,11 @@ public class RegisterGenerationJob {
         final BatchAssembly assembly = assembler.assemble(active, recorded, true);
 
         final Map<BatchStatus, Integer> outcomes = request(assembly);
+        final int deferred = assembly.deferred().size();
         metrics.oldestRecordedUnbatchedAge(oldestStillWaiting(active, assembly));
+        metrics.deferredKeys(deferred);
 
-        return new RunReport(decision, outcomes, 0, reconciler.reconcile(),
+        return new RunReport(decision, outcomes, deferred, reconciler.reconcile(),
                 sinceStart(startedAt));
     }
 
@@ -330,6 +334,11 @@ public class RegisterGenerationJob {
      * assembler deferred - a key whose earlier batch is still in flight - since everything else it
      * read is in a batch by now.
      *
+     * <p>The age is half the reading and {@code courtregister_deferred_keys} is the other half:
+     * this says how long the worst of them has waited and that says how much of the estate is
+     * waiting, and the report and the run's own line carry the same count so that a night's
+     * deferral is legible without a dashboard as well as with one.
+     *
      * @param active   the registers the store called active
      * @param assembly what the assembler made of them
      * @return the age of the oldest register still waiting, or {@link Duration#ZERO} where there is
@@ -361,12 +370,12 @@ public class RegisterGenerationJob {
     private static void record(final RunReport report) {
         final Map<BatchStatus, Integer> outcomes = report.outcomes();
         LOG.info("event={} gate={} reason={} batches={} generating={} failed={} pending={} "
-                        + "reconciled={} duration_ms={}",
+                        + "deferred={} reconciled={} duration_ms={}",
                 RUN_EVENT, gateOf(report.gateDecision()), reasonOf(report.gateDecision()),
                 outcomes.values().stream().mapToInt(Integer::intValue).sum(),
                 counted(outcomes, BatchStatus.GENERATING), counted(outcomes, BatchStatus.FAILED),
-                counted(outcomes, BatchStatus.PENDING), report.reconciled(),
-                report.duration().toMillis());
+                counted(outcomes, BatchStatus.PENDING), report.deferredKeys(),
+                report.reconciled(), report.duration().toMillis());
     }
 
     /**
