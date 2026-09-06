@@ -194,7 +194,7 @@ public class RegisterGenerationJob {
 
         final RunReport report;
         if (decision instanceof Skipped) {
-            report = new RunReport(decision, Map.of(), 0, sinceStart(startedAt));
+            report = new RunReport(decision, Map.of(), 0, 0, sinceStart(startedAt));
         } else {
             // Only from here on is the file service anything readiness should have an opinion
             // about, and it stops being one however the run ends.
@@ -230,7 +230,8 @@ public class RegisterGenerationJob {
         final Map<BatchStatus, Integer> outcomes = request(assembly);
         metrics.oldestRecordedUnbatchedAge(oldestStillWaiting(active, assembly));
 
-        return new RunReport(decision, outcomes, reconciler.reconcile(), sinceStart(startedAt));
+        return new RunReport(decision, outcomes, 0, reconciler.reconcile(),
+                sinceStart(startedAt));
     }
 
     /**

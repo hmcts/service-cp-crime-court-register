@@ -365,22 +365,24 @@ class GenerationMetricsTest {
     }
 
     /**
-     * The four readings that move when nothing happens.
+     * The five readings that move when nothing happens.
      *
      * <p>Every counter above records work. These record its absence: a record nobody batched, a
-     * batch nobody rendered, a deadline that cut a run short, and a flag nobody could read. A
-     * nightly flow that stopped running moves none of the counters at all.
+     * batch nobody rendered, a deadline that cut a run short, a court centre day the run passed
+     * over, and a flag nobody could read. A nightly flow that stopped running moves none of the
+     * counters at all.
      */
     @Nested
-    @DisplayName("the five gauges")
+    @DisplayName("the six gauges")
     class Gauges {
 
         @Test
-        void all_five_should_be_registered_before_a_run_has_happened() {
+        void all_six_should_be_registered_before_a_run_has_happened() {
             assertThat(gauge(GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE)).isZero();
             assertThat(gauge(GenerationMetrics.OLDEST_GENERATING_AGE)).isZero();
             assertThat(gauge(GenerationMetrics.OLDEST_PENDING_AGE)).isZero();
             assertThat(gauge(GenerationMetrics.PENDING_AFTER_DEADLINE)).isZero();
+            assertThat(gauge(GenerationMetrics.DEFERRED_KEYS)).isZero();
             assertThat(gauge(GenerationMetrics.FLAG_READ_OK)).isEqualTo(1);
         }
 
@@ -483,6 +485,7 @@ class GenerationMetricsTest {
                             GenerationMetrics.OLDEST_GENERATING_AGE,
                             GenerationMetrics.OLDEST_PENDING_AGE,
                             GenerationMetrics.PENDING_AFTER_DEADLINE,
+                            GenerationMetrics.DEFERRED_KEYS,
                             GenerationMetrics.FLAG_READ_OK);
         }
 
@@ -505,6 +508,7 @@ class GenerationMetricsTest {
                             GenerationMetrics.OLDEST_GENERATING_AGE,
                             GenerationMetrics.OLDEST_PENDING_AGE,
                             GenerationMetrics.PENDING_AFTER_DEADLINE,
+                            GenerationMetrics.DEFERRED_KEYS,
                             GenerationMetrics.FLAG_READ_OK);
         }
 
@@ -561,6 +565,7 @@ class GenerationMetricsTest {
             metrics.oldestGeneratingAge(Duration.ofMinutes(20));
             metrics.oldestPendingAge(Duration.ofMinutes(45));
             metrics.pendingAfterDeadline(1);
+            metrics.deferredKeys(1);
             metrics.flagRead(FlagDecision.OFF);
         }
     }
@@ -644,7 +649,7 @@ class GenerationMetricsTest {
         }
 
         @Test
-        @DisplayName("all five gauges scrape from a pod that has not run a night")
+        @DisplayName("all six gauges scrape from a pod that has not run a night")
         void the_gauges_should_scrape_before_any_run_has_happened() {
             assertThat(samplesOf(GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE))
                     .containsExactly(GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE);
@@ -654,6 +659,8 @@ class GenerationMetricsTest {
                     .containsExactly(GenerationMetrics.OLDEST_PENDING_AGE);
             assertThat(samplesOf(GenerationMetrics.PENDING_AFTER_DEADLINE))
                     .containsExactly(GenerationMetrics.PENDING_AFTER_DEADLINE);
+            assertThat(samplesOf(GenerationMetrics.DEFERRED_KEYS))
+                    .containsExactly(GenerationMetrics.DEFERRED_KEYS);
             assertThat(samplesOf(GenerationMetrics.FLAG_READ_OK))
                     .containsExactly(GenerationMetrics.FLAG_READ_OK);
         }

@@ -29,12 +29,12 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
  * ordinary one, because a run whose outcomes all arrive by reconciliation is a broker to look at
  * rather than a renderer.
  *
- * <p>The five gauges are the state a nightly flow cannot be understood without between runs: how
+ * <p>The six gauges are the state a nightly flow cannot be understood without between runs: how
  * old the oldest unbatched record is, how long the oldest batch has been waiting for a document,
  * how long the oldest batch that never reached the renderer has been stuck, how many batches the
- * run deadline left behind, and whether the flag was readable at all. Like
- * {@link ProcessingMetrics}'s two, they are registered from construction, because a dashboard must
- * be able to read them from a pod that has not yet run.
+ * run deadline left behind, how many court centre days a run passed over, and whether the flag was
+ * readable at all. Like {@link ProcessingMetrics}'s two, they are registered from construction,
+ * because a dashboard must be able to read them from a pod that has not yet run.
  *
  * <p>Nothing here refuses a reading it does not recognise. Telemetry that threw would end the run it
  * was only supposed to describe, so every label is derived from a bounded enumeration - the
@@ -63,6 +63,7 @@ public class GenerationMetrics {
     public static final String OLDEST_GENERATING_AGE = "courtregister_oldest_generating_age";
     public static final String OLDEST_PENDING_AGE = "courtregister_oldest_pending_age";
     public static final String PENDING_AFTER_DEADLINE = "courtregister_pending_after_deadline";
+    public static final String DEFERRED_KEYS = "courtregister_deferred_keys";
     public static final String FLAG_READ_OK = "courtregister_flag_read_ok";
 
     public static final String OUTCOME_TAG = "outcome";
@@ -112,7 +113,7 @@ public class GenerationMetrics {
     private final MeterRegistry registry;
 
     /**
-     * Gauge state, held here rather than read from a collaborator so the five gauges exist from
+     * Gauge state, held here rather than read from a collaborator so the six gauges exist from
      * construction: a nightly flow is read between runs as much as during one, and a gauge that
      * only appears after the first run is not an alerting surface.
      */
@@ -120,6 +121,7 @@ public class GenerationMetrics {
     private final AtomicLong oldestGeneratingSeconds = new AtomicLong();
     private final AtomicLong oldestPendingSeconds = new AtomicLong();
     private final AtomicInteger pendingAfterDeadlineBatches = new AtomicInteger();
+    private final AtomicInteger deferredCourtCentreDays = new AtomicInteger();
 
     /**
      * Whether the flag was readable, up until a read says otherwise - the honest starting position
@@ -148,6 +150,10 @@ public class GenerationMetrics {
         Gauge.builder(PENDING_AFTER_DEADLINE, pendingAfterDeadlineBatches,
                         AtomicInteger::doubleValue)
                 .description("Batches a run ended without asking the renderer for")
+                .register(registry);
+        Gauge.builder(DEFERRED_KEYS, deferredCourtCentreDays, AtomicInteger::doubleValue)
+                .description("Court centre days a run passed over, their earlier batch still in "
+                        + "flight")
                 .register(registry);
         Gauge.builder(FLAG_READ_OK, flagReadable, AtomicInteger::doubleValue)
                 .description("1 while the CourtRegisterService flag is readable, 0 while it is not")
@@ -299,6 +305,21 @@ public class GenerationMetrics {
      */
     public void pendingAfterDeadline(final int batches) {
         pendingAfterDeadlineBatches.set(batches);
+    }
+
+    /**
+     * Reports how many court centre days a run passed over.
+     *
+     * <p>The companion of {@link #OLDEST_RECORDED_UNBATCHED_AGE}, and not a substitute for it: the
+     * age says how long the worst of them has waited and this says how much of the estate is
+     * waiting. A key is deferred because a batch of its own is still in flight, so a reading that
+     * stays up across nights is the schema's one-in-flight-batch-per-key rule holding a court centre
+     * back rather than a run that failed.
+     *
+     * @param keys the number of court centre days this run assembled nothing for
+     */
+    public void deferredKeys(final int keys) {
+        deferredCourtCentreDays.set(keys);
     }
 
     /**

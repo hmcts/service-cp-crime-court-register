@@ -55,6 +55,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 import uk.gov.hmcts.cp.courtregister.domain.RunReport;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
 /**
  * The night, in the order it happens.
@@ -209,6 +210,34 @@ class RegisterGenerationJobTest {
         // read by the notify leg rather than by anything here - so a stub that hands the argument
         // back is what a written batch looks like from this class.
         when(store.assemble(any(), any())).thenAnswer(call -> call.getArgument(0));
+    }
+
+    /**
+     * Sets the night up as one the flag allows, holding one batch and deferring one key.
+     *
+     * <p>A key is deferred when a batch of its own is still in flight, which is the schema's
+     * one-live-batch-per-key rule (design Q27) rather than anything going wrong. What makes it worth
+     * reporting is that nothing else in the run says it happened: no batch was assembled for that
+     * key, so it is in none of the outcome counts.
+     *
+     * @param deferred the court centre days the assembler passed over
+     */
+    private void aNightDeferring(final CourtCentreDay... deferred) {
+        theGateAnswers(new Proceed(false));
+        when(store.activeUnbatched()).thenReturn(ACTIVE);
+        when(assembler.assemble(any(), any(), anyBoolean())).thenReturn(new BatchAssembly(
+                List.of(new AssembledBatch(batch(), ACTIVE)), List.of(deferred)));
+        when(store.assemble(any(), any())).thenAnswer(call -> call.getArgument(0));
+        everyRequestIsAccepted();
+    }
+
+    private static CourtCentreDay key() {
+        return new CourtCentreDay(UUID.randomUUID(), THURSDAY);
+    }
+
+    private double deferredKeys() {
+        final Gauge gauge = registry.find(GenerationMetrics.DEFERRED_KEYS).gauge();
+        return gauge == null ? ABSENT : gauge.value();
     }
 
     /**
@@ -725,6 +754,70 @@ class RegisterGenerationJobTest {
                             + "which is how a night that is drifting towards its hour is seen "
                             + "before the night it runs out of it")
                     .isEqualTo(Duration.ofMinutes(7));
+        }
+
+        /**
+         * A deferred key is the one thing a run does that no other number it reports covers.
+         *
+         * <p>Its registers were read as active and no batch was assembled for them, so they appear
+         * in none of the outcome counts, and the court centre gets no document tonight.
+         * {@code BatchAssembly.deferred} exists so the run can say so, and until it reached the
+         * report and the line it said it to nobody.
+         */
+        @Test
+        void the_report_should_count_the_keys_the_run_deferred() {
+            aNightDeferring(key());
+
+            final RunReport report = run();
+
+            softly.assertThat(reported(report, RunReport::deferredKeys))
+                    .as("a key whose earlier batch is still in flight produced no batch tonight, "
+                            + "so it is in none of the outcome counts and would otherwise leave "
+                            + "the run with nothing at all to say about it")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void the_line_the_run_leaves_behind_should_carry_the_keys_it_deferred() {
+            aNightDeferring(key());
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                softly.assertThat(log.messages())
+                        .as("the report is a value a test can read and the line is what an "
+                                + "operator reads; a count that reached only the first of them "
+                                + "would be a night's deferral nobody sees")
+                        .anyMatch(line -> line.contains("deferred=1"));
+            }
+        }
+
+        @Test
+        void the_keys_the_run_deferred_should_be_gauged() {
+            aNightDeferring(key(), key());
+
+            run();
+
+            softly.assertThat(deferredKeys())
+                    .as("the companion of the oldest-unbatched age: that says how long the worst "
+                            + "of them has waited and this says how much of the estate is waiting")
+                    .isEqualTo(2);
+        }
+
+        @Test
+        void a_run_that_deferred_nothing_should_bring_that_gauge_back_down() {
+            aNightDeferring(key());
+            run();
+
+            aNightHolding(batch());
+            when(assembler.assemble(any(), any(), anyBoolean()))
+                    .thenReturn(assembly(batch()));
+            run();
+
+            softly.assertThat(deferredKeys())
+                    .as("a gauge that only ever went up would need a run to fail before it could "
+                            + "come down again")
+                    .isZero();
         }
 
         @Test
