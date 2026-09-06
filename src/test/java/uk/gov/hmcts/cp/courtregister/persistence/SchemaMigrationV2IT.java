@@ -10,6 +10,10 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -17,6 +21,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.configuration.FluentConfiguration;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -818,6 +824,126 @@ class SchemaMigrationV2IT {
                     insertLock("register-generation")))
                     .isInstanceOf(SQLException.class)
                     .hasMessageContaining("shedlock_pkey");
+        }
+    }
+
+    @Nested
+    @DisplayName("a V1 progression-post row carried through the migration")
+    class BackfillOfADeployedV1Row {
+
+        private static final String HEARING_DAY = "2026-08-20";
+        private static final String DIGEST =
+                "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+
+        /**
+         * The London start of {@link #HEARING_DAY}, which falls in British Summer Time, so a
+         * backfill that cast the date at UTC rather than at Europe/London would land an hour late
+         * and this assertion would say so.
+         */
+        private static final Instant LONDON_MIDNIGHT = LocalDate.parse(HEARING_DAY)
+                .atStartOfDay(ZoneId.of("Europe/London"))
+                .toInstant();
+
+        private static FluentConfiguration flywayAgainst(final String jdbcUrl) {
+            return Flyway.configure()
+                    .dataSource(jdbcUrl, PostgresTestSupport.username(), PostgresTestSupport.password())
+                    .locations("classpath:db/migration");
+        }
+
+        private static Connection connectionTo(final String jdbcUrl) throws SQLException {
+            return DriverManager.getConnection(
+                    jdbcUrl, PostgresTestSupport.username(), PostgresTestSupport.password());
+        }
+
+        /**
+         * The parent request as the intake half wrote it: the hearing the register was built from
+         * and the day it was received under, which are the two facts the backfill reads.
+         */
+        private static String insertV1Request(final UUID requestId, final UUID hearingId) {
+            return "INSERT INTO " + REQUEST_TABLE + " (source, request_id, hearing_id, hearing_day, "
+                    + "shared_time, event_type, request_fingerprint, status, attempts) VALUES ("
+                    + "'RESULTS', '" + requestId + "', '" + hearingId + "', DATE '" + HEARING_DAY
+                    + "', TIMESTAMPTZ '2026-08-20T09:00:00Z', 'Hearing_Resulted', 'fingerprint', "
+                    + "'COMPLETED', 1)";
+        }
+
+        /**
+         * A settled {@code progression-post} row, in V1's shape: none of the ten columns V2 adds,
+         * because at the moment this row was written none of them existed.
+         */
+        private static String insertV1Output(final UUID outputId, final UUID requestId) {
+            return "INSERT INTO " + OUTPUT_TABLE + " (output_id, source, request_id, "
+                    + "court_centre_id, register_date, file_name, status, response_code, "
+                    + "request_digest) VALUES ('" + outputId + "', 'RESULTS', '" + requestId
+                    + "', '" + UUID.randomUUID() + "', DATE '" + HEARING_DAY + "', "
+                    + "'courtregister_" + HEARING_DAY + ".json', 'POSTED', 202, '" + DIGEST + "')";
+        }
+
+        @Test
+        @DisplayName("V2 backfills the four NOT NULL columns and leaves the POST's own evidence alone")
+        void a_progression_post_row_should_survive_the_widening_with_the_documented_values()
+                throws SQLException {
+            // The migration's own promise, made in V2__register_store.sql's backfill comment and in
+            // af16dad's message, where it was checked by hand once. A V1 database that already holds
+            // `courtregister.output=progression-post` rows is what production would be at cutover,
+            // and "add, backfill, then constrain" is only correct if the values it chooses are
+            // there afterwards - which nothing asserted until this case.
+            final String database =
+                    "courtregister_v1_backfill_" + UUID.randomUUID().toString().replace("-", "");
+            final String jdbcUrl = PostgresTestSupport.createEmptyDatabase(database);
+            final UUID requestId = UUID.randomUUID();
+            final UUID hearingId = UUID.randomUUID();
+            final UUID outputId = UUID.randomUUID();
+
+            flywayAgainst(jdbcUrl).target("1").load().migrate();
+
+            try (Connection connection = connectionTo(jdbcUrl);
+                 Statement statement = connection.createStatement()) {
+                statement.executeUpdate(insertV1Request(requestId, hearingId));
+                statement.executeUpdate(insertV1Output(outputId, requestId));
+            }
+
+            flywayAgainst(jdbcUrl).load().migrate();
+
+            final String sql = """
+                    SELECT document::text AS document_json, hearing_id, hearing_date, register_time,
+                           recorded_flag_state, status, request_digest, created_at
+                      FROM processed_output
+                     WHERE output_id = ?
+                    """;
+            try (Connection connection = connectionTo(jdbcUrl);
+                 PreparedStatement statement = connection.prepareStatement(sql)) {
+                statement.setObject(1, outputId);
+                try (ResultSet rows = statement.executeQuery()) {
+                    final boolean theRowIsStillThere = rows.next();
+                    assertThat(theRowIsStillThere)
+                            .as("the row a V1 database already held is still there after V2")
+                            .isTrue();
+
+                    // An empty object no reader can mistake for a CourtRegisterDocument, which
+                    // always carries at least a documentType.
+                    assertThat(rows.getString("document_json")).isEqualTo("{}");
+                    assertThat(rows.getObject("hearing_id", UUID.class)).isEqualTo(hearingId);
+                    assertThat(rows.getObject("hearing_date", OffsetDateTime.class).toInstant())
+                            .isEqualTo(LONDON_MIDNIGHT);
+                    // The nearest thing a POST row has to a register instant is when it was written.
+                    assertThat(rows.getObject("register_time", OffsetDateTime.class))
+                            .isEqualTo(rows.getObject("created_at", OffsetDateTime.class));
+                    // The flag did not exist when this row was written, and UNKNOWN says exactly
+                    // that rather than guessing which side of the cutover it was on.
+                    assertThat(rows.getString("recorded_flag_state")).isEqualTo("UNKNOWN");
+
+                    // Untouched: the 001 differential audit reads both, and on such a row the
+                    // digest is still the digest of the bytes posted, not of `document`.
+                    assertThat(rows.getString("status")).isEqualTo("POSTED");
+                    assertThat(rows.getString("request_digest")).isEqualTo(DIGEST);
+
+                    final boolean thereIsASecondRow = rows.next();
+                    assertThat(thereIsASecondRow)
+                            .as("and the backfill added no rows of its own")
+                            .isFalse();
+                }
+            }
         }
     }
 }
