@@ -344,79 +344,92 @@ GENERATED / FAILED with reason; grace period → reconciler.
 
 ### Tests first ⚠️ (all [P] — one file each; seams from T013/T014)
 
-- [ ] T031 [P] [US2] `pipeline/PdfPayloadMapperTest` — byte-identical to every T004 pdf-payload golden;
+- [x] T031 [P] [US2] `pipeline/PdfPayloadMapperTest` — byte-identical to every T004 pdf-payload golden;
       `sentinel_is_substituted_exactly_as_progression_did` (C24 `####` → `\n`, `:336`);
       `DASH` fallbacks, date formats, `getAge`, aliases, counsel, application validity
       (`isApplicationValid`) each pinned on a golden that exercises it. Red: seam throws.
-- [ ] T032 [P] [US2] `batch/BatchAssemblerTest` — grouping by (court centre, register date); first
+- [x] T032 [P] [US2] `batch/BatchAssemblerTest` — grouping by (court centre, register date); first
       row's `fileName`; recorded-while-off and superseded rows excluded; `batch_id` stamped;
       `system_generated` from the trigger source. Red: one batch for two keys.
-- [ ] T033 [P] [US2] `adapter/fileservice/FileServicePayloadStoreIT` (Testcontainers Postgres seeded
+- [x] T033 [P] [US2] `adapter/fileservice/FileServicePayloadStoreIT` (Testcontainers Postgres seeded
       from `contracts/fileservice/`) — inserts `metadata` (JSONB with progression's five keys) and
       `content` (bytea, `deleted=false`) under the given `file_id`; unavailable DB ⇒
       `PayloadStoreUnavailableException`; no other statement issued (statement log). Red: seam throws.
-- [ ] T034 [P] [US2] `adapter/systemdocgenerator/SystemDocGeneratorClientTest` (WireMock) — body
+- [x] T034 [P] [US2] `adapter/systemdocgenerator/SystemDocGeneratorClientTest` (WireMock) — body
       verbatim (`templateIdentifier=OEE_Layout5`, `conversionFormat=pdf`, `payloadFileServiceId`,
       `sourceCorrelationId=batch_id`, `originatingSource=CourtRegisterService`), media type,
       `CJSCPPUID`; 202 only (200 ⇒ `RENDER_REQUEST_REJECTED`); `retry_taxonomy_matches_the_submission_client`
       (shared `RetryPolicy`); `query` maps the four optional fields. Red: seam throws.
-- [ ] T035 [P] [US2] `adapter/publicevents/DocumentEventListenerTest` — parses a framework
+- [x] T035 [P] [US2] `adapter/publicevents/DocumentEventListenerTest` — parses a framework
       `JsonEnvelope` body, reads `CPPNAME`, ignores `originatingSource != CourtRegisterService`
       (acknowledged, counted), routes `document-available` / `generation-failed` to the sink with
       `sourceCorrelationId` and `payloadFileServiceId`. Red: sink not called.
-- [ ] T036 [P] [US2] `adapter/publicevents/DocumentEventListenerIT` (embedded Artemis) — durable
+- [x] T036 [P] [US2] `adapter/publicevents/DocumentEventListenerIT` (embedded Artemis) — durable
       subscription: an event published while the listener is stopped is delivered on restart; the
       selector excludes other `CPPNAME`s; two events for one batch ⇒ one outcome. Red: event lost.
-- [ ] T037 [P] [US2] `application/DocumentOutcomeSinkTest` — `documentAvailable` ⇒ batch GENERATED,
+- [x] T037 [P] [US2] `application/DocumentOutcomeSinkTest` — `documentAvailable` ⇒ batch GENERATED,
       `document_file_id`, `completed_by=EVENT`, rows of **this batch only** → GENERATED (reuses the
       P3 pin through the store); `generationFailed` ⇒ FAILED `GENERATION_FAILED` + `sdg_reason`
       (**P2 pin: `generation_failed_event_fails_the_batch_with_reason`**); unknown correlation ⇒
       counted, ignored; duplicate ⇒ idempotent. Red: FAILED not recorded.
-- [ ] T038 [P] [US2] `batch/GenerationReconcilerTest` — GENERATING older than grace ⇒ one `query`;
+- [x] T038 [P] [US2] `batch/GenerationReconcilerTest` — GENERATING older than grace ⇒ one `query`;
       answer applied via the sink with `completed_by=RECONCILER` + `reconciled` metric; still pending
       ⇒ FAILED `GENERATION_TIMED_OUT`. Red: no query.
-- [ ] T039 [P] [US2] `application/RegisterGenerationServiceTest` — payload id minted and persisted
+- [x] T039 [P] [US2] `application/RegisterGenerationServiceTest` — payload id minted and persisted
       before `store`; store failure ⇒ FAILED `PAYLOAD_STORE_UNAVAILABLE`, rows stay RECORDED; 202 ⇒
       GENERATING + `requested_at`; transient ⇒ retry within the run deadline then
       `RENDER_REQUEST_FAILED`; **P5 pin: `assembly_failure_fails_the_batch_and_the_run_continues`**.
       Red: seam throws.
-- [ ] T040 [P] [US2] `batch/RegisterGenerationJobTest` — reads the flag first (gate outcome ends the
+- [x] T040 [P] [US2] `batch/RegisterGenerationJobTest` — reads the flag first (gate outcome ends the
       run); sequential batches; run deadline bounds requesting only; `RunReport` emitted with counts,
       flag decision, duration; `@Scheduled` cron `0 0 18 * * MON-FRI` zone `Europe/London` and
       `@SchedulerLock` present (`job_is_scheduled_in_europe_london`). Red: runs with flag OFF.
-- [ ] T041 [P] [US2] `config/PublicEventsHealthIndicatorTest` + `config/FileServiceRunHealthIndicatorTest`
+- [x] T041 [P] [US2] `config/PublicEventsHealthIndicatorTest` + `config/FileServiceRunHealthIndicatorTest`
       — broker state and last-delivery age reported, never in readiness; file-service datasource DOWN
       affects readiness only while a run is in progress. Red: readiness includes broker.
 
 ### Implementation (serialised where files are shared)
 
-- [ ] T042 [US2] `pipeline/PdfPayloadMapper` — Java→Java port of `PROG CourtRegisterPdfPayloadGenerator`
+- [x] T042 [US2] `pipeline/PdfPayloadMapper` — Java→Java port of `PROG CourtRegisterPdfPayloadGenerator`
       (364 ln), `javax.json` → Jackson tree, every helper verbatim. Green: T031.
-- [ ] T043 [P] [US2] `batch/BatchAssembler` (resolve data-model.md's open question / design Q27
+- [x] T043 [P] [US2] `batch/BatchAssembler` (resolve data-model.md's open question / design Q27
       first). Green: T032.
-- [ ] T044 [P] [US2] `adapter/fileservice/FileServicePayloadStore` (JdbcClient over the second
+- [x] T044 [P] [US2] `adapter/fileservice/FileServicePayloadStore` (JdbcClient over the second
       DataSource; the two INSERTs from data-model.md). Green: T033.
-- [ ] T045 [P] [US2] `adapter/systemdocgenerator/SystemDocGeneratorClient` implementing
+- [x] T045 [P] [US2] `adapter/systemdocgenerator/SystemDocGeneratorClient` implementing
       `DocumentRenderer` (RestClient + shared `RetryPolicy`). Green: T034.
-- [ ] T046 [P] [US2] `adapter/publicevents/DocumentEventListener` (`@JmsListener`, destination /
+- [x] T046 [P] [US2] `adapter/publicevents/DocumentEventListener` (`@JmsListener`, destination /
       subscription / selector from properties) + `PublicEventEnvelope` + `config/PublicEventsConfig`
       (listener container factory, durable, client-id, `auto-startup` tied to generation enabled).
       Green: T035, T036.
-- [ ] T047 [US2] `application/DocumentOutcomeSinkImpl` (one code path for event and reconciler).
+- [x] T047 [US2] `application/DocumentOutcomeSinkImpl` (one code path for event and reconciler).
       Green: T037 — **flip P2 to FIXED in this commit.**
-- [ ] T048 [US2] `batch/GenerationReconciler`. Green: T038.
-- [ ] T049 [US2] `application/RegisterGenerationService`. Green: T039 — **flip P5 to FIXED in this
+- [x] T048 [US2] `batch/GenerationReconciler`. Green: T038.
+- [x] T049 [US2] `application/RegisterGenerationService`. Green: T039 — **flip P5 to FIXED in this
       commit.**
-- [ ] T050 [US2] `batch/RegisterGenerationJob` (+ `config/SchedulingConfig` with ShedLock provider and
+- [x] T050 [US2] `batch/RegisterGenerationJob` (+ `config/SchedulingConfig` with ShedLock provider and
       the zone validation) wiring gate → assembler → service → report. Green: T040.
-- [ ] T051 [P] [US2] `config/PublicEventsHealthIndicator`, `config/FileServiceRunHealthIndicator`;
+- [x] T051 [P] [US2] `config/PublicEventsHealthIndicator`, `config/FileServiceRunHealthIndicator`;
       readiness group unchanged for the broker. Green: T041.
-- [ ] T052 [A] [US2] `e2e/GenerationEndToEndIT` — seeded RECORDED rows, flag ON (WireMock), job run →
+- [x] T052 [A] [US2] `e2e/GenerationEndToEndIT` — seeded RECORDED rows, flag ON (WireMock), job run →
       file-service rows present → SDG WireMock received `generate-document` → embedded Artemis
       `document-available` → GENERATED → (Phase 6 completes the notify leg; until then assert
-      GENERATED and the run report). Record the first observed result.
-- [ ] T053 [A] [US2] `e2e/FlagGateEndToEndIT` — flag OFF ⇒ run skipped, nothing requested, rows stay
+      GENERATED and the run report). Record the first observed result. (**first observed run: RED**,
+      and on the assembly rather than on the suite. Two defects only an assembled context could show:
+      the reconciler's schedule and lock sat on the counting `reconcile()`, which returns a primitive
+      and which ShedLock's interceptor therefore refuses to lock, so a generating pod's first
+      proceeding run died at the reconcile step; and nothing constructed the downstream half at all,
+      so a pod with `courtregister.generation.enabled=true` registered no `@JmsListener` and scheduled
+      no run. Both were fixed before this suite's recorded run - the wiring at `602474c` under its own
+      red run `a24ac4f`, the ShedLock defect at `935a1c3` under its own red run `4b34bd3` - and the
+      run recorded in `f562e52` is the green one after them.)
+- [x] T053 [A] [US2] `e2e/FlagGateEndToEndIT` — flag OFF ⇒ run skipped, nothing requested, rows stay
       RECORDED; unreadable (WireMock 500) ⇒ skipped `flag-unreadable`; ON ⇒ requested. Record.
+      (**first observed run: RED**, for the same two reasons T052's was, and this suite is what found
+      the ShedLock one: it is the only place the run's proxy exists. Green after `602474c` and
+      `935a1c3`; the `935a1c3` commit also narrowed the suite's render-request count to the batch it
+      seeded, because the shared stack holds other suites' active registers and a night is entitled to
+      batch them. The green run of both suites is recorded in `f562e52`.)
 
 **Checkpoint**: batches render end to end against stubs; quickstart steps 2–3 work. Codex review 5.
 
