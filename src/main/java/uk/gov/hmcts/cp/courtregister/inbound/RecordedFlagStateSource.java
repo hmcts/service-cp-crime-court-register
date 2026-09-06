@@ -2,8 +2,8 @@ package uk.gov.hmcts.cp.courtregister.inbound;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
@@ -48,7 +48,7 @@ public class RecordedFlagStateSource {
     private final FeatureFlagReader reader;
 
     /** Where a refresh is handed to, so that no delivery thread is ever inside a read. */
-    private final Executor refreshes;
+    private final ScheduledExecutorService refreshes;
 
     /** What a reading's age is measured against. */
     private final Clock clock;
@@ -73,10 +73,20 @@ public class RecordedFlagStateSource {
      * @param clock    what the age of a reading is measured against
      */
     public RecordedFlagStateSource(
-            final FeatureFlagReader reader, final Executor refreshes, final Clock clock) {
+            final FeatureFlagReader reader, final ScheduledExecutorService refreshes,
+            final Clock clock) {
         this.reader = reader;
         this.refreshes = refreshes;
         this.clock = clock;
+    }
+
+    /**
+     * Starts keeping the reading inside its window, for as long as this pod is consuming.
+     *
+     * <p>The seam T030's review-gate fix implements; it schedules nothing yet.
+     */
+    public void start() {
+        // Implemented by the commit this red run guards.
     }
 
     /**

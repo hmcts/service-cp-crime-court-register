@@ -2,6 +2,9 @@ package uk.gov.hmcts.cp.courtregister.inbound;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -11,11 +14,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
+import java.util.Optional;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -71,6 +76,14 @@ class RecordedFlagStateTest {
     /** Enough to be outside the window and too little to be a different rule. */
     private static final Duration A_MOMENT = Duration.ofMillis(1);
 
+    /**
+     * How many windows of nothing a quiet stack leaves between two commands.
+     *
+     * <p>The plan's traffic is about 160 commands a day on a stack, which is one every nine minutes
+     * on average - nine windows, and every one of them long enough for a reading to age out.
+     */
+    private static final int QUIET_WINDOWS = 9;
+
     /** How long the off-thread case will wait for a refresh to get where it is going. */
     private static final Duration PATIENCE = Duration.ofSeconds(5);
 
@@ -86,12 +99,38 @@ class RecordedFlagStateTest {
      */
     private final List<Runnable> scheduled = new ArrayList<>();
 
-    private final Executor refreshes = scheduled::add;
+    /** The repeating refresh the source asked for, held rather than run, and how often it asked. */
+    private final AtomicReference<Runnable> periodic = new AtomicReference<>();
+
+    private final AtomicLong periodMillis = new AtomicLong();
+
+    private final ScheduledExecutorService refreshes = mock(ScheduledExecutorService.class);
 
     private final RecordedFlagStateSource source =
             new RecordedFlagStateSource(reader, refreshes, clock);
 
-    private ExecutorService offThread;
+    private ScheduledExecutorService offThread;
+
+    /**
+     * Holds everything handed to the executor instead of running any of it.
+     *
+     * <p>Both hand-overs are captured rather than executed, so what a case asserts is what the
+     * source asked for and when it asked - a real executor would decide both for it, and a
+     * schedule's own timing is the one thing a unit test cannot wait for.
+     */
+    @BeforeEach
+    void holdWhatIsHandedOver() {
+        doAnswer(handOver -> {
+            scheduled.add(handOver.getArgument(0));
+            return null;
+        }).when(refreshes).execute(any());
+        when(refreshes.scheduleAtFixedRate(any(), anyLong(), anyLong(), any()))
+                .thenAnswer(handOver -> {
+                    periodic.set(handOver.getArgument(0));
+                    periodMillis.set(handOver.getArgument(2));
+                    return null;
+                });
+    }
 
     @AfterEach
     void stopTheExecutor() {
@@ -241,6 +280,45 @@ class RecordedFlagStateTest {
                     .as("the cutover was rolled back, and the next command says so")
                     .isEqualTo(RecordedFlagState.OFF);
         }
+
+        /**
+         * The case the traffic makes ordinary rather than exceptional.
+         *
+         * <p>A stack takes about 160 commands a day, one every nine minutes on average, so a
+         * reading refreshed only when a command finds it stale is stale for almost every command
+         * there is: the arrival schedules a read that comes back in a second or two and labels
+         * nobody, and the row it did label says {@code UNKNOWN}. {@code activeUnbatched()} excludes
+         * every row that is not {@code ON}, so almost every register would sit outside automatic
+         * batching and have to be found with {@code list-batches --recorded-while-off} - which is
+         * FR-007 and US2 undone by a label.
+         *
+         * <p>So the reading is kept inside its window by a schedule instead of by the traffic:
+         * while the consumer is running the source renews it at least once a window, off the
+         * delivery thread as ever, and an arrival after any amount of quiet finds a reading that
+         * still stands for something.
+         */
+        @Test
+        @DisplayName("a command arriving after a quiet period is labelled from a fresh read")
+        void a_command_arriving_after_a_quiet_period_should_be_labelled_from_a_fresh_read() {
+            when(reader.read()).thenReturn(FlagDecision.ON);
+
+            source.start();
+            for (int window = 0; window < QUIET_WINDOWS; window++) {
+                runThePeriodicRefresh();
+                clock.advance(WINDOW.plus(A_MOMENT));
+            }
+            runThePeriodicRefresh();
+
+            assertThat(source.current())
+                    .as("nine minutes in which no command arrived, and the one that does is still "
+                            + "labelled from a reading: UNKNOWN here keeps a register the flag was "
+                            + "on for out of the nightly batch")
+                    .isEqualTo(RecordedFlagState.ON);
+            assertThat(periodMillis.get())
+                    .as("and the interval is what makes that true - a reading is renewed at least "
+                            + "once a window, so an arrival between two of them is inside one")
+                    .isBetween(1L, WINDOW.toMillis());
+        }
     }
 
     @Nested
@@ -282,7 +360,7 @@ class RecordedFlagStateTest {
                 readOn.set(Thread.currentThread().getName());
                 return FlagDecision.ON;
             });
-            offThread = Executors.newSingleThreadExecutor();
+            offThread = Executors.newSingleThreadScheduledExecutor();
             final RecordedFlagStateSource offThreadSource =
                     new RecordedFlagStateSource(reader, offThread, clock);
 
@@ -311,5 +389,15 @@ class RecordedFlagStateTest {
         final List<Runnable> handedOver = List.copyOf(scheduled);
         scheduled.clear();
         handedOver.forEach(Runnable::run);
+    }
+
+    /**
+     * Runs one tick of the repeating refresh, where the source asked for one.
+     *
+     * <p>Where it asked for none there is nothing to run and the case says so through the label it
+     * gets, which is what makes the red run a comparison rather than a missing collaborator.
+     */
+    private void runThePeriodicRefresh() {
+        Optional.ofNullable(periodic.get()).ifPresent(Runnable::run);
     }
 }

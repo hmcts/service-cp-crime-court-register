@@ -9,10 +9,8 @@ import com.azure.messaging.servicebus.ServiceBusProcessorClient;
 import com.azure.messaging.servicebus.ServiceBusReceivedMessageContext;
 import java.time.Clock;
 import java.time.Duration;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.function.Supplier;
 import org.flywaydb.core.Flyway;
 import org.slf4j.Logger;
@@ -94,24 +92,28 @@ public class ServiceBusConsumerConfig {
      * Where a flag refresh is run, so that no delivery thread is ever inside an App Configuration
      * read.
      *
-     * <p>One thread and room for one waiting refresh, because that is all
-     * {@link RecordedFlagStateSource} can ever ask for: it holds one refresh in flight at a time and
-     * one reading per window. The queue is bounded and the rejection policy is the default refusal
-     * rather than caller-runs, since caller-runs is exactly the delivery thread doing the read this
-     * whole arrangement exists to keep it out of; a refusal is reported and the next arrival asks
-     * again. The thread is a daemon and is created when the first refresh is handed over, so a pod
-     * that reads no flag never starts one.
+     * <p>One thread, because that is all {@link RecordedFlagStateSource} can ever ask for: a
+     * repeating refresh that keeps the reading inside its window, and at most one on-demand refresh
+     * in flight behind it. One thread also means the two can never run at once, so a reading is
+     * replaced by one read or the other and never by half of each. The rejection policy is the
+     * default refusal rather than caller-runs, since caller-runs is exactly the delivery thread
+     * doing the read this whole arrangement exists to keep it out of; a refusal is reported and the
+     * next arrival asks again. The thread is a daemon and is created when the first refresh is
+     * handed over, so a pod that reads no flag never starts one.
+     *
+     * <p>It is a <em>scheduled</em> executor because the flag has to be read on a clock rather than
+     * on the traffic: a stack takes a command every few minutes, and a reading refreshed only when
+     * an arrival finds it stale is stale for almost every arrival there is.
      *
      * @return the executor
      */
     @Bean
-    public ExecutorService recordedFlagStateRefreshes() {
-        return new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1),
-                refresh -> {
-                    final Thread thread = new Thread(refresh, "courtregister-flag-refresh");
-                    thread.setDaemon(true);
-                    return thread;
-                });
+    public ScheduledExecutorService recordedFlagStateRefreshes() {
+        return new ScheduledThreadPoolExecutor(1, refresh -> {
+            final Thread thread = new Thread(refresh, "courtregister-flag-refresh");
+            thread.setDaemon(true);
+            return thread;
+        });
     }
 
     /**
@@ -147,7 +149,7 @@ public class ServiceBusConsumerConfig {
             final ObjectProvider<ConsumerLifecycleController> lifecycle,
             final CourtRegisterProperties properties,
             final ObjectProvider<FeatureFlagReader> flagReader,
-            final ExecutorService refreshes,
+            final ScheduledExecutorService refreshes,
             final Clock clock) {
         // The delivery budget is the queue's, mirrored in configuration: the listener recognises the
         // final permitted delivery from it, so the two are changed together or this service is wrong
@@ -159,7 +161,11 @@ public class ServiceBusConsumerConfig {
     }
 
     /**
-     * The label source, where there is a reader to build it over.
+     * The label source, where there is a reader to build it over, started as it is built.
+     *
+     * <p>Started here rather than on the first arrival that finds no reading: the whole point of
+     * the schedule is that a command arriving on a quiet stack finds a reading already taken, and a
+     * source that waited to be asked would label that command from nothing.
      *
      * @param reader    the reader of the one lever, or {@code null} where this deployment has none
      * @param refreshes where a read is run
@@ -167,8 +173,14 @@ public class ServiceBusConsumerConfig {
      * @return the source, or {@code null} where every command is labelled UNKNOWN
      */
     private static RecordedFlagStateSource flagStates(
-            final FeatureFlagReader reader, final ExecutorService refreshes, final Clock clock) {
-        return reader == null ? null : new RecordedFlagStateSource(reader, refreshes, clock);
+            final FeatureFlagReader reader, final ScheduledExecutorService refreshes,
+            final Clock clock) {
+        final RecordedFlagStateSource source =
+                reader == null ? null : new RecordedFlagStateSource(reader, refreshes, clock);
+        if (source != null) {
+            source.start();
+        }
+        return source;
     }
 
     /**
