@@ -4,7 +4,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
+import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.persistence.JdbcRegisterStore;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedLogProbe;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedOutputRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedRequestRepository;
@@ -68,6 +72,30 @@ public class ProcessedLogConfig {
     @Bean
     public ProcessedOutputRepository processedOutputRepository(final JdbcClient jdbcClient) {
         return new ProcessedOutputRepository(jdbcClient);
+    }
+
+    /**
+     * The register store, over the same log and the same client as the repositories above it.
+     *
+     * <p>It belongs beside them because it writes the same table: a recorded register <em>is</em> the
+     * output half of the processed log, widened by V2 with the document, the hearing, the register
+     * instant and the batch it is on. Declared without a condition, so a pod running the default
+     * {@code courtregister.output=record} always has the store its last stage writes through, and the
+     * {@code progression-post} fallback simply never asks it for anything.
+     *
+     * <p>The transaction template is built here rather than injected because the store needs the
+     * commit boundary to be over <em>this</em> data source: the file-service datasource is a second
+     * one, write-only and never transacted from here, and a manager bound to it would open a
+     * transaction none of the store's statements ever joins.
+     *
+     * @param jdbcClient         the store
+     * @param transactionManager the manager over the same data source the client issues against
+     * @return the register store
+     */
+    @Bean
+    public RegisterStore registerStore(
+            final JdbcClient jdbcClient, final PlatformTransactionManager transactionManager) {
+        return new JdbcRegisterStore(jdbcClient, new TransactionTemplate(transactionManager));
     }
 
     /**

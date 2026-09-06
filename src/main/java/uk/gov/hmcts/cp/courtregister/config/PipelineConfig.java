@@ -197,10 +197,11 @@ public class PipelineConfig {
      * between them rather than replacing one - see {@link OutputMode} on why that is a build-time
      * fallback and not a second cutover lever.
      *
-     * <p>The register store is taken as a provider rather than as a bean, because the wiring that
-     * declares it is T024's: until then a {@code record}-mode pipeline is assembled with no store
-     * and refuses at the recording stage, which is the seam the T020 suite is written against, and
-     * no context is made unstartable by a bean that does not exist yet.
+     * <p>The register store is taken as a provider rather than as a required bean, and only because
+     * of where it is declared: it belongs to {@link ProcessedLogConfig}, beside the repositories over
+     * the table it writes, so a context that assembles this configuration without that one - the
+     * composition suite, which states {@code progression-post} and doubles the outward ports - still
+     * starts. Every deployed pod has both, so the {@code record} arm always has its store.
      *
      * @param guard               the processed-log guard
      * @param payloadSource       where hearing payloads come from

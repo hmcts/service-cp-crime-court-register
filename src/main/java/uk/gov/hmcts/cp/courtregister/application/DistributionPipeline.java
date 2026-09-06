@@ -7,6 +7,10 @@ import java.time.LocalDate;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.ConcurrencyFailureException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.RecoverableDataAccessException;
+import org.springframework.dao.TransientDataAccessException;
 import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.config.OutputMode;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
@@ -18,6 +22,7 @@ import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
+import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
@@ -35,7 +40,8 @@ import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
  *
  * <p><strong>The stages, in order</strong>: admit, fetch the hearing payload, ask whether the
  * group-proceedings flag suppresses the register, read the subscriptions in force on the register's
- * day, transform, submit — then record. The two reads are the core's because the ports are; the
+ * day, transform, record the register - or, under the fallback mode, submit it - and then record
+ * the run. The two reads are the core's because the ports are; the
  * transformation between them is pure, and is handed everything it needs (constitution Principle V).
  * The shape the
  * transport suites drive it through is unchanged: a request and the delivery it arrived on go in,
@@ -47,7 +53,8 @@ import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
  * {@code COMPLETED, group-proceedings} where the legacy records nothing (the recorded half of defect
  * fix C7); a transformation that declines to produce a register says which of the three remaining
  * reasons it was, and the run ends {@code COMPLETED} under that reason; a register that was built
- * ends {@code submitted} and only after progression has accepted it. Four of the five completion
+ * ends {@code recorded}, once the store holds it, or {@code submitted} under the fallback mode and
+ * only after progression has accepted it. Four of the five completion
  * reasons send nothing and two of those four are this flow's ordinary results, so the reason is
  * written and counted rather than folded away (defect fixes C6 and C33): a court centre nobody
  * subscribes to and a pipeline that has quietly stopped working look identical from the outside
@@ -107,6 +114,13 @@ import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
  * reason that describes the retry budget instead of the fault. A deadline is not a fault at all and
  * is never parked for being unretryable, and a failure nothing anticipated is treated as transient,
  * because "unknown" is not the same as "hopeless".
+ *
+ * <p><strong>A store that went away is the one failure this class does not classify at all.</strong>
+ * Nothing is recordable while it is gone, and what the delivery needs is not a transient failure but
+ * a suspension - the delivery back <em>and</em> intake stopped - which is the transport adapter's to
+ * carry out and nobody else's (spec FR-015). So it leaves the run as it was thrown, by its own type
+ * and never by where it was thrown, because this service's store is reached from more than one stage
+ * and the answer is the same wherever it went away.
  */
 public class DistributionPipeline {
 
@@ -118,10 +132,6 @@ public class DistributionPipeline {
     /** The field of the claim-check payload the results' share instant sits under. */
     private static final String SHARED_TIME = "sharedTime";
 
-    /** The task that replaces the recording refusal with the write into the register store. */
-    private static final String RECORDING_PENDING_TASK =
-            "T024 records through RegisterStore; DistributionPipelineTest (T020) guards it";
-
     private final IdempotencyGuard guard;
     private final HearingPayloadSource payloadSource;
     private final GroupProceedingsPolicy groupProceedings;
@@ -129,10 +139,9 @@ public class DistributionPipeline {
     private final Dates dates;
     private final RegisterTransformer transformer;
     private final OutputMode outputMode;
-    // The store the recording stage writes through. Held from here so that the composition is
-    // settled in one place, and read by T024, which replaces the refusal in `output` below with the
-    // recording itself.
-    @SuppressWarnings("PMD.UnusedPrivateField")
+    // The store the recording stage writes through, held from here so that the composition is
+    // settled in one place. Null under `progression-post`, where the last stage is the POST and a
+    // deployment that never records has nothing to hand in.
     private final RegisterStore registerStore;
     private final RegisterSubmissionClient submissionClient;
     private final ProcessingMetrics metrics;
@@ -286,9 +295,20 @@ public class DistributionPipeline {
      * until the broker parked the message under its own reason with no FAILED record behind it —
      * the silent parking the state machine exists to prevent. It is a catch-and-record, not a
      * catch-and-ignore: the failure is reported at ERROR, classified, and written to the processed
-     * log before the delivery is settled. A store that dies inside the recording write throws out
-     * of the catch block itself, which is correct — nothing is recordable during a store outage,
-     * and the transport adapter's own handling takes over.
+     * log before the delivery is settled. A store that dies while that outcome is being written
+     * throws out of the catch block itself, which is correct - nothing is recordable during a store
+     * outage, and the transport adapter's own handling takes over.
+     *
+     * <p><strong>Between them sit the two store branches, and the order they are written in is the
+     * behaviour.</strong> The store-went-away classes leave this frame untouched: there is nothing
+     * to record while the store is gone, and the transport adapter is the only place that can hand
+     * the delivery back <em>and</em> stop intake. Contention is caught above them and is not one of
+     * them: {@link ConcurrencyFailureException} extends {@link TransientDataAccessException}, and a
+     * re-share losing a race for its key is the store <em>answering</em> over a connection that
+     * plainly worked. It is recorded here, so the claim is released and the redelivery finds the row
+     * free; letting it out would stop the queue for a fault that clears itself on the next delivery.
+     * They are the same three classes {@code CourtRegisterMessageListener} tells apart, in the same
+     * order, because it is one rule about one store and a second copy of it would drift.
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private GuardDecision runUnder(
@@ -299,14 +319,55 @@ public class DistributionPipeline {
         } catch (PayloadUnavailableException | ReferenceDataUnavailableException
                 | TransformationFailedException | SubmissionFailedException classified) {
             outcome = failed(claim, classified.classification(), classified.reason(), lastChance);
+        } catch (ConcurrencyFailureException contention) {
+            outcome = lostContentionRace(claim, contention, lastChance);
+        } catch (TransientDataAccessException | RecoverableDataAccessException
+                | DataAccessResourceFailureException storeGone) {
+            throw storeGone;
         } catch (RuntimeException unexpected) {
-            LOG.error("Run failed unexpectedly; recording it so the claim is released. "
-                            + "source={} requestId={} type={}",
-                    claim.source(), claim.requestId(), unexpected.getClass().getName());
-            outcome = failed(claim, FailureClassification.TRANSIENT,
-                    ReasonCode.UNEXPECTED_FAILURE, lastChance);
+            outcome = unexpectedFailure(claim, unexpected, lastChance);
         }
         return outcome;
+    }
+
+    /**
+     * The store answered by refusing a contended row, not by going away.
+     *
+     * <p>The branch exists for where it sits rather than for what it does, and it does the ordinary
+     * thing: two writers met on one register and this run lost, which is a fault that clears itself
+     * on the next delivery. Merging it into the catch-all below is not available even though the
+     * outcome is the same - a multi-catch may not name a type and its own supertype - and moving it
+     * under the store-went-away classes is the very thing it prevents, since
+     * {@link ConcurrencyFailureException} is one of them by inheritance and none of them by meaning.
+     *
+     * @param claim      the claim this run holds
+     * @param contention the refusal the store answered with
+     * @param lastChance whether the queue will deliver this message again
+     * @return the settlement the outcome calls for
+     */
+    private GuardDecision lostContentionRace(
+            final RunClaim claim,
+            final ConcurrencyFailureException contention,
+            final boolean lastChance) {
+        return unexpectedFailure(claim, contention, lastChance);
+    }
+
+    /**
+     * The failure nothing anticipated: reported by its type, classified transient, and recorded so
+     * that the claim this frame holds is released before the delivery is settled.
+     *
+     * @param claim      the claim this run holds
+     * @param unexpected what was thrown
+     * @param lastChance whether the queue will deliver this message again
+     * @return the settlement the outcome calls for
+     */
+    private GuardDecision unexpectedFailure(
+            final RunClaim claim, final RuntimeException unexpected, final boolean lastChance) {
+        LOG.error("Run failed unexpectedly; recording it so the claim is released. "
+                        + "source={} requestId={} type={}",
+                claim.source(), claim.requestId(), unexpected.getClass().getName());
+        return failed(claim, FailureClassification.TRANSIENT,
+                ReasonCode.UNEXPECTED_FAILURE, lastChance);
     }
 
     private GuardDecision runToOutcome(
@@ -466,12 +527,11 @@ public class DistributionPipeline {
      * what to do with a register it has already built. The two arms are the same success reported
      * under two reasons - {@code recorded} and {@code submitted} - and they are never both live.
      *
-     * <p><strong>Seam.</strong> The recording arm is T024's, and its green run is
-     * {@code DistributionPipelineTest} (T020): the write needs the defendant type T022 resolves and
-     * the flag state T030 attaches, so it refuses here rather than recording a row missing both. The
-     * refusal is a {@link RuntimeException} like any other, which the run's own boundary records as
-     * a transient failure and hands the delivery back - nothing is lost and nothing is invented
-     * while the arm is unimplemented.
+     * <p>Only one of them is handed the run's anomaly counts and its register day. The submission
+     * carries both to progression, which has no other way of learning them; the recording needs
+     * neither, because the row the store writes is derived from the document itself - the register
+     * day is the London date part of the document's own register instant, which is what orders two
+     * re-shares of one hearing.
      *
      * @param command     the validated request
      * @param register    the register the transformation produced
@@ -490,10 +550,72 @@ public class DistributionPipeline {
             final RunBudget budget) {
 
         return switch (outputMode) {
-            case RECORD -> throw new UnsupportedOperationException(RECORDING_PENDING_TASK);
+            case RECORD -> record(command, register, claim, budget);
             case PROGRESSION_POST ->
                 submit(command, register, anomalies, registerDay, claim, budget);
         };
+    }
+
+    /**
+     * Writes one register into this service's own store and records the run only once it is there.
+     *
+     * <p>The register stops being progression's to hold: nothing leaves the pod, and the row the
+     * store writes is the register (spec US1). The write and the supersession of the hearing's
+     * earlier active row for the day are the store's own single transaction, so no reader can ever
+     * see two active registers for one hearing and one day (research §8), and a hearing whose
+     * results are shared twice before the nightly run therefore ends with one register rather than
+     * two.
+     *
+     * <p><strong>Four answers go into the write and this stage invents none of them.</strong> The
+     * document is the one the transformation validated; the OU code travels beside it because the
+     * frozen contract has no field for it and the batch's file name and render payload are built
+     * from it; the defendant type is the one the chain resolved from the hearing's own court
+     * application (FR-002); and the flag state is what the intake side last learned about the one
+     * lever.
+     *
+     * <p><strong>The flag state a run with no reading behind it records is {@code UNKNOWN}</strong>,
+     * which is a statement rather than a placeholder. Recording never waits on a flag read - a
+     * register that has been built is worth more than the label it carries, and an App Configuration
+     * outage must not stall the queue behind one (research §12) - so what is recorded is the state
+     * this run has, and a row written without a reading says exactly that. {@code UNKNOWN} and
+     * {@code OFF} are both kept out of automatic batching, so the label costs a register nothing
+     * except an operator's attention.
+     *
+     * <p><strong>The budget is read once more before the write</strong>, for the reason the send
+     * reads it: past the deadline the claim behind this run may already have been reclaimed, and a
+     * row written under a claim somebody else holds is a register the redelivery will record again
+     * and this one will only supersede. The completion that follows a write that <em>did</em> happen
+     * is not withheld for the budget, exactly as it is not on the submission arm.
+     *
+     * @param command  the validated request
+     * @param register the register the transformation produced
+     * @param claim    the claim this run holds
+     * @param budget   what is left of the run's time
+     * @return the settlement the outcome calls for
+     */
+    private GuardDecision record(
+            final DistributionCommand command,
+            final TransformationResult.Register register,
+            final RunClaim claim,
+            final RunBudget budget) {
+
+        final GuardDecision outcome;
+        if (spent(budget)) {
+            outcome = overran(claim, budget);
+        } else {
+            final RecordOutcome recording = registerStore.record(command, register.document(),
+                    register.courtCentreOuCode(), register.document().defendantType(),
+                    RecordedFlagState.UNKNOWN);
+            // The identities of the two rows and nothing from inside either of them: a register is a
+            // document about children (Principle VII). `superseded` is the fact support needs when a
+            // hearing is re-shared - the register that will not be sent is the one this line names.
+            LOG.info("Register recorded. source={} requestId={} hearingId={} outputId={} "
+                            + "supersededOutputId={}",
+                    command.source(), command.requestId(), command.hearingId(),
+                    recording.outputId(), recording.supersededOutputId());
+            outcome = completed(claim, CompletionReason.RECORDED);
+        }
+        return outcome;
     }
 
     /**
