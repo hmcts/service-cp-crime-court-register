@@ -96,7 +96,7 @@ inserts, because the row being replaced holds the key until the update takes it 
 | `supplement_index` | `int NOT NULL DEFAULT 0` | 0 on a day's first batch, counting up from 1 on each supplementary one; the file name is built from it |
 
 Constraint: `UNIQUE (court_centre_id, register_date) WHERE status IN ('PENDING','GENERATING',
-'GENERATED')` (partial unique) — one **in-flight** batch per key, those being the three states in
+'GENERATED')` (partial unique) - one **in-flight** batch per key, those being the three states in
 which a batch is still owed something (a render request, a render outcome, an e-mail). The four
 terminal states are alike: a FAILED batch may be re-assembled (new `batch_id`, rows re-stamped), and
 a NOTIFIED / PARTIALLY_NOTIFIED / NOTIFIED_NOBODY one may be followed by a supplementary batch
