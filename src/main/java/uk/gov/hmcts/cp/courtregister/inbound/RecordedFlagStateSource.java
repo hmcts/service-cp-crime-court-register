@@ -1,9 +1,11 @@
 package uk.gov.hmcts.cp.courtregister.inbound;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
@@ -33,16 +35,36 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
  * an executor inside it would put a second concern on the class whose single concern is the whole of
  * its correctness (constitution Principle V).
  *
- * <p><strong>At most one read per window, and at most one in flight.</strong> A refresh is asked for
- * only where the reading in hand no longer stands for anything, so a stack taking a command every
- * few seconds asks App Configuration once a minute rather than once a command; and a second arrival
- * during a read that has not come back yet joins the first one's refresh rather than starting
- * another. The pair is what keeps a busy queue from turning a labelling rule into a load test of
- * somebody else's store.
+ * <p><strong>The reading is renewed on a clock, not on the traffic.</strong> This service takes
+ * about 160 commands a day on a stack - one every nine minutes on average - so a reading refreshed
+ * only when an arrival finds it stale is stale for very nearly every arrival there is: each one is
+ * labelled {@code UNKNOWN} and schedules a read that comes back seconds later having labelled
+ * nobody. Rows that are not {@code ON} are excluded from automatic batching, so that would leave
+ * almost every register waiting for somebody to find it with
+ * {@code list-batches --recorded-while-off}. So {@link #start()} renews the reading every half
+ * window for as long as the pod is consuming, and an arrival meets a reading that was taken for it.
+ *
+ * <p><strong>At most one read per window, and at most one in flight.</strong> The renewal asks App
+ * Configuration twice a minute however busy the queue is, and an arrival that still finds no
+ * reading - before the first renewal has returned, or after one failed - asks for one refresh and
+ * not one per command: a second arrival during a read that has not come back yet joins the first
+ * one's refresh rather than starting another. The pair is what keeps a busy queue from turning a
+ * labelling rule into a load test of somebody else's store.
  */
 public class RecordedFlagStateSource {
 
     private static final Logger LOG = LoggerFactory.getLogger(RecordedFlagStateSource.class);
+
+    /**
+     * How often the reading is renewed while this pod is consuming.
+     *
+     * <p>Half the window a reading speaks for, so that a command arriving at the worst moment - the
+     * instant before the next renewal - still meets a reading half a window old. Deriving it from
+     * {@link FlagStateSnapshot#WINDOW} rather than writing a number is what keeps the two in step:
+     * an interval longer than the window would leave a gap in which every arrival is labelled
+     * {@code UNKNOWN}, which is the whole defect this schedule answers.
+     */
+    private static final Duration RENEWAL = FlagStateSnapshot.WINDOW.dividedBy(2);
 
     /** The same reader the nightly job uses, which is what makes the flag one lever. */
     private final FeatureFlagReader reader;
@@ -65,6 +87,9 @@ public class RecordedFlagStateSource {
     /** Whether a refresh is already on its way, so that arrivals behind it do not start another. */
     private final AtomicBoolean refreshing = new AtomicBoolean();
 
+    /** Whether the renewal is already running, so that {@link #start()} can only ask for one. */
+    private final AtomicBoolean scheduled = new AtomicBoolean();
+
     /**
      * Creates the source; the reading it hands out is its own and is shared by every delivery.
      *
@@ -83,10 +108,27 @@ public class RecordedFlagStateSource {
     /**
      * Starts keeping the reading inside its window, for as long as this pod is consuming.
      *
-     * <p>The seam T030's review-gate fix implements; it schedules nothing yet.
+     * <p>Called once, when the source is built. The first read is asked for immediately and every
+     * later one at {@link #RENEWAL}, on the executor's thread as ever, so a command arriving on a
+     * quiet stack finds a reading that was taken for it rather than one it has to ask for.
+     *
+     * <p>A refusal by the executor is reported and no more, exactly as an on-demand refresh's is: a
+     * pod that cannot start the schedule still labels every command, from whatever the on-demand
+     * refreshes manage to put in place. The schedule ends when the executor is shut down with the
+     * application context.
      */
     public void start() {
-        // Implemented by the commit this red run guards.
+        if (scheduled.compareAndSet(false, true)) {
+            try {
+                refreshes.scheduleAtFixedRate(
+                        this::refresh, 0L, RENEWAL.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (RejectedExecutionException notTaken) {
+                scheduled.set(false);
+                LOG.warn("The flag reading will not be renewed on a schedule, so a command is "
+                        + "labelled only from what an arrival before it asked for. type={}",
+                        notTaken.getClass().getName());
+            }
+        }
     }
 
     /**
@@ -139,11 +181,23 @@ public class RecordedFlagStateSource {
      * the flag was asked rather than when the answer came back: a store that took two seconds
      * answered about a flag as it stood when it was asked, and stamping the return would let a slow
      * read quietly lengthen the window its answer speaks for.
+     *
+     * <p>Both hand-overs run it and the executor has one thread, so two reads can never be in
+     * flight at once and a reading is replaced by one of them whole.
      */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    // Total, and for the renewal's sake rather than this read's. A throw out of a fixed-rate task
+    // cancels every later execution of it, so a reader that failed once would stop the renewal for
+    // the life of the pod and label every row UNKNOWN from then on - a far larger failure than the
+    // read that caused it. The port's contract is that it never throws; this is what happens if
+    // that is ever untrue, and it is reported rather than absorbed.
     private void refresh() {
         try {
             final Instant asked = clock.instant();
             reading.set(new FlagStateSnapshot(reader.read(), asked));
+        } catch (RuntimeException failed) {
+            LOG.warn("A flag read failed, so the reading in hand stands until one replaces it; the "
+                    + "renewal after this one asks again. type={}", failed.getClass().getName());
         } finally {
             refreshing.set(false);
         }
