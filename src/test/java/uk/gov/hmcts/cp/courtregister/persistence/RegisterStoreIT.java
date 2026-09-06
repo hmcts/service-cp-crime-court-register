@@ -963,6 +963,93 @@ class RegisterStoreIT {
     }
 
     /**
+     * The history a run has to read before it can decide anything supplementary.
+     *
+     * <p>The assembler is handed the batches already recorded for the keys in play, and there is no
+     * other way for it to learn either half of design Q27: whether a key still has a batch in flight
+     * (leave its registers waiting) and, if not, which batch a supplement follows at which index. A
+     * read that answered nothing would make every late re-share a day's first document all over
+     * again.
+     *
+     * <p>Two cases, and the second is the one a wrong predicate passes: asked for one key, the read
+     * must not answer with another key's batches. The run assembles per key, and a history that
+     * carried Tuesday's finished batch into Monday's decision would number Monday's supplements off
+     * Tuesday's.
+     */
+    @Nested
+    @DisplayName("the batches recorded for a run's keys")
+    class RecordedBatches {
+
+        @Test
+        void a_keys_batches_should_come_back_whatever_state_they_reached() {
+            final AtomicReference<UUID> failed = new AtomicReference<>();
+            final List<RegisterBatch> history = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(seededCommand(HEARING_ONE, MONDAY_SHARED),
+                        document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch first = assembled(MONDAY, mine(store.activeUnbatched()));
+                failed.set(first.batchId());
+                store.markFailed(first.batchId(), BatchFailureReason.RENDER_REQUEST_REJECTED, null,
+                        null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThatCode(() -> history.addAll(
+                            store.batchesFor(List.of(new CourtCentreDay(courtCentre, MONDAY)))))
+                    .as(PENDING)
+                    .doesNotThrowAnyException();
+            softly.assertThat(history)
+                    .as("a terminal batch is exactly the one the supplementary rule needs to see: "
+                            + "the day may be rendered again, following this one")
+                    .extracting(RegisterBatch::batchId)
+                    .containsExactly(failed.get());
+        }
+
+        @Test
+        void another_days_batches_should_not_be_among_them() {
+            final AtomicReference<UUID> monday = new AtomicReference<>();
+            final List<RegisterBatch> history = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(seededCommand(HEARING_ONE, MONDAY_SHARED),
+                        document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(seededCommand(HEARING_THREE, TUESDAY_SHARED),
+                        document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> waiting = mine(store.activeUnbatched());
+                monday.set(assembled(MONDAY, recordsOn(waiting, MONDAY)).batchId());
+                assembled(TUESDAY, recordsOn(waiting, TUESDAY));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThatCode(() -> history.addAll(
+                            store.batchesFor(List.of(new CourtCentreDay(courtCentre, MONDAY)))))
+                    .as(PENDING)
+                    .doesNotThrowAnyException();
+            softly.assertThat(history)
+                    .as("the same court centre's other day says nothing about whether this day may "
+                            + "be rendered again, and a supplement numbered off it would name a "
+                            + "document for a different set of children")
+                    .extracting(RegisterBatch::batchId)
+                    .containsExactly(monday.get());
+        }
+
+        @Test
+        void a_run_with_no_keys_should_be_answered_without_a_statement() {
+            final List<RegisterBatch> history = new ArrayList<>();
+
+            softly.assertThatCode(() -> history.addAll(store.batchesFor(List.of())))
+                    .as(PENDING)
+                    .doesNotThrowAnyException();
+            softly.assertThat(history)
+                    .as("a quiet night asks the database nothing; an empty IN list is a statement "
+                            + "Postgres refuses rather than answers")
+                    .isEmpty();
+        }
+    }
+
+    /**
      * The registers one batch was assembled from, read back by identity.
      *
      * <p>{@code BATCH_REGISTERS} landed with no automated case of its own, and it is what the whole
