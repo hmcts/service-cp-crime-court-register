@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
 import java.time.Duration;
+import java.time.ZoneId;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
@@ -17,9 +18,11 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * thing that decides which implementation generates is the App Configuration flag
  * {@code CourtRegisterService}, read per run (constitution Cutover Rule).
  *
- * <p><strong>Seam.</strong> {@link #validate()} carries the startup refusals of research §11 and is
- * completed by T016, guarded by {@code ConfigurationValidationTest} (T009) - including the P9 pin,
- * {@code blank_email_template_refuses_to_start_in_live_mode}.
+ * <p>{@link #validate()} carries the two refusals this record can reach on its own - the zone the
+ * schedule is read in and the completion mechanism's vocabulary. Everything that becomes required
+ * once {@link #enabled} is true is a relationship between records, so {@link PropertiesValidator}
+ * owns it, including the P9 pin
+ * {@code ConfigurationValidationTest.blank_email_template_refuses_to_start_in_live_mode}.
  *
  * @param enabled                  master switch for the job, the listener and the second datasource
  * @param cron                     the schedule, in Spring's six-field dialect
@@ -49,6 +52,26 @@ public record GenerationProperties(
         @DefaultValue(LIVE) SourceMode flagMode) {
 
     /**
+     * The one zone the requirement is written in: 18:00 wall clock, in BST and GMT alike.
+     *
+     * <p>The legacy fires in the scheduling JVM's default zone because its trigger is built without
+     * one. That ambiguity is not inherited - the zone is a value this service states, and startup
+     * holds it to this one unless an operator says otherwise deliberately.
+     */
+    public static final String COURTS_ZONE = "Europe/London";
+
+    /** Outcomes learned from systemdocgenerator's public events - the platform pattern. */
+    public static final String COMPLETION_EVENT = "event";
+
+    /** Outcomes learned by asking the query API - the escape hatch for a broker outage. */
+    public static final String COMPLETION_POLL_ONLY = "poll-only";
+
+    private static final String PREFIX = "courtregister.generation";
+    private static final String ZONE = PREFIX + ".zone";
+    private static final String ZONE_OVERRIDE_ACKNOWLEDGED = PREFIX + ".zone-override-acknowledged";
+    private static final String COMPLETION = PREFIX + ".completion";
+
+    /**
      * The default every downstream mode takes, named once.
      *
      * <p>One constant rather than four literals, which is the opposite of the choice
@@ -76,14 +99,61 @@ public record GenerationProperties(
     }
 
     /**
-     * Refuses a generation configuration that cannot be operated safely.
+     * Refuses a schedule that would run at the wrong hour and a completion mechanism nothing
+     * implements.
      *
-     * <p>The rules of research §11: the zone, the modes, and everything that becomes required once
-     * {@link #enabled} is true. All of them fail a deploy rather than a night.
+     * <p>Both are unconditional, and deliberately so: a job that happens to be disabled in this
+     * deployment is not a reason to accept a schedule that would run at the wrong hour in the next
+     * one.
+     *
+     * @throws IllegalStateException if the zone is not the court's and nobody has said so, if an
+     *                               acknowledged override names a zone the JVM does not know, or if
+     *                               the completion mechanism is not one this service implements
      */
     public void validate() {
-        throw new UnsupportedOperationException(
-                "T016 completes the generation refusals; "
-                        + "ConfigurationValidationTest (T009) guards them");
+        validateTheScheduleIsReadInTheCourtsZone();
+        validateTheCompletionMechanismIsOneThisServiceImplements();
+    }
+
+    /**
+     * The schedule is a wall-clock requirement, so the zone it is read in is part of it.
+     *
+     * <p>The override exists so that moving the run is a deliberate, reviewable act rather than a
+     * typo nobody notices until the registers arrive an hour late - and an acknowledged override is
+     * still held to naming a zone that exists, because {@code @Scheduled} would otherwise fail at
+     * refresh with nothing pointing at the setting that caused it.
+     */
+    private void validateTheScheduleIsReadInTheCourtsZone() {
+        if (!COURTS_ZONE.equals(zone)) {
+            if (zoneOverrideAcknowledged) {
+                if (!ZoneId.getAvailableZoneIds().contains(zone)) {
+                    throw new IllegalStateException(
+                            ZONE + " (" + zone + ") is not a zone this JVM knows, so the"
+                                    + " acknowledged override names no schedule at all");
+                }
+            } else {
+                throw new IllegalStateException(
+                        ZONE + " (" + zone + ") must be " + COURTS_ZONE + ", because the run is"
+                                + " 18:00 wall clock in BST and GMT alike; set "
+                                + ZONE_OVERRIDE_ACKNOWLEDGED + "=true to run in another zone"
+                                + " deliberately");
+            }
+        }
+    }
+
+    /**
+     * A value neither branch recognises is the worst of the three outcomes.
+     *
+     * <p>{@code poll-only} asks for no broker, so an unrecognised value that fell through to it
+     * would take the broker's own startup rule with it - and then every batch would wait for an
+     * event on a subscription this deployment was never told to make.
+     */
+    private void validateTheCompletionMechanismIsOneThisServiceImplements() {
+        if (!COMPLETION_EVENT.equals(completion) && !COMPLETION_POLL_ONLY.equals(completion)) {
+            throw new IllegalStateException(
+                    COMPLETION + " (" + completion + ") must be " + COMPLETION_EVENT + " or "
+                            + COMPLETION_POLL_ONLY + " - there is no third way for a batch to learn"
+                            + " what became of its render");
+        }
     }
 }

@@ -16,8 +16,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * that sameness is what makes the flag one lever rather than three. Changing it here without
  * changing it there leaves two implementations disagreeing about the cutover.
  *
- * <p><strong>Seam.</strong> {@link #validate()} is completed by T016, guarded by
- * {@code ConfigurationValidationTest} (T009).
+ * <p>{@link #validate()} holds the two settings that have defaults to what those defaults have to
+ * be. The endpoint and the label have none, so whether they are present is a question about
+ * generation rather than about this record, and {@link PropertiesValidator} asks it.
  *
  * @param endpoint the App Configuration store, empty where none is configured
  * @param key      the setting key, in App Configuration's feature-flag form
@@ -31,15 +32,32 @@ public record FeatureFlagProperties(
         String label,
         @DefaultValue("2s") Duration timeout) {
 
+    private static final String PREFIX = "courtregister.feature";
+    private static final String KEY = PREFIX + ".key";
+    private static final String TIMEOUT = PREFIX + ".timeout";
+
     /**
      * Refuses a flag configuration that cannot answer the question the run asks.
      *
-     * <p>Required whenever generation is enabled: a run that cannot read the flag skips every night,
-     * which is safe and silent, and silence of that kind is what this service exists to end.
+     * <p>The key is the lever's identity - it is the same string the producer and the legacy read,
+     * and an empty one reads a setting nobody writes, which is UNREADABLE, which is a run skipped
+     * every night. The timeout gates the start of a run, so one that never expires is a run held
+     * open by a slow store rather than a run that decided to skip.
+     *
+     * @throws IllegalStateException if the key is blank or the timeout cannot expire
      */
     public void validate() {
-        throw new UnsupportedOperationException(
-                "T016 completes the feature-flag refusals; "
-                        + "ConfigurationValidationTest (T009) guards them");
+        if (key == null || key.isBlank()) {
+            throw new IllegalStateException(
+                    KEY + " must be the App Configuration key the flag lives under, the same one"
+                            + " the producer and the legacy read - an empty key reads a setting"
+                            + " nobody writes, and every run would skip");
+        }
+        if (timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalStateException(
+                    TIMEOUT + " (" + timeout + ") must be positive - the flag gates the start of a"
+                            + " run, and a read that never expires holds the run open instead of"
+                            + " deciding it");
+        }
     }
 }

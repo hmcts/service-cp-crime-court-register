@@ -1,8 +1,10 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
 import java.time.Duration;
+import java.util.regex.Pattern;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 /**
@@ -20,12 +22,20 @@ import org.springframework.stereotype.Component;
  * that consumes normally, settles nothing usefully, and dead-letters every hearing it is given —
  * while readiness, liveness and the queue's own metrics say the deployment succeeded. Silence of
  * exactly that kind is what this service was commissioned to end, so it is not permitted to start.
+ *
+ * <p>The downstream half is held to the same standard, and its failures are quieter still: a
+ * schedule read in the wrong zone, a run with no payload store, no flag, no renderer or no
+ * notifier, an event-driven completion with no broker to hear from, a stub reachable where
+ * registers are really produced, and a blank or malformed e-mail template id (fix P9). None of them
+ * is discovered before 18:00, and by then the night's registers are already not going out
+ * (research §11).
  */
 @Component
-// The properties record is registered here, explicitly, rather than left to a scan: without it the
-// packaged application starts no context at all ("No qualifying bean of type
+// The properties records are registered here, explicitly, rather than left to a scan: without them
+// the packaged application starts no context at all ("No qualifying bean of type
 // CourtRegisterProperties"), which the container smoke finds and no JUnit suite does.
-@EnableConfigurationProperties(CourtRegisterProperties.class)
+@EnableConfigurationProperties({CourtRegisterProperties.class, GenerationProperties.class,
+    FeatureFlagProperties.class})
 public class PropertiesValidator implements InitializingBean {
 
     /**
@@ -82,8 +92,44 @@ public class PropertiesValidator implements InitializingBean {
     private static final String MAX_BACKOFF_SUFFIX = ".max-backoff";
     private static final String VALIDATE_OUTBOUND = "courtregister.submission.validate-outbound";
 
+    private static final String GENERATION = "courtregister.generation";
+    private static final String GENERATION_ENABLED = GENERATION + ".enabled";
+    private static final String GENERATION_COMPLETION = GENERATION + ".completion";
+    private static final String NN_MODE = GENERATION + ".nn-mode";
+    private static final String FILESERVICE_URL = "courtregister.fileservice.url";
+    private static final String FEATURE_ENDPOINT = "courtregister.feature.endpoint";
+    private static final String FEATURE_LABEL = "courtregister.feature.label";
+    private static final String SDG_ENDPOINT = "courtregister.endpoints.systemdocgenerator";
+    private static final String NN_ENDPOINT = "courtregister.endpoints.notificationnotify";
+    private static final String EMAIL_TEMPLATE = "courtregister.email.templates.cr_standard";
+
+    /** Spring's own key, not this service's: the broker the completion events arrive on. */
+    private static final String BROKER_URL = "spring.artemis.broker-url";
+
     /** Shared so the wording of a lower-bound refusal is one string and not five. */
     private static final String MUST_BE_AT_LEAST = ") must be at least ";
+
+    /** Shared so the wording of a stub-in-the-wrong-place refusal is one string and not five. */
+    private static final String IS_STUB_WHILE = " is STUB while ";
+
+    /** Shared so the wording of a required-setting refusal is one string and not four. */
+    private static final String MUST_BE_SET_WHEN = " must be set when ";
+
+    /**
+     * The shape notificationnotify's {@code templateId} has to be in, checked here rather than at
+     * send time (fix P9).
+     *
+     * <p>A pattern rather than {@link java.util.UUID#fromString}, which accepts shapes the estate's
+     * canonical form does not - it parses groups of any length, so {@code 1-2-3-4-5} is a UUID to it
+     * and is not one to notificationnotify.
+     */
+    private static final Pattern UUID_SHAPE = Pattern.compile(
+            "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+
+    /** The four downstream modes, by the setting each one is spelled with in a refusal. */
+    private static final String SDG_MODE = GENERATION + ".sdg-mode";
+    private static final String FILESERVICE_MODE = GENERATION + ".fileservice-mode";
+    private static final String FLAG_MODE = GENERATION + ".flag-mode";
 
     /** Shared so the wording of the run-budget refusals is one string and not three. */
     private static final String INSIDE_ITS_OWN_CLAIM =
@@ -94,22 +140,66 @@ public class PropertiesValidator implements InitializingBean {
 
     private final CourtRegisterProperties properties;
 
+    private final GenerationProperties generation;
+
+    private final FeatureFlagProperties feature;
+
+    /**
+     * The broker the completion events arrive on, read from the environment rather than bound.
+     *
+     * <p>{@code spring.artemis.*} is Spring's own configuration and this service does not own it,
+     * so re-declaring it under a {@code courtregister.} key would give a deployment two places to
+     * set one connection. The rule still has to be able to see it, because an event-driven
+     * completion with no broker is a batch that waits for an outcome nobody will ever send.
+     */
+    private final String brokerUrl;
+
     /**
      * Creates the validator over the bound properties.
      *
-     * @param properties the bound settings
+     * @param properties  the bound settings
+     * @param generation  the downstream half's settings
+     * @param feature     where the one lever is read from
+     * @param environment the resolved environment, for Spring's own broker key
      */
-    public PropertiesValidator(final CourtRegisterProperties properties) {
+    public PropertiesValidator(final CourtRegisterProperties properties,
+                               final GenerationProperties generation,
+                               final FeatureFlagProperties feature,
+                               final Environment environment) {
         this.properties = properties;
+        this.generation = generation;
+        this.feature = feature;
+        this.brokerUrl = environment.getProperty(BROKER_URL);
     }
 
     @Override
     public void afterPropertiesSet() {
-        validate(properties);
+        validate(properties, generation, feature, brokerUrl);
     }
 
     /**
-     * Checks the settings that must hold for the service to be safe to run.
+     * Checks every rule, the intake half's and the downstream half's alike.
+     *
+     * @param properties the bound settings
+     * @param generation the downstream half's settings
+     * @param feature    where the one lever is read from
+     * @param brokerUrl  {@code spring.artemis.broker-url}, empty or null where none is configured
+     * @throws IllegalStateException if any rule is broken
+     */
+    public static void validate(final CourtRegisterProperties properties,
+                                final GenerationProperties generation,
+                                final FeatureFlagProperties feature,
+                                final String brokerUrl) {
+        validate(properties);
+        generation.validate();
+        feature.validate();
+        validateTheStubsAreNotWhereRegistersAreProduced(properties, generation);
+        validateGenerationHasTheDownstreamsItNeeds(properties, generation, feature);
+        validateTheCompletionMechanismCanHearAnOutcome(generation, brokerUrl);
+    }
+
+    /**
+     * Checks the settings the intake half must hold to for the service to be safe to run.
      *
      * @param properties the bound settings
      * @throws IllegalStateException if any rule is broken
@@ -193,7 +283,7 @@ public class PropertiesValidator implements InitializingBean {
     private static void validateTheStubIsNotDeployed(final CourtRegisterProperties properties) {
         if (hasText(properties.servicebus().namespace())) {
             throw new IllegalStateException(
-                    PAYLOAD_MODE + " is STUB while " + NAMESPACE + " is set, which is a deployed"
+                    PAYLOAD_MODE + IS_STUB_WHILE + NAMESPACE + " is set, which is a deployed"
                             + " environment — the stub fetches nothing, so every request would be"
                             + " settled having produced no register at all");
         }
@@ -208,7 +298,7 @@ public class PropertiesValidator implements InitializingBean {
             final CourtRegisterProperties properties) {
         if (!hasText(properties.results().systemUserId())) {
             throw new IllegalStateException(
-                    SYSTEM_USER_ID + " must be set when " + PAYLOAD_MODE + " is LIVE, because the"
+                    SYSTEM_USER_ID + MUST_BE_SET_WHEN + PAYLOAD_MODE + " is LIVE, because the"
                             + " payload fallback cannot be used without an identity to authorise"
                             + " with");
         }
@@ -325,7 +415,7 @@ public class PropertiesValidator implements InitializingBean {
             final CourtRegisterProperties properties) {
         if (hasText(properties.servicebus().namespace())) {
             throw new IllegalStateException(
-                    SUBSCRIPTIONS_MODE + " is STUB while " + NAMESPACE + " is set, which is a"
+                    SUBSCRIPTIONS_MODE + IS_STUB_WHILE + NAMESPACE + " is set, which is a"
                             + " deployed environment — the stub asks reference data nothing, so every"
                             + " hearing that produced a register would complete addressed to nobody");
         }
@@ -347,7 +437,7 @@ public class PropertiesValidator implements InitializingBean {
             final CourtRegisterProperties properties) {
         if (properties.payload().mode() == PayloadSourceMode.LIVE) {
             throw new IllegalStateException(
-                    SUBSCRIPTIONS_MODE + " is STUB while " + PAYLOAD_MODE + " is LIVE — real"
+                    SUBSCRIPTIONS_MODE + IS_STUB_WHILE + PAYLOAD_MODE + " is LIVE — real"
                             + " hearings would be fetched and every one of them completed"
                             + " no-subscriptions, because reference data was never asked");
         }
@@ -369,7 +459,7 @@ public class PropertiesValidator implements InitializingBean {
         }
         if (!hasText(referencedata.systemUserId())) {
             throw new IllegalStateException(
-                    REFDATA_SYSTEM_USER_ID + " must be set when " + SUBSCRIPTIONS_MODE + " is LIVE,"
+                    REFDATA_SYSTEM_USER_ID + MUST_BE_SET_WHEN + SUBSCRIPTIONS_MODE + " is LIVE,"
                             + " because reference data authorises the now-subscriptions query on"
                             + " CJSCPPUID and refuses an anonymous one");
         }
@@ -458,7 +548,7 @@ public class PropertiesValidator implements InitializingBean {
         }
         if (!hasText(progression.systemUserId())) {
             throw new IllegalStateException(
-                    PROGRESSION_SYSTEM_USER_ID + " must be set when " + PAYLOAD_MODE + " is LIVE,"
+                    PROGRESSION_SYSTEM_USER_ID + MUST_BE_SET_WHEN + PAYLOAD_MODE + " is LIVE,"
                             + " because progression authorises the add-court-register command on"
                             + " CJSCPPUID and refuses an anonymous one — every register, one 403 at"
                             + " a time");
@@ -637,6 +727,164 @@ public class PropertiesValidator implements InitializingBean {
                     VALIDATE_OUTBOUND + " is false while " + NAMESPACE + " is set, which is a"
                             + " deployed environment — without the pre-send check an invalid"
                             + " document is a 400 nobody sees and a register nobody can find");
+        }
+    }
+
+    /**
+     * Constitution Principle V, applied to the four downstreams the nightly run has.
+     *
+     * <p>The same rule the payload and now-subscriptions stubs are held to, and the same two
+     * discriminators: a namespace means workload identity, which means a deployed pod, and an
+     * enabled generation means a pod that means to produce registers tonight. A stubbed renderer or
+     * notifier in either of those places is a run that completes, counts its batches, reports
+     * itself healthy - and sends nobody anything.
+     */
+    private static void validateTheStubsAreNotWhereRegistersAreProduced(
+            final CourtRegisterProperties properties, final GenerationProperties generation) {
+        validateTheStubIsSomewhereItCanDoNoHarm(SDG_MODE, generation.sdgMode(), properties,
+                generation);
+        validateTheStubIsSomewhereItCanDoNoHarm(NN_MODE, generation.nnMode(), properties,
+                generation);
+        validateTheStubIsSomewhereItCanDoNoHarm(FILESERVICE_MODE, generation.fileserviceMode(),
+                properties, generation);
+        validateTheStubIsSomewhereItCanDoNoHarm(FLAG_MODE, generation.flagMode(), properties,
+                generation);
+    }
+
+    /**
+     * One mode, against both discriminators, so the refusal names the one that caught it.
+     *
+     * @param setting    the mode's own key, so the message names the setting to change
+     * @param mode       what that key is currently set to
+     * @param properties the bound settings, for the credential source
+     * @param generation the downstream half's settings, for the master switch
+     */
+    private static void validateTheStubIsSomewhereItCanDoNoHarm(final String setting,
+            final GenerationProperties.SourceMode mode, final CourtRegisterProperties properties,
+            final GenerationProperties generation) {
+        if (mode == GenerationProperties.SourceMode.STUB) {
+            if (hasText(properties.servicebus().namespace())) {
+                throw new IllegalStateException(
+                        setting + IS_STUB_WHILE + NAMESPACE + " is set, which is a deployed"
+                                + " environment - the stub renders, notifies, stores or reads"
+                                + " nothing, so a run would count its batches and send nobody"
+                                + " anything");
+            }
+            if (generation.enabled()) {
+                throw new IllegalStateException(
+                        setting + IS_STUB_WHILE + GENERATION_ENABLED + " is true - a deployment"
+                                + " that means to produce registers tonight cannot produce them"
+                                + " against a stand-in");
+            }
+        }
+    }
+
+    /**
+     * Enabling the downstream half is enabling everything it depends on.
+     *
+     * <p>Each of these is the same failure wearing a different name: the pod starts, reports itself
+     * healthy, waits until 18:00 and then cannot store the payload, cannot read the flag, cannot ask
+     * for a render or cannot send an e-mail. The registers are not late, they are never produced,
+     * and the first anybody hears of it is a Youth Offending Team asking where the register is.
+     * Every one of these settings arrives from the deployment, so every one of them is a deploy that
+     * should have failed.
+     *
+     * <p>Conditional on the master switch and on nothing else. A local run and every plain
+     * context-load test leave all of them unset and are configured exactly as they mean to be: with
+     * the job, the listener and the second datasource absent, there is nothing to store a payload
+     * in, nothing to render and nobody to notify.
+     */
+    private static void validateGenerationHasTheDownstreamsItNeeds(
+            final CourtRegisterProperties properties, final GenerationProperties generation,
+            final FeatureFlagProperties feature) {
+        if (generation.enabled()) {
+            requireForGeneration(properties.fileservice().url(), FILESERVICE_URL,
+                    "systemdocgenerator renders only a payload that is already in the file service,"
+                            + " and there is nowhere to put one");
+            requireForGeneration(feature.endpoint(), FEATURE_ENDPOINT,
+                    "the run reads the cutover flag before it does anything else, and an unreadable"
+                            + " flag is a run skipped every night");
+            requireForGeneration(feature.label(), FEATURE_LABEL,
+                    "one App Configuration store serves every stack, so an unlabelled read is a read"
+                            + " of somebody else's flag or of none");
+            requireForGeneration(properties.endpoints().systemdocgenerator(), SDG_ENDPOINT,
+                    "the generate-document command has nowhere to go without it");
+            requireForGeneration(properties.endpoints().notificationnotify(), NN_ENDPOINT,
+                    "the send-email-notification command has nowhere to go without it");
+            validateTheEmailTemplateIsOneNotificationnotifyWillAccept(properties, generation);
+        }
+    }
+
+    /**
+     * Fix P9: the e-mail template id is a deployment fact, checked at startup rather than at 18:00.
+     *
+     * <p>The legacy resolved it per recipient and, finding it blank, logged a line at INFO and moved
+     * on to the next one. The e-mail was never sent, nothing recorded that it had not been, and the
+     * batch reported the state it would have reported had every recipient been e-mailed. A whole
+     * evening's registers can be lost that way to a value nobody set, and the loss is invisible.
+     *
+     * <p>Shape as well as presence, because a malformed id fails in exactly the same way and later:
+     * notificationnotify refuses the command, every recipient of every batch, on a value that was
+     * wrong before the pod ever started. Asked of a LIVE notifier only - the stub sends under no
+     * template, and it is already refused wherever registers are really produced.
+     */
+    private static void validateTheEmailTemplateIsOneNotificationnotifyWillAccept(
+            final CourtRegisterProperties properties, final GenerationProperties generation) {
+        if (generation.nnMode() == GenerationProperties.SourceMode.LIVE) {
+            final String template = properties.email().templates().crStandard();
+            if (!hasText(template)) {
+                throw new IllegalStateException(
+                        EMAIL_TEMPLATE + " must be the notificationnotify template the register is"
+                                + " sent under when " + GENERATION_ENABLED + " is true and " + NN_MODE
+                                + " is LIVE - a blank id discovered at 18:00 is a night's registers"
+                                + " unsent, and the legacy logged one line and moved on (P9)");
+            }
+            if (!UUID_SHAPE.matcher(template).matches()) {
+                throw new IllegalStateException(
+                        EMAIL_TEMPLATE + " (" + template + ") must be a UUID when " + NN_MODE
+                                + " is LIVE - notificationnotify refuses the command on anything"
+                                + " else, every recipient of every batch");
+            }
+        }
+    }
+
+    /**
+     * A batch has to be able to learn what became of its render.
+     *
+     * <p>{@code event} is the platform pattern and the default: systemdocgenerator publishes the
+     * outcome and this service hears it on a durable subscription. It cannot hear anything without a
+     * broker to subscribe to, and a run that never learns an outcome is a batch that stays
+     * GENERATING until the reconciler times it out - every batch, every night, silently.
+     * {@code poll-only} is the escape hatch for an environment without broker access and asks for no
+     * broker at all.
+     */
+    private static void validateTheCompletionMechanismCanHearAnOutcome(
+            final GenerationProperties generation, final String brokerUrl) {
+        if (generation.enabled()
+                && GenerationProperties.COMPLETION_EVENT.equals(generation.completion())
+                && !hasText(brokerUrl)) {
+            throw new IllegalStateException(
+                    BROKER_URL + " must name the broker the outcome events arrive on when "
+                            + GENERATION_COMPLETION + " is "
+                            + GenerationProperties.COMPLETION_EVENT + " and " + GENERATION_ENABLED
+                            + " is true - without it every batch waits for an outcome nobody will"
+                            + " send, until the reconciler times it out");
+        }
+    }
+
+    /**
+     * A setting the downstream half cannot run without, and the consequence of its absence.
+     *
+     * @param value       what the deployment supplied
+     * @param setting     the key, so the message names the setting to set
+     * @param consequence what happens at 18:00 without it, so the message says why it matters
+     */
+    private static void requireForGeneration(final String value, final String setting,
+            final String consequence) {
+        if (!hasText(value)) {
+            throw new IllegalStateException(
+                    setting + MUST_BE_SET_WHEN + GENERATION_ENABLED + " is true - "
+                            + consequence);
         }
     }
 
