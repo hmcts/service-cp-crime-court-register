@@ -1,5 +1,10 @@
 package uk.gov.hmcts.cp.courtregister.batch;
 
+import java.time.Clock;
+import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
+import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
+import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.domain.RunReport;
 
 /**
@@ -25,9 +30,58 @@ import uk.gov.hmcts.cp.courtregister.domain.RunReport;
  * yet, and no context creates it.
  *
  * <p><strong>Seam only.</strong> The job lands with T050; until then this throws, so that
- * {@code RegisterGenerationJobTest} records a failing assertion rather than a compile error.
+ * {@code RegisterGenerationJobTest} records a failing assertion rather than a compile error. The
+ * collaborators are already the constructor's, because a run's whole content is the order it asks
+ * them in and a test that could not stand between them would have nothing to pin; none is read
+ * until T050 reads them all, which is what the suppression below is and how long it lasts - the
+ * eight fields are unused for exactly as long as {@link #run()} refuses, and the implementation
+ * that reads them is the change that removes it.
  */
+@SuppressWarnings("PMD.UnusedPrivateField")
 public class RegisterGenerationJob {
+
+    private final FeatureFlagGate gate;
+
+    private final RegisterStore store;
+
+    private final BatchAssembler assembler;
+
+    private final RegisterGenerationService service;
+
+    private final GenerationReconciler reconciler;
+
+    private final GenerationMetrics metrics;
+
+    private final GenerationProperties properties;
+
+    private final Clock clock;
+
+    /**
+     * Creates the run over the collaborators it asks in order.
+     *
+     * @param gate       the one lever, asked first and before anything is read or assembled
+     * @param store      the register store, for the records this run may batch
+     * @param assembler  the grouping into one batch per court centre and register date
+     * @param service    the requesting leg, asked once per batch and sequentially
+     * @param reconciler the grace-period safety net under the public-event topic
+     * @param metrics    the instrument surface a nightly flow is read by between runs
+     * @param properties the settings the run works to, the run deadline above all
+     * @param clock      the run's own clock, which the deadline and the report's duration are
+     *                   measured on
+     */
+    public RegisterGenerationJob(final FeatureFlagGate gate, final RegisterStore store,
+            final BatchAssembler assembler, final RegisterGenerationService service,
+            final GenerationReconciler reconciler, final GenerationMetrics metrics,
+            final GenerationProperties properties, final Clock clock) {
+        this.gate = gate;
+        this.store = store;
+        this.assembler = assembler;
+        this.service = service;
+        this.reconciler = reconciler;
+        this.metrics = metrics;
+        this.properties = properties;
+        this.clock = clock;
+    }
 
     /**
      * Runs one generation, from the flag read to the report.

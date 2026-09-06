@@ -15,15 +15,23 @@ import java.util.Map;
  * expected state for every night before cutover, and a report that only appeared when work happened
  * would make "the flag is off" and "the job did not fire" the same silence.
  *
- * @param flagDecision what the flag said, which is the first thing a run does and the reason a
- *                     skipped run is a success
+ * <p><strong>What the gate decided, not what the store answered.</strong> The report says what the
+ * run knows, and what a run knows about the flag is the {@link GateDecision} it was given: a
+ * {@link FlagDecision} here could say neither that an operator overrode a flag that had not said ON
+ * - which is the one night in this flow most worth reading a report for - nor which of the six
+ * unreadable causes stopped a run, since the gate does not pass the cause on. Those six keep their
+ * own series on {@code courtregister_generation_skipped_total}, which is where
+ * {@link uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate} already puts them.
+ *
+ * @param gateDecision what the gate decided from its one read of the flag, which is the first thing
+ *                     a run does and the reason a skipped run is a success
  * @param outcomes     how many batches ended in each state; empty for a skipped run
  * @param reconciled   how many outcomes the grace-period reconciler had to fetch rather than
  *                     receive, which is the broker's health seen from here
  * @param duration     how long the run took
  */
 public record RunReport(
-        FlagDecision flagDecision,
+        GateDecision gateDecision,
         Map<BatchStatus, Integer> outcomes,
         int reconciled,
         Duration duration) {
