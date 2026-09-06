@@ -78,6 +78,8 @@ NN delivery events, PCR, history migration, C18.
 | `courtregister.feature.endpoint` / `.key` / `.label` / `.timeout` | `${APPCONFIG_ENDPOINT:}` / `.appconfig.featureflag/CourtRegisterService` / `${STACK_LABEL:}` / `2s` | The third reader of the flag; required when generation is enabled |
 | `courtregister.fileservice.url` / `.username` / `.password` | `${FILESERVICE_DATASOURCE_URL:}` … | Write-only datasource; required when generation is enabled |
 | `courtregister.endpoints.systemdocgenerator` / `.notificationnotify` | `${SYSTEMDOCGENERATOR_BASE_URL:}` / `${NOTIFICATIONNOTIFY_BASE_URL:}` | Internal ingress hosts; command/query API paths appended by the clients |
+| `courtregister.endpoints.system-user-id` | `${COURT_REGISTER_SYSTEM_USER_ID:}` | The `CJSCPPUID` both downstream calls are made under. One identity, because a run asks systemdocgenerator to render a batch and notificationnotify to e-mail it as one caller; the same service identity the 001 results and reference-data reads use |
+| `courtregister.endpoints.max-attempts` / `.initial-backoff` / `.max-backoff` / `.connect-timeout` / `.read-timeout` | `3` / `1s` / `2s` / `5s` / `10s` | The transport the SDG and NN clients share, at the estate's own defaults, so an endpoint is the only thing a deployment must state. The same five keys the 001 clients carry and the same `RetryPolicy` object behind them, so the taxonomy is one taxonomy (`retry_taxonomy_matches_the_submission_client`); both timeouts are set deliberately, a render request with no read timeout outliving the run deadline meant to bound it |
 | `courtregister.email.templates.cr_standard` | `${CR_EMAIL_TEMPLATE_ID:}` | UUID, required in LIVE mode when generation is enabled |
 | `spring.artemis.broker-url` / `.user` / `.password`; `spring.jms.pub-sub-domain=true`, `.subscription-durable=true`, `.client-id=courtregister-service` | `${ARTEMIS_*}` | The `public.event` subscription |
 | `courtregister.publicevents.topic` / `.subscription` / `.selector` | `public.event` / `courtregister-service.sdg` / `CPPNAME IN (…)` | Listener destination and filter |
@@ -177,11 +179,22 @@ docker-compose.yml                             # + artemis, fileservice-postgres
 
 ```java
 public interface RegisterStore {
-    RecordOutcome record(DistributionCommand command, CourtRegisterDocument document,
-                         String courtCentreOuCode,                              // the batch's copy
-                         String defendantType, RecordedFlagState flagState);   // supersedes in-txn
+    RecordedCompletion recordAndComplete(DistributionCommand command,           // insert + supersede +
+                         CourtRegisterDocument document,                        // complete the command,
+                         String courtCentreOuCode,                              // one transaction; the
+                         String defendantType, RecordedFlagState flagState,     // batch's copy of the
+                         Supplier<GuardDecision> completion);                   // OU code
     List<RegisterRecord> activeUnbatched();                                     // RECORDED, unsuperseded, ON
-    RegisterBatch assemble(CourtCentreDay key, List<RegisterRecord> records);   // stamps batch_id
+    List<RegisterRecord> batched(UUID batchId);                                 // the batch's own rows,
+                                                                                // read back by identity
+    List<RegisterBatch> batchesFor(Collection<CourtCentreDay> keys);            // the keys' history, which
+                                                                                // is what decides the
+                                                                                // supplementary rule (Q27)
+    RegisterBatch assemble(RegisterBatch batch, List<RegisterRecord> records);  // writes the batch the
+                                                                                // assembler decided and
+                                                                                // stamps batch_id
+    void markPayloadMinted(UUID batchId, UUID payloadFileId);                   // before the file-service
+                                                                                // write; batch stays PENDING
     void markRequested(UUID batchId, UUID payloadFileId);
     void markGenerated(UUID batchId, UUID documentFileId, Instant generatedAt,
                        CompletedBy completedBy);                                // this batch's rows only (P3);
@@ -251,7 +264,7 @@ DEFECT-FIXES rows use these names verbatim.**
 | Notify | `RegisterNotifierServiceTest` | U | per-recipient rows minted first, each carrying the `notificationId` that goes in the path of its `POST /notifications/{notificationId}`; ACCEPTED/FAILED; NOTIFIED / PARTIALLY_NOTIFIED / NOTIFIED_NOBODY (P1: `a_batch_with_no_recipients_ends_notified_nobody_not_generated_forever`); resend only FAILED |
 | Config | `ConfigurationValidationTest` (extended) | U | P9: `blank_email_template_refuses_to_start_in_live_mode`; generation-enabled requires fileservice + flag + endpoints; completion=poll-only logged; STUB refused with namespace |
 | Health | `PublicEventsHealthIndicatorTest`, `FileServiceRunHealthIndicatorTest`, `ReadinessPolicyIT` (extended) | U/PG | broker never in readiness; file-service datasource in readiness only during a run |
-| Metrics | `GenerationMetricsTest` | U | instrument names/labels (`courtregister.batches{outcome}`, `generation.latency`, `generation.reconciled`, `generation.skipped{reason}`, `notifications{status}`, gauges) |
+| Metrics | `GenerationMetricsTest`, `GenerationMetricsContextTest` | U | instrument names and labels as shipped: counters `courtregister_batches_total{outcome}`, `courtregister_generation_request_total{response_code}`, `courtregister_generation_reconciled_total`, `courtregister_generation_skipped_total{reason}`, `courtregister_notifications_total{status,response_code}`, `courtregister_public_events_ignored_total{reason}`; timer `courtregister_generation_latency`; gauges `courtregister_oldest_recorded_unbatched_age`, `courtregister_oldest_generating_age`, `courtregister_oldest_pending_age`, `courtregister_pending_after_deadline`, `courtregister_flag_read_ok`. Every label is drawn from a bounded enumeration, and the bean is unconditional so the meters do not come and go with `courtregister.generation.enabled` |
 | Privacy | `TelemetryPrivacyTest` (extended) | U | recipient address/name never at INFO+ |
 | CLI | `GenerateRegisterCliTest`, `NotifyRegisterCliTest`, `ListBatchesCliTest`, `SupersedeBeforeCliTest`, `CheckFlagCliTest` | U | FR-016 behaviours; flag refusal without `--ignore-flag`; output shapes |
 | CLI | `CliDispatchIT` | CS | `startup.sh generate-register --help` exits 0 inside the image |
