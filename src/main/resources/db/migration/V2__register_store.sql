@@ -112,17 +112,32 @@ CREATE TABLE register_batch (
     -- and this is the same rule where the writers that do not go through the store - the operations
     -- CLI's whole-row write, and whatever is written next - cannot get past it either.
     --
+    -- The two states that are still in flight say so themselves rather than being left to a
+    -- catch-all: PENDING is a batch nothing has been asked of the renderer for and GENERATING is one
+    -- whose answer has not come back, so on neither of them is there an outcome for any mechanism to
+    -- have learned. A row that named one would have the reconciler chasing a batch its own row says
+    -- was already reported, and the reconciled metric counting an outcome nobody delivered.
+    --
+    -- Three implications rather than a disjunction with an "everything else" arm. Each states what
+    -- the column must be for one family of states and says nothing about the others, so all seven
+    -- states of register_batch_status_chk are covered and none is covered by omission. A status that
+    -- is not a status at all - a typo, a state from a release that never shipped - is
+    -- register_batch_status_chk's refusal to report and not this one's, and leaving it there is what
+    -- makes the error a writer sees name the vocabulary rather than the attribution. Widening the
+    -- vocabulary is therefore a migration that widens this constraint in the same breath, which
+    -- SchemaMigrationV2IT pins by reading BatchStatus against both.
+    --
     -- COALESCE rather than a bare IN: a FAILED row with no reason at all would otherwise leave the
     -- comparison NULL, and a CHECK that evaluates to NULL is a CHECK that passes.
     CONSTRAINT register_batch_completed_by_shape_chk
-        CHECK ((status IN ('GENERATED', 'NOTIFIED', 'PARTIALLY_NOTIFIED', 'NOTIFIED_NOBODY')
-                    AND completed_by IS NOT NULL)
-            OR (status = 'FAILED'
-                    AND ((COALESCE(failure_reason, '')
+        CHECK ((status NOT IN ('PENDING', 'GENERATING')
+                    OR completed_by IS NULL)
+           AND (status NOT IN ('GENERATED', 'NOTIFIED', 'PARTIALLY_NOTIFIED', 'NOTIFIED_NOBODY')
+                    OR completed_by IS NOT NULL)
+           AND (status <> 'FAILED'
+                    OR ((COALESCE(failure_reason, '')
                               IN ('GENERATION_FAILED', 'GENERATION_TIMED_OUT'))
-                         = (completed_by IS NOT NULL)))
-            OR (status NOT IN ('GENERATED', 'NOTIFIED', 'PARTIALLY_NOTIFIED', 'NOTIFIED_NOBODY',
-                               'FAILED'))),
+                         = (completed_by IS NOT NULL)))),
     CONSTRAINT register_batch_attempts_chk
         CHECK (attempts >= 0)
 );

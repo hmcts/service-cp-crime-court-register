@@ -82,12 +82,16 @@ Constraint: `UNIQUE (court_centre_id, register_date) WHERE status <> 'FAILED'` (
 live batch per key; a FAILED batch may be re-assembled (new `batch_id`, rows re-stamped).
 
 Check: `register_batch_completed_by_shape_chk`, the `completed_by` rule above as a shape the row
-keeps, for the writers that do not go through the store (the CLI's whole-row write): `completed_by`
-NOT NULL on `GENERATED` / `NOTIFIED` / `PARTIALLY_NOTIFIED` / `NOTIFIED_NOBODY`, and on `FAILED`
-present exactly when `failure_reason` is one of the two generator-attributed reasons.
-`JdbcRegisterStore` refuses a contradictory `markGenerated` or `markFailed` before it issues a
-statement, so the same rule is enforced twice and stated once
-(`BatchFailureReason.isGeneratorAttributed()`).
+keeps, for the writers that do not go through the store (the CLI's whole-row write): NULL on
+`PENDING` / `GENERATING`, which are the states that have no outcome for a mechanism to have learned;
+NOT NULL on `GENERATED` / `NOTIFIED` / `PARTIALLY_NOTIFIED` / `NOTIFIED_NOBODY`; and on `FAILED`
+present exactly when `failure_reason` is one of the two generator-attributed reasons. Written as
+three implications rather than a disjunction with an "everything else" arm, so all seven states are
+covered and none is covered by omission; a status outside the vocabulary is
+`register_batch_status_chk`'s refusal to report. `JdbcRegisterStore` refuses a
+contradictory `markGenerated` or `markFailed` before it issues a statement and
+`RegisterBatchRepository` refuses an attribution on a batch that has not finished, so the same rule
+is enforced twice and stated once (`BatchFailureReason.isGeneratorAttributed()`).
 
 **Open design question (before T043/T050).** A same-day re-share recorded after that day's batch is
 GENERATED or NOTIFIED becomes a fresh active unbatched row whose key already has a live batch, so the

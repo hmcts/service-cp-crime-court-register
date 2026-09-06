@@ -9,6 +9,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
@@ -43,6 +44,17 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 public class RegisterBatchRepository {
 
     private static final String BATCH_ID = "batchId";
+
+    /**
+     * The two states a batch is still in flight in, and so has not been completed by anything.
+     *
+     * <p>PENDING is a batch nothing has been asked of the renderer for; GENERATING is one whose
+     * answer has not come back, which is exactly why the reconciler reads it. Neither has an
+     * outcome for a mechanism to have learned, and {@code register_batch_completed_by_shape_chk}
+     * says the same of the row.
+     */
+    private static final Set<BatchStatus> UNFINISHED =
+            Set.of(BatchStatus.PENDING, BatchStatus.GENERATING);
 
     /**
      * Statement 1 - a batch written whole, by a caller that already holds every fact about it.
@@ -143,13 +155,15 @@ public class RegisterBatchRepository {
      * Statement 1 - inserts a newly assembled batch.
      *
      * @param batch the batch, carrying the identity minted at assembly
-     * @throws IllegalArgumentException if the batch does not start where a batch starts
+     * @throws IllegalArgumentException if the batch does not start where a batch starts, or if it
+     *                                  already names the mechanism that completed it
      */
     public void insert(final RegisterBatch batch) {
         if (batch.status() != BatchStatus.PENDING) {
             throw new IllegalArgumentException("a batch enters the table at PENDING and is moved "
                     + "from there; " + batch.batchId() + " was offered as " + batch.status());
         }
+        unattributed(batch);
         mutable(jdbcClient.sql(INSERT_BATCH)
                 .param(BATCH_ID, batch.batchId())
                 .param("courtCentreId", batch.courtCentreId())
@@ -217,17 +231,41 @@ public class RegisterBatchRepository {
      * @param batch    the batch as it should now stand; its status is the state moved to
      * @param expected the state the caller read the batch in, and the state the write is fenced on
      * @return whether a row changed
-     * @throws IllegalStateException if the state machine does not draw the move
+     * @throws IllegalArgumentException if the state moved to is still in flight and the batch names
+     *                                  the mechanism that completed it
+     * @throws IllegalStateException    if the state machine does not draw the move
      */
     public boolean compareAndSet(final RegisterBatch batch, final BatchStatus expected) {
         if (!expected.canTransitionTo(batch.status())) {
             throw new IllegalStateException("batch " + batch.batchId() + " may not move from "
                     + expected + " to " + batch.status());
         }
+        unattributed(batch);
         return mutable(jdbcClient.sql(UPDATE_BATCH)
                 .param(BATCH_ID, batch.batchId())
                 .param("expected", expected.name()), batch)
                 .update() > 0;
+    }
+
+    /**
+     * A batch that has not finished has been completed by nothing, refused before either write.
+     *
+     * <p>Both statements here bind {@code completed_by} from the batch they are handed - the insert
+     * because a caller assembling by hand states every column, and the update because it is a
+     * whole-row write - so both can carry an attribution onto a state that has no outcome yet. The
+     * store cannot: assembly never names the column and {@code markRequested} does not set it, so
+     * this is the path the shape check exists behind, and refusing it here is what turns a
+     * constraint violation at the driver into a refusal that names the batch and the pair.
+     *
+     * <p>The message names the batch, its state and the mechanism, and nothing else; none of the
+     * three is about a document whose every defendant is a child (constitution Principle VII).
+     */
+    private static void unattributed(final RegisterBatch batch) {
+        if (UNFINISHED.contains(batch.status()) && batch.completedBy() != null) {
+            throw new IllegalArgumentException("batch " + batch.batchId() + " is " + batch.status()
+                    + ", which nothing has reported an outcome for, and named "
+                    + batch.completedBy());
+        }
     }
 
     /**
