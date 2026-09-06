@@ -358,7 +358,7 @@ public class DistributionPipeline {
     /**
      * The run itself, with every failure it can meet turned into an outcome.
      *
-     * <p>The first catch takes every failure whose throw site already classified it — the ports
+     * <p>The first catch takes every failure whose throw site already classified it - the ports
      * answer "is this worth retrying" in the exception, and the pipeline never second-guesses them
      * by reading the Java type. A register the store <em>refused</em> is one of them and is
      * deliberately not the signal below it: the store was reached and declined to hold this row, so
