@@ -741,7 +741,7 @@ class TelemetryPrivacyTest {
                         Duration.ofMinutes(5), Duration.ofSeconds(60)),
                 new CourtRegisterProperties.Claim(Duration.ofMinutes(5), RUN_DEADLINE),
                 new CourtRegisterProperties.Store(Duration.ofSeconds(10)),
-                new CourtRegisterProperties.Stub(PayloadFailureMode.NONE),
+                new CourtRegisterProperties.Stub(PayloadFailureMode.NONE, StubFlagAnswer.ON),
                 new CourtRegisterProperties.Payload(
                         PayloadSourceMode.STUB,
                         new CourtRegisterProperties.Redis("localhost", 6379, null, false,

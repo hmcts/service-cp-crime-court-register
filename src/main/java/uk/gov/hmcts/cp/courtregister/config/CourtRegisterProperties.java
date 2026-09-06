@@ -101,9 +101,18 @@ public record CourtRegisterProperties(
     /**
      * Stub adapter behaviour, for the test and local profiles only.
      *
+     * <p>Both settings are here rather than beside the modes they belong to, because neither is a
+     * mode: {@code payload.mode} and {@code generation.flag-mode} say which adapter is deployed,
+     * which is a question an operator must be able to answer, and these two say how the stand-in
+     * behaves once one is, which is a question only a test asks.
+     *
      * @param payloadFailureMode the simulated payload failure; test and local profiles only
+     * @param flagAnswer         what the stub feature-flag reader answers; ON unless a test wants a
+     *                           skip path
      */
-    public record Stub(@DefaultValue("NONE") PayloadFailureMode payloadFailureMode) {
+    public record Stub(
+            @DefaultValue("NONE") PayloadFailureMode payloadFailureMode,
+            @DefaultValue("ON") StubFlagAnswer flagAnswer) {
     }
 
     /**

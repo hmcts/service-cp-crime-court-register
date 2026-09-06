@@ -205,6 +205,12 @@ courtregister:
     # NONE | TRANSIENT. Test and local profiles only: it is deliberately not a field in the message
     # and not an HTTP endpoint, either of which would be a production fault-injection surface.
     payload-failure-mode: NONE
+    # ON | OFF | UNREADABLE, and only what the STUB feature-flag reader answers - it decides nothing
+    # wherever generation.flag-mode is LIVE, which is everywhere the service is deployed. ON is the
+    # default and is the opposite of the live reader's fail-closed disposition on purpose: the stub
+    # has no store to fail against, and an answer of OFF would skip every local run before it began.
+    # The other two exist so the skip paths can be exercised deliberately.
+    flag-answer: ON
 
   payload:
     # LIVE | STUB. LIVE is the cache-with-query-fallback adapter and is what an environment that
