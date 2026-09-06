@@ -130,6 +130,7 @@ class RegisterStoreIT {
 
     private static final String RECORDED = "RECORDED";
     private static final String SUPERSEDED = "SUPERSEDED";
+    private static final String GENERATING = "GENERATING";
     private static final String GENERATED = "GENERATED";
     private static final String NOTIFIED = "NOTIFIED";
     private static final String FAILED = "FAILED";
@@ -629,6 +630,52 @@ class RegisterStoreIT {
                             + "other mechanism, which is the one the metric exists to count")
                     .contains("RECONCILER");
         }
+
+        /**
+         * A generated batch that names nobody, refused before anything is written.
+         *
+         * <p>A document exists because some mechanism outside this service said so, and the row that
+         * records the document is the only place that says which one. A GENERATED row with no
+         * {@code completed_by} is therefore not an incomplete row but a contradictory one: it claims
+         * an answer arrived and denies that anything delivered it, and the {@code reconciled} metric
+         * counts it as neither.
+         *
+         * <p>The refusal has to come before the statement. The mark is a compare-and-set that also
+         * moves this batch's registers to GENERATED, and there is no second write afterwards that
+         * could add the attribution: GENERATED to GENERATED is a move
+         * {@link uk.gov.hmcts.cp.courtregister.domain.BatchStatus} refuses. A row written without it
+         * is a row that can never acquire it.
+         */
+        @Test
+        void a_generated_mark_without_attribution_is_refused() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = store.assemble(
+                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+            }).as(WALKED).doesNotThrowAnyException();
+            final UUID batchId = batchIdOn(MONDAY);
+
+            softly.assertThatThrownBy(() ->
+                            store.markGenerated(batchId, DOCUMENT_FILE_ID, GENERATED_AT, null))
+                    .as("a document arrived because some mechanism reported it, and this row is "
+                            + "the only place that ever says which one")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining(GENERATED);
+            softly.assertThat(batchOn(MONDAY))
+                    .as("and the refusal is made before the statement, so the batch is still "
+                            + "waiting for the outcome it was asked about")
+                    .contains(new BatchOutcome(GENERATING, null, null));
+            softly.assertThat(completedByOn(MONDAY))
+                    .as("nothing was attributed, because nothing was written")
+                    .isEmpty();
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("and the register the batch was assembled from did not move either")
+                    .containsExactly(RECORDED);
+        }
     }
 
     /**
@@ -750,6 +797,80 @@ class RegisterStoreIT {
             softly.assertThat(batchOn(MONDAY).map(BatchOutcome::status))
                     .as("and the batch still ends where the reason says it ended")
                     .contains(FAILED);
+        }
+
+        /**
+         * The two endings somebody outside this service reported, and what they must carry.
+         *
+         * <p>GENERATION_FAILED is systemdocgenerator's own verdict about the render and
+         * GENERATION_TIMED_OUT is the reconciler's verdict about systemdocgenerator's silence. Both
+         * are learned by a named mechanism, and the {@code reconciled} metric is the count of which
+         * one: a batch that ends under either of them without naming it is the one row the metric
+         * cannot be computed from, and no later write can supply it.
+         */
+        @Test
+        void a_generator_failure_without_attribution_is_refused() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = store.assemble(
+                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+            }).as(WALKED).doesNotThrowAnyException();
+            final UUID batchId = batchIdOn(MONDAY);
+
+            softly.assertThatThrownBy(() -> store.markFailed(batchId,
+                            BatchFailureReason.GENERATION_FAILED, SDG_REASON, null))
+                    .as("this reason is somebody else's answer about the render, so a caller that "
+                            + "cannot say whose answer it is has lost half of it")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("GENERATION_FAILED");
+            softly.assertThat(batchOn(MONDAY))
+                    .as("and nothing is written: no ending, and no reason to explain one")
+                    .contains(new BatchOutcome(GENERATING, null, null));
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("the batch is still the batch its register belongs to")
+                    .isEqualTo(1);
+        }
+
+        /**
+         * The four endings this service reached on its own, and what they must not carry.
+         *
+         * <p>The payload was never stored, the request was never delivered, it was refused, or the
+         * batch could not be assembled at all. Nobody outside this service was ever in a position to
+         * answer, so naming EVENT or RECONCILER on one of these credits a decision that mechanism
+         * never made - and the {@code reconciled} metric, which exists to say how many outcomes had
+         * to be gone and asked for, counts an outcome nobody delivered.
+         */
+        @Test
+        void a_service_failure_with_attribution_is_refused() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                store.assemble(new CourtCentreDay(courtCentre, MONDAY),
+                        mine(store.activeUnbatched()));
+            }).as(WALKED).doesNotThrowAnyException();
+            final UUID batchId = batchIdOn(MONDAY);
+
+            softly.assertThatThrownBy(() -> store.markFailed(batchId,
+                            BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, CompletedBy.EVENT))
+                    .as("the file service was never written to, so no event and no query could "
+                            + "have reported anything about a render nobody was asked for")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("PAYLOAD_STORE_UNAVAILABLE");
+            softly.assertThat(batchOn(MONDAY).map(BatchOutcome::status))
+                    .as("and the batch is exactly where assembly left it")
+                    .contains("PENDING");
+            softly.assertThat(completedByOn(MONDAY))
+                    .as("nothing was attributed, because nothing was written")
+                    .isEmpty();
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("and the stamp this ending would have released is still on the register")
+                    .isEqualTo(1);
         }
     }
 

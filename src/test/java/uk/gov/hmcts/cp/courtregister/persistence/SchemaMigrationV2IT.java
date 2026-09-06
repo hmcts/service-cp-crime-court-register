@@ -714,6 +714,41 @@ class SchemaMigrationV2IT {
                     .contains(vocabularyOf(CompletedBy.class));
         }
 
+        /**
+         * The attribution rules, as a shape no writer at all can get past.
+         *
+         * <p>The store refuses a contradictory mark before it issues a statement, but the store is
+         * not the only writer: the operations CLI writes whole rows through
+         * {@code RegisterBatchRepository}, and a later one could be written tomorrow. A batch that
+         * reached GENERATED was completed by a mechanism somebody can name, and a FAILED batch names
+         * one exactly when the reason is the one somebody outside this service reported - so the
+         * rule belongs in the table as well as in the code that usually writes it.
+         */
+        @Test
+        void completed_by_shape_check_should_reject_an_ending_its_attribution_contradicts() {
+            // A document exists because some mechanism reported it, and this row is where which
+            // one is recorded; a GENERATED row that names nobody claims an answer arrived and
+            // denies that anything delivered it.
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    "INSERT INTO " + BATCH_TABLE + " (batch_id, court_centre_id, register_date, "
+                            + "file_name, status, system_generated) VALUES ('"
+                            + UUID.randomUUID() + "', '" + UUID.randomUUID() + "', "
+                            + "DATE '2026-08-20', 'courtregister_2026-08-20.json', 'GENERATED', "
+                            + "true)"))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("register_batch_completed_by_shape_chk");
+            // And the other direction: the payload was never stored, so no event and no query
+            // could have reported anything about a render nobody was ever asked for.
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    "INSERT INTO " + BATCH_TABLE + " (batch_id, court_centre_id, register_date, "
+                            + "file_name, status, system_generated, failure_reason, completed_by) "
+                            + "VALUES ('" + UUID.randomUUID() + "', '" + UUID.randomUUID() + "', "
+                            + "DATE '2026-08-20', 'courtregister_2026-08-20.json', 'FAILED', true, "
+                            + "'PAYLOAD_STORE_UNAVAILABLE', 'EVENT')"))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("register_batch_completed_by_shape_chk");
+        }
+
         @Test
         void live_key_index_should_be_unique_and_partial_on_the_unfailed_batches() throws SQLException {
             // One live batch per (court centre, register day). Partial rather than a plain unique
