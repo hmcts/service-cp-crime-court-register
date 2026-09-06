@@ -143,6 +143,18 @@ class RegisterStoreIT {
 
     private static final String OU_CODE = "B01LY00";
 
+    /** The bound parameter every batch-keyed read below names the identity by. */
+    private static final String BATCH_ID = "batchId";
+
+    /**
+     * What a day's second document is filed under, as {@code BatchAssembler} builds the name.
+     *
+     * <p>The first register's file name with {@code -supplementary-1} before the extension, which is
+     * the assembler's decision and the store's to record rather than to make.
+     */
+    private static final String SUPPLEMENTARY_FILE_NAME =
+            "court-register_2026-08-24_B01LY00-supplementary-1.pdf";
+
     /** Two re-shares of one hearing, which is the smallest number that can lose the invariant. */
     private static final int RACERS = 2;
 
@@ -317,8 +329,7 @@ class RegisterStoreIT {
             softly.assertThatCode(() -> {
                 store.recordAndComplete(command, document(HEARING_ONE, MONDAY, MONDAY_SHARED),
                         OU_CODE, APPLICANT, RecordedFlagState.ON, COMPLETED);
-                store.assemble(new CourtCentreDay(courtCentre, MONDAY),
-                        mine(store.activeUnbatched()));
+                assembled(MONDAY, mine(store.activeUnbatched()));
             }).as(WALKED).doesNotThrowAnyException();
 
             softly.assertThat(ouCodeOf(command))
@@ -727,8 +738,7 @@ class RegisterStoreIT {
             softly.assertThatCode(() -> {
                 record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.assemble(new CourtCentreDay(courtCentre, MONDAY),
-                        mine(store.activeUnbatched()));
+                assembled(MONDAY, mine(store.activeUnbatched()));
                 beforeTheReshare.set(wholeRowOf(first));
                 reshare.set(record(second,
                         document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
@@ -800,8 +810,7 @@ class RegisterStoreIT {
             softly.assertThatCode(() -> {
                 record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.assemble(new CourtCentreDay(courtCentre, MONDAY),
-                        mine(store.activeUnbatched()));
+                assembled(MONDAY, mine(store.activeUnbatched()));
                 record(waiting, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
             }).as(PENDING).doesNotThrowAnyException();
@@ -876,7 +885,7 @@ class RegisterStoreIT {
             }).as(WALKED).doesNotThrowAnyException();
 
             softly.assertThatThrownBy(() ->
-                            store.assemble(new CourtCentreDay(courtCentre, MONDAY), stale))
+                            assembled(MONDAY, stale))
                     .as("a batch that would render one of the two registers it was asked for is "
                             + "refused rather than sent")
                     .isInstanceOf(IllegalStateException.class)
@@ -890,11 +899,66 @@ class RegisterStoreIT {
                             + "again, and waits for the batch that does contain it")
                     .isZero();
 
-            softly.assertThatCode(() -> store.assemble(new CourtCentreDay(courtCentre, MONDAY),
-                            mine(store.activeUnbatched())))
+            softly.assertThatCode(() -> assembled(MONDAY, mine(store.activeUnbatched())))
                     .as("the next run assembles the day as it now stands, which is the whole point "
                             + "of refusing the first one")
                     .doesNotThrowAnyException();
+        }
+
+        /**
+         * The batch the assembler decided on is the batch that is written.
+         *
+         * <p>Four of its facts are decisions no statement here can make again: the identity every
+         * downstream call correlates on, the file the day is rendered under, whether the schedule
+         * or an operator asked, and which batch this one follows at which supplementary index. The
+         * assembler is the only thing that has seen the key's history, so it is the only thing that
+         * can decide the last of those - and a store that minted its own identity and copied its
+         * own file name off the first row would silently overrule all four.
+         *
+         * <p>The supplementary shape is the one that cannot be faked. A day whose first batch has
+         * ended and whose hearing is re-shared afterwards is design Q27's whole subject, and the
+         * columns that record it - {@code supplement_of} and {@code supplement_index} - have no
+         * other way of being written: there is nothing in a register row to derive them from.
+         */
+        @Test
+        void an_assembled_batch_is_written_as_the_assembler_decided_it() {
+            final AtomicReference<UUID> followed = new AtomicReference<>();
+            final AtomicReference<RegisterBatch> decided = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(seededCommand(HEARING_ONE, MONDAY_SHARED),
+                        document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch first = assembled(MONDAY, mine(store.activeUnbatched()));
+                followed.set(first.batchId());
+                // Terminal, so the day's live key is free and a supplement is admitted at all;
+                // rejected rather than store-unavailable, so the first batch keeps its own rows.
+                store.markFailed(first.batchId(), BatchFailureReason.RENDER_REQUEST_REJECTED, null,
+                        null);
+                // The late re-share: a fresh active register for a day that has already been
+                // rendered once.
+                record(seededCommand(HEARING_TWO, MONDAY_RESHARED),
+                        document(HEARING_TWO, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+
+                final List<RegisterRecord> late = mine(store.activeUnbatched());
+                decided.set(new RegisterBatch(UUID.randomUUID(), courtCentre, null, null, MONDAY,
+                        SUPPLEMENTARY_FILE_NAME, null, null, BatchStatus.PENDING, null, null,
+                        false, null, null, null, null, null, null, 0, followed.get(), 1));
+                store.assemble(decided.get(), late);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(assemblyOf(supplementIndexOn(MONDAY, 1)))
+                    .as("the identity the render request correlates on, the name the day's second "
+                            + "document is filed under, the batch it follows and the index its "
+                            + "name was built from - all four decided by the assembler, and none "
+                            + "of them re-derivable from a register row")
+                    .contains(new AssemblyFacts(
+                            decided.get() == null ? null : decided.get().batchId(),
+                            SUPPLEMENTARY_FILE_NAME, followed.get(), 1, false));
+            softly.assertThat(stampedWith(decided.get() == null ? null : decided.get().batchId()))
+                    .as("and the rows carry that identity, not one the statement minted for itself")
+                    .isEqualTo(1);
         }
     }
 
@@ -937,10 +1001,8 @@ class RegisterStoreIT {
                         document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
                 final List<RegisterRecord> waiting = mine(store.activeUnbatched());
-                monday.set(store.assemble(new CourtCentreDay(courtCentre, MONDAY),
-                        recordsOn(waiting, MONDAY)).batchId());
-                tuesday.set(store.assemble(new CourtCentreDay(courtCentre, TUESDAY),
-                        recordsOn(waiting, TUESDAY)).batchId());
+                monday.set(assembled(MONDAY, recordsOn(waiting, MONDAY)).batchId());
+                tuesday.set(assembled(TUESDAY, recordsOn(waiting, TUESDAY)).batchId());
                 store.batched(monday.get()).forEach(
                         register -> mondayHearings.add(register.hearingId()));
             }).as(WALKED).doesNotThrowAnyException();
@@ -964,10 +1026,8 @@ class RegisterStoreIT {
                         document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
                 final List<RegisterRecord> waiting = mine(store.activeUnbatched());
-                store.assemble(new CourtCentreDay(courtCentre, MONDAY),
-                        recordsOn(waiting, MONDAY));
-                final RegisterBatch tuesday = store.assemble(
-                        new CourtCentreDay(courtCentre, TUESDAY), recordsOn(waiting, TUESDAY));
+                assembled(MONDAY, recordsOn(waiting, MONDAY));
+                final RegisterBatch tuesday = assembled(TUESDAY, recordsOn(waiting, TUESDAY));
                 store.batched(tuesday.batchId()).forEach(
                         register -> tuesdayHearings.add(register.hearingId()));
             }).as(WALKED).doesNotThrowAnyException();
@@ -988,8 +1048,7 @@ class RegisterStoreIT {
                 record(seededCommand(HEARING_ONE, MONDAY_SHARED),
                         document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.assemble(new CourtCentreDay(courtCentre, MONDAY),
-                        mine(store.activeUnbatched()));
+                assembled(MONDAY, mine(store.activeUnbatched()));
                 answered.addAll(store.batched(UUID.randomUUID()));
             }).as(WALKED).doesNotThrowAnyException();
 
@@ -1024,8 +1083,7 @@ class RegisterStoreIT {
                 record(seededCommand(HEARING_ONE, MONDAY_SHARED),
                         document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                final RegisterBatch monday = store.assemble(
-                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
                 store.markPayloadMinted(monday.batchId(), PAYLOAD_FILE_ID);
             }).as(WALKED).doesNotThrowAnyException();
 
@@ -1047,8 +1105,7 @@ class RegisterStoreIT {
                 record(seededCommand(HEARING_ONE, MONDAY_SHARED),
                         document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                monday.set(store.assemble(new CourtCentreDay(courtCentre, MONDAY),
-                        mine(store.activeUnbatched())).batchId());
+                monday.set(assembled(MONDAY, mine(store.activeUnbatched())).batchId());
                 store.markPayloadMinted(monday.get(), PAYLOAD_FILE_ID);
                 store.markRequested(monday.get(), PAYLOAD_FILE_ID);
             }).as(WALKED).doesNotThrowAnyException();
@@ -1112,9 +1169,8 @@ class RegisterStoreIT {
                 record(tuesdaySecond, document(HEARING_FOUR, TUESDAY, TUESDAY_SHARED),
                         APPLICANT, RecordedFlagState.ON);
                 final List<RegisterRecord> waiting = mine(store.activeUnbatched());
-                final RegisterBatch monday = store.assemble(
-                        new CourtCentreDay(courtCentre, MONDAY), recordsOn(waiting, MONDAY));
-                store.assemble(new CourtCentreDay(courtCentre, TUESDAY), recordsOn(waiting, TUESDAY));
+                final RegisterBatch monday = assembled(MONDAY, recordsOn(waiting, MONDAY));
+                assembled(TUESDAY, recordsOn(waiting, TUESDAY));
                 store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
                 store.markGenerated(monday.batchId(), DOCUMENT_FILE_ID, GENERATED_AT,
                         CompletedBy.EVENT);
@@ -1160,10 +1216,8 @@ class RegisterStoreIT {
                 record(reconciledFor, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
                 final List<RegisterRecord> waiting = mine(store.activeUnbatched());
-                final RegisterBatch listened = store.assemble(
-                        new CourtCentreDay(courtCentre, MONDAY), recordsOn(waiting, MONDAY));
-                final RegisterBatch reconciled = store.assemble(
-                        new CourtCentreDay(courtCentre, TUESDAY), recordsOn(waiting, TUESDAY));
+                final RegisterBatch listened = assembled(MONDAY, recordsOn(waiting, MONDAY));
+                final RegisterBatch reconciled = assembled(TUESDAY, recordsOn(waiting, TUESDAY));
                 store.markRequested(listened.batchId(), PAYLOAD_FILE_ID);
                 store.markGenerated(listened.batchId(), DOCUMENT_FILE_ID, GENERATED_AT,
                         CompletedBy.EVENT);
@@ -1204,8 +1258,7 @@ class RegisterStoreIT {
             softly.assertThatCode(() -> {
                 record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                final RegisterBatch monday = store.assemble(
-                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
                 store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
             }).as(WALKED).doesNotThrowAnyException();
             final UUID batchId = batchIdOn(MONDAY);
@@ -1258,8 +1311,7 @@ class RegisterStoreIT {
                         RecordedFlagState.ON);
                 record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                final RegisterBatch monday = store.assemble(
-                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
                 store.markFailed(monday.batchId(),
                         BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
             }).as(WALKED).doesNotThrowAnyException();
@@ -1291,8 +1343,7 @@ class RegisterStoreIT {
                         RecordedFlagState.ON);
                 record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                final RegisterBatch monday = store.assemble(
-                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
                 store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
                 store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
                         CompletedBy.EVENT);
@@ -1329,8 +1380,7 @@ class RegisterStoreIT {
             softly.assertThatCode(() -> {
                 record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                final RegisterBatch monday = store.assemble(
-                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
                 store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
                 store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED,
                         OVERSIZED_SDG_REASON, CompletedBy.EVENT);
@@ -1366,8 +1416,7 @@ class RegisterStoreIT {
             softly.assertThatCode(() -> {
                 record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                final RegisterBatch monday = store.assemble(
-                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
                 store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
             }).as(WALKED).doesNotThrowAnyException();
             final UUID batchId = batchIdOn(MONDAY);
@@ -1402,8 +1451,7 @@ class RegisterStoreIT {
             softly.assertThatCode(() -> {
                 record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                store.assemble(new CourtCentreDay(courtCentre, MONDAY),
-                        mine(store.activeUnbatched()));
+                assembled(MONDAY, mine(store.activeUnbatched()));
             }).as(WALKED).doesNotThrowAnyException();
             final UUID batchId = batchIdOn(MONDAY);
 
@@ -1442,8 +1490,7 @@ class RegisterStoreIT {
             softly.assertThatCode(() -> {
                 record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                final RegisterBatch monday = store.assemble(
-                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
                 store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
             }).as(WALKED).doesNotThrowAnyException();
             final UUID batchId = batchIdOn(MONDAY);
@@ -1478,8 +1525,7 @@ class RegisterStoreIT {
             softly.assertThatCode(() -> {
                 record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                final RegisterBatch monday = store.assemble(
-                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
                 store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
                 store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_TIMED_OUT, null,
                         CompletedBy.RECONCILER);
@@ -1537,10 +1583,8 @@ class RegisterStoreIT {
                 record(tuesdaySecond, document(HEARING_FOUR, TUESDAY, TUESDAY_SHARED),
                         APPLICANT, RecordedFlagState.ON);
                 final List<RegisterRecord> waiting = mine(store.activeUnbatched());
-                final RegisterBatch monday = store.assemble(
-                        new CourtCentreDay(courtCentre, MONDAY), recordsOn(waiting, MONDAY));
-                final RegisterBatch tuesday = store.assemble(
-                        new CourtCentreDay(courtCentre, TUESDAY), recordsOn(waiting, TUESDAY));
+                final RegisterBatch monday = assembled(MONDAY, recordsOn(waiting, MONDAY));
+                final RegisterBatch tuesday = assembled(TUESDAY, recordsOn(waiting, TUESDAY));
                 generate(monday, PAYLOAD_FILE_ID, DOCUMENT_FILE_ID);
                 generate(tuesday, SECOND_PAYLOAD_FILE_ID, SECOND_DOCUMENT_FILE_ID);
                 store.markNotified(monday.batchId(), new NotificationSummary(1, 0,
@@ -1572,8 +1616,7 @@ class RegisterStoreIT {
                         RecordedFlagState.ON);
                 record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                final RegisterBatch monday = store.assemble(
-                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
                 generate(monday, PAYLOAD_FILE_ID, DOCUMENT_FILE_ID);
                 store.markNotified(monday.batchId(), tallyFor(outcome));
             }).as(WALKED).doesNotThrowAnyException();
@@ -1598,8 +1641,7 @@ class RegisterStoreIT {
                         RecordedFlagState.ON);
                 record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                generate(store.assemble(new CourtCentreDay(courtCentre, MONDAY),
-                        mine(store.activeUnbatched())), PAYLOAD_FILE_ID, DOCUMENT_FILE_ID);
+                generate(assembled(MONDAY, mine(store.activeUnbatched())), PAYLOAD_FILE_ID, DOCUMENT_FILE_ID);
             }).as(WALKED).doesNotThrowAnyException();
             final UUID batchId = batchIdOn(MONDAY);
 
@@ -1949,6 +1991,93 @@ class RegisterStoreIT {
                 .param("registerDate", registerDate)
                 .query(String.class)
                 .optional();
+    }
+
+    /**
+     * The four assembly facts a batch carries that nothing else can re-derive, plus who asked.
+     *
+     * @param batchId         the identity every downstream call correlates on
+     * @param fileName        what the day's document is filed under
+     * @param supplementOf    the batch this one follows, or {@code null} on a day's first
+     * @param supplementIndex nought on a day's first, counting up on each supplement
+     * @param systemGenerated whether the nightly schedule asked, rather than an operator
+     */
+    private record AssemblyFacts(UUID batchId, String fileName, UUID supplementOf,
+            int supplementIndex,
+            boolean systemGenerated) {
+    }
+
+    /** This case's batch at one supplementary index for a day, if it was written at all. */
+    private Optional<UUID> supplementIndexOn(final LocalDate registerDate, final int index) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT batch_id
+                          FROM register_batch
+                         WHERE court_centre_id = :courtCentre AND register_date = :registerDate
+                           AND supplement_index = :index
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("registerDate", registerDate)
+                .param("index", index)
+                .query(UUID.class)
+                .optional();
+    }
+
+    /** The assembly facts a batch row holds, read straight back out of {@code register_batch}. */
+    private Optional<AssemblyFacts> assemblyOf(final Optional<UUID> batchId) {
+        return batchId.flatMap(id -> ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT batch_id, file_name, supplement_of, supplement_index,
+                               system_generated
+                          FROM register_batch
+                         WHERE batch_id = :batchId
+                        """)
+                .param(BATCH_ID, id)
+                .query((rs, rowNumber) -> new AssemblyFacts(rs.getObject("batch_id", UUID.class),
+                        rs.getString("file_name"), rs.getObject("supplement_of", UUID.class),
+                        rs.getInt("supplement_index"), rs.getBoolean("system_generated")))
+                .optional());
+    }
+
+    /** How many registers carry one batch's identity. */
+    private static long stampedWith(final UUID batchId) {
+        return batchId == null ? -1 : ProcessedLogTestSupport.jdbcClient()
+                .sql("SELECT count(*) FROM processed_output WHERE batch_id = :batchId")
+                .param(BATCH_ID, batchId)
+                .query(Long.class)
+                .single();
+    }
+
+    /**
+     * The batch a case assembles, decided the way {@code BatchAssembler} decides a day's first one.
+     *
+     * <p>The batch is the assembler's decision and an argument to the port, so a case that is not
+     * about the supplementary rule still has to make it: PENDING, the first register's file name,
+     * asked for by the schedule, following nothing at index nought. The case that <em>is</em> about
+     * the rule builds its own.
+     *
+     * @param registerDate the day being batched, at this case's court centre
+     * @param records      the registers it groups, the first of which names the file
+     * @return the batch the store is asked to write
+     */
+    private RegisterBatch firstBatchFor(
+            final LocalDate registerDate, final List<RegisterRecord> records) {
+        return new RegisterBatch(UUID.randomUUID(), courtCentre, null, null, registerDate,
+                records.isEmpty() ? null : records.getFirst().fileName(), null, null,
+                BatchStatus.PENDING, null, null, true, null, null, null, null, null, null, 0,
+                null, 0);
+    }
+
+    /**
+     * Assembles a day's first batch out of the given registers.
+     *
+     * @param registerDate the day being batched
+     * @param records      the registers that belong to it
+     * @return the batch as the row now stands
+     */
+    private RegisterBatch assembled(
+            final LocalDate registerDate, final List<RegisterRecord> records) {
+        return store.assemble(firstBatchFor(registerDate, records), records);
     }
 
     /** The payload id a batch carries, read back out of {@code register_batch}. */

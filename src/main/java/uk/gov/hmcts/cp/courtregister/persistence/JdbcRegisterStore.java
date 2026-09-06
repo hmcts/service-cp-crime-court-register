@@ -12,6 +12,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
+import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -542,7 +543,7 @@ public class JdbcRegisterStore implements RegisterStore {
      * Binds the store to this service's own Postgres.
      *
      * @param jdbcClient   the client every statement in this class is issued through
-     * @param transactions the transaction {@link #assemble(CourtCentreDay, List)} runs in, over the
+     * @param transactions the transaction {@link #assemble(RegisterBatch, List)} runs in, over the
      *                     same data source as the client
      */
     public JdbcRegisterStore(final JdbcClient jdbcClient, final TransactionOperations transactions) {
@@ -560,7 +561,7 @@ public class JdbcRegisterStore implements RegisterStore {
      * instant is what orders two re-shares of one hearing and the day it falls on is what the batch
      * groups by.
      *
-     * <p>The OU code is written here because {@link #assemble(CourtCentreDay, List)} reads it off
+     * <p>The OU code is written here because {@link #assemble(RegisterBatch, List)} reads it off
      * the batch's first row, and nothing between the transformation and the render payload knows it
      * otherwise: the document does not carry it.
      *
@@ -874,12 +875,19 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * {@inheritDoc}
      *
+     * <p><strong>Seam.</strong> The statement below still mints an identity of its own and still
+     * copies the file name off the first row, so the batch handed in decides nothing yet. The
+     * supplementary link and the trigger source are the two facts that reach no column at all, which
+     * is what {@code RegisterStoreIT.an_assembled_batch_is_written_as_the_assembler_decided_it}
+     * fails on.
+     *
      * @throws IllegalArgumentException if the batch is empty or holds a record from another key
      * @throws IllegalStateException    if a record stopped being available between the read and the
      *                                  stamp, so the assembled batch would not be the one asked for
      */
     @Override
-    public RegisterBatch assemble(final CourtCentreDay key, final List<RegisterRecord> records) {
+    public RegisterBatch assemble(final RegisterBatch batch, final List<RegisterRecord> records) {
+        final CourtCentreDay key = batch.key();
         if (records.isEmpty()) {
             throw new IllegalArgumentException("a batch is assembled from at least one register: "
                     + key.courtCentreId() + " on " + key.registerDate());
@@ -894,6 +902,17 @@ public class JdbcRegisterStore implements RegisterStore {
                 });
         return StoreOutage.translating("assemble a batch",
                 () -> transactions.execute(transaction -> stamp(outputIds)).batch());
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><strong>Seam.</strong> No statement yet, and nothing calls it yet either.
+     */
+    @Override
+    public List<RegisterBatch> batchesFor(final Collection<CourtCentreDay> keys) {
+        throw new UnsupportedOperationException(
+                "the batches recorded for a run's keys are not read yet: " + keys.size() + " keys");
     }
 
     /**

@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -120,18 +121,48 @@ public interface RegisterStore {
     List<RegisterRecord> batched(UUID batchId);
 
     /**
-     * Groups one court centre's day into a batch and stamps its identity onto the rows.
+     * The batches already recorded for these keys, whatever state they reached.
+     *
+     * <p>What the assembler is given so that the supplementary rule can be decided at all (design
+     * Q27). A key whose earlier batch is still PENDING, GENERATING or GENERATED has its registers
+     * left waiting - the schema admits one in-flight batch per key - and a key whose batches are all
+     * terminal may be followed by a supplementary one, which names the batch it follows and carries
+     * the next index. Neither decision can be made from the registers alone, and a run that read
+     * nothing here would answer "no earlier batch" for every key and assemble every late re-share as
+     * if it were a day's first document.
+     *
+     * <p>Asked for the keys in play rather than for everything, because that is what the decision
+     * needs: another court centre's finished document, or the same court centre's other day, says
+     * nothing about whether this day may be rendered again.
+     *
+     * @param keys the court centre and register days a run holds active registers for
+     * @return every batch recorded for those keys, in no particular order; empty where none of them
+     *         has ever been batched
+     */
+    List<RegisterBatch> batchesFor(Collection<CourtCentreDay> keys);
+
+    /**
+     * Writes the batch the assembler decided on and stamps its identity onto the rows.
+     *
+     * <p><strong>The batch is an argument, not something this port invents.</strong> Which identity
+     * a day's document is correlated on, what the file is called, which batch it follows and at what
+     * supplementary index are the assembler's decisions - it is the only thing that has seen the
+     * key's history - and a store that minted its own identity and named its own file would be
+     * deciding all four again, differently, at the moment the rows are stamped. What the adapter
+     * still owns is the moment ({@code assembled_at}) and the OU code, which is a column of the
+     * register's own row and is copied from it.
      *
      * <p>All of it or none of it. A register that was superseded or batched elsewhere between the
      * read and the stamp means this is not the batch that was asked for, and the batch is refused
      * <em>and</em> undone: a refused batch that left its row behind would hold that court centre and
      * day against every later run, and the day would never be rendered at all.
      *
-     * @param key     the court centre and register day being batched
-     * @param records the registers that belong to it
-     * @return the batch, carrying the identity every downstream call correlates on
+     * @param batch   the batch as the assembler decided it: identity, file name, trigger source and
+     *                the supplementary link
+     * @param records the registers that belong to it, in the order the batch holds them
+     * @return the batch as the row now stands, carrying the stamps the database made
      */
-    RegisterBatch assemble(CourtCentreDay key, List<RegisterRecord> records);
+    RegisterBatch assemble(RegisterBatch batch, List<RegisterRecord> records);
 
     /**
      * Records the file-service id this batch's payload is about to be written under.

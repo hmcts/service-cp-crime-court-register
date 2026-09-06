@@ -396,6 +396,54 @@ class RegisterGenerationJobTest {
             verify(assembler).assemble(any(), any(), eq(true));
         }
 
+        /**
+         * The run has to write the batch down before it asks anybody to render it.
+         *
+         * <p>Everything downstream is keyed on the batch: {@code store.batched(batchId)} is what the
+         * payload is built from, {@code markPayloadMinted} and {@code markRequested} move a row that
+         * has to exist, and the public event correlates back on the same identity. A run that handed
+         * the assembler's batch straight to the service would ask for a render of a batch no row
+         * knows about - the payload read would answer nothing, every batch would take the
+         * ASSEMBLY_FAILED path, and {@code markFailed} would be asked about a batch that is not
+         * there. Nothing about it is visible from a suite that mocks the store, which is exactly why
+         * it is asserted as an order here.
+         */
+        @Test
+        void every_assembled_batch_should_be_written_down_before_its_render_is_asked_for() {
+            final RegisterBatch first = batch();
+            final RegisterBatch second = batch();
+            aNightHolding(first, second);
+            everyRequestIsAccepted();
+
+            run();
+
+            final InOrder order = inOrder(store, service);
+            order.verify(store).assemble(eq(first), any());
+            order.verify(service).request(eq(first), any());
+            order.verify(store).assemble(eq(second), any());
+            order.verify(service).request(eq(second), any());
+        }
+
+        /**
+         * And the history the supplementary rule is decided from has to be read at all.
+         *
+         * <p>The assembler is given the batches already recorded for the keys in play so that a late
+         * re-share becomes a supplementary batch for its day rather than a second first one (design
+         * Q27). A run that passed an empty list would answer "no earlier batch" for every key, and
+         * the rule would be dead from end to end however carefully the assembler implemented it.
+         */
+        @Test
+        void the_batches_already_recorded_for_tonights_keys_should_be_read_and_passed_on() {
+            final RegisterBatch earlier = batch();
+            aNightHolding(batch());
+            everyRequestIsAccepted();
+            when(store.batchesFor(any())).thenReturn(List.of(earlier));
+
+            run();
+
+            verify(assembler).assemble(any(), eq(List.of(earlier)), anyBoolean());
+        }
+
         @Test
         void a_night_with_nothing_waiting_should_ask_the_renderer_for_nothing() {
             aNightHolding();
