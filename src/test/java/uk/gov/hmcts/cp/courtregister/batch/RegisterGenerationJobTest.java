@@ -559,6 +559,32 @@ class RegisterGenerationJobTest {
             verify(reconciler).reconcile();
         }
 
+        /**
+         * The run calls the reconciler, but the run is not what makes reconciliation happen.
+         *
+         * <p>A skipped run touches nothing - which is right, and is the case above - so on a night
+         * the flag reads OFF or could not be read, a batch left GENERATING by an earlier ON night
+         * is not asked about by this class at all. Before cutover that is every night. The safety
+         * net therefore has to have a schedule of its own, independent of the gate, and this is
+         * where a reader of the run meets that fact; what its cadence and its lock are is pinned in
+         * {@code GenerationReconcilerTest}.
+         */
+        @Test
+        void a_skipped_run_should_leave_overdue_batches_to_the_reconcilers_own_schedule()
+                throws NoSuchMethodException {
+            theGateAnswers(new Skipped(Reason.FLAG_OFF));
+
+            run();
+
+            verifyNoInteractions(reconciler);
+            softly.assertThat(GenerationReconciler.class.getDeclaredMethod("reconcile")
+                            .getAnnotation(Scheduled.class))
+                    .as("a night this service may not generate on is still a night it owns the "
+                            + "batches it asked for yesterday; without a schedule of its own the "
+                            + "reconciler never runs on one")
+                    .isNotNull();
+        }
+
         @Test
         void what_the_reconciler_had_to_fetch_should_be_reported() {
             aNightHolding();

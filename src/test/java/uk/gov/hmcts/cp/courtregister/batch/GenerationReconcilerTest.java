@@ -11,7 +11,9 @@ import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Level;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.lang.reflect.Method;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -22,6 +24,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
@@ -30,6 +33,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.springframework.scheduling.annotation.Scheduled;
 import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
 import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
@@ -577,5 +581,88 @@ class GenerationReconcilerTest {
             verify(sink).generationFailed(batch.batchId(), batch.payloadFileId(), SDG_REASON,
                     FAILED_AT, CompletedBy.RECONCILER);
         }
+    }
+
+    /**
+     * When it runs, and why that cannot be "whenever the flag let a run happen".
+     *
+     * <p>Reconciliation is about batches this service already owns. Whether it may generate tonight
+     * is a different question with a different answer, and hanging the safety net off the flag gate
+     * costs a night in both directions: a batch requested at 18:00 is first asked about at 18:01,
+     * inside its own grace period, and then not again until the next evening - so a lost public
+     * event costs about twenty-four hours rather than the ten minutes the grace period configures;
+     * and on a night the flag reads OFF or unreadable the run touches nothing at all, so a batch
+     * left GENERATING by an earlier ON night is never asked about again.
+     *
+     * <p>Hence a schedule of its own, on the same single thread the run uses, with a lock of its
+     * own: two replicas asking systemdocgenerator about one batch would apply one outcome twice,
+     * and the second application is what {@code BatchStatus} refuses rather than absorbs.
+     *
+     * <p>The gauge belongs here for the same reason. {@code courtregister_oldest_generating_age} is
+     * declared by T010 and set by nothing, so the one reading that says "a batch has been waiting
+     * for its document since before anybody was worried" has never moved off zero.
+     */
+    @Nested
+    @DisplayName("when it runs, and what it leaves on the dashboard")
+    class ItsOwnSchedule {
+
+        @Test
+        void reconciliation_is_scheduled_independently_of_the_flag_gate()
+                throws NoSuchMethodException {
+            final Method reconcile = GenerationReconciler.class.getDeclaredMethod("reconcile");
+            final Scheduled schedule = reconcile.getAnnotation(Scheduled.class);
+            final SchedulerLock lock = reconcile.getAnnotation(SchedulerLock.class);
+
+            softly.assertThat(schedule)
+                    .as("the run calls this too, so its report can name what it fetched - but a "
+                            + "safety net that only runs when the flag said the service may "
+                            + "generate is no net on the nights the flag says it may not")
+                    .isNotNull();
+            softly.assertThat(schedule == null ? null : schedule.fixedDelayString())
+                    .as("a cadence of the grace period, so a batch is asked about within one "
+                            + "grace period of becoming overdue instead of within one day")
+                    .isEqualTo("${courtregister.generation.grace-period}");
+            softly.assertThat(lock)
+                    .as("two replicas asking systemdocgenerator about one batch would apply one "
+                            + "outcome twice, and the second application is refused rather than "
+                            + "absorbed")
+                    .isNotNull();
+            softly.assertThat(lock == null ? null : lock.name())
+                    .as("its own lock and not the run's: a reconciliation waiting on the lock a "
+                            + "sixty-minute run holds is a reconciliation that never happens")
+                    .isNotBlank()
+                    .isNotEqualTo(RegisterGenerationJob.LOCK_NAME);
+        }
+
+        @Test
+        void the_oldest_generating_age_should_be_gauged_from_the_overdue_read() {
+            generatingSince(generating(UUID.randomUUID(), NOW.minus(Duration.ofMinutes(40))),
+                    overdue());
+            when(renderer.query(any(), any())).thenReturn(Optional.empty());
+
+            reconcile();
+
+            softly.assertThat(oldestGeneratingAge())
+                    .as("the reading a nightly flow cannot be understood without between runs: how "
+                            + "long the batch that has been waiting longest has been waiting")
+                    .isEqualTo(Duration.ofMinutes(40).toSeconds());
+        }
+
+        @Test
+        void a_run_with_nothing_overdue_should_bring_the_gauge_back_down() {
+            generatingSince();
+
+            reconcile();
+
+            softly.assertThat(oldestGeneratingAge())
+                    .as("a gauge that only ever moved up would need a batch to fail before it "
+                            + "could come down again")
+                    .isZero();
+        }
+    }
+
+    private double oldestGeneratingAge() {
+        final Gauge gauge = registry.find(GenerationMetrics.OLDEST_GENERATING_AGE).gauge();
+        return gauge == null ? ABSENT : gauge.value();
     }
 }
