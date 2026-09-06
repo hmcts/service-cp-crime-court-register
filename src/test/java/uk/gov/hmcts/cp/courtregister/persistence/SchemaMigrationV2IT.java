@@ -80,6 +80,10 @@ class SchemaMigrationV2IT {
 
     private static final String TIMESTAMPTZ = "timestamp with time zone";
 
+    /** The batch states that carry an attribution, because each of them is reached by one. */
+    private static final List<String> COMPLETED_STATUSES =
+            List.of("GENERATED", "NOTIFIED", "PARTIALLY_NOTIFIED", "NOTIFIED_NOBODY");
+
     @BeforeAll
     static void migrate() {
         PostgresTestSupport.applyFlyway();
@@ -299,13 +303,19 @@ class SchemaMigrationV2IT {
 
     /**
      * The smallest valid {@code register_batch} row for the given key and state.
+     *
+     * <p>A batch that reached GENERATED, or one of the three notified states it is reached through,
+     * names the mechanism that learned the outcome: {@code register_batch_completed_by_shape_chk}
+     * requires it of the row, so a fixture that left it out would be probing some other constraint
+     * than the one its case is about.
      */
     private static String insertBatch(final UUID batchId, final UUID courtCentreId,
                                       final String status) {
+        final String completedBy = COMPLETED_STATUSES.contains(status) ? "'EVENT'" : "null";
         return "INSERT INTO " + BATCH_TABLE + " (batch_id, court_centre_id, register_date, "
-                + "file_name, status, system_generated) VALUES ('" + batchId + "', '"
+                + "file_name, status, system_generated, completed_by) VALUES ('" + batchId + "', '"
                 + courtCentreId + "', DATE '2026-08-20', 'courtregister_2026-08-20.json', '"
-                + status + "', true)";
+                + status + "', true, " + completedBy + ")";
     }
 
     /**

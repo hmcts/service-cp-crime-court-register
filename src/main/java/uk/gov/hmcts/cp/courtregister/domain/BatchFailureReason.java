@@ -31,5 +31,29 @@ public enum BatchFailureReason {
     GENERATION_TIMED_OUT,
 
     /** The batch could not be assembled into a payload at all (defect fix P5). */
-    ASSEMBLY_FAILED
+    ASSEMBLY_FAILED;
+
+    /**
+     * Whether this ending was reported by a completion mechanism outside this service.
+     *
+     * <p>The two that were: {@link #GENERATION_FAILED} is systemdocgenerator's own verdict about
+     * the render, and {@link #GENERATION_TIMED_OUT} is the reconciler's verdict about the renderer's
+     * silence. Each of them arrived because something went and learned it, so each names the
+     * mechanism that did - which is what {@code register_batch.completed_by} holds and what the
+     * {@code reconciled} metric counts.
+     *
+     * <p>The other four are this service's own verdict about a render it could not ask for or could
+     * not hear about, and naming a mechanism on one of them would credit a decision nobody outside
+     * this service made.
+     *
+     * <p>Stated here once, and asked here by everything that enforces it: {@code JdbcRegisterStore}
+     * refuses a mark whose attribution disagrees with its reason, and
+     * {@code register_batch_completed_by_shape_chk} enumerates the same two reasons for the writers
+     * that do not go through the store.
+     *
+     * @return true where the ending carries a {@link CompletedBy}, and false where it must not
+     */
+    public boolean isGeneratorAttributed() {
+        return this == GENERATION_FAILED || this == GENERATION_TIMED_OUT;
+    }
 }

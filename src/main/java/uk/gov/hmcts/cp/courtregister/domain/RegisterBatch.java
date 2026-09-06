@@ -36,8 +36,12 @@ import java.util.UUID;
  *                          never logged at INFO, bounded by {@link #boundedReason(String)};
  *                          {@code null} where it said nothing
  * @param systemGenerated   true from the nightly schedule, false from the operations CLI
- * @param completedBy       which mechanism learned the outcome ({@link CompletedBy}), or
- *                          {@code null} while it is pending
+ * @param completedBy       which mechanism learned the outcome ({@link CompletedBy}): set on every
+ *                          state reached through GENERATED and on the failures somebody outside
+ *                          this service reported
+ *                          ({@link BatchFailureReason#isGeneratorAttributed()}), and {@code null}
+ *                          while the batch is PENDING or GENERATING and on this service's own
+ *                          FAILED verdicts, which nobody outside it answered for
  * @param assembledAt       when the batch was grouped and stamped
  * @param requestedAt       when systemdocgenerator accepted the render request, or {@code null}
  * @param generatedAt       when the document was generated, or {@code null}

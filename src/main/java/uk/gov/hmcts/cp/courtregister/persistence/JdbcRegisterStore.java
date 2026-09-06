@@ -76,6 +76,9 @@ public class JdbcRegisterStore implements RegisterStore {
     /** The one statement a fenced batch write is expected to change. */
     private static final long ONE_BATCH = 1;
 
+    /** How every refusal in this class names the batch it is about, and the only thing it names. */
+    private static final String BATCH = "batch ";
+
     private static final String BATCH_ID = "batchId";
     private static final String OUTPUT_ID = "outputId";
     private static final String OUTPUT_IDS = "outputIds";
@@ -292,7 +295,9 @@ public class JdbcRegisterStore implements RegisterStore {
      * it is null for most of these endings: only a {@code generation-failed} event and a reconciled
      * query are somebody else's answer about the render. The other four are this service's own
      * verdict about a render it could not ask for or could not hear about, and naming a completion
-     * mechanism for those would credit a decision nobody outside this service made.
+     * mechanism for those would credit a decision nobody outside this service made. Which is which
+     * is {@link BatchFailureReason#isGeneratorAttributed()}, and a mark that disagrees with it is
+     * refused before this statement is issued rather than persisted contradicting itself.
      */
     private static final String MARK_FAILED = """
             WITH failed AS (
@@ -480,7 +485,7 @@ public class JdbcRegisterStore implements RegisterStore {
                 .query((rs, rowNumber) -> new Assembled(assembledBatch(rs), rs.getLong("stamped_rows")))
                 .single();
         if (assembled.stampedRows() != outputIds.size()) {
-            throw new IllegalStateException("batch " + assembled.batch().batchId() + " was asked for "
+            throw new IllegalStateException(BATCH + assembled.batch().batchId() + " was asked for "
                     + outputIds.size() + " registers and stamped " + assembled.stampedRows()
                     + "; a register was superseded or batched elsewhere in between");
         }
@@ -506,12 +511,17 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * {@inheritDoc}
      *
-     * @throws IllegalStateException if there is no such batch, if the state machine refuses the
-     *                               move, or if the batch changed under the statement
+     * @throws IllegalArgumentException if the mark names no completion mechanism
+     * @throws IllegalStateException    if there is no such batch, if the state machine refuses the
+     *                                  move, or if the batch changed under the statement
      */
     @Override
     public void markGenerated(final UUID batchId, final UUID documentFileId,
             final Instant generatedAt, final CompletedBy completedBy) {
+        if (completedBy == null) {
+            throw new IllegalArgumentException(BATCH + batchId + " cannot be marked GENERATED "
+                    + "without naming the mechanism that learned it");
+        }
         final BatchStatus expected = permitted(batchId, BatchStatus.GENERATED);
         settle(jdbcClient.sql(MARK_GENERATED)
                 .param(BATCH_ID, batchId)
@@ -526,12 +536,16 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * {@inheritDoc}
      *
-     * @throws IllegalStateException if there is no such batch, if the state machine refuses the
-     *                               move, or if the batch changed under the statement
+     * @throws IllegalArgumentException if the attribution disagrees with the reason: a reason
+     *                                  somebody outside this service reported that names no
+     *                                  mechanism, or one of this service's own that names one
+     * @throws IllegalStateException    if there is no such batch, if the state machine refuses the
+     *                                  move, or if the batch changed under the statement
      */
     @Override
     public void markFailed(final UUID batchId, final BatchFailureReason reason,
             final String sdgReason, final CompletedBy completedBy) {
+        attributionOf(batchId, reason, completedBy);
         final BatchStatus expected = permitted(batchId, BatchStatus.FAILED);
         settle(jdbcClient.sql(MARK_FAILED)
                 .param(BATCH_ID, batchId)
@@ -585,16 +599,41 @@ public class JdbcRegisterStore implements RegisterStore {
                         "no register batch " + batchId + " to move to " + next));
         if (!current.canTransitionTo(next)) {
             throw new IllegalStateException(
-                    "batch " + batchId + " may not move from " + current + " to " + next);
+                    BATCH + batchId + " may not move from " + current + " to " + next);
         }
         return current;
+    }
+
+    /**
+     * The attribution rule, asked of the reason itself and refused before any statement is issued.
+     *
+     * <p>Which endings carry a completion mechanism is
+     * {@link BatchFailureReason#isGeneratorAttributed()}'s answer and not this class's, so the store
+     * and {@code register_batch_completed_by_shape_chk} enforce one rule rather than two that can
+     * drift. A refusal here leaves the batch exactly where the caller found it: the reason is
+     * examined before the status is even read, so nothing at all was written to be undone.
+     *
+     * <p>Both messages name the batch and the reason and nothing else. Neither is about a document
+     * whose every defendant is a child, so neither can carry a word of one (constitution Principle
+     * VII).
+     */
+    private static void attributionOf(final UUID batchId, final BatchFailureReason reason,
+            final CompletedBy completedBy) {
+        if (reason.isGeneratorAttributed() && completedBy == null) {
+            throw new IllegalArgumentException(BATCH + batchId + " failed " + reason
+                    + ", which somebody outside this service reported, and named no mechanism");
+        }
+        if (!reason.isGeneratorAttributed() && completedBy != null) {
+            throw new IllegalArgumentException(BATCH + batchId + " failed " + reason
+                    + ", which is this service's own verdict, and named " + completedBy);
+        }
     }
 
     /** The affected-row count is the decision, and a count of nothing is reported rather than kept. */
     private static void settle(final long batches, final UUID batchId, final BatchStatus expected,
             final BatchStatus next) {
         if (batches != ONE_BATCH) {
-            throw new IllegalStateException("batch " + batchId + " was not moved from " + expected
+            throw new IllegalStateException(BATCH + batchId + " was not moved from " + expected
                     + " to " + next + "; it changed under the statement");
         }
     }

@@ -74,12 +74,20 @@ unique violation by re-reading and superseding.
 | `failure_reason` | `text` | `PAYLOAD_STORE_UNAVAILABLE` \| `RENDER_REQUEST_FAILED` \| `RENDER_REQUEST_REJECTED` \| `GENERATION_FAILED` \| `GENERATION_TIMED_OUT` \| `ASSEMBLY_FAILED` |
 | `sdg_reason` | `varchar(512)` | SDG's `reason` from `generation-failed` / query, never logged at INFO. Bounded before the write by `RegisterBatch.boundedReason`: a longer message is stored as its first 500 characters plus the marker ` [truncated]`, so the row is exactly 512 and a reader can tell there is more |
 | `system_generated` | `boolean NOT NULL` | true from the schedule, false from the CLI (progression's flag) |
-| `completed_by` | `text` | `EVENT` \| `RECONCILER`, feeds the `reconciled` metric. Written by the `mark` that learned the outcome, in that mark's own statement: a batch state change is a compare-and-set, so there is no moment either side of the transition in which this could be set on its own. NULL where nobody outside this service answered, which is four of the six failure reasons |
+| `completed_by` | `text` | `EVENT` \| `RECONCILER`, feeds the `reconciled` metric. Written by the `mark` that learned the outcome, in that mark's own statement: a batch state change is a compare-and-set, so there is no moment either side of the transition in which this could be set on its own. NOT NULL on `GENERATED` and on the three notified states it is reached through; on `FAILED`, set exactly for the two generator-attributed reasons (`GENERATION_FAILED`, `GENERATION_TIMED_OUT`, which is `BatchFailureReason.isGeneratorAttributed()`) and NULL for the other four, which are this service's own verdict about a render nobody outside it answered for |
 | `assembled_at`, `requested_at`, `generated_at`, `notified_at`, `failed_at` | `timestamptz` | |
 | `attempts` | `int NOT NULL DEFAULT 0` | Lifetime tally, never a control variable |
 
 Constraint: `UNIQUE (court_centre_id, register_date) WHERE status <> 'FAILED'` (partial unique) — one
 live batch per key; a FAILED batch may be re-assembled (new `batch_id`, rows re-stamped).
+
+Check: `register_batch_completed_by_shape_chk`, the `completed_by` rule above as a shape the row
+keeps, for the writers that do not go through the store (the CLI's whole-row write): `completed_by`
+NOT NULL on `GENERATED` / `NOTIFIED` / `PARTIALLY_NOTIFIED` / `NOTIFIED_NOBODY`, and on `FAILED`
+present exactly when `failure_reason` is one of the two generator-attributed reasons.
+`JdbcRegisterStore` refuses a contradictory `markGenerated` or `markFailed` before it issues a
+statement, so the same rule is enforced twice and stated once
+(`BatchFailureReason.isGeneratorAttributed()`).
 
 **Open design question (before T043/T050).** A same-day re-share recorded after that day's batch is
 GENERATED or NOTIFIED becomes a fresh active unbatched row whose key already has a live batch, so the

@@ -101,6 +101,28 @@ CREATE TABLE register_batch (
                                   'GENERATION_TIMED_OUT', 'ASSEMBLY_FAILED')),
     CONSTRAINT register_batch_completed_by_chk
         CHECK (completed_by IS NULL OR completed_by IN ('EVENT', 'RECONCILER')),
+    -- Which endings carry an attribution, as a shape the row itself keeps. A batch that reached
+    -- GENERATED - or one of the three notified states, which it can only reach through GENERATED -
+    -- was completed by a mechanism somebody can name, and a FAILED batch names one exactly when the
+    -- reason is the one somebody outside this service reported: GENERATION_FAILED, the renderer's
+    -- own verdict, and GENERATION_TIMED_OUT, the reconciler's verdict about its silence. The other
+    -- four reasons are this service's own verdict about a render it could not ask for or could not
+    -- hear about, and naming a mechanism on one of them credits a decision nobody made. The store
+    -- refuses such a mark before it issues a statement (BatchFailureReason.isGeneratorAttributed),
+    -- and this is the same rule where the writers that do not go through the store - the operations
+    -- CLI's whole-row write, and whatever is written next - cannot get past it either.
+    --
+    -- COALESCE rather than a bare IN: a FAILED row with no reason at all would otherwise leave the
+    -- comparison NULL, and a CHECK that evaluates to NULL is a CHECK that passes.
+    CONSTRAINT register_batch_completed_by_shape_chk
+        CHECK ((status IN ('GENERATED', 'NOTIFIED', 'PARTIALLY_NOTIFIED', 'NOTIFIED_NOBODY')
+                    AND completed_by IS NOT NULL)
+            OR (status = 'FAILED'
+                    AND ((COALESCE(failure_reason, '')
+                              IN ('GENERATION_FAILED', 'GENERATION_TIMED_OUT'))
+                         = (completed_by IS NOT NULL)))
+            OR (status NOT IN ('GENERATED', 'NOTIFIED', 'PARTIALLY_NOTIFIED', 'NOTIFIED_NOBODY',
+                               'FAILED'))),
     CONSTRAINT register_batch_attempts_chk
         CHECK (attempts >= 0)
 );

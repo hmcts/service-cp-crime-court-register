@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
+import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
@@ -250,14 +251,22 @@ class RegisterNotificationRepositoryIT {
                 BatchStatus.GENERATING);
     }
 
-    /** This suite's batch in one of the three states the walk above passes through. */
+    /**
+     * This suite's batch in one of the three states the walk above passes through.
+     *
+     * <p>The generated state names the mechanism that learned it, because a document exists only
+     * because something reported it and the row is where which one is recorded: a GENERATED row
+     * with no {@code completed_by} is contradictory rather than incomplete, and
+     * {@code register_batch_completed_by_shape_chk} refuses it.
+     */
     private RegisterBatch batchAt(final BatchStatus status, final UUID payloadFileId,
             final Instant requestedAt) {
         return new RegisterBatch(batchId, courtCentre, OU_CODE, COURT_HOUSE, MONDAY,
                 "court-register_" + MONDAY + '_' + OU_CODE + ".pdf", payloadFileId,
                 status == BatchStatus.GENERATED ? DOCUMENT_FILE_ID : null,
-                status, null, null, true, null, ASSEMBLED_AT, requestedAt,
-                status == BatchStatus.GENERATED ? GENERATED_AT : null, null, null,
+                status, null, null, true,
+                status == BatchStatus.GENERATED ? CompletedBy.EVENT : null, ASSEMBLED_AT,
+                requestedAt, status == BatchStatus.GENERATED ? GENERATED_AT : null, null, null,
                 status == BatchStatus.PENDING ? 0 : 1);
     }
 
