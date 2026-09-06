@@ -33,7 +33,8 @@ import java.util.UUID;
  * @param status            where the batch has got to
  * @param failureReason     the bounded reason the batch failed, or {@code null}
  * @param sdgReason         systemdocgenerator's own words about a failure, kept for support and
- *                          never logged at INFO; {@code null} where it said nothing
+ *                          never logged at INFO, bounded by {@link #boundedReason(String)};
+ *                          {@code null} where it said nothing
  * @param systemGenerated   true from the nightly schedule, false from the operations CLI
  * @param completedBy       which mechanism learned the outcome, or {@code null} while it is pending
  * @param assembledAt       when the batch was grouped and stamped
@@ -64,6 +65,46 @@ public record RegisterBatch(
         Instant notifiedAt,
         Instant failedAt,
         int attempts) {
+
+    /**
+     * How much of systemdocgenerator's message this service keeps.
+     *
+     * <p>The same bound the column carries (data-model.md). It is a bound and not a validation:
+     * how long the message is is systemdocgenerator's decision, not this service's, and a batch
+     * whose failure could not be written because the renderer was verbose would stay GENERATING
+     * until the reconciler gave up on it - the failure lost twice over.
+     */
+    public static final int REASON_LIMIT = 512;
+
+    /** What a reader who cannot see the rest of the message is told about the rest. */
+    private static final String TRUNCATION_MARKER = " [truncated]";
+
+    /**
+     * Bounds the renderer's words to what the row holds, and says so when it had to.
+     */
+    public RegisterBatch {
+        sdgReason = boundedReason(sdgReason);
+    }
+
+    /**
+     * The renderer's message as this service stores it.
+     *
+     * <p>Public because the store writes {@code sdg_reason} from a bare argument as well as from a
+     * batch, and one bound applied in two places is two bounds waiting to disagree.
+     *
+     * <p>The marker replaces the tail rather than being appended past the bound, so the result is
+     * exactly {@link #REASON_LIMIT} characters and the column never refuses it. A message that fits
+     * is returned untouched, so nothing that was never truncated says it was.
+     *
+     * @param reason systemdocgenerator's own words, or {@code null} where it said nothing
+     * @return the same words where they fit, and a marked prefix of them where they do not
+     */
+    public static String boundedReason(final String reason) {
+        return reason == null || reason.length() <= REASON_LIMIT
+                ? reason
+                : reason.substring(0, REASON_LIMIT - TRUNCATION_MARKER.length())
+                        + TRUNCATION_MARKER;
+    }
 
     /**
      * Which of the two completion mechanisms learned a batch's outcome.

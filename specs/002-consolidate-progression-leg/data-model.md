@@ -72,7 +72,7 @@ unique violation by re-reading and superseding.
 | `document_file_id` | `uuid` | From `document-available` (`documentFileServiceId`) or the query API |
 | `status` | `text NOT NULL` | `PENDING` → `GENERATING` → `GENERATED` → `NOTIFIED` \| `PARTIALLY_NOTIFIED` \| `NOTIFIED_NOBODY` \| `FAILED` |
 | `failure_reason` | `text` | `PAYLOAD_STORE_UNAVAILABLE` \| `RENDER_REQUEST_FAILED` \| `RENDER_REQUEST_REJECTED` \| `GENERATION_FAILED` \| `GENERATION_TIMED_OUT` \| `ASSEMBLY_FAILED` |
-| `sdg_reason` | `varchar(512)` | SDG's `reason` from `generation-failed` / query (bounded length, never logged at INFO) |
+| `sdg_reason` | `varchar(512)` | SDG's `reason` from `generation-failed` / query, never logged at INFO. Bounded before the write by `RegisterBatch.boundedReason`: a longer message is stored as its first 500 characters plus the marker ` [truncated]`, so the row is exactly 512 and a reader can tell there is more |
 | `system_generated` | `boolean NOT NULL` | true from the schedule, false from the CLI (progression's flag) |
 | `completed_by` | `text` | `EVENT` \| `RECONCILER` — feeds the `reconciled` metric |
 | `assembled_at`, `requested_at`, `generated_at`, `notified_at`, `failed_at` | `timestamptz` | |

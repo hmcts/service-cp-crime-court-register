@@ -67,6 +67,9 @@ class RegisterBatchRepositoryIT {
     /** systemdocgenerator's own words, kept for support and never logged at INFO. */
     private static final String SDG_REASON = "template OEE_Layout5 rendered no pages";
 
+    /** The same words, from a renderer that said far more of them than the column holds. */
+    private static final String OVERSIZED_SDG_REASON = (SDG_REASON + "; ").repeat(30);
+
     /** This case's court centre: minted per test so no case can read another's rows. */
     private final UUID courtCentre = UUID.randomUUID();
 
@@ -235,6 +238,34 @@ class RegisterBatchRepositoryIT {
                             + "what the run report prints; the free text is what a person reads, "
                             + "and the two are separate columns so the second can stay out of logs")
                     .contains(failed);
+        }
+
+        /**
+         * How long systemdocgenerator's message is is its decision, and the column's bound is this
+         * service's. The batch applies the bound as it is built, so a caller cannot carry a reason
+         * the row will refuse - which would fail the write that was recording why the batch failed.
+         */
+        @Test
+        void an_oversized_renderer_reason_should_be_bounded_by_the_batch_that_carries_it() {
+            final RegisterBatch assembled = assembled(MONDAY);
+            repository.insert(assembled);
+            final RegisterBatch failed = new RegisterBatch(assembled.batchId(), courtCentre,
+                    OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
+                    BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, OVERSIZED_SDG_REASON,
+                    true, RegisterBatch.CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null,
+                    null, FAILED_AT, 2);
+
+            assertThat(repository.compareAndSet(failed, BatchStatus.PENDING))
+                    .as("the row the renderer's verbosity would otherwise have refused")
+                    .isTrue();
+
+            assertThat(repository.findById(assembled.batchId()).map(RegisterBatch::sdgReason))
+                    .as("bounded, and saying so: a reader who cannot see the rest must be able to "
+                            + "tell that there is a rest")
+                    .hasValueSatisfying(reason -> assertThat(reason)
+                            .hasSize(RegisterBatch.REASON_LIMIT)
+                            .startsWith(SDG_REASON)
+                            .endsWith(" [truncated]"));
         }
 
         @Test

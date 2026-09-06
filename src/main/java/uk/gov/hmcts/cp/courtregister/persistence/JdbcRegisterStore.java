@@ -271,6 +271,12 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * Statement 7 - the batch ended without a document, under one bounded reason.
      *
+     * <p>{@code sdg_reason} is bounded on the way in, by the rule the domain states once
+     * ({@link RegisterBatch#boundedReason(String)}). How long systemdocgenerator's message is is
+     * systemdocgenerator's decision, and an unbounded write against a bounded column would fail
+     * this whole statement: the batch would stay GENERATING, unable to say why it failed, until the
+     * reconciler gave up on it.
+     *
      * <p>The rows stay RECORDED whatever the reason, because nothing was ever sent about them. Two
      * of the six reasons say the batch never left this service, and only for those is the stamp
      * released: the rows become unbatched again and the next run re-assembles them under a fresh
@@ -518,7 +524,7 @@ public class JdbcRegisterStore implements RegisterStore {
                 .param(BATCH_ID, batchId)
                 .param(EXPECTED, expected.name())
                 .param("reason", reason.name())
-                .param("sdgReason", sdgReason)
+                .param("sdgReason", RegisterBatch.boundedReason(sdgReason), Types.VARCHAR)
                 .param("releaseRows", RELEASING_REASONS.contains(reason))
                 .query(Long.class)
                 .single(), batchId, expected, BatchStatus.FAILED);

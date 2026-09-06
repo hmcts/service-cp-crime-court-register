@@ -113,6 +113,9 @@ class RegisterStoreIT {
     /** systemdocgenerator's own words about a failure, which the row keeps and no log prints. */
     private static final String SDG_REASON = "template OEE_Layout5 rendered no pages";
 
+    /** The same words, from a renderer that said far more of them than the column holds. */
+    private static final String OVERSIZED_SDG_REASON = (SDG_REASON + "; ").repeat(30);
+
     private static final String OU_CODE = "B01LY00";
 
     private static final String APPLICANT = "Applicant";
@@ -627,6 +630,43 @@ class RegisterStoreIT {
             softly.assertThat(activeUnbatched())
                     .as("nothing is waiting: these registers belong to a batch a person must look at")
                     .isEmpty();
+        }
+
+        /**
+         * The one column here holding words this service did not author.
+         *
+         * <p>{@code sdg_reason} is systemdocgenerator's own message, and how long it is is
+         * systemdocgenerator's decision rather than this service's. The column is bounded, so the
+         * bound has to be applied before the write: an unbounded write against a bounded column
+         * fails the whole failure statement, and the batch that could not say why it failed then
+         * stays GENERATING until the reconciler gives up on it - the failure lost twice over.
+         */
+        @Test
+        void a_reason_longer_than_the_column_should_be_bounded_before_it_is_written() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = store.assemble(
+                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED,
+                        OVERSIZED_SDG_REASON);
+            }).as("the failure is recorded whatever the renderer chose to say")
+                    .doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY).map(BatchOutcome::sdgReason))
+                    .as("bounded to the column, and saying so: a reader who cannot see the rest "
+                            + "must be able to tell that there is a rest")
+                    .hasValueSatisfying(reason -> {
+                        softly.assertThat(reason).hasSize(512);
+                        softly.assertThat(reason).startsWith(SDG_REASON);
+                        softly.assertThat(reason).endsWith(" [truncated]");
+                    });
+            softly.assertThat(batchOn(MONDAY).map(BatchOutcome::status))
+                    .as("and the batch still ends where the reason says it ended")
+                    .contains(FAILED);
         }
     }
 
