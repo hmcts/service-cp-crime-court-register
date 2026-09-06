@@ -15,8 +15,14 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
@@ -371,6 +377,129 @@ class RecordedFlagStateTest {
             assertThat(readOn.get())
                     .as("the flag was read, and not on the thread that holds the delivery")
                     .isNotEqualTo(Thread.currentThread().getName());
+        }
+    }
+
+    @Nested
+    @DisplayName("one refresh in flight, whoever asked for it")
+    class OneRefreshInFlight {
+
+        /** More arrivals than the executor has threads, which is the shape a busy minute has. */
+        private static final int ARRIVALS = 8;
+
+        /** How long an arrival may take while a read is in flight; a blocking one takes for ever. */
+        private static final Duration ARRIVAL_PATIENCE = Duration.ofSeconds(2);
+
+        /**
+         * The renewal and the arrivals are one mechanism, and it admits one read at a time.
+         *
+         * <p>Research §12 states it as a pair: the flag is asked for twice a minute however busy
+         * the queue is, and an arrival that finds no reading asks for one refresh and not one per
+         * command. A periodic refresh that does not take the in-flight claim breaks the second
+         * half - every arrival during a read that has not come back yet is free to hand over
+         * another, and a minute's worth of commands becomes a minute's worth of reads of somebody
+         * else's store, queued behind one thread.
+         *
+         * <p>The read is held open rather than timed: the reader blocks until this case lets it go,
+         * so every arrival happens while a refresh is genuinely in flight and the count afterwards
+         * is a fact rather than a race the suite hoped to win. The executor has one thread, exactly
+         * as the deployed one does, so a second read that was handed over is not lost - it waits,
+         * and is counted when the queue drains.
+         */
+        @Test
+        @DisplayName("concurrent arrivals join the refresh already in flight rather than adding one")
+        void concurrent_arrivals_should_share_one_flag_refresh() throws InterruptedException {
+            final CountDownLatch reading = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+            final AtomicLong reads = new AtomicLong();
+            offThread = Executors.newSingleThreadScheduledExecutor();
+            final RecordedFlagStateSource source = new RecordedFlagStateSource(
+                    heldOpen(reads, reading, release), offThread, clock);
+
+            source.start();
+            assertThat(reading.await(PATIENCE.toMillis(), TimeUnit.MILLISECONDS))
+                    .as("the periodic refresh is the read this case's arrivals are behind")
+                    .isTrue();
+            final List<RecordedFlagState> observed = arrivalsDuringTheRead(source);
+            release.countDown();
+            offThread.shutdown();
+
+            assertThat(offThread.awaitTermination(PATIENCE.toMillis(), TimeUnit.MILLISECONDS))
+                    .as("everything handed to the executor has run, so nothing is still queued")
+                    .isTrue();
+            assertThat(reads.get())
+                    .as("one refresh was in flight and every arrival joined it: a read per "
+                            + "arrival is the load test of somebody else's store research 12 "
+                            + "says this mechanism exists to prevent")
+                    .isEqualTo(1);
+            assertThat(observed)
+                    .as("and none of them waited for it - they are labelled from what is known, "
+                            + "which before the first read returns is UNKNOWN")
+                    .hasSize(ARRIVALS)
+                    .containsOnly(RecordedFlagState.UNKNOWN);
+        }
+
+        /**
+         * A reader that blocks inside the read, counting how many times it was entered.
+         *
+         * @param reads   how many reads have been made
+         * @param reading counted down as the first read begins
+         * @param release held until this case lets the read finish
+         * @return the reader
+         */
+        private FeatureFlagReader heldOpen(final AtomicLong reads, final CountDownLatch reading,
+                final CountDownLatch release) {
+            return () -> {
+                reads.incrementAndGet();
+                reading.countDown();
+                try {
+                    release.await(PATIENCE.toMillis(), TimeUnit.MILLISECONDS);
+                } catch (InterruptedException stopped) {
+                    Thread.currentThread().interrupt();
+                }
+                return FlagDecision.ON;
+            };
+        }
+
+        /**
+         * Every arrival labelled while the read is in flight, each on its own thread.
+         *
+         * <p>They are released together and every one of them is required to answer well inside
+         * the read it arrived during, which is the "never waits" half stated against a read that
+         * really is in progress rather than against an executor holding one.
+         *
+         * @param source the source under test
+         * @return what each arrival was labelled with
+         */
+        private List<RecordedFlagState> arrivalsDuringTheRead(
+                final RecordedFlagStateSource source) {
+            final CountDownLatch startLine = new CountDownLatch(1);
+            final List<RecordedFlagState> observed = new ArrayList<>();
+            try (ExecutorService arrivals = Executors.newFixedThreadPool(ARRIVALS)) {
+                final List<Future<RecordedFlagState>> labels = new ArrayList<>();
+                for (int arrival = 0; arrival < ARRIVALS; arrival++) {
+                    labels.add(arrivals.submit(() -> {
+                        startLine.await();
+                        return source.current();
+                    }));
+                }
+                startLine.countDown();
+                labels.forEach(label -> observed.add(labelFrom(label)));
+            }
+            return List.copyOf(observed);
+        }
+
+        /** One arrival's label, insisting it did not wait on the read it arrived during. */
+        private RecordedFlagState labelFrom(final Future<RecordedFlagState> label) {
+            try {
+                return label.get(ARRIVAL_PATIENCE.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException stopped) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("the arrivals were interrupted", stopped);
+            } catch (ExecutionException | TimeoutException waited) {
+                throw new IllegalStateException(
+                        "an arrival did not answer while a flag read was in flight", waited);
+            }
         }
     }
 
