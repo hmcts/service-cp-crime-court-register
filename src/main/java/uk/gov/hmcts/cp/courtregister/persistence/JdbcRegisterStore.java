@@ -137,18 +137,31 @@ public class JdbcRegisterStore implements RegisterStore {
      * the store, which cannot tell that refusal from the V3 key race, would fail a command whose
      * register is recorded and active and would go on failing it until the broker parked it.
      *
-     * <p>The row it superseded comes back with it, through the only thing that leads from a dropped
-     * register to its replacement, so a redelivery is answered exactly as the delivery that recorded
-     * it was. The scalar subquery is deliberate for the reason statement 1's is: it answers
-     * {@code NULL} where nothing was superseded and <em>fails</em> where two rows name this one,
-     * which is a key that had already lost the invariant rather than a redelivery.
+     * <p>The row it superseded comes back with it, so a redelivery is answered exactly as the
+     * delivery that recorded it was - and it is asked for as <strong>the row this recording
+     * replaced</strong> rather than as the row naming it, because more than one row can name it and
+     * this store writes them itself. Statement 1 records an <em>earlier</em> share that arrives
+     * after the register it belongs behind as SUPERSEDED against that register, so both the row the
+     * later share replaced and the late arrival that never displaced it carry the same
+     * {@code superseded_by}. A read of "the row naming this one" would find two and fail, on a
+     * command whose register is recorded and active, every time the broker delivered it.
+     *
+     * <p>The two are told apart by <em>when</em> the supersession happened. Statement 1 supersedes
+     * and inserts in one statement, so the row this recording replaced carries a
+     * {@code superseded_at} equal to this row's own {@code created_at}, to the microsecond; a row
+     * that recorded itself SUPERSEDED against this one stamped both of its own timestamps in its
+     * own transaction, later. The scalar subquery stays scalar for the reason statement 1's is: it
+     * answers {@code NULL} where nothing was superseded and <em>fails</em> where two rows were
+     * superseded by one recording, which no single statement can produce and is a key that had
+     * genuinely lost the invariant.
      */
     private static final String RECORDED_REGISTER = """
             SELECT recorded.output_id,
                    recorded.status,
                    (SELECT replaced.output_id
                       FROM processed_output replaced
-                     WHERE replaced.superseded_by = recorded.output_id) AS superseded_output_id
+                     WHERE replaced.superseded_by = recorded.output_id
+                       AND replaced.superseded_at = recorded.created_at) AS superseded_output_id
               FROM processed_output recorded
              WHERE recorded.source = :source
                AND recorded.request_id = :requestId
@@ -187,6 +200,12 @@ public class JdbcRegisterStore implements RegisterStore {
      * <p>The scalar subquery is deliberate: it answers {@code NULL} where there is no incumbent and
      * <em>fails</em> where there is more than one, so a key that had already lost the invariant is
      * reported rather than silently added to.
+     *
+     * <p><strong>{@code now()} is read once here, and statement 0 depends on that.</strong> The
+     * supersession's {@code superseded_at} and the insert's {@code created_at} are the same
+     * transaction timestamp, which is how a redelivery tells the row this recording replaced from
+     * the rows that later came to name it. A rewrite that timed either of them differently would
+     * have to give statement 0 another way to ask the question.
      */
     private static final String RECORD_REGISTER = """
             WITH incumbent AS (
