@@ -115,11 +115,11 @@ committing agents at once.**
 
 ### Tests first ⚠️
 
-- [ ] T007 [P] `persistence/SchemaMigrationV2IT` — V2 facts: new `processed_output` columns and status
+- [x] T007 [P] `persistence/SchemaMigrationV2IT` — V2 facts: new `processed_output` columns and status
       values, `register_batch` with its partial unique constraint, `register_notification` with
       `UNIQUE (batch_id, email_address)`, `shedlock`, the two indexes (data-model.md). Red: table
       `register_batch` does not exist.
-- [ ] T008 [P] `persistence/RegisterStoreIT` — `record` inserts RECORDED with document, hearing,
+- [x] T008 [P] `persistence/RegisterStoreIT` — `record` inserts RECORDED with document, hearing,
       register time, defendant type, flag state; same-key re-share supersedes in one transaction
       (`superseded_by` set, only the newer row active); a row with a `batch_id` is never superseded;
       a later-date re-share starts a fresh row; `activeUnbatched()` excludes superseded, batched and
@@ -127,46 +127,46 @@ committing agents at once.**
       (**P3 pin: `generation_flips_only_the_batchs_own_rows`** — fails against a court-centre-wide
       flip). Red: `UnsupportedOperationException` from the seam replaced by a failing assertion on
       the row count.
-- [ ] T009 [P] `config/ConfigurationValidationTest` (extend) — generation enabled requires
+- [x] T009 [P] `config/ConfigurationValidationTest` (extend) — generation enabled requires
       fileservice url, flag endpoint/label, SDG and NN endpoints, template id; zone must be
       `Europe/London` unless `zone-override-acknowledged` (`SchedulingConfigTest.job_is_scheduled_in_europe_london`
       lives here as a binding test); `completion=event` requires broker url; STUB modes refused with a
       namespace; **P9 pin: `blank_email_template_refuses_to_start_in_live_mode`**. Red: context starts.
-- [ ] T010 [P] `config/GenerationMetricsTest` — instrument names and tags:
+- [x] T010 [P] `config/GenerationMetricsTest` — instrument names and tags:
       `courtregister.batches{outcome}`, `courtregister.generation.request{response_code}`,
       `courtregister.generation.latency`, `courtregister.generation.reconciled`,
       `courtregister.generation.skipped{reason}`, `courtregister.notifications{status,response_code}`,
       gauges `oldest_recorded_unbatched_age`, `oldest_generating_age`, `pending_after_deadline`,
       `flag_read_ok`. Red: meter absent.
-- [ ] T011 [P] `domain/BatchStateTest` — `BatchStatus` transitions permitted/refused per the
+- [x] T011 [P] `domain/BatchStateTest` — `BatchStatus` transitions permitted/refused per the
       data-model state machine; `BatchFailureReason` and `NotificationStatus` codes bounded;
       `FlagDecision` never carries free text beyond a bounded reason code. Red: illegal transition
       not refused.
 
 ### Implementation
 
-- [ ] T012 `src/main/resources/db/migration/V2__register_store.sql` per data-model.md (columns,
+- [x] T012 `src/main/resources/db/migration/V2__register_store.sql` per data-model.md (columns,
       constraints, partial indexes, `shedlock`). Green: T007.
-- [ ] T013 [P] Domain types in `domain/`: `RegisterBatch`, `BatchStatus`, `BatchFailureReason`,
+- [x] T013 [P] Domain types in `domain/`: `RegisterBatch`, `BatchStatus`, `BatchFailureReason`,
       `RegisterNotification`, `NotificationStatus`, `RecordedFlagState`, `FlagDecision`,
       `CourtCentreDay`, `RegisterRecord`, `RenderRequest`, `DocumentStatus`, `RunReport`,
       `GenerationFailedException`, `NotificationFailedException`, `PayloadStoreUnavailableException`;
       `CompletionReason.RECORDED` replaces `SUBMITTED` (keep `SUBMITTED` only for
       `progression-post` mode, documented). Green: T011.
-- [ ] T014 [P] Ports in `application/`: `RegisterStore`, `PayloadFileStore`, `DocumentRenderer`,
+- [x] T014 [P] Ports in `application/`: `RegisterStore`, `PayloadFileStore`, `DocumentRenderer`,
       `DocumentOutcomeSink`, `RegisterNotifier`, `FeatureFlagReader` exactly as the plan's port
       contracts; no Azure/HTTP/JDBC/JMS type in any signature.
-- [ ] T015 `persistence/ProcessedOutputRepository` (extend) + `persistence/RegisterBatchRepository` +
+- [x] T015 `persistence/ProcessedOutputRepository` (extend) + `persistence/RegisterBatchRepository` +
       `persistence/RegisterNotificationRepository` + `persistence/JdbcRegisterStore` implementing
       `RegisterStore` with write-time supersession and batch-scoped `mark*`. Green: T008 incl. P3 —
       **flip P3 to FIXED in this commit.**
-- [ ] T016 [P] `config/GenerationProperties`, `config/FeatureFlagProperties`,
+- [x] T016 [P] `config/GenerationProperties`, `config/FeatureFlagProperties`,
       `config/FileServiceDataSourceConfig` (second `DataSource` + `JdbcClient`, Hikari
       `initialization-fail-timeout: -1`, `socketTimeout: 30`), `config/PropertiesValidator` (extend)
       — the T009 rules; template id validated as UUID in LIVE mode. Green: T009 incl. P9 — **flip P9
       to FIXED in this commit.**
-- [ ] T017 [P] `config/GenerationMetrics`. Green: T010.
-- [ ] T018 [P] `adapter/stub/Stub{PayloadFileStore,DocumentRenderer,RegisterNotifier,FeatureFlagReader}`
+- [x] T017 [P] `config/GenerationMetrics`. Green: T010.
+- [x] T018 [P] `adapter/stub/Stub{PayloadFileStore,DocumentRenderer,RegisterNotifier,FeatureFlagReader}`
       and `config/StubGenerationConfig` for test/local profiles (flag ON by default, overridable).
 
 **Checkpoint**: `./gradlew build` green; V2 applies on a fresh and on a V1 database. Codex review 2.
