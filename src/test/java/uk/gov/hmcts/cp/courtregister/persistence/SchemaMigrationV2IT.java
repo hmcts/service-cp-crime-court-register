@@ -319,6 +319,19 @@ class SchemaMigrationV2IT {
     }
 
     /**
+     * A {@code register_batch} row in the given state that names a completion mechanism.
+     *
+     * <p>Valid in every other respect, so the only thing a refusal can be about is whether that
+     * state is one a mechanism could have completed.
+     */
+    private static String insertBatchNaming(final String status, final String completedBy) {
+        return "INSERT INTO " + BATCH_TABLE + " (batch_id, court_centre_id, register_date, "
+                + "file_name, status, system_generated, completed_by) VALUES ('"
+                + UUID.randomUUID() + "', '" + UUID.randomUUID() + "', DATE '2026-08-20', "
+                + "'courtregister_2026-08-20.json', '" + status + "', true, '" + completedBy + "')";
+    }
+
+    /**
      * The smallest valid {@code register_notification} row for the given batch and recipient.
      */
     private static String insertNotification(final UUID batchId, final String emailAddress) {
@@ -755,6 +768,34 @@ class SchemaMigrationV2IT {
                             + "VALUES ('" + UUID.randomUUID() + "', '" + UUID.randomUUID() + "', "
                             + "DATE '2026-08-20', 'courtregister_2026-08-20.json', 'FAILED', true, "
                             + "'PAYLOAD_STORE_UNAVAILABLE', 'EVENT')"))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("register_batch_completed_by_shape_chk");
+        }
+
+        /**
+         * The other end of the same rule: a batch nobody has finished has completed nothing.
+         *
+         * <p>PENDING is a batch that was assembled and has not been asked of the renderer, and
+         * GENERATING is one that was asked and whose answer has not come back - which is exactly
+         * the state the reconciler reads, because nothing has completed it. An attribution on
+         * either says a mechanism reported an outcome that has not happened, and the
+         * {@code reconciled} metric counts an outcome nobody delivered.
+         *
+         * <p>Left to the catch-all branch this constraint used to end with, both rows are legal:
+         * the branch permits every state outside GENERATED, the three notified states and FAILED,
+         * so it permits an attribution on the two states that are still in flight.
+         */
+        @Test
+        void completed_by_shape_check_should_reject_an_unfinished_batch_that_names_a_mechanism() {
+            // Nothing has been asked of the renderer, so no event and no query can have answered.
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    insertBatchNaming("PENDING", "EVENT")))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("register_batch_completed_by_shape_chk");
+            // The render was asked for and the answer has not arrived; the batch is the
+            // reconciler's to chase, not one it has already reported on.
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    insertBatchNaming("GENERATING", "RECONCILER")))
                     .isInstanceOf(SQLException.class)
                     .hasMessageContaining("register_batch_completed_by_shape_chk");
         }

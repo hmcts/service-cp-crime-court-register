@@ -331,6 +331,34 @@ class RegisterBatchRepositoryIT {
                     .as("the payload the first run actually stored is still the batch's")
                     .contains(requested);
         }
+
+        /**
+         * The move that leaves the batch still waiting, and what it must not carry.
+         *
+         * <p>GENERATING is the state the reconciler reads precisely because nothing has completed
+         * the batch yet: the render was asked for and the answer has not come back. A whole-row
+         * write that carried an attribution into it would say the answer had already arrived, and
+         * the batch would be chased by a reconciler that had supposedly already reported it.
+         */
+        @Test
+        void moving_a_batch_to_generating_with_an_attribution_should_be_refused() {
+            final RegisterBatch assembled = assembled(MONDAY);
+            repository.insert(assembled);
+            final RegisterBatch attributed = new RegisterBatch(assembled.batchId(), courtCentre,
+                    OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
+                    BatchStatus.GENERATING, null, null, true, CompletedBy.RECONCILER, ASSEMBLED_AT,
+                    REQUESTED_AT, null, null, null, 1);
+
+            assertThatThrownBy(() -> repository.compareAndSet(attributed, BatchStatus.PENDING))
+                    .as("the render was asked for and no answer has come back, so there is no "
+                            + "outcome for a mechanism to have learned")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("GENERATING")
+                    .hasMessageContaining("RECONCILER");
+            assertThat(repository.findById(assembled.batchId()))
+                    .as("and the batch is exactly where the insert left it")
+                    .contains(assembled);
+        }
     }
 
     @Nested
@@ -352,6 +380,31 @@ class RegisterBatchRepositoryIT {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("GENERATING");
             assertThat(repository.findById(midway.batchId()))
+                    .as("and nothing is written")
+                    .isEmpty();
+        }
+
+        /**
+         * A batch is assembled, not completed, so the row that starts it names no mechanism.
+         *
+         * <p>{@code completed_by} says which mechanism learned the outcome, and at PENDING there is
+         * no outcome: nothing has been asked of the renderer, so no event and no query can have
+         * answered about it. A row inserted with one credits a decision nobody made, and the
+         * {@code reconciled} metric counts an outcome nobody delivered.
+         */
+        @Test
+        void inserting_a_batch_that_already_names_a_mechanism_should_be_refused() {
+            final RegisterBatch attributed = new RegisterBatch(UUID.randomUUID(), courtCentre,
+                    OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), null, null, BatchStatus.PENDING,
+                    null, null, true, CompletedBy.EVENT, ASSEMBLED_AT, null, null, null, null, 0);
+
+            assertThatThrownBy(() -> repository.insert(attributed))
+                    .as("nothing has been asked of the renderer, so nothing can have reported "
+                            + "back about it")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("PENDING")
+                    .hasMessageContaining("EVENT");
+            assertThat(repository.findById(attributed.batchId()))
                     .as("and nothing is written")
                     .isEmpty();
         }
