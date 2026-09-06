@@ -49,13 +49,23 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * pinned.
  *
  * <p><strong>The supplementary rule (design Q27).</strong> A hearing re-shared after its key's
- * batch has finished cannot join that batch - the document is rendered and the recipients have been
- * told - so once every earlier batch for the key is terminal the rows become a batch of their own,
- * naming the batch they follow and counting up from its index. While any earlier batch is still in
- * flight they wait, because the partial unique index admits one PENDING / GENERATING / GENERATED
- * batch per key. A key left waiting is <em>reported</em> rather than dropped: a register that
- * silently produced no batch is the same silence the progression leg left behind when a generation
- * failed, one step earlier in the flow.
+ * batch has been <em>sent</em> cannot join that batch - the document is rendered and the recipients
+ * have been told - so once every earlier batch for the key is terminal the rows become a batch of
+ * their own, naming the batch they follow and counting up from its index. While any earlier batch is
+ * still in flight they wait, because the partial unique index admits one PENDING / GENERATING /
+ * GENERATED batch per key. A key left waiting is <em>reported</em> rather than dropped: a register
+ * that silently produced no batch is the same silence the progression leg left behind when a
+ * generation failed, one step earlier in the flow.
+ *
+ * <p><strong>A FAILED predecessor is not one of the batches a supplement follows.</strong> Q27
+ * separates the four terminal states into two answers, and so does the V2 index comment: "a FAILED
+ * batch may be re-assembled (new batch_id, rows re-stamped), and a NOTIFIED / PARTIALLY_NOTIFIED /
+ * NOTIFIED_NOBODY one may be followed by a supplementary batch". Both endings free the key, and only
+ * the second of them produced a document. So a day whose only batch failed is re-assembled as that
+ * day's first document - index 0, following nothing, under the register's own file name - and a
+ * failed supplement is re-assembled at the index it failed at rather than one past it. Calling the
+ * re-assembly a supplement would name it {@code -supplementary-1} in the file-service metadata
+ * systemdocgenerator reads, for a first document nobody ever received.
  *
  * <p>Nothing here reaches a recipient or a defendant. The values the assembler decides from are a
  * court centre, a date, a file name and a flag state, and the keys it reports as deferred are the
@@ -423,7 +433,7 @@ class BatchAssemblerTest {
 
         @ParameterizedTest
         @EnumSource(value = BatchStatus.class,
-                names = {"NOTIFIED", "PARTIALLY_NOTIFIED", "NOTIFIED_NOBODY", "FAILED"})
+                names = {"NOTIFIED", "PARTIALLY_NOTIFIED", "NOTIFIED_NOBODY"})
         void a_key_whose_earlier_batch_has_finished_should_be_assembled_as_a_supplement(
                 final BatchStatus terminal) {
 
@@ -440,6 +450,61 @@ class BatchAssemblerTest {
                     .extracting(batch -> batch.batch().supplementOf(),
                             batch -> batch.batch().supplementIndex())
                     .containsExactly(tuple(finished.batchId(), 1));
+        }
+
+        /**
+         * The other half of Q27's sentence, which the three states above are only one half of.
+         *
+         * <p>A FAILED batch produced no document and told nobody, so the rows it held are still the
+         * day's first register rather than an addition to one. data-model.md and the V2 index
+         * comment both say so - a FAILED batch is re-assembled, a notified one is followed - and
+         * the file name is where the difference is visible from outside: this is what
+         * systemdocgenerator's metadata row records and what support finds the document by.
+         */
+        @Test
+        void a_key_whose_only_earlier_batch_failed_should_be_re_assembled_not_supplemented() {
+            final RegisterBatch failed =
+                    earlier(LEEDS_DAY, BatchStatus.FAILED, DESIGNS_FILE, null, 0);
+
+            final BatchAssembly assembly =
+                    assemble(List.of(recorded(LEEDS_DAY, DESIGNS_FILE)), List.of(failed));
+
+            softly.assertThat(assembly.batches())
+                    .as("a supplement is an addition to a document a Youth Offending Team already "
+                            + "has; a batch that failed PAYLOAD_STORE_UNAVAILABLE rendered nothing "
+                            + "and sent nothing, so the next run's batch is the day's first "
+                            + "document and is named as one")
+                    .extracting(batch -> batch.batch().supplementOf(),
+                            batch -> batch.batch().supplementIndex(),
+                            batch -> batch.batch().fileName())
+                    .containsExactly(tuple(null, 0, DESIGNS_FILE));
+        }
+
+        /**
+         * And a supplement that failed is re-assembled where it failed, not one place further on.
+         *
+         * <p>The index counts the documents a day has, and a failed supplement is not one of them:
+         * bumping it would leave the day with a {@code -supplementary-1} nobody received and a
+         * {@code -supplementary-2} that is really its first supplement.
+         */
+        @Test
+        void a_failed_supplement_should_be_re_assembled_at_the_index_it_failed_at() {
+            final RegisterBatch sent =
+                    earlier(LEEDS_DAY, BatchStatus.NOTIFIED, DESIGNS_FILE, null, 0);
+            final RegisterBatch failedSupplement = earlier(LEEDS_DAY, BatchStatus.FAILED,
+                    DESIGNS_FIRST_SUPPLEMENT, sent.batchId(), 1);
+
+            final BatchAssembly assembly = assemble(
+                    List.of(recorded(LEEDS_DAY, DESIGNS_FILE)), List.of(sent, failedSupplement));
+
+            softly.assertThat(assembly.batches())
+                    .as("the day has had exactly one document, so the batch that follows it is "
+                            + "still its first supplement and still follows the batch that was "
+                            + "sent")
+                    .extracting(batch -> batch.batch().supplementOf(),
+                            batch -> batch.batch().supplementIndex(),
+                            batch -> batch.batch().fileName())
+                    .containsExactly(tuple(sent.batchId(), 1, DESIGNS_FIRST_SUPPLEMENT));
         }
 
         @Test
