@@ -227,12 +227,17 @@ class RegisterStoreIT {
      * are asserted before anything else.
      *
      * <p>And the third thing, which is what a <em>second</em> delivery of one command makes of it.
-     * The recording and the completion of the command are two statements, so a pod that stops
-     * between them leaves a register recorded against a request the broker will deliver again; 001's
-     * POST path met the same shape and answered it with {@code ON CONFLICT (source, request_id)}.
-     * Recording has to be idempotent on the command's own key for the same reason: a redelivery that
-     * met {@code processed_output_unique_request} instead would fail a command whose register is
-     * recorded and active, and would go on failing it until the broker parked it.
+     * The recording and the completion of the command are one transaction, so a delivery cannot
+     * stop between them - but it can stop after both, before the broker learns the message was
+     * settled, and the message is delivered again; 001's POST path met the same shape and answered
+     * it with {@code ON CONFLICT (source, request_id)}. Recording is idempotent on the command's
+     * own key for the same reason: a redelivery that met {@code processed_output_unique_request}
+     * instead would fail a command whose register is recorded and active, and would go on failing
+     * it until the broker parked it.
+     *
+     * <p>That the two writes are one transaction is asserted here from both sides - a completion
+     * that could not be written and one the guard refused each take the register back with them -
+     * and from the broker's side by {@code CrashWindowIT}.
      */
     @Nested
     @DisplayName("recording a register")

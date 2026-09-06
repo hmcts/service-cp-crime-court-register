@@ -60,14 +60,17 @@ insert an active register (`RegisterStoreIT.two_concurrent_re_shares_leave_exact
 processed_output (hearing_id, court_centre_id, register_date) WHERE status = 'RECORDED' AND
 superseded_at IS NULL AND batch_id IS NULL` - the same predicate the sweep and the recorder read
 "active" with, so a superseded row, a batched row and 001's PENDING/POSTED rows are all outside it
-(`SchemaMigrationV3IT`). `JdbcRegisterStore.record` meets the refusal as a `DuplicateKeyException`,
-rolls the attempt back, re-reads the incumbent the winner left and records against that instead, up
-to three attempts; a losing re-share is therefore recorded rather than failed, and only a key that
-lost the race three times over raises a `ConcurrencyFailureException` (the store answering: the
-delivery is handed back, intake keeps running). V1's `processed_output_unique_request` is a
-different refusal wearing the same exception type and is told apart from it on the driver's own
-message: that one is this command delivered again, and is answered from the row it already wrote
-rather than retried as a race. The recording statement supersedes **before** it
+(`SchemaMigrationV3IT`). `JdbcRegisterStore.recordAndComplete` meets the refusal as a
+`DuplicateKeyException`, rolls the attempt back, re-reads the incumbent the winner left and records
+against that instead, up to three attempts; a losing re-share is therefore recorded rather than
+failed, and only a key that lost the race three times over raises a `ConcurrencyFailureException`
+(the store answering: the delivery is handed back, intake keeps running). V1's
+`processed_output_unique_request` is a different refusal wearing the same exception type and is told
+apart from it on the driver's own message: that one is this command delivered again, and is answered
+from the row it already wrote rather than retried as a race. Both keys are recognised by name and
+neither by elimination: a duplicate-key refusal that is neither of them is a constraint the recorder
+cannot act on, and it is raised as a classified non-transient `RegisterNotRecordedException` rather
+than retried (`RegisterStoreIT.a_unique_violation_that_is_not_the_active_row_race_is_propagated_not_retried`). The recording statement supersedes **before** it
 inserts, because the row being replaced holds the key until the update takes it out of the index.
 
 ## `register_batch`
@@ -138,13 +141,24 @@ timestamptz`, `locked_by varchar(255)`.
 
 **Per command** (unchanged from 001 except the last leg):
 `RECEIVED → … → COMPLETED{recorded | group-proceedings | no-defendants | no-subscriptions |
-no-youth-defendants} | FAILED{SCHEMA_INVALID | …}`. The output row is written RECORDED in its own
-transaction, which commits before the command is completed: the recording and the completion are two
-statements and not one, so a delivery that stops between them leaves a register recorded against a
-request the broker will deliver again. The recording is therefore **idempotent on
-`(source, request_id)`** - each attempt reads that key inside the recording transaction and answers
-a command it has already recorded with the row it wrote, the row that recording superseded included,
-writing nothing and superseding nothing
+no-youth-defendants} | FAILED{SCHEMA_INVALID | …}`. The output row is **written RECORDED in the
+same transaction that completes the command**. The completion is a second statement against
+`processed_request` and it belongs to `IdempotencyGuard`, not to the store, so the pipeline hands it
+to `RegisterStore.recordAndComplete` as the thing to do inside the recording's transaction and the
+adapter issues it there, through a client over the same datasource: neither write survives without
+the other (`RegisterStoreIT.a_completion_that_could_not_be_written_takes_the_recording_with_it`,
+`…a_completion_the_guard_refused_takes_the_recording_with_it`, and
+`CrashWindowIT.a_crash_between_the_register_and_its_completion_should_leave_neither`). A completion
+the guard refuses - the claim was reclaimed while the run worked - rolls the recording back for the
+same reason it would be wrong to keep it: the new owner records the register again, and this one
+would only be superseded.
+
+There is therefore no window between the register and its command's completion. A delivery can still
+stop *after* both, before the broker learns the message was settled, and the message is delivered
+again; the guard answers most of those `ALREADY_COMPLETED` without reaching the store, and the
+recording is **idempotent on `(source, request_id)`** for the rest - each attempt reads that key
+inside the recording transaction and answers a command it has already recorded with the row it
+wrote, the row that recording superseded included, writing nothing and superseding nothing
 (`RegisterStoreIT.a_redelivered_command_is_answered_with_the_register_it_already_recorded` and
 `…a_redelivered_re_share_supersedes_nothing_a_second_time`). It is the property 001's POST path gets
 from `ON CONFLICT (source, request_id)`, kept rather than lost.

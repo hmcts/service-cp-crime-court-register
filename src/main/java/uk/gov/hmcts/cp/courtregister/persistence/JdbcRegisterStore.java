@@ -22,6 +22,7 @@ import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionOperations;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
@@ -73,12 +74,19 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * {@code mark notified}, {@code flipped} reads {@code generated} through {@code FROM}, because the
  * rows that move are the rows of the batch the update just settled.
  *
- * <p><strong>Recording is idempotent on the command's own key.</strong> The recording and the
- * completion of the command are two statements and not one, so a pod that stops between them leaves
- * a register written against a request the broker will deliver again. The recording statement is
- * therefore preceded, inside its own transaction, by a read of {@code (source, request_id)}: a
- * command that has been recorded before is answered with the row it already wrote, exactly as 001's
- * POST path answers a re-claim through {@code ON CONFLICT (source, request_id)}. The two unique
+ * <p><strong>A recording and its command's completion are one transaction.</strong> The completion
+ * is a second statement against a second table and it belongs to the caller, not to this class, so
+ * the commit boundary is the only place the two can be made one thing: the caller hands the
+ * completion over and it is issued inside the recording's transaction, through a client over the
+ * same {@code DataSource} this one issues against. Neither survives without the other, so there is
+ * no moment in which a register stands against a request the broker will deliver again.
+ *
+ * <p><strong>Recording is idempotent on the command's own key even so.</strong> A delivery can
+ * still arrive for a command this store has recorded - the transaction committed and the broker
+ * never learned the message was settled - so the recording statement is preceded, inside the same
+ * transaction, by a read of {@code (source, request_id)}: a command that has been recorded before
+ * is answered with the row it already wrote, exactly as 001's POST path answers a re-claim through
+ * {@code ON CONFLICT (source, request_id)}. The two unique
  * keys a recording can meet are told apart for the same reason - only
  * {@code idx_output_active_register_key} is a lost race worth retrying, and
  * {@code processed_output_unique_request} is this command arriving twice. Each is recognised by
@@ -531,13 +539,14 @@ public class JdbcRegisterStore implements RegisterStore {
      * and reused, which is safe precisely because a refused attempt committed nothing.
      *
      * <p><strong>A command delivered again is answered rather than recorded again.</strong> The
-     * completion of a command is written after this call and not inside it, so a pod that stops in
-     * between - or a completion that fails transiently - leaves the register written and the request
-     * unfinished, and the broker delivers the message again. Each attempt therefore reads
-     * {@code (source, request_id)} first and answers with the row it finds, which is the same answer
-     * the first delivery was given: 001's POST path settles the same shape with
-     * {@code ON CONFLICT (source, request_id)}, and a recording that failed here instead would park a
-     * command whose register is recorded and active. The two unique keys are told apart rather than
+     * completion is written inside this call now, so a delivery cannot stop between the two writes
+     * - but it can stop after them, before the broker learns the message was settled, and the
+     * message is delivered again. Each attempt therefore reads {@code (source, request_id)} first
+     * and answers with the row it finds, which is the same answer the first delivery was given:
+     * 001's POST path settles the same shape with {@code ON CONFLICT (source, request_id)}, and a
+     * recording that failed here instead would park a command whose register is recorded and
+     * active. The guard settles most such deliveries before they reach this store at all; this is
+     * what makes the ones that do reach it harmless. The two unique keys are told apart rather than
      * both read as contention - {@value #COMMAND_KEY} is this command arriving beside itself and is
      * settled from the row that landed, and only {@value #ACTIVE_ROW_KEY} is a race for the day's
      * key worth trying again. A duplicate-key refusal that is neither of them is a rule nobody
@@ -560,10 +569,8 @@ public class JdbcRegisterStore implements RegisterStore {
             final CourtRegisterDocument document, final String courtCentreOuCode,
             final String defendantType, final RecordedFlagState flagState,
             final Supplier<GuardDecision> completion) {
-        final RecordOutcome recording = StoreOutage.translating("record a register",
-                () -> attemptedRecording(
-                        command, document, courtCentreOuCode, defendantType, flagState));
-        return new RecordedCompletion(recording, completion.get());
+        return StoreOutage.translating("record a register", () -> attemptedRecording(
+                command, document, courtCentreOuCode, defendantType, flagState, completion));
     }
 
     /**
@@ -574,22 +581,24 @@ public class JdbcRegisterStore implements RegisterStore {
      * @param courtCentreOuCode the court centre's OU code, which the document has no field for
      * @param defendantType     the side of the court application the register's defendants are on
      * @param flagState         the cutover flag as the intake side last read it
-     * @return what was written, and what it replaced
+     * @param completion        the completion of the command, run in the recording's transaction
+     * @return what was written, what it replaced, and what the completion answered
      */
-    private RecordOutcome attemptedRecording(final DistributionCommand command,
+    private RecordedCompletion attemptedRecording(final DistributionCommand command,
             final CourtRegisterDocument document, final String courtCentreOuCode,
-            final String defendantType, final RecordedFlagState flagState) {
+            final String defendantType, final RecordedFlagState flagState,
+            final Supplier<GuardDecision> completion) {
         final Recording recording = new Recording(UUID.randomUUID(), command, document,
                 objectMapper.writeValueAsString(document), courtCentreOuCode, defendantType,
                 flagState);
-        RecordOutcome outcome = null;
+        RecordedCompletion outcome = null;
         DuplicateKeyException lost = null;
         for (int attempt = 0; outcome == null && attempt < RECORD_ATTEMPTS; attempt++) {
             try {
-                outcome = insert(recording);
+                outcome = insert(recording, completion);
             } catch (DuplicateKeyException collision) {
                 if (violates(collision, COMMAND_KEY)) {
-                    outcome = recorded(command).orElseThrow(() -> unrecorded(command, collision));
+                    outcome = answered(recording, completion, collision);
                 } else if (violates(collision, ACTIVE_ROW_KEY)) {
                     lost = collision;
                 } else {
@@ -606,20 +615,79 @@ public class JdbcRegisterStore implements RegisterStore {
     }
 
     /**
-     * One attempt at the recording statement, inside the transaction that undoes a lost race.
+     * One attempt at the recording, and the completion of the command, in one transaction.
      *
-     * <p>The transaction is what makes the retry safe rather than what makes the write atomic - one
-     * statement is atomic on its own. A re-share that loses the race has already superseded the
-     * incumbent by the time its insert is refused, and without a transaction to roll back that
-     * supersession would stand: the register the winner replaced would carry the loser's identity in
-     * {@code superseded_by}, pointing support at a row that was never recorded.
+     * <p><strong>The transaction is now what makes the pair atomic, as well as what undoes a lost
+     * race.</strong> The recording statement is atomic on its own; the completion is a second
+     * statement, against a second table, and it is the caller's rather than this class's - so the
+     * commit boundary is the only place the two can be made one thing. It is issued through the
+     * guard's own repository, over the same {@code DataSource} this store's client issues against,
+     * so it joins this transaction rather than opening one of its own (data-model.md).
+     *
+     * <p>A re-share that loses the race has already superseded the incumbent by the time its insert
+     * is refused, and without a transaction to roll back that supersession would stand: the register
+     * the winner replaced would carry the loser's identity in {@code superseded_by}, pointing
+     * support at a row that was never recorded. The retry that follows is safe for the same reason.
      *
      * <p>The read that opens it is inside the same transaction, so what it sees and what the write
      * is refused for are one snapshot's worth of the same table.
      */
-    private RecordOutcome insert(final Recording recording) {
-        return transactions.execute(recorded ->
-                recorded(recording.command()).orElseGet(() -> write(recording)));
+    private RecordedCompletion insert(final Recording recording,
+            final Supplier<GuardDecision> completion) {
+        return transactions.execute(oneTransaction -> completed(oneTransaction,
+                recorded(recording.command()).orElseGet(() -> write(recording)), completion));
+    }
+
+    /**
+     * The register this command already holds, answered and completed in one transaction.
+     *
+     * <p>Reached where the insert met {@value #COMMAND_KEY} rather than the read that precedes it -
+     * two deliveries of one command, racing, both finding nothing and both writing. The loser is
+     * answered with the row the winner wrote, and its command is completed beside that answer, in a
+     * transaction of its own: the delivery is settled on a register that exists, and the completion
+     * it settles under is written under the same rule every other completion here is.
+     *
+     * @param recording  the recording that was refused
+     * @param completion the completion of the command, run in this transaction
+     * @param collision  the refusal, kept for the failure raised where no row is behind it
+     * @return the register this command already had, and what the completion answered
+     */
+    private RecordedCompletion answered(final Recording recording,
+            final Supplier<GuardDecision> completion, final DuplicateKeyException collision) {
+        return transactions.execute(oneTransaction -> completed(oneTransaction,
+                recorded(recording.command())
+                        .orElseThrow(() -> unrecorded(recording.command(), collision)),
+                completion));
+    }
+
+    /**
+     * Writes the completion beside the recording, and undoes the recording where it does not stand.
+     *
+     * <p>Three outcomes and one rule. A completion that throws takes the transaction with it, which
+     * is the ordinary behaviour of a transaction template and is exactly right: nothing was
+     * recorded, and the caller is handed the failure. A completion the guard <em>refused</em> throws
+     * nothing - the claim behind this run was reclaimed while it worked, and the guard reports
+     * rather than raises - so the rollback is asked for explicitly: a register recorded under a
+     * claim somebody else holds is a register the new owner records again and this one only
+     * supersedes. And a completion that was admitted commits with the register it belongs to.
+     *
+     * <p>The rollback is local to this transaction, so it ends the transaction without raising: the
+     * caller is answered with the guard's own decision and settles the delivery on it, which is the
+     * division of labour the port describes.
+     *
+     * @param transaction the recording's transaction, marked for rollback where the completion
+     *                    did not stand
+     * @param recording   what the recording wrote, or the row it answered a redelivery with
+     * @param completion  the completion of the command
+     * @return the pair, whether or not it is about to be committed
+     */
+    private static RecordedCompletion completed(final TransactionStatus transaction,
+            final RecordOutcome recording, final Supplier<GuardDecision> completion) {
+        final GuardDecision decision = completion.get();
+        if (!(decision instanceof GuardDecision.Complete)) {
+            transaction.setRollbackOnly();
+        }
+        return new RecordedCompletion(recording, decision);
     }
 
     /**
