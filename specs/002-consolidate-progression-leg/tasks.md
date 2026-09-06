@@ -30,8 +30,9 @@ The accepted types are `feat`, `fix`, `chore`, `docs`, `test`, `refactor`, `buil
 (`config` is not one of them; a configuration change is a `chore` or a `build`).
 **Every task that lands a P-fix flips that row of `doc/DEFECT-FIXES.md` (status → FIXED, pinning
 test confirmed) in the same commit.** Every phase ends with a `./gradlew build` that is green and a
-Codex review (new session) whose findings are fixed before the next phase starts. **Never two
-committing agents at once.**
+Codex review (new session) whose findings are fixed before the next phase starts. From Phase 3 on,
+review-gate fixes also land as a red test commit followed by an implementation commit; no further
+exceptions of this kind are pre-approved. **Never two committing agents at once.**
 
 ## Format: `[ID] [P?] [A?] [US#] Description`
 
@@ -174,9 +175,10 @@ committing agents at once.**
 **Checkpoint**: `./gradlew build` green; V2 applies on a fresh and on a V1 database. Codex review 2.
 
 **Approved TDD exceptions (Phase 2)**. Principle II is non-negotiable and these are recorded, not
-excused: two pieces of behaviour in this phase were pinned after the code rather than before it, and
-each is named here with the reason it was allowed. Approver: **design owner, 2026-09-06**. Anything
-else in Phase 2 that arrived test-after is a defect, not a precedent.
+excused: the pieces of behaviour listed below were pinned after the code, or in the same commit as
+it, rather than before it, and each is named here with the reason it was allowed. Approver:
+**design owner, 2026-09-06**. Anything else in Phase 2 that arrived test-after is a defect, not a
+precedent.
 
 1. **The V1-to-V2 backfill case (`SchemaMigrationV2IT.BackfillOfADeployedV1Row`), written after
    T012.** The migration's backfill values were chosen and hand-checked when V2 was written, and the
@@ -188,9 +190,23 @@ else in Phase 2 that arrived test-after is a defect, not a precedent.
    five test authors were writing against it in parallel and a seam that left the question open
    would have had each of them answer it differently. The invariant is pinned by `BatchStateTest`,
    which is T011's own file and was written against the seam rather than after the implementation.
-
-The third gap the Phase 2 review found, T018's untested stubs, is **not** on this list: it is closed
-by `StubGenerationAdaptersTest` rather than approved.
+3. **The seven Phase 2 review-gate remediation commits, each landing its new test and the
+   implementation it pins in one commit.** They are `ad553fb` "fix(schema): keep V2 compatible with
+   a live pre-002 pod during rollout", `461b96c` "fix(store): record the court centre OU code the
+   batch needs", `6918069` "fix(store): assemble a batch atomically or not at all", `8ed4e65`
+   "fix(store): progression-post statements cannot touch register rows", `2ee4178` "fix(store):
+   batch state changes are compare-and-set through the state machine", `06b4f64` "fix(metrics):
+   register the generation instruments in the context" and `20c2b38` "fix(store): bound the
+   generator's failure reason at 512 characters". The failing assertion is quoted in each commit
+   body and the test precedes the code within the commit, so the red run is recorded and reviewable
+   where the convention asks for it; splitting unpushed history for a review fix was judged higher
+   risk than recording the exception.
+4. **T018's stub adapters (`d1d081c` "feat(stubs): generation-side stub adapters for test and local
+   profiles"), landed before their characterisation test.** Stub adapters that deliberately do
+   nothing were committed first and `3dd8532` "test(stubs): characterise the generation stubs"
+   followed; approved as an **[A]** characterisation after the fact, which is what the test turned
+   out to be - it accepts four stubs, the per-mode selection and the ON-by-default answer as they
+   stand rather than specifying behaviour a red run could have driven.
 
 ---
 
