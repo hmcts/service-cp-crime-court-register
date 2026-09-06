@@ -183,6 +183,14 @@ class RegisterStoreIT {
      * A recorded register is the row the whole downstream half is written against, so the two things
      * that decide what a batch can do with it - what it says, and that there is exactly one of it -
      * are asserted before anything else.
+     *
+     * <p>And the third thing, which is what a <em>second</em> delivery of one command makes of it.
+     * The recording and the completion of the command are two statements, so a pod that stops
+     * between them leaves a register recorded against a request the broker will deliver again; 001's
+     * POST path met the same shape and answered it with {@code ON CONFLICT (source, request_id)}.
+     * Recording has to be idempotent on the command's own key for the same reason: a redelivery that
+     * met {@code processed_output_unique_request} instead would fail a command whose register is
+     * recorded and active, and would go on failing it until the broker parked it.
      */
     @Nested
     @DisplayName("recording a register")
@@ -273,6 +281,81 @@ class RegisterStoreIT {
                     .as("and therefore on the batch, which takes it from its first row and has "
                             + "nowhere else to get it from")
                     .contains(OU_CODE);
+        }
+
+        /**
+         * The redelivery of a command whose register is already recorded.
+         *
+         * <p>The recording and the completion of the command are separate statements, so a pod that
+         * dies between them - or a completion that fails transiently - leaves the register written
+         * and the request unfinished, and the broker delivers the message again. What the second
+         * delivery must find is the register the first one wrote: one row, still active, answered
+         * under the identity it already has.
+         */
+        @Test
+        void a_redelivered_command_is_answered_with_the_register_it_already_recorded() {
+            final DistributionCommand command = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final CourtRegisterDocument document = document(HEARING_ONE, MONDAY, MONDAY_SHARED);
+            final AtomicReference<RecordOutcome> first = new AtomicReference<>();
+            final AtomicReference<RecordOutcome> redelivered = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                first.set(record(command, document, APPLICANT, RecordedFlagState.ON));
+                redelivered.set(record(command, document, APPLICANT, RecordedFlagState.ON));
+            }).as(PENDING).doesNotThrowAnyException();
+
+            softly.assertThat(rowsAtCourtCentre())
+                    .as("one command, one register, however many times the broker delivers it")
+                    .isEqualTo(1);
+            softly.assertThat(statusOf(command))
+                    .as("and it is still the active register: a redelivery neither supersedes it "
+                            + "nor moves it out of the nightly sweep")
+                    .contains(RECORDED);
+            softly.assertThat(redelivered.get())
+                    .as("the second delivery is answered with the row the first one wrote, so the "
+                            + "run it belongs to can be completed rather than failed and retried "
+                            + "until the queue parks a register that is safely recorded")
+                    .isEqualTo(first.get());
+        }
+
+        /**
+         * The same redelivery, of the re-share that replaced an earlier register.
+         *
+         * <p>The supersession is the part that must not happen twice. A second run of the statement
+         * would find the register this command already recorded, supersede <em>it</em>, and record a
+         * third row - so the hearing would end the day with a register nobody asked for and an
+         * answer naming a row that was never dropped.
+         */
+        @Test
+        void a_redelivered_re_share_supersedes_nothing_a_second_time() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final CourtRegisterDocument resharedDocument =
+                    document(HEARING_ONE, MONDAY, MONDAY_RESHARED);
+            final AtomicReference<RecordOutcome> redelivered = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(reshare, resharedDocument, APPLICANT, RecordedFlagState.ON);
+                redelivered.set(
+                        record(reshare, resharedDocument, APPLICANT, RecordedFlagState.ON));
+            }).as(PENDING).doesNotThrowAnyException();
+
+            softly.assertThat(rowsAtCourtCentre())
+                    .as("two registers and no more: the redelivery supersedes nothing and records "
+                            + "nothing")
+                    .isEqualTo(2);
+            softly.assertThat(statusOf(first))
+                    .as("the register the re-share replaced is superseded once, by the recording "
+                            + "that replaced it")
+                    .contains(SUPERSEDED);
+            softly.assertThat(statusOf(reshare)).contains(RECORDED);
+            softly.assertThat(redelivered.get())
+                    .as("and the answer is the recording that already happened, the row it "
+                            + "superseded included")
+                    .isEqualTo(new RecordOutcome(outputIdOf(reshare).orElse(null),
+                            outputIdOf(first).orElse(null)));
         }
     }
 
