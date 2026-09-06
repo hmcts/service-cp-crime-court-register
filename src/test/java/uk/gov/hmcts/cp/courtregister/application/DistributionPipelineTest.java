@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -30,9 +31,14 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.RecoverableDataAccessException;
+import org.springframework.dao.TransientDataAccessResourceException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
+import uk.gov.hmcts.cp.courtregister.config.OutputMode;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
@@ -45,6 +51,7 @@ import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.NoRegisterReason;
 import uk.gov.hmcts.cp.courtregister.domain.PayloadUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
+import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
@@ -81,6 +88,13 @@ import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
  * here is the order the stages run in, what each is handed, and what is recorded when one of them
  * refuses. The stages' own behaviour is asserted in their own suites.
  *
+ * <p><strong>002 adds a fifth port and a second last stage.</strong> Under
+ * {@code courtregister.output=record} the assembled register is written into this service's own
+ * store rather than POSTed to progression, and the run completes {@code recorded} instead of
+ * {@code submitted}. Both stages are wired and the mode chooses between them once, when the
+ * pipeline is assembled, so the two arms can be driven side by side here; {@link Recording} holds
+ * the new one, and every case above it still describes the {@code progression-post} arm.
+ *
  * @see <a href="file:../../../../../../../../doc/DEFECT-FIXES.md">doc/DEFECT-FIXES.md</a> rows C2,
  *     C6, C7, C32 and C33
  */
@@ -112,6 +126,7 @@ class DistributionPipelineTest {
     private final GroupProceedingsPolicy groupProceedings = mock(GroupProceedingsPolicy.class);
     private final NowSubscriptionsSource subscriptionsSource = mock(NowSubscriptionsSource.class);
     private final RegisterTransformer transformer = mock(RegisterTransformer.class);
+    private final RegisterStore registerStore = mock(RegisterStore.class);
     private final RegisterSubmissionClient submissionClient = mock(RegisterSubmissionClient.class);
 
     private final DistributionCommand command = new DistributionCommand(
@@ -895,6 +910,296 @@ class DistributionPipelineTest {
             verify(guard, never()).recordCompletion(any(RunClaim.class),
                     any(CompletionReason.class));
             assertThat(completions("submitted")).isEqualTo(ABSENT);
+        }
+    }
+
+    /**
+     * The recording stage - what {@code courtregister.output=record} makes of a register that was
+     * built, and the whole of user story 1 as the core sees it.
+     *
+     * <p>The register stops being progression's to hold. It is written into this service's own
+     * store, in the transaction that supersedes the hearing's earlier active row for the day
+     * (research §8), and the run completes {@code recorded} rather than {@code submitted}: two
+     * spellings of one success, never both live in one deployment. Nothing is POSTed, so a
+     * {@code record}-mode pod makes no traffic to progression at all - which is the observable
+     * claim {@code RecordEndToEndIT} makes at the far end and this suite makes at the seam.
+     *
+     * <p><strong>Five arguments go into the write and each of them is somebody's answer.</strong>
+     * The document is the one the transformation validated, byte for byte; the OU code travels
+     * beside it because the frozen contract has no field for it and the batch needs it (the batch's
+     * file name and render payload are built from it); the defendant type is the one
+     * {@code DefendantTypeResolver} put on the document from the hearing's own court application
+     * (FR-002); and the flag state is what the intake side last learned about the one lever. This
+     * suite pins that the pipeline forwards all four and invents none of them.
+     *
+     * <p><strong>The flag state a run with no reading records is {@code UNKNOWN}</strong>, which is
+     * a statement rather than a placeholder: recording never waits on a flag read, because a
+     * register that has been built is worth more than the label it carries, and {@code UNKNOWN} is
+     * exactly what "nobody read it" means (research §12). Attaching a fresh reading to a live
+     * delivery is T030's, and {@code RecordedFlagStateTest} (T028) holds it to the window and to
+     * the three answers; what belongs here is that the pipeline records the state it has rather
+     * than guessing at one, and that a row written without a read says so.
+     *
+     * <p><strong>Two failures are settled differently, and the difference is the point.</strong> A
+     * register the frozen contract refuses is a document that must never become a row - the
+     * command fails SCHEMA_INVALID and is parked, and the store is not called at all (FR-004). A
+     * store that has gone away is not the register's fault: the pipeline classifies nothing and
+     * lets the store's own refusal out to the transport, which hands the delivery back and stops
+     * intake, exactly as it does when the processed log goes away underneath a run (FR-015,
+     * spec US1 acceptance 5). Classifying it here would report a transient pipeline failure, hand
+     * the delivery back with intake still running, and let the next delivery meet the same dead
+     * store until the broker's budget parked work whose only fault was arriving during an outage
+     * of ours.
+     */
+    @Nested
+    @DisplayName("the recording stage (US1)")
+    class Recording {
+
+        /** The side of the court application this register's defendants are on (FR-002). */
+        private static final String DEFENDANT_TYPE = "Respondent";
+
+        /** Identity of the row the store answers with, so a recording has something to report. */
+        private static final UUID OUTPUT_ID =
+                UUID.fromString("0a5f6d31-6c2b-4c2e-9a8f-3d51b7e0c4a9");
+
+        /** The register as T023 hands it over: the 001 document, with its defendant type on it. */
+        private final CourtRegisterDocument recorded = new CourtRegisterDocument(
+                document.registerDate(),
+                document.hearingDate(),
+                document.hearingId(),
+                document.courtCentreId(),
+                document.fileName(),
+                DEFENDANT_TYPE,
+                document.hearingVenue(),
+                document.recipients(),
+                document.defendants());
+
+        @BeforeEach
+        void theOrdinaryRecording() {
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                        any(JsonNode.class), any()))
+                    .thenReturn(new TransformationResult.Register(recorded, OU_CODE));
+            when(registerStore.record(any(DistributionCommand.class),
+                        any(CourtRegisterDocument.class), any(), any(),
+                        any(RecordedFlagState.class)))
+                    .thenReturn(new RecordOutcome(OUTPUT_ID, null));
+        }
+
+        @Test
+        @DisplayName("records the register it built, then completes the run as recorded")
+        void records_the_register_and_completes_recorded() {
+            final GuardDecision decision = runRecording();
+
+            final InOrder stages = inOrder(transformer, registerStore, guard);
+            stages.verify(transformer).transform(eqCommand(), any(JsonNode.class),
+                    any(JsonNode.class), any());
+            stages.verify(registerStore).record(command, recorded, OU_CODE, DEFENDANT_TYPE,
+                    RecordedFlagState.UNKNOWN);
+            stages.verify(guard).recordCompletion(claim, CompletionReason.RECORDED);
+
+            assertThat(decision).isInstanceOf(GuardDecision.Complete.class);
+            assertThat(completions("recorded")).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("records the document the transformation validated, with the OU code beside "
+                + "it")
+        void records_the_document_the_transformation_validated() {
+            final ArgumentCaptor<CourtRegisterDocument> written =
+                    ArgumentCaptor.forClass(CourtRegisterDocument.class);
+            final ArgumentCaptor<String> ouCode = ArgumentCaptor.forClass(String.class);
+
+            runRecording();
+
+            verify(registerStore).record(eqCommand(), written.capture(), ouCode.capture(),
+                    any(), any(RecordedFlagState.class));
+            assertThat(written.getValue()).isEqualTo(recorded);
+            assertThat(ouCode.getValue())
+                    .as("the batch's file name and render payload are built from it, and nothing "
+                            + "downstream can re-derive it from a row that did not record it")
+                    .isEqualTo(OU_CODE);
+        }
+
+        @Test
+        @DisplayName("records the defendant type the document carries (FR-002)")
+        void records_the_defendant_type_the_document_carries() {
+            final ArgumentCaptor<String> defendantType = ArgumentCaptor.forClass(String.class);
+
+            runRecording();
+
+            verify(registerStore).record(eqCommand(), any(CourtRegisterDocument.class), any(),
+                    defendantType.capture(), any(RecordedFlagState.class));
+            assertThat(defendantType.getValue()).isEqualTo(DEFENDANT_TYPE);
+        }
+
+        @Test
+        @DisplayName("records a hearing that carried no court application under no defendant type")
+        void records_no_defendant_type_for_a_hearing_with_no_court_application() {
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                        any(JsonNode.class), any()))
+                    .thenReturn(new TransformationResult.Register(document, OU_CODE));
+
+            runRecording();
+
+            verify(registerStore).record(command, document, OU_CODE, null,
+                    RecordedFlagState.UNKNOWN);
+        }
+
+        @Test
+        @DisplayName("records UNKNOWN for a run no flag reading was attached to, and waits on none")
+        void records_the_flag_state_no_reading_was_attached_for() {
+            final ArgumentCaptor<RecordedFlagState> flagState =
+                    ArgumentCaptor.forClass(RecordedFlagState.class);
+
+            runRecording();
+
+            verify(registerStore).record(eqCommand(), any(CourtRegisterDocument.class), any(),
+                    any(), flagState.capture());
+            assertThat(flagState.getValue())
+                    .as("a row written without a flag read says so, rather than claiming ON or OFF")
+                    .isEqualTo(RecordedFlagState.UNKNOWN);
+        }
+
+        @Test
+        @DisplayName("records exactly once per document")
+        void records_exactly_once_per_document() {
+            runRecording();
+
+            verify(registerStore, times(1)).record(any(DistributionCommand.class),
+                    any(CourtRegisterDocument.class), any(), any(), any(RecordedFlagState.class));
+        }
+
+        @Test
+        @DisplayName("sends nothing to progression, and never completes a recording as submitted")
+        void sends_nothing_to_progression_when_it_records() {
+            runRecording();
+
+            verify(submissionClient, never()).submit(any(RegisterSubmission.class));
+            verify(guard).recordCompletion(claim, CompletionReason.RECORDED);
+            assertThat(completions("submitted")).isEqualTo(ABSENT);
+        }
+
+        @Test
+        @DisplayName("records nothing at all for a register the frozen contract refuses "
+                + "(SCHEMA_INVALID)")
+        void records_nothing_a_contract_refusal_stopped() {
+            // FR-004: the contract is enforced before the write, so a document that could never be
+            // a legal register never becomes a row. It is parked here and now rather than carried
+            // to exhaustion: the same bytes meet the same refusal on every redelivery.
+            when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
+                        any(JsonNode.class), any()))
+                    .thenThrow(new TransformationFailedException(
+                            "the assembled register does not satisfy the frozen register contract",
+                            ReasonCode.OUTBOUND_CONTRACT_VIOLATION));
+
+            final GuardDecision decision = runRecording();
+
+            assertThat(decision).isEqualTo(new GuardDecision.DeadLetter(
+                    DeadLetterReason.NON_TRANSIENT, ReasonCode.OUTBOUND_CONTRACT_VIOLATION));
+            verify(registerStore, never()).record(any(DistributionCommand.class),
+                    any(CourtRegisterDocument.class), any(), any(), any(RecordedFlagState.class));
+            verify(guard, never()).recordCompletion(any(RunClaim.class),
+                    any(CompletionReason.class));
+        }
+
+        @Test
+        @DisplayName("lets a register store that went away out to the transport, which hands the "
+                + "delivery back and stops intake")
+        void a_store_that_went_away_is_left_for_the_transport_to_suspend_intake_on() {
+            // The same rule the claim has: nothing is recordable during a store outage, so the
+            // store's own refusal travels out of the run unclassified and the transport adapter
+            // decides. Classified here it would be an ordinary transient failure - delivery handed
+            // back, intake still running - and every message behind it would meet the same dead
+            // store until the broker parked recoverable work.
+            for (final DataAccessException outage : everyWayTheStoreCanGoAway()) {
+                when(registerStore.record(any(DistributionCommand.class),
+                            any(CourtRegisterDocument.class), any(), any(),
+                            any(RecordedFlagState.class)))
+                        .thenThrow(outage);
+
+                assertThatThrownBy(this::runRecording)
+                        .as("a %s was classified inside the run instead of reaching the transport",
+                                outage.getClass().getSimpleName())
+                        .isSameAs(outage);
+            }
+
+            verify(guard, never()).recordCompletion(any(RunClaim.class),
+                    any(CompletionReason.class));
+            verify(guard, never()).recordTransientFailure(any(RunClaim.class),
+                    any(ReasonCode.class));
+        }
+
+        @Test
+        @DisplayName("under progression-post the 001 submission path runs unchanged, and nothing "
+                + "is recorded")
+        void progression_post_mode_still_submits() {
+            final GuardDecision decision =
+                    progressionPostPipeline().process(command, delivery());
+
+            assertThat(decision).isInstanceOf(GuardDecision.Complete.class);
+            verify(submissionClient).submit(any(RegisterSubmission.class));
+            verify(guard).recordCompletion(claim, CompletionReason.SUBMITTED);
+            assertThat(completions("submitted")).isEqualTo(1);
+            verify(registerStore, never()).record(any(DistributionCommand.class),
+                    any(CourtRegisterDocument.class), any(), any(), any(RecordedFlagState.class));
+        }
+
+        /**
+         * Runs one ordinary delivery through a {@code record}-mode pipeline.
+         *
+         * @return what the pipeline decided the delivery is worth settling as
+         */
+        private GuardDecision runRecording() {
+            return recordingPipeline().process(command, delivery());
+        }
+
+        /**
+         * The pipeline over both last stages, with the mode that selects the recording one.
+         *
+         * <p>Both are wired, because the mode chooses between them rather than replacing one: a
+         * pipeline that held only the port its mode selected could not be asked what the other
+         * mode would have done, and this suite asks exactly that of the case below.
+         *
+         * @return the pipeline
+         */
+        private DistributionPipeline recordingPipeline() {
+            return new DistributionPipeline(guard, payloadSource, groupProceedings,
+                    subscriptionsSource, new Dates(), transformer, OutputMode.RECORD, registerStore,
+                    submissionClient, metrics, fixedClock(), RUN_DEADLINE);
+        }
+
+        /**
+         * The same pipeline under the 001 mode, with the register store wired and unused.
+         *
+         * <p>Assembled through the mode-bearing constructor rather than the 001 one, so what the
+         * case asserts is that {@code progression-post} selects the submission - not that a
+         * pipeline built without a store has nowhere else to go.
+         *
+         * @return the pipeline
+         */
+        private DistributionPipeline progressionPostPipeline() {
+            return new DistributionPipeline(guard, payloadSource, groupProceedings,
+                    subscriptionsSource, new Dates(), transformer, OutputMode.PROGRESSION_POST,
+                    registerStore, submissionClient, metrics, fixedClock(), RUN_DEADLINE);
+        }
+
+        /**
+         * Every way the register store can go away underneath a run, as the transport adapter
+         * names them.
+         *
+         * <p>The three classes {@code CourtRegisterMessageListener} treats as an outage, and
+         * deliberately not the whole {@code DataAccessException} hierarchy: a constraint violation
+         * or a broken statement is the store <em>answering</em>, over a connection that plainly
+         * worked, and must not stop the queue.
+         *
+         * @return one outage of each kind
+         */
+        private DataAccessException[] everyWayTheStoreCanGoAway() {
+            return new DataAccessException[] {
+                new DataAccessResourceFailureException("the register store cannot be reached"),
+                new RecoverableDataAccessException("the register store dropped the connection"),
+                new TransientDataAccessResourceException("the register store timed out"),
+            };
         }
     }
 
