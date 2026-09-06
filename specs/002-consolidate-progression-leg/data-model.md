@@ -202,10 +202,30 @@ PENDING ──payload stored + 202──▶ GENERATING ──document-available�
    │                                 ├─ generation-failed ──▶ FAILED    │             └─ no recipients ▶ NOTIFIED_NOBODY
    │                                 └─ grace period → reconcile → GENERATED | FAILED(GENERATION_FAILED | GENERATION_TIMED_OUT)
    ├─ store unavailable ──▶ FAILED(PAYLOAD_STORE_UNAVAILABLE)   [rows stay RECORDED; next run re-assembles]
-   └─ request rejected / exhausted ──▶ FAILED(RENDER_REQUEST_*)
+   ├─ request rejected / exhausted ──▶ FAILED(RENDER_REQUEST_*)
+   └─ grace period, payload_file_id set → reconcile → GENERATED | FAILED(RENDER_REQUEST_FAILED)
 PARTIALLY_NOTIFIED ──notify-register --batch (resend FAILED only)──▶ NOTIFIED
 FAILED ──generate-register --batch (new batch_id)──▶ PENDING
 ```
+
+**The last arrow out of PENDING, and why it is drawn.** `RegisterGenerationService.storeAndRequest`
+mints the payload id, writes it down (`markPayloadMinted`), stores the payload, POSTs, and only then
+`markRequested`. A pod that dies between the 202 and that mark - or a store blip on the mark itself -
+leaves a batch PENDING with `payload_file_id` set and its rows stamped, and until this arrow existed
+nothing revisited it: the reconciler read `generatingSince()` only, the stamped rows are outside
+`activeUnbatched()`, `idx_register_batch_live_key` defers every later re-share of that key for ever,
+and `oldest_generating_age` reads GENERATING. So the reconciler also sweeps PENDING batches whose
+`payload_file_id` is set and whose `assembled_at` is older than the grace period, asks
+systemdocgenerator about that payload, and applies the answer through the same `DocumentOutcomeSink`:
+a document makes the batch **GENERATED** (`completed_by = RECONCILER`), a refusal FAILED
+`GENERATION_FAILED`, and no record at all FAILED **`RENDER_REQUEST_FAILED`** with `completed_by` NULL
+- this service's own verdict about a request it cannot show was ever accepted. Their age is published
+on `courtregister_oldest_pending_age`, the fifth gauge.
+
+`PENDING → GENERATED` is therefore a drawn arrow rather than a batch skipping GENERATING: the render
+really was accepted and the mark that says so is what was lost, and refusing the move would throw
+away a document that exists (`BatchStateTest`, `GenerationReconcilerTest.StillPending`,
+`RegisterBatchRepositoryIT.NeverRequested`).
 
 Rows follow their batch: `RECORDED → GENERATED` on `document-available` (**only this batch's rows**),
 `GENERATED → NOTIFIED` when the batch reaches NOTIFIED / PARTIALLY_NOTIFIED / NOTIFIED_NOBODY; a

@@ -31,7 +31,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
  * <p><strong>The single-table half of the batch's life.</strong> {@link JdbcRegisterStore} owns the
  * writes that have to move {@code processed_output} in the same statement - assembly and every
  * {@code mark} - because those are atomic or they are wrong. What is left is what the other
- * collaborators need and can do alone: the reconciler's overdue read, the listener's fallback
+ * collaborators need and can do alone: the reconciler's two overdue reads, the listener's fallback
  * lookup, the operations CLI's own assembly, and the whole-row compare-and-set a caller that read a
  * batch and decided about it writes it back through.
  *
@@ -108,7 +108,28 @@ public class RegisterBatchRepository {
             """;
 
     /**
-     * Statement 5 - the batch as it should now stand, if it still stands where the caller left it.
+     * Statement 5 - the batches that never reached the renderer, oldest first.
+     *
+     * <p>The other half of the safety net's read. A batch whose payload id was minted and whose
+     * {@code markRequested} never landed - the pod died after the 202, or the store blipped on the
+     * mark - stays PENDING for ever: {@link #generatingSince(Instant)} does not see it, its rows are
+     * stamped and so outside {@code activeUnbatched}, and the live-key index keeps every later
+     * re-share of that key waiting behind it.
+     *
+     * <p>{@code payload_file_id IS NOT NULL} is what makes such a batch answerable at all:
+     * systemdocgenerator is asked about a payload, so a batch that never minted one is a batch
+     * there is nothing to ask about. The cutoff is read against {@code assembled_at} because
+     * {@code requested_at} is exactly the column this batch never got.
+     */
+    private static final String PENDING_SINCE = SELECT_BATCH + """
+             WHERE status = 'PENDING'
+               AND payload_file_id IS NOT NULL
+               AND assembled_at < :assembledBefore
+             ORDER BY assembled_at, batch_id
+            """;
+
+    /**
+     * Statement 6 - the batch as it should now stand, if it still stands where the caller left it.
      *
      * <p>The whole mutable row, so a caller that read a batch, decided about it and writes it back
      * cannot leave half of its decision behind. The key and the assembly facts are not among the
@@ -222,25 +243,20 @@ public class RegisterBatchRepository {
     }
 
     /**
-     * The batches that never reached the renderer, oldest first.
-     *
-     * <p>The other half of the safety net's read, and a seam until the sweep behind it is written.
-     * A batch whose payload id was minted and whose {@code markRequested} never landed - the pod
-     * died after the 202, or the store blipped on the mark - stays PENDING for ever:
-     * {@link #generatingSince(Instant)} does not see it, its rows are stamped and so outside
-     * {@code activeUnbatched}, and the partial unique index keeps every later re-share of that key
-     * waiting behind it.
+     * Statement 5 - the batches that minted a payload before the given instant and got no further.
      *
      * @param assembledBefore the far edge of the grace period, measured from assembly
      * @return every stale PENDING batch that minted a payload, oldest first
      */
     public List<RegisterBatch> pendingSince(final Instant assembledBefore) {
-        throw new UnsupportedOperationException(
-                "the stale-PENDING sweep implements this read; " + assembledBefore);
+        return jdbcClient.sql(PENDING_SINCE)
+                .param("assembledBefore", offsetOf(assembledBefore))
+                .query((rs, rowNumber) -> batch(rs))
+                .list();
     }
 
     /**
-     * Statement 5 - moves a batch from the state the caller read it in to the state it decided on.
+     * Statement 6 - moves a batch from the state the caller read it in to the state it decided on.
      *
      * <p>The move is asked of {@link BatchStatus} before it is attempted, so the state machine is
      * the domain's and not this statement's, and a move nobody drew is refused where it is made

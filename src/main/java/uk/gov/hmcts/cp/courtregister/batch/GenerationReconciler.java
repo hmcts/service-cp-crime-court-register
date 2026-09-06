@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,6 +34,19 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * {@link uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink} the listener uses, naming
  * RECONCILER rather than EVENT so the row records which mechanism learned it.
  *
+ * <p><strong>And the batch that never reached the renderer at all.</strong>
+ * {@code RegisterGenerationService} mints the payload id, writes it down, stores the payload, POSTs
+ * and only then marks the batch requested. A pod that dies between the 202 and that mark - or a
+ * store that blips on the mark itself - leaves the batch PENDING with a payload id and its
+ * registers stamped, and nothing else in the flow ever revisits it: the overdue read is GENERATING
+ * only, the stamped rows are outside {@code activeUnbatched}, and the live-key index defers every
+ * later re-share of that key behind it. So a second read, over PENDING batches that minted a
+ * payload before the same grace period, asks systemdocgenerator the same question by the same
+ * payload id and applies the answer through the same sink. Where it has none, the batch is failed
+ * RENDER_REQUEST_FAILED - this service's own verdict about a request it cannot show was ever
+ * accepted, which is the reason the run itself would have used and the one an operator reads as
+ * "ask for it again".
+ *
  * <p>A batch the query has nothing to say about is failed GENERATION_TIMED_OUT rather than asked
  * again. Two systems have now been given the chance to report an outcome and neither has one, and a
  * batch that is retried indefinitely is a night's registers nobody is told are missing. That ending
@@ -57,10 +71,12 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * only ever ran when there was nothing to catch. The run still calls it, because the run report
  * names what the night had to fetch.
  *
- * <p>Every pass also publishes {@code courtregister_oldest_generating_age} from the read it has just
- * made: how long the batch that has been waiting longest for its document has been waiting. It is
- * the reading a nightly flow cannot be understood without between runs, and until this schedule
- * existed there was nowhere for it to be taken.
+ * <p>Every pass also publishes {@code courtregister_oldest_generating_age} and
+ * {@code courtregister_oldest_pending_age} from the two reads it has just made: how long the batch
+ * that has been waiting longest for its document has been waiting, and how long the oldest batch
+ * that never reached the renderer has been stuck. They are the readings a nightly flow cannot be
+ * understood without between runs, and until this schedule existed there was nowhere for them to be
+ * taken.
  *
  * <p><strong>Collaborators, and why these.</strong> The overdue read is
  * {@link RegisterBatchRepository#generatingSince}, which is a single-table read the store has no
@@ -102,6 +118,14 @@ public class GenerationReconciler {
      * it, rather than leaving a batch overdue for nine minutes out of every ten.
      */
     private static final String GRACE_PERIOD = "${courtregister.generation.grace-period}";
+
+    /** What a GENERATING batch nobody has an outcome for is ended as. */
+    private static final Ending TIMED_OUT =
+            new Ending(BatchFailureReason.GENERATION_TIMED_OUT, CompletedBy.RECONCILER);
+
+    /** What a PENDING batch systemdocgenerator holds no payload for is ended as. */
+    private static final Ending NEVER_REQUESTED =
+            new Ending(BatchFailureReason.RENDER_REQUEST_FAILED, null);
 
     private static final Logger LOG = LoggerFactory.getLogger(GenerationReconciler.class);
 
@@ -171,12 +195,32 @@ public class GenerationReconciler {
      */
     public int reconcile() {
         final Instant now = clock.instant();
-        final List<RegisterBatch> overdue = batches.generatingSince(now.minus(gracePeriod));
-        metrics.oldestGeneratingAge(oldestOf(overdue, now));
+        final Instant cutoff = now.minus(gracePeriod);
 
+        final List<RegisterBatch> overdue = batches.generatingSince(cutoff);
+        metrics.oldestGeneratingAge(oldestOf(overdue, now, RegisterBatch::requestedAt));
+
+        final List<RegisterBatch> stalled = batches.pendingSince(cutoff);
+        metrics.oldestPendingAge(oldestOf(stalled, now, RegisterBatch::assembledAt));
+
+        return settle(overdue, TIMED_OUT) + settle(stalled, NEVER_REQUESTED);
+    }
+
+    /**
+     * Asks about every batch of one read and counts the ones this pass settled.
+     *
+     * <p>Every batch is its own attempt, and the two reads are the same attempt made about two
+     * states: what systemdocgenerator says is applied through the sink either way, and only what a
+     * silence means differs, which is why the silence is the argument.
+     *
+     * @param overdue the batches this pass read, oldest first
+     * @param silence what a batch systemdocgenerator has nothing to say about is ended as
+     * @return how many of them this pass completed
+     */
+    private int settle(final List<RegisterBatch> overdue, final Ending silence) {
         int completed = 0;
         for (final RegisterBatch batch : overdue) {
-            if (reconcileOne(batch)) {
+            if (reconcileOne(batch, silence)) {
                 metrics.reconciled();
                 completed++;
             }
@@ -217,11 +261,14 @@ public class GenerationReconciler {
      *
      * @param overdue the batches this pass read, oldest first
      * @param now     the instant the pass was made at
+     * @param since   the stamp the age is measured from, which is the one the read was made against
      * @return the age of the oldest, or {@link Duration#ZERO} where there is none
      */
-    private static Duration oldestOf(final List<RegisterBatch> overdue, final Instant now) {
+    private static Duration oldestOf(final List<RegisterBatch> overdue, final Instant now,
+            final Function<RegisterBatch, Instant> since) {
+
         return overdue.stream()
-                .map(RegisterBatch::requestedAt)
+                .map(since)
                 .filter(Objects::nonNull)
                 .min(Instant::compareTo)
                 .map(oldest -> Duration.between(oldest, now))
@@ -238,16 +285,17 @@ public class GenerationReconciler {
      * its cause rather than dropped - it is the reading that says the query API, and not the
      * broker, is what tonight's stuck batches are waiting on.
      *
-     * @param batch the overdue batch, as the read returned it
+     * @param batch   the overdue batch, as the read returned it
+     * @param silence what this batch is ended as if systemdocgenerator has nothing to say about it
      * @return whether this batch was completed by the reconciler
      */
-    private boolean reconcileOne(final RegisterBatch batch) {
+    private boolean reconcileOne(final RegisterBatch batch, final Ending silence) {
         boolean completed;
         try {
             final Optional<DocumentStatus> answer =
                     renderer.query(batch.payloadFileId(), CallerIdentity.SYSTEM);
-            completed = answer.map(status -> apply(batch, status))
-                    .orElseGet(() -> timedOut(batch));
+            completed = answer.map(status -> apply(batch, status, silence))
+                    .orElseGet(() -> end(batch, silence));
         } catch (GenerationFailedException e) {
             LOG.warn("Batch {} is past its grace period and systemdocgenerator could not answer "
                     + "what became of its payload, so it stays GENERATING and is asked again on "
@@ -268,11 +316,13 @@ public class GenerationReconciler {
      * reason is the bounded GENERATION_FAILED the sink applies. An answer that says neither is the
      * renderer having nothing to say, which is the silence below.
      *
-     * @param batch  the overdue batch the answer is about
-     * @param status what systemdocgenerator said became of its payload
+     * @param batch   the overdue batch the answer is about
+     * @param status  what systemdocgenerator said became of its payload
+     * @param silence what this batch is ended as if the answer says neither
      * @return whether this batch was completed by the reconciler
      */
-    private boolean apply(final RegisterBatch batch, final DocumentStatus status) {
+    private boolean apply(final RegisterBatch batch, final DocumentStatus status,
+            final Ending silence) {
         final boolean completed;
         if (status.documentFileServiceId() != null && status.generatedTime() != null) {
             LOG.info("Batch {} has a document systemdocgenerator generated and no event delivered, "
@@ -289,7 +339,7 @@ public class GenerationReconciler {
                     status.failedTime(), CompletedBy.RECONCILER);
             completed = true;
         } else {
-            completed = timedOut(batch);
+            completed = end(batch, silence);
         }
         return completed;
     }
@@ -298,20 +348,37 @@ public class GenerationReconciler {
      * Ends a batch nothing can be learned about.
      *
      * <p>Through the store rather than the sink, because it is this service's own verdict about a
-     * render nobody answered for and not an answer anybody gave; under GENERATION_TIMED_OUT, with
-     * no words from systemdocgenerator because it said none, and naming RECONCILER, which is what
-     * that reason requires of the row.
+     * render nobody answered for and not an answer anybody gave, with no words from
+     * systemdocgenerator because it said none.
      *
-     * @param batch the overdue batch neither the topic nor the query API has an outcome for
+     * @param batch  the overdue batch neither the topic nor the query API has an outcome for
+     * @param ending the bounded reason and attribution its own read decided on
      * @return {@code true}, because a batch given up on is a completion this run made rather than
-     *     one the topic delivered, and is one of the rows {@code completed_by} names RECONCILER
+     *     one the topic delivered
      */
-    private boolean timedOut(final RegisterBatch batch) {
-        LOG.warn("Batch {} is past its grace period, the topic never carried an outcome for it and "
-                + "systemdocgenerator has none to give, so it is failed GENERATION_TIMED_OUT "
-                + "rather than left waiting.", batch.batchId());
-        store.markFailed(batch.batchId(), BatchFailureReason.GENERATION_TIMED_OUT, null,
-                CompletedBy.RECONCILER);
+    private boolean end(final RegisterBatch batch, final Ending ending) {
+        LOG.warn("Batch {} is past its grace period and systemdocgenerator has no outcome to give "
+                + "for it, so it is failed {} rather than left waiting.", batch.batchId(),
+                ending.reason());
+        store.markFailed(batch.batchId(), ending.reason(), null, ending.completedBy());
         return true;
+    }
+
+    /**
+     * How a batch the topic and the query API both said nothing about is ended, which depends on
+     * which of the two reads found it.
+     *
+     * <p>A GENERATING batch was asked for and accepted, so the silence is systemdocgenerator's and
+     * the row names RECONCILER, which is what {@code BatchFailureReason.isGeneratorAttributed()}
+     * requires of GENERATION_TIMED_OUT. A PENDING one was never recorded as requested and
+     * systemdocgenerator holds no payload under its id, so the silence says the request never
+     * arrived: that is this service's own RENDER_REQUEST_FAILED verdict and names no mechanism,
+     * because nobody outside this service answered for it.
+     *
+     * @param reason      the bounded reason the batch is failed under
+     * @param completedBy the mechanism that learned the outcome, or {@code null} where this is this
+     *                    service's own verdict
+     */
+    private record Ending(BatchFailureReason reason, CompletedBy completedBy) {
     }
 }

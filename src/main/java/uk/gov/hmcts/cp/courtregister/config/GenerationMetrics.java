@@ -29,9 +29,10 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
  * ordinary one, because a run whose outcomes all arrive by reconciliation is a broker to look at
  * rather than a renderer.
  *
- * <p>The four gauges are the state a nightly flow cannot be understood without between runs: how
+ * <p>The five gauges are the state a nightly flow cannot be understood without between runs: how
  * old the oldest unbatched record is, how long the oldest batch has been waiting for a document,
- * how many batches the run deadline left behind, and whether the flag was readable at all. Like
+ * how long the oldest batch that never reached the renderer has been stuck, how many batches the
+ * run deadline left behind, and whether the flag was readable at all. Like
  * {@link ProcessingMetrics}'s two, they are registered from construction, because a dashboard must
  * be able to read them from a pod that has not yet run.
  *
@@ -92,7 +93,7 @@ public class GenerationMetrics {
     private final MeterRegistry registry;
 
     /**
-     * Gauge state, held here rather than read from a collaborator so the four gauges exist from
+     * Gauge state, held here rather than read from a collaborator so the five gauges exist from
      * construction: a nightly flow is read between runs as much as during one, and a gauge that
      * only appears after the first run is not an alerting surface.
      */
@@ -121,6 +122,9 @@ public class GenerationMetrics {
                 .register(registry);
         Gauge.builder(OLDEST_GENERATING_AGE, oldestGeneratingSeconds, AtomicLong::doubleValue)
                 .description("Age in seconds of the oldest batch still waiting for a document")
+                .register(registry);
+        Gauge.builder(OLDEST_PENDING_AGE, oldestPendingSeconds, AtomicLong::doubleValue)
+                .description("Age in seconds of the oldest batch that never reached the renderer")
                 .register(registry);
         Gauge.builder(PENDING_AFTER_DEADLINE, pendingAfterDeadlineBatches,
                         AtomicInteger::doubleValue)
@@ -231,9 +235,9 @@ public class GenerationMetrics {
     /**
      * Reports how long the oldest batch that never reached the renderer has been waiting.
      *
-     * <p>The seam the safety-net fix registers a gauge behind. A batch left PENDING with a payload
-     * id - the pod died between the render request and the mark that records it, or the mark itself
-     * failed - moves no counter and appears in no other gauge: {@link #OLDEST_GENERATING_AGE} reads
+     * <p>A batch left PENDING with a payload id - the pod died between the render request and the
+     * mark that records it, or the mark itself failed - moves no counter and appears in no other
+     * gauge: {@link #OLDEST_GENERATING_AGE} reads
      * GENERATING only, and its registers are already stamped, so they are outside
      * {@code activeUnbatched} too. This is the reading that says so.
      *

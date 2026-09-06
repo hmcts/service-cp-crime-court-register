@@ -19,7 +19,7 @@ import java.util.Set;
  * shape the progression leg ends a batch in and the shape defect P1 is about.
  *
  * <p><strong>The refusals are the point.</strong> {@link #canTransitionTo(BatchStatus)} permits the
- * eight moves the data-model diagram draws and refuses the other forty-one pairs the enumeration
+ * nine moves the data-model diagram draws and refuses the other forty pairs the enumeration
  * admits, including every move out of a terminal state and every move of a state to itself. A
  * machine that permitted an undrawn move would record the same "somewhere in the middle" the
  * progression leg left behind, one column further on; {@code BatchStateTest} guards the list.
@@ -51,7 +51,7 @@ public enum BatchStatus {
     private static final Set<BatchStatus> NO_MOVES =
             Collections.unmodifiableSet(EnumSet.noneOf(BatchStatus.class));
 
-    /** The eight arrows of the data-model diagram, read once and never rebuilt. */
+    /** The nine arrows of the data-model diagram, read once and never rebuilt. */
     private static final Map<BatchStatus, Set<BatchStatus>> PERMITTED_MOVES = permittedMoves();
 
     /**
@@ -62,11 +62,17 @@ public enum BatchStatus {
      * rather than reviving this one. Reviving it would leave systemdocgenerator's verdict about the
      * old identity attached to a batch being rendered again.
      *
+     * <p>{@code PENDING -> GENERATED} is the one arrow that is not this service moving its own
+     * batch along. It is the reconciler's stale-PENDING sweep: a render systemdocgenerator accepted
+     * and whose {@code markRequested} never landed leaves a batch that says nobody asked and a
+     * document that exists, and the sweep finds it by the payload id the row does carry. Refusing
+     * the move would mean throwing the document away rather than sending it.
+     *
      * @return the permitted next states of every drawn state, unmodifiable
      */
     private static Map<BatchStatus, Set<BatchStatus>> permittedMoves() {
         final Map<BatchStatus, Set<BatchStatus>> moves = new EnumMap<>(BatchStatus.class);
-        moves.put(PENDING, unmodifiable(EnumSet.of(GENERATING, FAILED)));
+        moves.put(PENDING, unmodifiable(EnumSet.of(GENERATING, GENERATED, FAILED)));
         moves.put(GENERATING, unmodifiable(EnumSet.of(GENERATED, FAILED)));
         moves.put(GENERATED, unmodifiable(EnumSet.of(NOTIFIED, PARTIALLY_NOTIFIED, NOTIFIED_NOBODY)));
         moves.put(PARTIALLY_NOTIFIED, unmodifiable(EnumSet.of(NOTIFIED)));
