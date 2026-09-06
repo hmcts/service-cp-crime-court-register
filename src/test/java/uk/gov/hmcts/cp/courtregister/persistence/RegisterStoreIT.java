@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
 import static org.assertj.core.api.Assertions.tuple;
+import static org.awaitility.Awaitility.await;
 
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -16,6 +17,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
@@ -95,6 +102,7 @@ class RegisterStoreIT {
 
     private static final Instant MONDAY_SHARED = Instant.parse("2026-08-24T09:00:00Z");
     private static final Instant MONDAY_RESHARED = Instant.parse("2026-08-24T16:30:00Z");
+    private static final Instant MONDAY_RESHARED_AGAIN = Instant.parse("2026-08-24T16:45:00Z");
     private static final Instant TUESDAY_SHARED = Instant.parse("2026-08-25T09:00:00Z");
 
     private static final Instant HEARING_DATE = Instant.parse("2026-08-19T00:00:00Z");
@@ -124,6 +132,14 @@ class RegisterStoreIT {
     private static final String OVERSIZED_SDG_REASON = (SDG_REASON + "; ").repeat(30);
 
     private static final String OU_CODE = "B01LY00";
+
+    /** Two re-shares of one hearing, which is the smallest number that can lose the invariant. */
+    private static final int RACERS = 2;
+
+    /** How long the suite waits for both recorders to reach the register they are superseding. */
+    private static final Duration PARKED_DEADLINE = Duration.ofSeconds(10);
+
+    private static final Duration PARKED_POLL = Duration.ofMillis(20);
 
     private static final String APPLICANT = "Applicant";
     private static final String RESPONDENT = "Respondent";
@@ -335,6 +351,73 @@ class RegisterStoreIT {
                             + "one PDF twice")
                     .extracting(RegisterRecord::registerTime)
                     .containsExactly(MONDAY_RESHARED);
+        }
+
+        /**
+         * The same invariant, put to two recorders at once, which is the only way it can be lost.
+         *
+         * <p>Which register a re-share replaces is decided by a read: the recording statement looks
+         * for the hearing's active row for the day and writes what it found. Two re-shares that
+         * both read before either of them has committed therefore both find the same incumbent,
+         * both supersede it and both insert an active register - and the day is rendered with one
+         * hearing on it twice, under two different sets of results, with nothing in the store
+         * saying which of them the Youth Offending Team should believe. One recording at a time can
+         * never show this, because the second read always sees the first row: the case above
+         * asserts the same property and would stay green throughout.
+         *
+         * <p>The race is arranged rather than hoped for. The suite takes the incumbent row itself,
+         * on its own connection, and only then releases both recorders: each statement reads the
+         * incumbent on its own snapshot and then parks on the supersession it is about to make, so
+         * neither can commit until the suite lets go and both have therefore read the register they
+         * are replacing while it was still the active one. The suite waits for the database to say
+         * both are parked rather than for a duration, so what it releases them into is a fact it
+         * checked and not a delay it hoped was long enough.
+         *
+         * <p>Nothing here is the caller's problem. A re-share that loses this race is a message the
+         * broker delivered and the pipeline completed, so the store settles it and reports nothing:
+         * a duplicate-key failure escaping to the listener would abandon a command whose register
+         * is safely recorded, and turn an invariant the database keeps into an outage.
+         */
+        @Test
+        void two_concurrent_re_shares_leave_exactly_one_active_row() {
+            final DistributionCommand shared = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshared = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final DistributionCommand resharedAgain =
+                    seededCommand(HEARING_ONE, MONDAY_RESHARED_AGAIN);
+
+            softly.assertThatCode(() -> record(shared,
+                            document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                            RecordedFlagState.ON))
+                    .as(WALKED)
+                    .doesNotThrowAnyException();
+            final List<Throwable> escaped = raceToRecord(shared, reshared, resharedAgain);
+
+            softly.assertThat(escaped)
+                    .as("a re-share that lost the race is still a register this service recorded, "
+                            + "and the command that carried it completed: the store settles the "
+                            + "collision itself rather than handing the listener a failure")
+                    .isEmpty();
+            softly.assertThat(activeUnbatched())
+                    .as("one hearing, one day, one active register - whichever recorder got there "
+                            + "first, the later results are the ones the day is rendered from")
+                    .extracting(RegisterRecord::registerTime)
+                    .containsExactly(MONDAY_RESHARED_AGAIN);
+            softly.assertThat(statusOf(resharedAgain)).contains(RECORDED);
+            softly.assertThat(statusOf(reshared))
+                    .as("and the earlier of the two is superseded rather than lost or refused")
+                    .contains(SUPERSEDED);
+            softly.assertThat(supersessionOf(reshared))
+                    .as("naming the register that replaced it, which is the only thing that leads "
+                            + "from a dropped register to the one the batch will carry")
+                    .hasValueSatisfying(pair -> {
+                        softly.assertThat(pair.supersededAt()).isNotNull();
+                        softly.assertThat(pair.supersededBy())
+                                .isEqualTo(outputIdOf(resharedAgain).orElse(null));
+                    });
+            softly.assertThat(statusOf(shared))
+                    .as("the register both of them replaced is superseded exactly once, whichever "
+                            + "of them got to it")
+                    .contains(SUPERSEDED);
         }
 
         /**
@@ -1123,6 +1206,110 @@ class RegisterStoreIT {
             final CourtRegisterDocument document, final String defendantType,
             final RecordedFlagState flagState) {
         return store.record(command, document, OU_CODE, defendantType, flagState);
+    }
+
+    /**
+     * Two re-shares of one hearing recorded at once, with the collision made to happen.
+     *
+     * <p>Both recorders are submitted and then held at a start line the suite only opens once it
+     * has the incumbent register under lock on its own connection. Each statement then reads that
+     * incumbent on its own snapshot and parks on the supersession it is about to make, so neither
+     * can commit before the other has read - which is the whole of the race, and the one thing a
+     * sequence of calls cannot produce.
+     *
+     * @param incumbent the register both re-shares replace, held while they gather behind it
+     * @param first     one re-share
+     * @param second    the other, whose register instant is the later of the two
+     * @return whatever escaped either recorder, which is expected to be nothing
+     */
+    private List<Throwable> raceToRecord(final DistributionCommand incumbent,
+            final DistributionCommand first, final DistributionCommand second) {
+        final CountDownLatch startLine = new CountDownLatch(1);
+        try (ExecutorService racers = Executors.newFixedThreadPool(RACERS)) {
+            final List<Future<RecordOutcome>> attempts = List.of(
+                    racers.submit(reshare(startLine, first)),
+                    racers.submit(reshare(startLine, second)));
+            holdTheIncumbent(incumbent, startLine);
+            return escapedFrom(attempts);
+        }
+    }
+
+    /** One re-share, waiting at the start line until the register it replaces is under lock. */
+    private Callable<RecordOutcome> reshare(
+            final CountDownLatch startLine, final DistributionCommand command) {
+        return () -> {
+            startLine.await();
+            return record(command, document(HEARING_ONE, MONDAY, command.sharedTime()), APPLICANT,
+                    RecordedFlagState.ON);
+        };
+    }
+
+    /**
+     * Holds the register both re-shares supersede until both of them are parked behind it.
+     *
+     * <p>The lock is taken before the start line opens, so no recorder can be past it, and released
+     * by this transaction committing once the database says both are waiting. A recorder that had
+     * not yet issued its statement when the lock went would read an incumbent one of the others had
+     * already committed, and the suite would be asserting the ordinary case under a concurrent
+     * name.
+     */
+    private void holdTheIncumbent(
+            final DistributionCommand incumbent, final CountDownLatch startLine) {
+        ProcessedLogTestSupport.transactions().executeWithoutResult(held -> {
+            ProcessedLogTestSupport.jdbcClient()
+                    .sql("""
+                            SELECT output_id
+                              FROM processed_output
+                             WHERE source = :source AND request_id = :requestId
+                               FOR UPDATE
+                            """)
+                    .param("source", incumbent.source())
+                    .param("requestId", incumbent.requestId())
+                    .query(UUID.class)
+                    .single();
+            startLine.countDown();
+            await().alias("both re-shares parked behind the register they supersede")
+                    .atMost(PARKED_DEADLINE)
+                    .pollInterval(PARKED_POLL)
+                    .until(() -> recordersParkedOnALock() == RACERS);
+        });
+    }
+
+    /**
+     * How many other client backends this database has parked on a lock.
+     *
+     * <p>Asked of the database rather than inferred from a sleep, and asked on the connection
+     * holding the lock, so the connection doing the asking is the one excluded.
+     */
+    private static long recordersParkedOnALock() {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT count(*)
+                          FROM pg_stat_activity
+                         WHERE datname = current_database()
+                           AND backend_type = 'client backend'
+                           AND pid <> pg_backend_pid()
+                           AND wait_event_type = 'Lock'
+                        """)
+                .query(Long.class)
+                .single();
+    }
+
+    /** What each recorder threw, unwrapped from the executor that carried it back. */
+    private static List<Throwable> escapedFrom(final List<Future<RecordOutcome>> attempts) {
+        final List<Throwable> escaped = new ArrayList<>();
+        for (final Future<RecordOutcome> attempt : attempts) {
+            try {
+                attempt.get();
+            } catch (ExecutionException failed) {
+                escaped.add(failed.getCause());
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                        "the race was interrupted before it settled", interrupted);
+            }
+        }
+        return List.copyOf(escaped);
     }
 
     /** One hearing's register for this case's court centre, as the pipeline would hand it over. */
