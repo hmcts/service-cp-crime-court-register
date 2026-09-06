@@ -180,7 +180,7 @@ public class ProcessedOutputRepository {
      * possible.
      *
      * <p>The state predicate is the one that has to be there. Two deliveries of a request can
-     * overlap — a runner whose claim was reclaimed while it worked is still running — and without
+     * overlap - a runner whose claim was reclaimed while it worked is still running - and without
      * the predicate that runner's late failure would move a register the winner had already POSTED
      * back to FAILED. The next delivery would then re-claim it and POST a second,
      * non-idempotent {@code add-court-register}: a duplicate register created by the very log that
