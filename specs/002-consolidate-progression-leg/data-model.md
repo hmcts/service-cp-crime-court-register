@@ -64,7 +64,10 @@ superseded_at IS NULL AND batch_id IS NULL` - the same predicate the sweep and t
 rolls the attempt back, re-reads the incumbent the winner left and records against that instead, up
 to three attempts; a losing re-share is therefore recorded rather than failed, and only a key that
 lost the race three times over raises a `ConcurrencyFailureException` (the store answering: the
-delivery is handed back, intake keeps running). The recording statement supersedes **before** it
+delivery is handed back, intake keeps running). V1's `processed_output_unique_request` is a
+different refusal wearing the same exception type and is told apart from it on the driver's own
+message: that one is this command delivered again, and is answered from the row it already wrote
+rather than retried as a race. The recording statement supersedes **before** it
 inserts, because the row being replaced holds the key until the update takes it out of the index.
 
 ## `register_batch`
@@ -135,8 +138,16 @@ timestamptz`, `locked_by varchar(255)`.
 
 **Per command** (unchanged from 001 except the last leg):
 `RECEIVED → … → COMPLETED{recorded | group-proceedings | no-defendants | no-subscriptions |
-no-youth-defendants} | FAILED{SCHEMA_INVALID | …}`. The output row is written RECORDED in the same
-transaction that completes the command.
+no-youth-defendants} | FAILED{SCHEMA_INVALID | …}`. The output row is written RECORDED in its own
+transaction, which commits before the command is completed: the recording and the completion are two
+statements and not one, so a delivery that stops between them leaves a register recorded against a
+request the broker will deliver again. The recording is therefore **idempotent on
+`(source, request_id)`** - each attempt reads that key inside the recording transaction and answers
+a command it has already recorded with the row it wrote, the row that recording superseded included,
+writing nothing and superseding nothing
+(`RegisterStoreIT.a_redelivered_command_is_answered_with_the_register_it_already_recorded` and
+`…a_redelivered_re_share_supersedes_nothing_a_second_time`). It is the property 001's POST path gets
+from `ON CONFLICT (source, request_id)`, kept rather than lost.
 
 **Per batch**:
 
