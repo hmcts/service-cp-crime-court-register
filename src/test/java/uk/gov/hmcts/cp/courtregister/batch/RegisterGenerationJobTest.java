@@ -204,6 +204,11 @@ class RegisterGenerationJobTest {
         theGateAnswers(new Proceed(false));
         when(store.activeUnbatched()).thenReturn(ACTIVE);
         when(assembler.assemble(any(), any(), anyBoolean())).thenReturn(assembly(assembled));
+        // The store answers with the batch as the row now stands. It carries the same identity the
+        // assembler decided - the OU code and the court house it gains are the rows' own and are
+        // read by the notify leg rather than by anything here - so a stub that hands the argument
+        // back is what a written batch looks like from this class.
+        when(store.assemble(any(), any())).thenAnswer(call -> call.getArgument(0));
     }
 
     /**

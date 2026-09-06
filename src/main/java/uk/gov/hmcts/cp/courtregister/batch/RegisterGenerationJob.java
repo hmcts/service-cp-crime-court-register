@@ -3,9 +3,12 @@ package uk.gov.hmcts.cp.courtregister.batch;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.EnumMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -98,19 +101,6 @@ public class RegisterGenerationJob {
 
     /** What the line calls the reading a run goes ahead on when nobody overrode anything. */
     private static final String FLAG_ON = "flag-on";
-
-    /**
-     * What the assembler is told about the batches already recorded for tonight's keys.
-     *
-     * <p>Nothing, and that is a gap rather than a decision: {@link RegisterStore} answers no
-     * question of the form "the batches recorded for these keys", so the supplementary link and the
-     * in-flight deferral design Q27 describes cannot yet be decided by a run. Both belong to the
-     * same store change - the one that stamps an assembled batch onto exactly its rows, which is
-     * what {@code assembled_at} and the OU code are left to - and this constant is the single line
-     * that changes when it lands. Until then the read would answer nothing anyway: no run yet
-     * stamps the batch the assembler decided, so there is no earlier batch for a key to be found.
-     */
-    private static final List<RegisterBatch> NO_EARLIER_BATCHES = List.of();
 
     private final FeatureFlagGate gate;
 
@@ -228,14 +218,34 @@ public class RegisterGenerationJob {
      */
     private RunReport generate(final GateDecision decision, final Instant startedAt) {
         final List<RegisterRecord> active = store.activeUnbatched();
+        // The history the supplementary rule is decided from (design Q27): a key with a batch still
+        // in flight is left waiting, and a key whose batches are all terminal may be followed by a
+        // supplement at the next index. A run that read nothing here would make every late re-share
+        // a day's first document all over again.
+        final List<RegisterBatch> recorded = store.batchesFor(keysOf(active));
         // True because this is the schedule asking. The operations CLI assembles the same way and
         // says false, which is progression's own flag and is written to the batch row.
-        final BatchAssembly assembly = assembler.assemble(active, NO_EARLIER_BATCHES, true);
+        final BatchAssembly assembly = assembler.assemble(active, recorded, true);
 
         final Map<BatchStatus, Integer> outcomes = request(assembly);
         metrics.oldestRecordedUnbatchedAge(oldestStillWaiting(active, assembly));
 
         return new RunReport(decision, outcomes, reconciler.reconcile(), sinceStart(startedAt));
+    }
+
+    /**
+     * The court centres and days this run holds registers for, each named once.
+     *
+     * <p>In the order the store answered, because everything downstream of the grouping is ordered
+     * by it: which batches a deadline cuts off is decided by the registers' own order.
+     *
+     * @param active the active unbatched records, as the store answered
+     * @return the keys those records fall under, first seen first
+     */
+    private static Collection<CourtCentreDay> keysOf(final List<RegisterRecord> active) {
+        return active.stream()
+                .map(RegisterRecord::key)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     /**
@@ -259,12 +269,34 @@ public class RegisterGenerationJob {
                 leftBehind++;
                 count(outcomes, BatchStatus.PENDING);
             } else {
-                count(outcomes, service.request(assembled.batch(), deadline).status());
+                count(outcomes, requested(assembled, deadline));
             }
         }
 
         metrics.pendingAfterDeadline(leftBehind);
         return outcomes;
+    }
+
+    /**
+     * Writes one batch down and then asks for its render.
+     *
+     * <p>That order, and not the other one. Everything downstream is keyed on the batch:
+     * {@code RegisterStore.batched} is what the payload is built from, the two marks move a row that
+     * has to exist, and the public event correlates back on the same identity. A run that asked for
+     * a render of a batch no row knew about would find no registers, fail every batch
+     * ASSEMBLY_FAILED, and then ask the store to fail a batch that is not there.
+     *
+     * <p>The batch handed on is the one the store wrote rather than the one the assembler decided:
+     * they carry the same identity, and the stored one also carries what only the rows knew - the
+     * OU code and the court house the day is described by.
+     *
+     * @param assembled the batch the assembler decided on, beside the registers it groups
+     * @param deadline  the run's requesting bound
+     * @return the state this batch ended the requesting leg in
+     */
+    private BatchStatus requested(final AssembledBatch assembled, final Deadline deadline) {
+        final RegisterBatch batch = store.assemble(assembled.batch(), assembled.records());
+        return service.request(batch, deadline).status();
     }
 
     /**

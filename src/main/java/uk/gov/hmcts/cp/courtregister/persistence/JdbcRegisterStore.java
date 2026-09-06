@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.ConcurrencyFailureException;
@@ -320,10 +321,14 @@ public class JdbcRegisterStore implements RegisterStore {
      * foreign key to it, and both are one statement because a batch with no rows would hold the
      * partial unique key for that court centre and day against every later run.
      *
-     * <p>The descriptive columns are selected from the first row rather than passed in, so the batch
-     * says what the rows say. {@code system_generated} is true: assembly through the port is the
-     * nightly job's, and the operations CLI assembles by writing its own row through
-     * {@link RegisterBatchRepository#insert(RegisterBatch)}, where it can say false.
+     * <p><strong>What the caller decides and what the row still reads for itself.</strong> The
+     * identity, the file name, the trigger source and the supplementary link are bound parameters,
+     * because they are the assembler's decisions and it is the only thing that has seen the key's
+     * history: a statement that minted an identity and copied a file name off the first row would
+     * be deciding all four again at the moment the rows are stamped, and would have no way at all
+     * to write {@code supplement_of} - there is nothing in a register row to derive it from. What
+     * is still selected from the first row is what only the row knows: the OU code, the court house
+     * and the register date, which {@link RegisterRecord} does not carry.
      *
      * <p>The stamp repeats the active-unbatched predicates. Between the read and the write a row can
      * have been superseded by a re-share or stamped by another run, and a batch that quietly
@@ -335,14 +340,17 @@ public class JdbcRegisterStore implements RegisterStore {
             WITH assembled AS (
                 INSERT INTO register_batch (
                     batch_id, court_centre_id, court_centre_ou_code, court_house, register_date,
-                    file_name, status, system_generated, assembled_at, attempts)
+                    file_name, status, system_generated, assembled_at, attempts,
+                    supplement_of, supplement_index)
                 SELECT :batchId, first_row.court_centre_id, first_row.court_centre_ou_code,
-                       first_row.court_house, first_row.register_date, first_row.file_name,
-                       'PENDING', true, now(), 0
+                       first_row.court_house, first_row.register_date, :fileName,
+                       'PENDING', :systemGenerated, now(), 0,
+                       :supplementOf, :supplementIndex
                   FROM processed_output first_row
                  WHERE first_row.output_id = :firstOutputId
                 RETURNING batch_id, court_centre_id, court_centre_ou_code, court_house,
-                          register_date, file_name, system_generated, assembled_at
+                          register_date, file_name, system_generated, assembled_at,
+                          supplement_of, supplement_index
             ), stamped AS (
                 UPDATE processed_output waiting
                    SET batch_id = assembled.batch_id, updated_at = now()
@@ -356,8 +364,32 @@ public class JdbcRegisterStore implements RegisterStore {
             SELECT assembled.batch_id, assembled.court_centre_id, assembled.court_centre_ou_code,
                    assembled.court_house, assembled.register_date, assembled.file_name,
                    assembled.system_generated, assembled.assembled_at,
+                   assembled.supplement_of, assembled.supplement_index,
                    (SELECT count(*) FROM stamped) AS stamped_rows
               FROM assembled
+            """;
+
+    /**
+     * Statement 4a - every batch already recorded for the keys a run holds registers for.
+     *
+     * <p>What the supplementary rule is decided from (design Q27). Whatever state each batch
+     * reached, because both halves of the rule need the whole history: a key with a batch still
+     * PENDING, GENERATING or GENERATED is left waiting, and a key whose batches are all terminal may
+     * be followed by a supplement at the next index up.
+     *
+     * <p>Asked by the two columns the key is, rather than by a composite the schema does not hold,
+     * so the read is the same predicate the live-key index is built on. A run with no active
+     * registers asks nothing at all, which is why the caller answers an empty list without issuing
+     * this.
+     */
+    private static final String BATCHES_FOR_KEYS = """
+            SELECT batch_id, court_centre_id, court_centre_ou_code, court_house, register_date,
+                   file_name, payload_file_id, document_file_id, status, failure_reason,
+                   sdg_reason, system_generated, completed_by, assembled_at, requested_at,
+                   generated_at, notified_at, failed_at, attempts, supplement_of, supplement_index
+              FROM register_batch
+             WHERE (court_centre_id, register_date) IN (:keys)
+             ORDER BY register_date, supplement_index, batch_id
             """;
 
     /** Statement 5 - the status a transition is asked about and then fenced on. */
@@ -875,12 +907,6 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * {@inheritDoc}
      *
-     * <p><strong>Seam.</strong> The statement below still mints an identity of its own and still
-     * copies the file name off the first row, so the batch handed in decides nothing yet. The
-     * supplementary link and the trigger source are the two facts that reach no column at all, which
-     * is what {@code RegisterStoreIT.an_assembled_batch_is_written_as_the_assembler_decided_it}
-     * fails on.
-     *
      * @throws IllegalArgumentException if the batch is empty or holds a record from another key
      * @throws IllegalStateException    if a record stopped being available between the read and the
      *                                  stamp, so the assembled batch would not be the one asked for
@@ -901,18 +927,34 @@ public class JdbcRegisterStore implements RegisterStore {
                             + " belongs to " + foreign.key() + ", not to " + key);
                 });
         return StoreOutage.translating("assemble a batch",
-                () -> transactions.execute(transaction -> stamp(outputIds)).batch());
+                () -> transactions.execute(transaction -> stamp(batch, outputIds)).batch());
     }
 
     /**
      * {@inheritDoc}
      *
-     * <p><strong>Seam.</strong> No statement yet, and nothing calls it yet either.
+     * <p>A run with nothing active asks nothing at all: an empty {@code IN} list is a statement
+     * Postgres refuses rather than answers, and there is no history to read for keys nobody holds a
+     * register for.
+     *
+     * <p>The keys go down as row values, which is the same pair {@code idx_register_batch_live_key}
+     * is built on. A read that asked for the court centres and the days separately would answer a
+     * cross product - another day's finished batch offered as this day's history - and the
+     * supplementary index would be counted off a document for a different set of children.
      */
     @Override
     public List<RegisterBatch> batchesFor(final Collection<CourtCentreDay> keys) {
-        throw new UnsupportedOperationException(
-                "the batches recorded for a run's keys are not read yet: " + keys.size() + " keys");
+        if (keys.isEmpty()) {
+            return List.of();
+        }
+        final List<Object[]> pairs = keys.stream()
+                .map(key -> new Object[] {key.courtCentreId(), key.registerDate()})
+                .toList();
+        return StoreOutage.translating("read the batches recorded for a run's keys",
+                () -> jdbcClient.sql(BATCHES_FOR_KEYS)
+                        .param("keys", pairs)
+                        .query((rs, rowNumber) -> recordedBatch(rs))
+                        .list());
     }
 
     /**
@@ -923,9 +965,13 @@ public class JdbcRegisterStore implements RegisterStore {
      * on a batch that is already committed, which is the state this method exists to make
      * impossible.
      */
-    private Assembled stamp(final List<UUID> outputIds) {
+    private Assembled stamp(final RegisterBatch batch, final List<UUID> outputIds) {
         final Assembled assembled = jdbcClient.sql(ASSEMBLE_BATCH)
-                .param(BATCH_ID, UUID.randomUUID())
+                .param(BATCH_ID, batch.batchId())
+                .param("fileName", batch.fileName())
+                .param("systemGenerated", batch.systemGenerated())
+                .param("supplementOf", batch.supplementOf())
+                .param("supplementIndex", batch.supplementIndex())
                 .param("firstOutputId", outputIds.getFirst())
                 .param(OUTPUT_IDS, outputIds)
                 .query((rs, rowNumber) -> new Assembled(assembledBatch(rs), rs.getLong("stamped_rows")))
@@ -1155,8 +1201,47 @@ public class JdbcRegisterStore implements RegisterStore {
                 null,
                 null,
                 0,
-                null,
-                0);
+                rs.getObject("supplement_of", UUID.class),
+                rs.getInt("supplement_index"));
+    }
+
+    /**
+     * A whole batch row, for the history a run reads before it assembles.
+     *
+     * <p>Every column, because the supplementary rule reads the status and the index and a caller
+     * that was handed a partial row would have to know which parts were real. The two enumerated
+     * columns are read through their own names, so a value the vocabulary does not hold is refused
+     * here rather than carried into a decision as {@code null}.
+     */
+    private static RegisterBatch recordedBatch(final ResultSet rs) throws SQLException {
+        return new RegisterBatch(
+                rs.getObject("batch_id", UUID.class),
+                rs.getObject("court_centre_id", UUID.class),
+                rs.getString("court_centre_ou_code"),
+                rs.getString("court_house"),
+                rs.getObject("register_date", LocalDate.class),
+                rs.getString("file_name"),
+                rs.getObject("payload_file_id", UUID.class),
+                rs.getObject("document_file_id", UUID.class),
+                BatchStatus.valueOf(rs.getString("status")),
+                enumOf(rs.getString("failure_reason"), BatchFailureReason::valueOf),
+                rs.getString("sdg_reason"),
+                rs.getBoolean("system_generated"),
+                enumOf(rs.getString("completed_by"), CompletedBy::valueOf),
+                instant(rs.getObject("assembled_at", OffsetDateTime.class)),
+                instant(rs.getObject("requested_at", OffsetDateTime.class)),
+                instant(rs.getObject("generated_at", OffsetDateTime.class)),
+                instant(rs.getObject("notified_at", OffsetDateTime.class)),
+                instant(rs.getObject("failed_at", OffsetDateTime.class)),
+                rs.getInt("attempts"),
+                rs.getObject("supplement_of", UUID.class),
+                rs.getInt("supplement_index"));
+    }
+
+    /** A bounded column read back as its constant, and nothing where the column is null. */
+    private static <E extends Enum<E>> E enumOf(
+            final String value, final Function<String, E> constant) {
+        return value == null ? null : constant.apply(value);
     }
 
     /** The batch the statement wrote, beside the count of rows it managed to stamp. */
