@@ -91,9 +91,9 @@ public class GenerationMetrics {
     /**
      * The {@code reason} label of an outcome naming a batch this service never recorded.
      *
-     * <p>Another consumer's document that carried this service's own source, or one from a batch
-     * that predates this store. Zero is the expected reading, and anything else is a correlation
-     * lost between the render request and the event.
+     * <p>Another consumer's document that carried this service's own source, one from a batch that
+     * predates this store, or one of ours that named no batch at all. Zero is the expected reading,
+     * and anything else is a correlation lost between the render request and the event.
      */
     public static final String UNKNOWN_CORRELATION = "unknown-correlation";
 
@@ -210,7 +210,12 @@ public class GenerationMetrics {
     }
 
     /**
-     * Counts an outcome for a batch identity this service has no record of.
+     * Counts an outcome this service cannot attribute to a batch.
+     *
+     * <p>The sink's reading is an outcome for a batch identity this service has no record of; the
+     * listener's is an event of ours that named no batch at all, which is the same fault one step
+     * earlier - a correlation lost between the render request and the topic - and is counted here
+     * rather than dropped in silence.
      *
      * <p>The same counter the foreign source is counted on, under its own bounded reason, because
      * the question they answer together is the one a night's outcomes going nowhere is read by:

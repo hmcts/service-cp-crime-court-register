@@ -31,7 +31,10 @@ import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
  *       message is acknowledged and counted, never left unsettled: a message this service has no
  *       business with is not a message the broker should redeliver;</li>
  *   <li>{@code sourceCorrelationId}, which is the batch id and the only thing that maps an outcome
- *       back to the rows the document was built from.</li>
+ *       back to the rows the document was built from. An event of ours that names none is
+ *       acknowledged and counted under {@code unknown-correlation}, the same reason the sink counts
+ *       a correlation this store holds no batch for: both are announcements that reached this
+ *       subscription and were applied to nothing.</li>
  * </ul>
  *
  * <p>What it does with a message it recognises is call
@@ -128,7 +131,8 @@ public class DocumentEventListener {
      * Holds the outcome port, the instruments the routing uses and the observer of every delivery.
      *
      * @param sink              where a recognised outcome is applied, naming EVENT
-     * @param metrics           where an event this service did not ask for is counted
+     * @param metrics           where an event that reaches this subscription and is applied to
+     *                          nothing is counted, under the reason it was not applied
      * @param deliveryObserver  told that the broker served this subscription, before any filter
      */
     public DocumentEventListener(final DocumentOutcomeSink sink, final GenerationMetrics metrics,
@@ -214,6 +218,11 @@ public class DocumentEventListener {
         final UUID correlationId = uuid(payload, SOURCE_CORRELATION_ID);
         final UUID payloadFileId = uuid(payload, PAYLOAD_FILE_SERVICE_ID);
         if (correlationId == null || payloadFileId == null) {
+            // Counted before it is dropped. This one carries our own source, so it is not the
+            // foreign-source reading; it is an announcement this service asked for that names
+            // nothing to apply itself to, and a drop with no reading behind it is an outcome that
+            // vanished between the renderer and the register.
+            metrics.unknownCorrelationIgnored();
             LOG.warn("A {} named no batch to apply it to, so it is acknowledged and dropped: "
                     + "inventing one from the payload would be this service guessing at somebody "
                     + "else's document.", eventName);
