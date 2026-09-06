@@ -87,6 +87,9 @@ class RegisterStoreIT {
             UUID.fromString("c41e9a37-05b2-4f6d-9e18-7a3b2c5d8064");
     private static final UUID HEARING_FOUR = UUID.fromString("9d2c7b48-3e15-4a70-b6c9-0f8e1d4a2537");
 
+    private static final UUID PAYLOAD_FILE_ID =
+            UUID.fromString("5e08b6d1-92a7-4c33-8f10-6b4d3e79a281");
+
     private static final UUID DOCUMENT_FILE_ID =
             UUID.fromString("3a7f1c92-6d84-4b05-9e73-1c2b8a4e07d5");
 
@@ -375,6 +378,11 @@ class RegisterStoreIT {
      * Tuesday's rows too, Tuesday's batch is never assembled, and nobody is told. The store's port
      * takes a batch identity precisely so the widening cannot come back without changing the
      * signature, and this is the test that would fail if it did.
+     *
+     * <p>The Monday batch is requested before it is generated because that is the only way a batch
+     * reaches GENERATED: {@code BatchStatus.canTransitionTo} refuses PENDING -&gt; GENERATED, since a
+     * document cannot exist before a render was asked for. The request writes {@code register_batch}
+     * and nothing else, so it moves no row and the counts below are the counts P3 is about.
      */
     @Nested
     @DisplayName("marking a batch generated")
@@ -400,6 +408,7 @@ class RegisterStoreIT {
                 final RegisterBatch monday = store.assemble(
                         new CourtCentreDay(courtCentre, MONDAY), recordsOn(waiting, MONDAY));
                 store.assemble(new CourtCentreDay(courtCentre, TUESDAY), recordsOn(waiting, TUESDAY));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
                 store.markGenerated(monday.batchId(), DOCUMENT_FILE_ID, GENERATED_AT);
             }).as(PENDING).doesNotThrowAnyException();
 
