@@ -190,10 +190,12 @@ class RecordEndToEndIT {
 
         final Recorded recorded = requireRecorded(requestId);
         assertThat(recorded.flagState())
-                .as("no reading had come back when this command arrived, and UNKNOWN is what that "
-                        + "means rather than a placeholder: recording never waits on the flag, and "
-                        + "a row not recorded under a known ON is one the nightly sweep leaves "
-                        + "alone (research §12)")
+                .as("this stack records and does not generate, so no flag reader is contributed and "
+                        + "nothing has been read about the one lever: UNKNOWN is what that means "
+                        + "rather than a placeholder, and a row not recorded under a known ON is "
+                        + "one the nightly sweep leaves alone (research §12). A pod that generates "
+                        + "labels its rows ON or OFF, which DistributionPipelineTest and "
+                        + "MessageListenerSettlementTest pin at the two seams the label crosses")
                 .isEqualTo(RecordedFlagState.UNKNOWN.name());
         assertThat(recorded.supersededAt())
                 .as("nothing has replaced it, so it is the active register for its hearing and day")

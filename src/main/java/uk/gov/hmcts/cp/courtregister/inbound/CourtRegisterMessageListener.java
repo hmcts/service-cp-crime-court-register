@@ -25,6 +25,7 @@ import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
+import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
 
 /**
@@ -88,7 +89,18 @@ public class CourtRegisterMessageListener {
     private final int maxDeliveryCount;
 
     /**
-     * Creates the listener; the settlement decision stays here and nowhere else.
+     * What an arriving command is labelled with, or {@code null} where this pod reads no flag.
+     *
+     * <p>Held here rather than inside the pipeline because this is where a delivery begins: the
+     * label belongs to the command as it arrives, and the recording stage records what it was
+     * handed. A pod with no flag reader - {@code courtregister.generation.enabled} false, which is
+     * every record-only deployment and every local run - has nothing to read and labels every
+     * command {@link RecordedFlagState#UNKNOWN}, which is exactly what "nobody read it" means.
+     */
+    private final RecordedFlagStateSource flagStates;
+
+    /**
+     * Creates the listener for a pod that reads no cutover flag.
      *
      * @param parser           reads the body into the validated command
      * @param pipeline         the use case every valid request is run through
@@ -104,12 +116,39 @@ public class CourtRegisterMessageListener {
             final ServiceBusHealthIndicator health,
             final StoreGate storeGate,
             final int maxDeliveryCount) {
+        this(parser, pipeline, metrics, health, storeGate, maxDeliveryCount, null);
+    }
+
+    /**
+     * Creates the listener; the settlement decision stays here and nowhere else.
+     *
+     * @param parser           reads the body into the validated command
+     * @param pipeline         the use case every valid request is run through
+     * @param metrics          the instrument surface settlements are counted on
+     * @param health           where a refused or accepted settlement is reported as transport news
+     * @param storeGate        the processed-log precondition every delivery passes through
+     * @param maxDeliveryCount the queue's own delivery budget, mirrored in configuration
+     * @param flagStates       what an arriving command is labelled with, or {@code null} where this
+     *                         deployment has no flag reader to label it from
+     */
+    // Five collaborators, the queue's delivery budget and the label an arriving command carries.
+    // The count is the transport's dependency list rather than a smell: each is asked exactly one
+    // question, and the label is asked before the run rather than during it.
+    public CourtRegisterMessageListener(
+            final DistributionCommandParser parser,
+            final DistributionPipeline pipeline,
+            final ProcessingMetrics metrics,
+            final ServiceBusHealthIndicator health,
+            final StoreGate storeGate,
+            final int maxDeliveryCount,
+            final RecordedFlagStateSource flagStates) {
         this.parser = parser;
         this.pipeline = pipeline;
         this.metrics = metrics;
         this.health = health;
         this.storeGate = storeGate;
         this.maxDeliveryCount = maxDeliveryCount;
+        this.flagStates = flagStates;
     }
 
     /**
@@ -333,7 +372,22 @@ public class CourtRegisterMessageListener {
         LOG.info("Delivery received. source={} eventType={} deliveryCount={} finalPermittedDelivery={}",
                 command.source(), command.eventType(), message.getDeliveryCount(),
                 isFinalPermittedDelivery(message));
-        return pipeline.process(command, identityOf(message));
+        return pipeline.process(command, identityOf(message), flagState());
+    }
+
+    /**
+     * The cutover flag as it stood for this delivery, asked without waiting for it.
+     *
+     * <p>Answered from the last reading and never from a read on this thread: an App Configuration
+     * outage must not stall a queue of hearings behind the label their registers carry (research
+     * §12). A pod with no reader answers {@link RecordedFlagState#UNKNOWN}, which keeps the rows it
+     * records out of automatic batching until somebody looks at them - the safe direction, because
+     * a row wrongly labelled ON is a second copy of a child's register.
+     *
+     * @return what this delivery's register is labelled with
+     */
+    private RecordedFlagState flagState() {
+        return flagStates == null ? RecordedFlagState.UNKNOWN : flagStates.current();
     }
 
     /**

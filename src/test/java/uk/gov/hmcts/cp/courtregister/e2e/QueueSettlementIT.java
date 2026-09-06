@@ -32,6 +32,7 @@ import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
+import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.inbound.CourtRegisterMessageListener;
 import uk.gov.hmcts.cp.courtregister.inbound.DistributionCommandParser;
 import uk.gov.hmcts.cp.courtregister.support.QueueHealthTestSupport;
@@ -115,7 +116,8 @@ class QueueSettlementIT {
     }
 
     private void consumeWith(final GuardDecision decision) {
-        when(pipeline.process(any(DistributionCommand.class), any(DeliveryIdentity.class)))
+        when(pipeline.process(any(DistributionCommand.class), any(DeliveryIdentity.class),
+                any(RecordedFlagState.class)))
                 .thenReturn(decision);
         processor = clients().processor()
                 .queueName(ServiceBusEmulatorTestSupport.QUEUE_NAME)

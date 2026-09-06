@@ -9,6 +9,10 @@ import com.azure.messaging.servicebus.ServiceBusProcessorClient;
 import com.azure.messaging.servicebus.ServiceBusReceivedMessageContext;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import org.flywaydb.core.Flyway;
 import org.slf4j.Logger;
@@ -18,6 +22,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import uk.gov.hmcts.cp.courtregister.application.DistributionPipeline;
+import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.config.CourtRegisterProperties;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.config.ServiceBusHealthIndicator;
@@ -86,7 +91,41 @@ public class ServiceBusConsumerConfig {
     }
 
     /**
-     * The inbound adapter: parse, dispatch to the pipeline, settle exactly once.
+     * Where a flag refresh is run, so that no delivery thread is ever inside an App Configuration
+     * read.
+     *
+     * <p>One thread and room for one waiting refresh, because that is all
+     * {@link RecordedFlagStateSource} can ever ask for: it holds one refresh in flight at a time and
+     * one reading per window. The queue is bounded and the rejection policy is the default refusal
+     * rather than caller-runs, since caller-runs is exactly the delivery thread doing the read this
+     * whole arrangement exists to keep it out of; a refusal is reported and the next arrival asks
+     * again. The thread is a daemon and is created when the first refresh is handed over, so a pod
+     * that reads no flag never starts one.
+     *
+     * @return the executor
+     */
+    @Bean
+    public ExecutorService recordedFlagStateRefreshes() {
+        return new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1),
+                refresh -> {
+                    final Thread thread = new Thread(refresh, "courtregister-flag-refresh");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+    }
+
+    /**
+     * The inbound adapter: parse, label, dispatch to the pipeline, settle exactly once.
+     *
+     * <p><strong>What labels an arriving command is decided here, and it depends on whether this
+     * deployment reads the flag at all.</strong> {@code LiveFeatureFlagConfig} contributes a reader
+     * only where {@code courtregister.generation.enabled} is true, so a pod that records but does
+     * not generate - the intake-only shape, and every local run - has no reader to label from and
+     * labels every command {@code UNKNOWN}. That is the honest answer rather than a gap: the flag
+     * says which implementation is generating, a pod that does not generate has read nothing about
+     * it, and {@code UNKNOWN} keeps those rows out of automatic batching until a person decides
+     * what became of them ({@code list-batches --recorded-while-off}, research §12). Where a reader
+     * is present the source is built over it, and the rows say ON or OFF.
      *
      * @param parser     reads a body into the validated command
      * @param pipeline   the use case every valid request is run through
@@ -94,6 +133,9 @@ public class ServiceBusConsumerConfig {
      * @param health     where a refused or accepted settlement is reported as transport news
      * @param lifecycle  the store gate, resolved late — see {@link DeferredStoreGate}
      * @param properties the typed settings, for the queue's delivery budget
+     * @param flagReader the reader of the one lever, where this deployment has one
+     * @param refreshes  where a flag refresh is run, which is never a delivery thread
+     * @param clock      what the age of a flag reading is measured against
      * @return the listener
      */
     @Bean
@@ -103,13 +145,30 @@ public class ServiceBusConsumerConfig {
             final ProcessingMetrics metrics,
             final ServiceBusHealthIndicator health,
             final ObjectProvider<ConsumerLifecycleController> lifecycle,
-            final CourtRegisterProperties properties) {
+            final CourtRegisterProperties properties,
+            final ObjectProvider<FeatureFlagReader> flagReader,
+            final ExecutorService refreshes,
+            final Clock clock) {
         // The delivery budget is the queue's, mirrored in configuration: the listener recognises the
         // final permitted delivery from it, so the two are changed together or this service is wrong
         // about the broker.
         return new CourtRegisterMessageListener(
                 parser, pipeline, metrics, health, new DeferredStoreGate(lifecycle::getObject),
-                properties.servicebus().maxDeliveryCount());
+                properties.servicebus().maxDeliveryCount(),
+                flagStates(flagReader.getIfAvailable(), refreshes, clock));
+    }
+
+    /**
+     * The label source, where there is a reader to build it over.
+     *
+     * @param reader    the reader of the one lever, or {@code null} where this deployment has none
+     * @param refreshes where a read is run
+     * @param clock     what the age of a reading is measured against
+     * @return the source, or {@code null} where every command is labelled UNKNOWN
+     */
+    private static RecordedFlagStateSource flagStates(
+            final FeatureFlagReader reader, final ExecutorService refreshes, final Clock clock) {
+        return reader == null ? null : new RecordedFlagStateSource(reader, refreshes, clock);
     }
 
     /**

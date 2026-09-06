@@ -39,6 +39,7 @@ import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
+import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.support.QueueHealthTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.StoreGateTestSupport;
@@ -132,8 +133,19 @@ class MessageListenerSettlementTest {
     }
 
     private void pipelineDecides(final GuardDecision decision) {
-        when(pipeline.process(any(DistributionCommand.class), any(DeliveryIdentity.class)))
+        when(pipeline.process(any(DistributionCommand.class), any(DeliveryIdentity.class),
+                any(RecordedFlagState.class)))
                 .thenReturn(decision);
+    }
+
+    /**
+     * The same listener over a source of flag readings — for the cases whose subject is the label.
+     */
+    private CourtRegisterMessageListener listenerLabelling(
+            final RecordedFlagStateSource flagStates) {
+        return new CourtRegisterMessageListener(
+                parser, pipeline, metrics, QueueHealthTestSupport.unwatched(),
+                StoreGateTestSupport.open(), MAX_DELIVERY_COUNT, flagStates);
     }
 
     /**
@@ -374,7 +386,8 @@ class MessageListenerSettlementTest {
         @Test
         void should_hand_the_delivery_back_rather_than_acknowledge_work_that_did_not_happen() {
             final ServiceBusReceivedMessageContext context = validDelivery();
-            when(pipeline.process(any(DistributionCommand.class), any(DeliveryIdentity.class)))
+            when(pipeline.process(any(DistributionCommand.class), any(DeliveryIdentity.class),
+                any(RecordedFlagState.class)))
                     .thenThrow(new IllegalStateException("the store went away mid-run"));
 
             listener.onMessage(context);
@@ -483,7 +496,8 @@ class MessageListenerSettlementTest {
 
             final ArgumentCaptor<DeliveryIdentity> identity =
                     ArgumentCaptor.forClass(DeliveryIdentity.class);
-            verify(pipeline).process(any(DistributionCommand.class), identity.capture());
+            verify(pipeline).process(any(DistributionCommand.class), identity.capture(),
+                    any(RecordedFlagState.class));
             assertThat(identity.getValue().messageId()).isEqualTo(MESSAGE_ID);
             assertThat(identity.getValue().claimOwner()).contains(LOCK_TOKEN);
         }
@@ -497,9 +511,47 @@ class MessageListenerSettlementTest {
 
             final ArgumentCaptor<DistributionCommand> parsed =
                     ArgumentCaptor.forClass(DistributionCommand.class);
-            verify(pipeline).process(parsed.capture(), any(DeliveryIdentity.class));
+            verify(pipeline).process(parsed.capture(), any(DeliveryIdentity.class),
+                    any(RecordedFlagState.class));
             assertThat(parsed.getValue().requestId()).isEqualTo(requestId);
             assertThat(parsed.getValue().hearingId()).isEqualTo(hearingId);
+        }
+
+        @Test
+        void should_carry_the_flag_state_the_intake_side_last_read() {
+            // Research §12: the label is attached where the delivery begins and handed down with
+            // the command, so the register recorded from it says which implementation was meant to
+            // be generating when it arrived. The source answers from its last reading and is never
+            // waited on, which RecordedFlagStateTest holds it to.
+            final ServiceBusReceivedMessageContext context = validDelivery();
+            final RecordedFlagStateSource flagStates = mock(RecordedFlagStateSource.class);
+            when(flagStates.current()).thenReturn(RecordedFlagState.OFF);
+            pipelineDecides(new GuardDecision.Complete(ReasonCode.RUN_COMPLETED));
+
+            listenerLabelling(flagStates).onMessage(context);
+
+            final ArgumentCaptor<RecordedFlagState> attached =
+                    ArgumentCaptor.forClass(RecordedFlagState.class);
+            verify(pipeline).process(any(DistributionCommand.class), any(DeliveryIdentity.class),
+                    attached.capture());
+            assertThat(attached.getValue()).isEqualTo(RecordedFlagState.OFF);
+        }
+
+        @Test
+        void should_label_a_delivery_unknown_where_this_pod_reads_no_flag() {
+            // The record-only shape: no nightly job, so no flag reader, so nothing has been read
+            // about the one lever. UNKNOWN keeps the rows out of automatic batching, which is the
+            // safe direction - a row wrongly labelled ON is a second copy of a child's register.
+            final ServiceBusReceivedMessageContext context = validDelivery();
+            pipelineDecides(new GuardDecision.Complete(ReasonCode.RUN_COMPLETED));
+
+            listener.onMessage(context);
+
+            final ArgumentCaptor<RecordedFlagState> attached =
+                    ArgumentCaptor.forClass(RecordedFlagState.class);
+            verify(pipeline).process(any(DistributionCommand.class), any(DeliveryIdentity.class),
+                    attached.capture());
+            assertThat(attached.getValue()).isEqualTo(RecordedFlagState.UNKNOWN);
         }
     }
 }

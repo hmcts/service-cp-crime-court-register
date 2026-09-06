@@ -294,7 +294,8 @@ public class DistributionPipeline {
         final GuardDecision admission = guard.admit(command, delivery);
         final GuardDecision decision;
         if (admission instanceof GuardDecision.Run admitted) {
-            decision = runUnder(command, admitted.claim(), delivery.finalPermittedDelivery());
+            decision = runUnder(command, admitted.claim(), delivery.finalPermittedDelivery(),
+                    flagState);
         } else {
             // Already completed, contested, or a collision: the guard has decided, and a run would
             // either duplicate work or overwrite a record that belongs to a different request.
@@ -331,10 +332,11 @@ public class DistributionPipeline {
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private GuardDecision runUnder(
-            final DistributionCommand command, final RunClaim claim, final boolean lastChance) {
+            final DistributionCommand command, final RunClaim claim, final boolean lastChance,
+            final RecordedFlagState flagState) {
         GuardDecision outcome;
         try {
-            outcome = runToOutcome(command, claim, lastChance);
+            outcome = runToOutcome(command, claim, lastChance, flagState);
         } catch (PayloadUnavailableException | ReferenceDataUnavailableException
                 | TransformationFailedException | SubmissionFailedException classified) {
             outcome = failed(claim, classified.classification(), classified.reason(), lastChance);
@@ -390,7 +392,8 @@ public class DistributionPipeline {
     }
 
     private GuardDecision runToOutcome(
-            final DistributionCommand command, final RunClaim claim, final boolean lastChance) {
+            final DistributionCommand command, final RunClaim claim, final boolean lastChance,
+            final RecordedFlagState flagState) {
         final RunBudget budget =
                 new RunBudget(clock.instant().plus(processingDeadline), lastChance);
 
@@ -406,7 +409,7 @@ public class DistributionPipeline {
         } else if (transformer == null) {
             outcome = completed(claim, CompletionReason.NO_DEFENDANTS);
         } else {
-            outcome = distribute(command, payload, claim, budget);
+            outcome = distribute(command, payload, claim, budget, flagState);
         }
         return outcome;
     }
@@ -473,16 +476,18 @@ public class DistributionPipeline {
      * stages derive rather than edit (constitution Principle IV).
      *
      * @param command the validated request
-     * @param payload the hearing payload the fetch returned
-     * @param claim   the claim this run holds
-     * @param budget  what is left of the run's time
+     * @param payload   the hearing payload the fetch returned
+     * @param claim     the claim this run holds
+     * @param budget    what is left of the run's time
+     * @param flagState the cutover flag as the intake side last read it
      * @return the settlement the outcome calls for
      */
     private GuardDecision distribute(
             final DistributionCommand command,
             final JsonNode payload,
             final RunClaim claim,
-            final RunBudget budget) {
+            final RunBudget budget,
+            final RecordedFlagState flagState) {
 
         final GuardDecision outcome;
         if (groupProceedings.suppresses(command, hearingOf(payload))) {
@@ -493,7 +498,8 @@ public class DistributionPipeline {
                     subscriptionsSource.subscriptionsOn(registerDay, CallerIdentity.of(command));
             outcome = spent(budget)
                     ? overran(claim, budget)
-                    : transformed(command, payload, subscriptions, registerDay, claim, budget);
+                    : transformed(command, payload, subscriptions, registerDay, claim, budget,
+                            flagState);
         }
         return outcome;
     }
@@ -512,6 +518,7 @@ public class DistributionPipeline {
      *                      records (C12)
      * @param claim         the claim this run holds
      * @param budget        what is left of the run's time
+     * @param flagState     the cutover flag as the intake side last read it
      * @return the settlement the outcome calls for
      */
     private GuardDecision transformed(
@@ -520,7 +527,8 @@ public class DistributionPipeline {
             final JsonNode subscriptions,
             final LocalDate registerDay,
             final RunClaim claim,
-            final RunBudget budget) {
+            final RunBudget budget,
+            final RecordedFlagState flagState) {
 
         final RunAnomalies anomalies = new RunAnomalies();
         final TransformationResult result =
@@ -535,7 +543,8 @@ public class DistributionPipeline {
                         : completed(claim, nothing.reason().completion());
             }
             case TransformationResult.Register register ->
-                output(command, register, anomalies.counts(), registerDay, claim, budget);
+                output(command, register, anomalies.counts(), registerDay, claim, budget,
+                        flagState);
         };
     }
 
@@ -558,6 +567,7 @@ public class DistributionPipeline {
      * @param registerDay the day the register covers, as its recipients were read for it (C12)
      * @param claim       the claim this run holds
      * @param budget      what is left of the run's time
+     * @param flagState   the cutover flag as the intake side last read it
      * @return the settlement the outcome calls for
      */
     private GuardDecision output(
@@ -566,10 +576,11 @@ public class DistributionPipeline {
             final Map<TransformationAnomaly, Integer> anomalies,
             final LocalDate registerDay,
             final RunClaim claim,
-            final RunBudget budget) {
+            final RunBudget budget,
+            final RecordedFlagState flagState) {
 
         return switch (outputMode) {
-            case RECORD -> record(command, register, claim, budget);
+            case RECORD -> record(command, register, claim, budget, flagState);
             case PROGRESSION_POST ->
                 submit(command, register, anomalies, registerDay, claim, budget);
         };
@@ -592,13 +603,15 @@ public class DistributionPipeline {
      * application (FR-002); and the flag state is what the intake side last learned about the one
      * lever.
      *
-     * <p><strong>The flag state a run with no reading behind it records is {@code UNKNOWN}</strong>,
-     * which is a statement rather than a placeholder. Recording never waits on a flag read - a
-     * register that has been built is worth more than the label it carries, and an App Configuration
-     * outage must not stall the queue behind one (research §12) - so what is recorded is the state
-     * this run has, and a row written without a reading says exactly that. {@code UNKNOWN} and
-     * {@code OFF} are both kept out of automatic batching, so the label costs a register nothing
-     * except an operator's attention.
+     * <p><strong>The flag state is the delivery's and this stage records it unchanged.</strong> The
+     * intake side labels an arriving command from the last reading of the one lever, taken with the
+     * same reader the nightly job uses, and hands the answer down with the command (research §12);
+     * the pipeline reads no flag of its own, because a recording that waited on App Configuration
+     * would stall the queue behind a label and a register that has been built is worth more than the
+     * label it carries. A run with no reading behind it therefore records {@code UNKNOWN}, which is a
+     * statement rather than a placeholder - it is what a pod that reads no flag at all has to say,
+     * and {@code UNKNOWN} and {@code OFF} are both kept out of automatic batching, so the label costs
+     * a register nothing except an operator's attention.
      *
      * <p><strong>The budget is read once more before the write</strong>, for the reason the send
      * reads it: past the deadline the claim behind this run may already have been reclaimed, and a
@@ -606,25 +619,26 @@ public class DistributionPipeline {
      * and this one will only supersede. The completion that follows a write that <em>did</em> happen
      * is not withheld for the budget, exactly as it is not on the submission arm.
      *
-     * @param command  the validated request
-     * @param register the register the transformation produced
-     * @param claim    the claim this run holds
-     * @param budget   what is left of the run's time
+     * @param command   the validated request
+     * @param register  the register the transformation produced
+     * @param claim     the claim this run holds
+     * @param budget    what is left of the run's time
+     * @param flagState the cutover flag as the intake side last read it, recorded as the row's own
      * @return the settlement the outcome calls for
      */
     private GuardDecision record(
             final DistributionCommand command,
             final TransformationResult.Register register,
             final RunClaim claim,
-            final RunBudget budget) {
+            final RunBudget budget,
+            final RecordedFlagState flagState) {
 
         final GuardDecision outcome;
         if (spent(budget)) {
             outcome = overran(claim, budget);
         } else {
             final RecordOutcome recording = registerStore.record(command, register.document(),
-                    register.courtCentreOuCode(), register.document().defendantType(),
-                    RecordedFlagState.UNKNOWN);
+                    register.courtCentreOuCode(), register.document().defendantType(), flagState);
             // The identities of the two rows and nothing from inside either of them: a register is a
             // document about children (Principle VII). `superseded` is the fact support needs when a
             // hearing is re-shared - the register that will not be sent is the one this line names.

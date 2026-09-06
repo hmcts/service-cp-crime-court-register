@@ -42,6 +42,7 @@ import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
+import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 import uk.gov.hmcts.cp.courtregister.support.QueueHealthTestSupport;
@@ -157,7 +158,8 @@ class SettlementFailureEdgeTest {
     }
 
     private void pipelineDecides(final GuardDecision decision) {
-        when(pipeline.process(any(DistributionCommand.class), any(DeliveryIdentity.class)))
+        when(pipeline.process(any(DistributionCommand.class), any(DeliveryIdentity.class),
+                any(RecordedFlagState.class)))
                 .thenReturn(decision);
     }
 
