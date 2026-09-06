@@ -45,9 +45,10 @@ Two, and they are recorded here rather than argued for in a commit body:
   refusal was itself an uncatalogued deviation the differential audit refuses without a register
   row, and the row could not be written from that change. The pair it reverted to was already
   characterised rather than driven, so there was no red run left to record for it. The behaviour is
-  now owned by **row P10 of `doc/DEFECT-FIXES.md`** and is pinned red-first by the third shape's
-  case, `DefendantTypeResolverTest.a_respondent_without_a_master_defendant_is_answered_applicant`,
-  written against the P10 row rather than against the resolver. History is left as it stands:
+  now owned by **row P10 of `doc/DEFECT-FIXES.md`**, whose third shape is pinned by
+  `DefendantTypeResolverTest.a_respondent_without_a_master_defendant_is_answered_applicant`
+  (`2ca9263`): a test-only **[A]** characterisation of behaviour the resolver already had, green on
+  introduction, with no implementation commit following it. History is left as it stands:
   splitting unpushed commits for a review fix was judged higher risk than recording the exception,
   which is the same judgement the Phase 2 block records.
   **Approved: design owner, 2026-09-06.**
