@@ -41,7 +41,7 @@ import org.springframework.boot.health.contributor.Status;
  * about health groups rather than about the setting somebody changed. On an intake-only pod no run
  * ever starts, so it answers idle for ever and asks nothing of a datasource that does not exist.
  */
-public class FileServiceRunHealthIndicator implements HealthIndicator {
+public class FileServiceRunHealthIndicator implements HealthIndicator, RunProgress {
 
     private static final Logger LOG = LoggerFactory.getLogger(FileServiceRunHealthIndicator.class);
 
@@ -78,6 +78,7 @@ public class FileServiceRunHealthIndicator implements HealthIndicator {
     /**
      * Records that a generation run has started, from which point the file service gates readiness.
      */
+    @Override
     public void recordRunStarted() {
         runInProgress.set(true);
     }
@@ -89,6 +90,7 @@ public class FileServiceRunHealthIndicator implements HealthIndicator {
      * uninteresting to readiness as one that completed, and a flag left set by a failure would gate
      * readiness on a database nothing is using until the pod restarts.
      */
+    @Override
     public void recordRunEnded() {
         runInProgress.set(false);
     }
