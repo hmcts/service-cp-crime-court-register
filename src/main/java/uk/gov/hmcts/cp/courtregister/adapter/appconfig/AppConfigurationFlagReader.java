@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.adapter.appconfig;
 
+import com.azure.data.appconfiguration.ConfigurationClient;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.config.FeatureFlagProperties;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
@@ -41,12 +42,44 @@ public class AppConfigurationFlagReader implements FeatureFlagReader {
     private final FeatureFlagProperties properties;
 
     /**
+     * The client the setting is read through, or {@code null} where the deployment's own is meant.
+     *
+     * <p>Read by T029, which asks it for {@code getConfigurationSetting(key, label)} and maps its
+     * answer - and each of its failures - onto a {@link FlagDecision}.
+     */
+    @SuppressWarnings("PMD.UnusedPrivateField")
+    private final ConfigurationClient client;
+
+    /**
      * Creates the reader over the store, the key and the label the deployment named.
+     *
+     * <p>T029 builds the client here from {@code properties.endpoint()}, the pod's
+     * {@code WorkloadIdentityCredential} and {@code properties.timeout()}; until then the field is
+     * null and {@link #read()} refuses before anything touches it.
      *
      * @param properties where the flag is read from, and under which key, label and budget
      */
     public AppConfigurationFlagReader(final FeatureFlagProperties properties) {
+        this(properties, null);
+    }
+
+    /**
+     * Creates the reader over a client somebody else built.
+     *
+     * <p>The adapter owns the SDK type - that is what makes it the adapter - so taking the client
+     * rather than only the endpoint costs the design nothing and lets the read be exercised as the
+     * SDK call it is: {@code AppConfigurationFlagReaderTest} (T026) hands in a client pointed at a
+     * stub of App Configuration's {@code kv} resource, so the key in the path, the label in the
+     * query and the mapping of every answer onto a decision are all asserted against the real
+     * client rather than a stand-in for it.
+     *
+     * @param properties where the flag is read from, and under which key, label and budget
+     * @param client     the client the read is made through
+     */
+    public AppConfigurationFlagReader(
+            final FeatureFlagProperties properties, final ConfigurationClient client) {
         this.properties = properties;
+        this.client = client;
     }
 
     @Override
