@@ -23,7 +23,7 @@ the task records the initial observed result.
 
 ### Approved TDD exceptions (Phase 3)
 
-One, and it is recorded here rather than argued for in a commit body:
+Two, and they are recorded here rather than argued for in a commit body:
 
 - **`22fe4b4`** "test(pipeline): pin the two golden shapes progression throws on" is an **[A]
   characterisation of `c1786da`'s answer**, not the red half of a pair. T022 (`c1786da`) landed
@@ -37,6 +37,20 @@ One, and it is recorded here rather than argued for in a commit body:
   `DefendantTypeResolverTest.the_shapes_progression_throws_on_are_answered_applicant` as its pinning
   test and carries the sign-off-before-cutover marker; the javadoc notes in `DefendantTypeResolver`
   and its suite that said the row was owed describe how it was found, not where it lives.
+- **`9cf66f3`** "fix(pipeline): put back the resolver's answer pending a register row" changed the
+  P10 expectations and the resolver in one commit, with no red test before it. It is a
+  **review-remediation commit that re-pinned an existing characterisation together with its
+  implementation while the P10 row was still being decided**: it reverted `1113931` and `664152e`
+  (which had made the three shapes refuse) back to the answer `c1786da` shipped, because the
+  refusal was itself an uncatalogued deviation the differential audit refuses without a register
+  row, and the row could not be written from that change. The pair it reverted to was already
+  characterised rather than driven, so there was no red run left to record for it. The behaviour is
+  now owned by **row P10 of `doc/DEFECT-FIXES.md`** and is pinned red-first by the third shape's
+  case, `DefendantTypeResolverTest.a_respondent_without_a_master_defendant_is_answered_applicant`,
+  written against the P10 row rather than against the resolver. History is left as it stands:
+  splitting unpushed commits for a review fix was judged higher risk than recording the exception,
+  which is the same judgement the Phase 2 block records.
+  **Approved: design owner, 2026-09-06.**
 
 No other exception of this kind is pre-approved.
 
