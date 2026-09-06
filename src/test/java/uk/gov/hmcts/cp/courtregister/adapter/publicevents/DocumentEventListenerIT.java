@@ -2,6 +2,7 @@ package uk.gov.hmcts.cp.courtregister.adapter.publicevents;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
@@ -40,6 +41,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.util.TestSocketUtils;
 import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 
 /**
  * The subscription itself, against a broker: what {@code public.event} hands this service, and what
@@ -57,7 +59,7 @@ import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
  *
  * <p>So this suite owns a broker. An embedded Artemis on a port of its own (research §14), the real
  * {@code spring.jms} configuration this service deploys with, and the real listener container -
- * against which three things are asserted, and they are the three ways a completion is lost:
+ * against which four things are asserted, and they are the four ways a completion is lost:
  *
  * <ul>
  *   <li><strong>a restart.</strong> A pod redeploys while systemdocgenerator renders. If the
@@ -76,6 +78,11 @@ import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
  *       out of the event rather than off this pod's clock - so the duplicate is one the sink can
  *       absorb (it does, and {@code DocumentOutcomeSinkTest} is where that is pinned) rather than
  *       two different answers about one batch.</li>
+ *   <li><strong>a sink that could not write.</strong> The register store is a database, and a
+ *       database is down for a second or two now and then. The listener hands such a failure back to
+ *       the container on purpose - it is the one thing it does not absorb - and that is worth
+ *       nothing unless the container is running a session that can roll back, so the event has to
+ *       reach the sink a second time.</li>
  * </ul>
  *
  * <p><strong>The sink is doubled and nothing else is.</strong> What an outcome does to a batch is
@@ -273,6 +280,38 @@ class DocumentEventListenerIT {
                 .documentAvailable(batchId, payloadFileId, documentFileId, GENERATED_AT,
                         CompletedBy.EVENT);
         verifyNoMoreInteractions(sink);
+    }
+
+    /**
+     * The one failure the listener deliberately does not absorb, and the only thing that makes not
+     * absorbing it worth anything.
+     *
+     * <p>{@code DocumentEventListener}'s own account of itself is that a message it cannot make sense
+     * of is said out loud and acknowledged, and that "the one failure worth a redelivery is the
+     * sink's". A sink failure is a register store that was not there for the second or two the
+     * outcome arrived in - and unless the session the listener runs in is transacted, the exception
+     * it raises reaches a container that acknowledged the message before it ever called the listener,
+     * so the outcome is dropped and the batch waits for the reconciler's grace period instead. The
+     * redelivery is the claim; this is where it is either true or a comment.
+     */
+    @Test
+    @DisplayName("offers the event again when the sink could not apply it")
+    void an_outcome_the_sink_could_not_apply_should_be_offered_again() {
+        final UUID batchId = UUID.randomUUID();
+        final UUID payloadFileId = UUID.randomUUID();
+        final UUID documentFileId = UUID.randomUUID();
+
+        doThrow(new StoreUnavailableException("the register store is unavailable", null))
+                .doNothing()
+                .when(sink).documentAvailable(batchId, payloadFileId, documentFileId, GENERATED_AT,
+                        CompletedBy.EVENT);
+
+        publish(DOCUMENT_AVAILABLE,
+                documentAvailable(batchId, payloadFileId, documentFileId, GENERATED_AT));
+
+        verify(sink, timeout(DELIVERED_WITHIN.toMillis()).times(2))
+                .documentAvailable(batchId, payloadFileId, documentFileId, GENERATED_AT,
+                        CompletedBy.EVENT);
     }
 
     // --- the broker -------------------------------------------------------------------------------
