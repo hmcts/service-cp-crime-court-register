@@ -1344,6 +1344,89 @@ class ConfigurationValidationTest {
     }
 
     /**
+     * The lock over the nightly run has to outlast the run it locks.
+     *
+     * <p>The job holds a ShedLock lock so a scaled deployment cannot generate the same night twice,
+     * and the lock expires on its own after {@code lock-at-most-for} whether the run has finished
+     * or not - that is what makes it safe against a pod that dies mid-run. The two settings are
+     * therefore one arrangement: a deployment that lengthens the run deadline and leaves the lock
+     * where it was has a window in which a run is still inside its hour and the lock it was holding
+     * is free for another replica to take. What comes out of that is two documents and two e-mails
+     * for every court centre in the country, and nothing about the deployment looks wrong until it
+     * happens.
+     *
+     * <p>The same shape as the broker's own renewal rule above, and refused the same way: at
+     * startup, naming both settings and the margin between them, rather than at 18:00 on the night
+     * a run happens to be slow.
+     */
+    @Nested
+    @DisplayName("the run's lock must outlast the run it locks")
+    class SchedulerLockAgainstRunDeadline {
+
+        @Test
+        void a_run_deadline_the_lock_cannot_cover_refuses_to_start() {
+            generating.withPropertyValues("courtregister.generation.run-deadline=90m")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.generation.lock-at-most-for")
+                                .hasMessageContaining("courtregister.generation.run-deadline");
+                    });
+        }
+
+        /**
+         * The margin is fixed rather than configured, so a deployment cannot set it to nothing:
+         * a lock that expires the instant the deadline does is a lock the last batch of a run
+         * races.
+         */
+        @Test
+        void a_lock_that_only_just_covers_the_run_refuses_to_start() {
+            generating.withPropertyValues("courtregister.generation.run-deadline=60m",
+                    "courtregister.generation.lock-at-most-for=65m")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.generation.lock-at-most-for");
+                    });
+        }
+
+        @Test
+        void a_longer_run_with_a_lock_lengthened_to_match_should_start() {
+            generating.withPropertyValues("courtregister.generation.run-deadline=90m",
+                    "courtregister.generation.lock-at-most-for=100m")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /**
+         * Unconditional, like the zone rule beside it: a job that happens to be disabled in this
+         * deployment is not a reason to accept a lock that cannot cover the run in the next one.
+         */
+        @Test
+        void a_lock_shorter_than_the_run_is_refused_even_with_the_job_disabled() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.generation.run-deadline=90m").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.generation.lock-at-most-for");
+                    });
+        }
+
+        @Test
+        void the_shipped_lock_should_cover_the_shipped_run_deadline() {
+            generating.run(context -> {
+                assertThat(context).hasNotFailed();
+                final GenerationProperties generation =
+                        context.getBean(GenerationProperties.class);
+                assertThat(generation.lockAtMostFor())
+                        .as("the value the job's @SchedulerLock reads, and the one the run deadline "
+                                + "is checked against")
+                        .isEqualTo(generation.runDeadline()
+                                .plus(PropertiesValidator.SCHEDULER_LOCK_MARGIN));
+            });
+        }
+    }
+
+    /**
      * Enabling the downstream half is enabling everything it depends on.
      *
      * <p>Each of these is the same failure wearing a different name: the pod starts, reports itself

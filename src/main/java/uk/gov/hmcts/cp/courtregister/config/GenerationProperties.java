@@ -30,6 +30,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *                                 acknowledged otherwise
  * @param zoneOverrideAcknowledged the deliberate acknowledgement that permits another zone
  * @param runDeadline              the bound on how long one run may go on requesting renders
+ * @param lockAtMostFor            how long the ShedLock lock is held for, which must outlast the
+ *                                 run deadline by {@link PropertiesValidator#SCHEDULER_LOCK_MARGIN}
  * @param gracePeriod              how long a batch may stay GENERATING before the reconciler asks
  * @param completion               {@code event} or the loudly logged {@code poll-only} escape hatch
  * @param sdgMode                  live or stubbed systemdocgenerator
@@ -44,6 +46,7 @@ public record GenerationProperties(
         @DefaultValue("Europe/London") String zone,
         @DefaultValue("false") boolean zoneOverrideAcknowledged,
         @DefaultValue("60m") Duration runDeadline,
+        @DefaultValue("70m") Duration lockAtMostFor,
         @DefaultValue("10m") Duration gracePeriod,
         @DefaultValue("event") String completion,
         @DefaultValue(LIVE) SourceMode sdgMode,

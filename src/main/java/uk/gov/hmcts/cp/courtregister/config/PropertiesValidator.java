@@ -55,6 +55,16 @@ public class PropertiesValidator implements InitializingBean {
     public static final Duration RUN_OVERHEAD_MARGIN = Duration.ofSeconds(30);
 
     /**
+     * The fixed margin the nightly run's ShedLock lock has to outlast its run deadline by.
+     *
+     * <p>Fixed rather than configured, for the reason the margin above is: a lock that expires the
+     * instant the deadline does is a lock the last batch of a run races, and there is no
+     * environment for which that is the right answer. Ten minutes is what the shipped
+     * {@code lock-at-most-for} is longer than the shipped {@code run-deadline} by.
+     */
+    public static final Duration SCHEDULER_LOCK_MARGIN = Duration.ofMinutes(10);
+
+    /**
      * How many cache reads one payload fetch makes, and therefore how many of them the run's time
      * budget has to cover.
      *

@@ -273,6 +273,12 @@ courtregister:
     # batches. Completion is event-driven, so a slow render never spends this budget and never
     # blocks the next request.
     run-deadline: 60m
+    # How long the ShedLock lock over the nightly run is held, and the value the job's
+    # @SchedulerLock reads. It is run-deadline plus a fixed ten-minute margin, so a run still inside
+    # its hour cannot be joined by the replica that took the lock it had already lost - two
+    # documents and two e-mails for every court centre in the country. Lengthening run-deadline
+    # without lengthening this is refused at startup rather than discovered at 18:00.
+    lock-at-most-for: 70m
     # How long a batch may sit in GENERATING before the reconciler asks systemdocgenerator's query
     # API what happened to it. Past it with no answer, the batch fails GENERATION_TIMED_OUT.
     grace-period: 10m

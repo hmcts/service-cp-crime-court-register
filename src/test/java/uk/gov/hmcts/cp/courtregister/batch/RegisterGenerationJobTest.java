@@ -116,10 +116,14 @@ class RegisterGenerationJobTest {
     /** 18:00 Monday to Friday, six fields, Spring's dialect. */
     private static final String COURT_CRON = "0 0 18 * * MON-FRI";
 
+    /** The setting the lock's duration has to come from rather than be written twice. */
+    private static final String LOCK_PROPERTY = "${courtregister.generation.lock-at-most-for}";
+
     /** The one zone the requirement is written in. */
     private static final String COURTS_ZONE = "Europe/London";
 
     private static final Duration RUN_DEADLINE = Duration.ofMinutes(60);
+    private static final Duration LOCK_AT_MOST_FOR = Duration.ofMinutes(70);
     private static final Duration GRACE_PERIOD = Duration.ofMinutes(10);
 
     /** 18:00 in Europe/London on a Thursday in August, which is 17:00 UTC. */
@@ -155,8 +159,8 @@ class RegisterGenerationJobTest {
      */
     private static GenerationProperties settings() {
         return new GenerationProperties(true, COURT_CRON, COURTS_ZONE, false, RUN_DEADLINE,
-                GRACE_PERIOD, GenerationProperties.COMPLETION_EVENT, SourceMode.LIVE,
-                SourceMode.LIVE, SourceMode.LIVE, SourceMode.LIVE);
+                LOCK_AT_MOST_FOR, GRACE_PERIOD, GenerationProperties.COMPLETION_EVENT,
+                SourceMode.LIVE, SourceMode.LIVE, SourceMode.LIVE, SourceMode.LIVE);
     }
 
     /**
@@ -300,6 +304,7 @@ class RegisterGenerationJobTest {
         return switch (annotated) {
             case "${courtregister.generation.cron}" -> settings().cron();
             case "${courtregister.generation.zone}" -> settings().zone();
+            case LOCK_PROPERTY -> settings().lockAtMostFor().toString();
             default -> annotated;
         };
     }
@@ -314,7 +319,7 @@ class RegisterGenerationJobTest {
      * @return the duration the lock is held for, or {@code null} where none is stated
      */
     private static Duration lockedFor(final SchedulerLock lock) {
-        final String stated = lock == null ? "" : lock.lockAtMostFor();
+        final String stated = lock == null ? "" : configured(lock.lockAtMostFor());
         return stated.isBlank()
                 ? null
                 : Duration.parse(stated.regionMatches(true, 0, "P", 0, 1) ? stated : "PT" + stated);
@@ -874,6 +879,30 @@ class RegisterGenerationJobTest {
                             + "still inside its hour would be joined by the replica that took the "
                             + "lock it had already lost")
                     .isGreaterThan(RUN_DEADLINE);
+        }
+
+        /**
+         * The lock and the deadline are one arrangement, so the lock is not allowed to be a second
+         * statement of it.
+         *
+         * <p>{@code run-deadline} is configurable and a literal here is not, so a deployment that
+         * lengthens the run past a hard-coded lock gets a window in which a run still inside its
+         * hour has already lost the lock that keeps the second replica out. The annotation
+         * therefore reads the setting, {@code application.yaml} declares it as the deadline plus a
+         * fixed margin, and {@code ConfigurationValidationTest.SchedulerLockAgainstRunDeadline}
+         * refuses startup on any pair that does not hold.
+         */
+        @Test
+        void the_lock_duration_should_come_from_configuration_and_not_be_written_twice()
+                throws NoSuchMethodException {
+
+            final SchedulerLock lock = RegisterGenerationJob.class.getDeclaredMethod("run")
+                    .getAnnotation(SchedulerLock.class);
+
+            softly.assertThat(lock == null ? null : lock.lockAtMostFor())
+                    .as("a literal here is a second copy of a configurable setting, and the day "
+                            + "the two disagree is the day two pods generate the same night")
+                    .isEqualTo(LOCK_PROPERTY);
         }
     }
 }
