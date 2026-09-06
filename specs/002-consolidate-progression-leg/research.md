@@ -161,12 +161,27 @@ Service*, rev 2.1) is the authority; this file records what the plan derived fro
 ## 12. Recorded-while-off rows
 
 - **Decision**: `RegisterStore.record` stamps `recorded_flag_state` from the most recent flag read
-  cached **for this purpose only** (the listener reads the flag with the same reader when a command
-  arrives and the last read is older than 60 s; recording never waits on the read — unknown ⇒
-  `UNKNOWN`, treated as OFF for batching). Rows with state ≠ ON are excluded from automatic batching
-  and surfaced by `list-batches --recorded-while-off`.
+  cached **for this purpose only**, and `inbound/RecordedFlagStateSource` keeps that reading fresh
+  **on a clock rather than on the traffic**: `start()` reads once immediately when the pod begins
+  consuming and every 30 s thereafter, on its own executor thread and never on a delivery's. The
+  interval is derived as half `FlagStateSnapshot.WINDOW` (the 60 s a reading is allowed to speak for)
+  rather than written as a number of its own, so it cannot drift past the window it exists to stay
+  inside. An arrival that still finds no reading - before the first renewal has returned, or after
+  one failed - asks for a single on-demand refresh, and arrivals behind it join that one rather than
+  starting another. Recording never waits on either: the command is labelled from what is already
+  known, which for an absent reading is `UNKNOWN`, treated as OFF for batching. Rows with state ≠ ON
+  are excluded from automatic batching and surfaced by `list-batches --recorded-while-off`.
 - **Rationale**: commands still on the queue when the producer stops publishing may belong to
   hearings the resumed legacy also processed; automatic batching would double-send them.
+- **Why the clock and not the arrival** (the correction this section originally described the other
+  way round): this service takes about 160 commands a day on a stack, one every nine minutes on
+  average, so a reading refreshed only when an arrival finds it stale is stale for very nearly every
+  arrival there is. Each one is labelled `UNKNOWN` and schedules a read that comes back seconds later
+  having labelled nobody, and since rows that are not ON are kept out of automatic batching, almost
+  every register would wait for somebody to find it with `list-batches --recorded-while-off`. The
+  renewal also has to be total: a throw out of a fixed-rate task cancels every later execution of it,
+  so a reader that failed once would stop the renewal for the life of the pod and label every row
+  `UNKNOWN` from then on, which is a far larger failure than the read that caused it.
 
 ## 13. CLI in the image
 

@@ -299,8 +299,12 @@ CLI refuses without `--ignore-flag`.
 - [x] T027 [P] [US4] `batch/FeatureFlagGateTest` — OFF/UNREADABLE ⇒ `Skipped(reason)` + metric
       `generation.skipped{reason}` + `flag_read_ok` gauge; ON ⇒ `Proceed`; `ignoreFlag=true` ⇒
       `Proceed(overridden)` logged. Red: proceeds on OFF.
-- [x] T028 [P] [US4] `inbound/RecordedFlagStateTest` — the listener attaches the last flag read
-      (≤ 60 s old) as ON/OFF, UNKNOWN when none; recording never waits on a read. Red: state absent.
+- [x] T028 [P] [US4] `inbound/RecordedFlagStateTest` - `RecordedFlagStateSource` renews the reading
+      on a fixed 30 s schedule (half `FlagStateSnapshot.WINDOW`) for as long as the pod is consuming,
+      with a single on-demand refresh for an arrival that still finds none; the listener attaches the
+      last reading (≤ 60 s old) as ON/OFF and UNKNOWN where there is none, and recording never waits
+      on a read. Red: state absent. (Landed as an on-arrival refresh and corrected to the schedule at
+      `8abc073`; research §12 carries the traffic rationale.)
 
 ### Implementation
 
