@@ -1,12 +1,16 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
+import uk.gov.hmcts.cp.courtregister.domain.FlagDecision.Unreadable;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 
 /**
@@ -30,13 +34,10 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
  * {@link ProcessingMetrics}'s two, they are registered from construction, because a dashboard must
  * be able to read them from a pod that has not yet run.
  *
- * <p><strong>Seam.</strong> Every recording method below is completed by T017, whose green run is
- * {@code GenerationMetricsTest} (T010) - which is also where the instrument names and tags are
- * pinned. Until then each of them records nothing, so every counter and timer this class documents
- * is absent from the registry and the four gauges never leave the reading they were registered
- * with - which is what T010 fails on. A recorder that refused instead would fail T010 as an error
- * rather than as the absent meter its task text names, and refusing is in any case the wrong
- * production shape: telemetry that throws would end the run it was only supposed to describe.
+ * <p>Nothing here refuses a reading it does not recognise. Telemetry that threw would end the run it
+ * was only supposed to describe, so every label is derived from a bounded enumeration - the
+ * constant's own name, lower-cased and hyphenated, or the bounded code the decision carries - and
+ * every state of every enumeration therefore has a series.
  */
 public class GenerationMetrics {
 
@@ -67,6 +68,9 @@ public class GenerationMetrics {
     public static final String NO_RESPONSE = "none";
 
     private static final int READABLE = 1;
+    private static final int UNREADABLE = 0;
+
+    private final MeterRegistry registry;
 
     /**
      * Gauge state, held here rather than read from a collaborator so the four gauges exist from
@@ -89,6 +93,8 @@ public class GenerationMetrics {
      * @param registry the registry every instrument is registered against
      */
     public GenerationMetrics(final MeterRegistry registry) {
+        this.registry = registry;
+
         Gauge.builder(OLDEST_RECORDED_UNBATCHED_AGE, oldestRecordedUnbatchedSeconds,
                         AtomicLong::doubleValue)
                 .description("Age in seconds of the oldest record still waiting to be batched")
@@ -111,7 +117,7 @@ public class GenerationMetrics {
      * @param outcome the state it ended in
      */
     public void batchCompleted(final BatchStatus outcome) {
-        // Seam: T017 counts this on BATCHES, labelled with the outcome's bounded code.
+        counter(BATCHES, OUTCOME_TAG, code(outcome)).increment();
     }
 
     /**
@@ -120,7 +126,7 @@ public class GenerationMetrics {
      * @param responseCode the status line, which is a bounded dimension and the only one
      */
     public void generationRequested(final int responseCode) {
-        // Seam: T017 counts this on GENERATION_REQUEST, labelled with the status line.
+        counter(GENERATION_REQUEST, RESPONSE_CODE_TAG, String.valueOf(responseCode)).increment();
     }
 
     /**
@@ -129,14 +135,17 @@ public class GenerationMetrics {
      * @param latency request to outcome, however the outcome arrived
      */
     public void generationLatency(final Duration latency) {
-        // Seam: T017 records this on the GENERATION_LATENCY timer.
+        Timer.builder(GENERATION_LATENCY)
+                .description("Time from the render request to the batch's outcome")
+                .register(registry)
+                .record(latency);
     }
 
     /**
      * Counts an outcome the grace-period reconciler had to fetch rather than receive.
      */
     public void reconciled() {
-        // Seam: T017 counts this on GENERATION_RECONCILED, which carries no label.
+        counter(GENERATION_RECONCILED).increment();
     }
 
     /**
@@ -145,7 +154,7 @@ public class GenerationMetrics {
      * @param decision what the flag said, whose bounded code is the reason label
      */
     public void runSkipped(final FlagDecision decision) {
-        // Seam: T017 counts this on GENERATION_SKIPPED, labelled with the decision's code.
+        counter(GENERATION_SKIPPED, REASON_TAG, decision.code()).increment();
     }
 
     /**
@@ -156,7 +165,12 @@ public class GenerationMetrics {
      *                     answered at all
      */
     public void notificationSettled(final NotificationStatus status, final Integer responseCode) {
-        // Seam: T017 counts this on NOTIFICATIONS, labelled with the status and the status line.
+        Counter.builder(NOTIFICATIONS)
+                .tag(STATUS_TAG, code(status))
+                .tag(RESPONSE_CODE_TAG,
+                        responseCode == null ? NO_RESPONSE : String.valueOf(responseCode))
+                .register(registry)
+                .increment();
     }
 
     /**
@@ -169,7 +183,7 @@ public class GenerationMetrics {
      *            there is none
      */
     public void oldestRecordedUnbatchedAge(final Duration age) {
-        // Seam: T017 moves the OLDEST_RECORDED_UNBATCHED_AGE gauge, which reads in seconds.
+        oldestRecordedUnbatchedSeconds.set(age.toSeconds());
     }
 
     /**
@@ -179,7 +193,7 @@ public class GenerationMetrics {
      *            is none
      */
     public void oldestGeneratingAge(final Duration age) {
-        // Seam: T017 moves the OLDEST_GENERATING_AGE gauge, which reads in seconds.
+        oldestGeneratingSeconds.set(age.toSeconds());
     }
 
     /**
@@ -188,7 +202,7 @@ public class GenerationMetrics {
      * @param batches the number of batches a run ended without asking the renderer for
      */
     public void pendingAfterDeadline(final int batches) {
-        // Seam: T017 moves the PENDING_AFTER_DEADLINE gauge.
+        pendingAfterDeadlineBatches.set(batches);
     }
 
     /**
@@ -200,6 +214,25 @@ public class GenerationMetrics {
      * @param decision what the last read produced
      */
     public void flagRead(final FlagDecision decision) {
-        // Seam: T017 moves the FLAG_READ_OK gauge, which is 0 only for an unreadable decision.
+        flagReadable.set(decision instanceof Unreadable ? UNREADABLE : READABLE);
+    }
+
+    /**
+     * The bounded label a state is counted under: the constant's own name, lower-cased and
+     * hyphenated, so every state of the enumeration has a series and none of them carries free text.
+     *
+     * @param state the enumerated state being counted
+     * @return the label value for that state
+     */
+    private static String code(final Enum<?> state) {
+        return state.name().toLowerCase(Locale.ROOT).replace('_', '-');
+    }
+
+    private Counter counter(final String name) {
+        return Counter.builder(name).register(registry);
+    }
+
+    private Counter counter(final String name, final String tag, final String value) {
+        return Counter.builder(name).tag(tag, value).register(registry);
     }
 }
