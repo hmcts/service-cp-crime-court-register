@@ -21,10 +21,17 @@ import java.util.List;
  * is resolved from the hearing's own court application by {@code DefendantTypeResolver}. The
  * {@code add-court-register} command above does <em>not</em> declare it, and is
  * {@code additionalProperties: false}, so a document that carries one is refused by
- * {@code OutboundContractValidator} under {@code UNKNOWN_FIELD [/defendantType]} - which schema a
- * recorded register is held to at the write is T023's to settle. Declaring the component moves no
- * wire byte on its own: the record is serialised {@code NON_NULL}, so every register without a court
- * application leaves the field absent exactly as it did in 001.
+ * {@code OutboundContractValidator} under {@code UNKNOWN_FIELD [/defendantType]}. Which schema a
+ * recorded register is held to is settled by where the type is attached:
+ * {@code RegisterTransformationChain} holds the assembled document to the command exactly as 001
+ * did, and attaches the type afterwards - so the contract check is still the check of a POST body,
+ * and the register that leaves the chain is the one 002 records. What a {@code progression-post}
+ * deployment sends must therefore be the command's own fields rather than this record whole, which
+ * is the retained fallback's obligation and not the chain's.
+ *
+ * <p>Declaring the component moves no wire byte on its own: the record is serialised
+ * {@code NON_NULL}, so every register without a court application leaves the field absent exactly
+ * as it did in 001.
  *
  * <p><strong>Two spellings the legacy gets wrong meet here.</strong> {@code courtCentreId} is
  * spelled the way the contract spells it, end to end (defect C26): the legacy writes

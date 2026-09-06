@@ -53,6 +53,19 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
  * once, when it is built, and thereafter does nothing but apply them to a tree. Putting it here is
  * what makes an unsendable register a <em>transformation</em> outcome — visible, classified and
  * dead-lettered — rather than a 400 discovered at the far end and swallowed (C29 with C1).
+ *
+ * <p><strong>The defendant type is attached after the check, and that order is the settlement the
+ * check itself forces.</strong> Increment 002 records the register instead of posting it, and the
+ * batch's PDF payload prints its defendants under the {@code defendantType} progression used to
+ * resolve for itself once the POST had arrived ({@code CourtRegisterHandler.java:131-153}); this
+ * chain is where the hearing and the assembled document meet, so {@link DefendantTypeResolver} is
+ * asked here. The field is a legal, optional one of the frozen <em>register document</em>
+ * ({@code courtRegisterDocumentRequest.json:30-32}) and is <em>not</em> a field of the
+ * {@code add-court-register} command this chain validates against, which is
+ * {@code additionalProperties: false} - so a document carrying it is refused under
+ * {@code UNKNOWN_FIELD [/defendantType]}. Validating first and attaching after therefore holds the
+ * document to exactly the contract 001 held it to, byte for byte, and leaves the register this
+ * increment records carrying the one field 002 adds.
  */
 // PMD.OnlyOneReturn: each stage answers where it decides, which is the whole of C6, C33 and C36 —
 // a single exit would put the four answers back behind one variable and lose which stage chose.
@@ -70,6 +83,7 @@ public final class RegisterTransformationChain implements RegisterTransformer {
     private final RegisterBuilder registerBuilder;
     private final SubscriptionMatcher subscriptionMatcher;
     private final OutboundContractValidator contractValidator;
+    private final DefendantTypeResolver defendantTypeResolver;
 
     /**
      * Creates the chain over its four stages.
@@ -77,6 +91,14 @@ public final class RegisterTransformationChain implements RegisterTransformer {
      * <p>No anomaly sink is held here. One is handed to each call, because it belongs to the run
      * being made and not to the chain making it: this object is a singleton in the running service,
      * and a counter it held would accumulate every hearing the pod has ever transformed.
+     *
+     * <p>The defendant-type rule is built here rather than handed in, which is what
+     * {@link RegisterBuilder} and {@link SubscriptionMatcher} do with {@link Dates} and
+     * {@link SubscriptionRules}: it is a pure rule object with no collaborator, no configuration and
+     * no state, so there is nothing about it a caller could choose, and nothing a test could
+     * usefully replace it with - {@code DefendantTypeResolverTest} holds the rule itself to
+     * progression's recorded answers, and this chain's suite holds the wiring to the register that
+     * comes out.
      *
      * @param builder   the fragment stage
      * @param matcher   the addressing stage
@@ -89,6 +111,7 @@ public final class RegisterTransformationChain implements RegisterTransformer {
         this.registerBuilder = builder;
         this.subscriptionMatcher = matcher;
         this.contractValidator = validator;
+        this.defendantTypeResolver = new DefendantTypeResolver();
     }
 
     @Override
@@ -121,7 +144,59 @@ public final class RegisterTransformationChain implements RegisterTransformer {
         }
 
         validated(command, document);
-        return new TransformationResult.Register(document, fragment.courtCentreOUCode());
+        return new TransformationResult.Register(
+                recorded(document, hearing), fragment.courtCentreOUCode());
+    }
+
+    /**
+     * The register as this increment records it: the validated document, carrying the side of the
+     * court application its defendants are on.
+     *
+     * <p>Answered by {@link DefendantTypeResolver} out of the hearing's own court applications, and
+     * absent rather than empty where the register names no application at all. Progression writes
+     * {@code StringUtils.EMPTY} there ({@code CourtRegisterHandler.java:84}); the field is optional
+     * in the frozen register-document schema and the document is serialised {@code NON_NULL}, so a
+     * hearing without an application leaves it out exactly as 001 did and every 001 recording comes
+     * back byte-identical.
+     *
+     * <p>The document is rebuilt rather than edited, because it is a record and because nothing in
+     * this chain edits what it was handed (constitution Principle V): the resolver is given the
+     * assembled register and the hearing, and neither comes back changed.
+     *
+     * @param document the validated register
+     * @param hearing  the hearing the claim-check payload carries, whose court applications the
+     *                 register's application is looked up in
+     * @return the register with its defendant type, or the register unchanged where the hearing
+     *         carried no court application for it
+     */
+    private CourtRegisterDocument recorded(
+            final CourtRegisterDocument document, final JsonNode hearing) {
+
+        return defendantTypeResolver.resolve(hearing, document)
+                .map(defendantType -> carrying(document, defendantType))
+                .orElse(document);
+    }
+
+    /**
+     * One register, with its defendant type on it.
+     *
+     * @param document      the validated register
+     * @param defendantType the side of the court application its defendants are on
+     * @return the same register, carrying the type
+     */
+    private static CourtRegisterDocument carrying(
+            final CourtRegisterDocument document, final String defendantType) {
+
+        return new CourtRegisterDocument(
+                document.registerDate(),
+                document.hearingDate(),
+                document.hearingId(),
+                document.courtCentreId(),
+                document.fileName(),
+                defendantType,
+                document.hearingVenue(),
+                document.recipients(),
+                document.defendants());
     }
 
     /**

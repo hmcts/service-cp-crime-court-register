@@ -28,11 +28,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import uk.gov.hmcts.cp.courtregister.adapter.progression.OutboundContractValidator;
 import uk.gov.hmcts.cp.courtregister.application.GroupProceedingsPolicy;
 import uk.gov.hmcts.cp.courtregister.application.TransformationResult;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
@@ -108,6 +110,13 @@ import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.PortResult;
  * {@code now-subscriptions} GET, so the audit compares the day the legacy asked for against the day
  * this port's own {@link Dates} answers for the same shared time, and reports the difference like
  * any other.
+ *
+ * <p><strong>One field has no recorded counterpart, and is left out of the comparison.</strong>
+ * Increment 002 records the register instead of posting it, and puts the {@code defendantType}
+ * progression used to resolve after the POST onto the document itself. The command the legacy posted
+ * does not declare that field, so the corpus holds nothing at that path for any of its 381 cases -
+ * see {@link #asPosted}, which takes it out of the tree before anything is compared, and
+ * {@code RegisterTransformationChainTest}, which pins what the chain puts there.
  *
  * <p><strong>It is fast because it is pure.</strong> The whole corpus runs in seconds against no
  * container, no socket and no clock, so it needs no tag and runs in {@code ./gradlew build} with
@@ -319,7 +328,7 @@ class DifferentialAuditTest {
                     command, recorded.payload(), recorded.subscriptions(), anomalies::add);
             if (result instanceof TransformationResult.Register register) {
                 return new PortOutcome(PortResult.REGISTER,
-                        mapper.valueToTree(register.document()), null, null, "");
+                        asPosted(register.document()), null, null, "");
             }
             return new PortOutcome(PortResult.NO_REGISTER, null,
                     ((TransformationResult.NoRegister) result).reason().completion().value(),
@@ -328,6 +337,32 @@ class DifferentialAuditTest {
             return new PortOutcome(PortResult.FAILED, null, null,
                     classified.reason().name(), pointerOf(classified));
         }
+    }
+
+    /**
+     * The register as the output contract the corpus was recorded against renders it: the assembled
+     * document, without the one field increment 002 adds.
+     *
+     * <p>{@code defendantType} is a legal, optional field of the frozen register document
+     * ({@code courtRegisterDocumentRequest.json:30-32}) and is not a field of the
+     * {@code add-court-register} command the legacy posted, which is
+     * {@code additionalProperties: false} and does not declare it: progression resolved the type for
+     * itself once the POST had arrived ({@code CourtRegisterHandler.java:131-153}), and that is the
+     * leg 002 consolidates. So the recorded corpus has nothing at that path and never could have
+     * had - it is not an oracle for a field the flow it recorded did not carry - and the field is
+     * taken out of the tree before the comparison rather than being attributed to a defect-fix row,
+     * which is what {@link RegisteredDefectFixes} would otherwise demand of it. It is not left
+     * unattributed either: {@code RegisterTransformationChainTest} pins what the chain puts there,
+     * against the answers {@code DefendantTypeResolverTest} holds to progression's own recorded
+     * goldens.
+     *
+     * @param document the assembled register
+     * @return the tree this audit compares, which is the document the legacy's contract carried
+     */
+    private JsonNode asPosted(final CourtRegisterDocument document) {
+        final ObjectNode posted = (ObjectNode) mapper.valueToTree(document);
+        posted.remove("defendantType");
+        return posted;
     }
 
     /**
