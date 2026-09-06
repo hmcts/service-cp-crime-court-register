@@ -226,35 +226,35 @@ re-share supersedes; schema-invalid fails SCHEMA_INVALID with no row.
 
 ### Tests first ⚠️
 
-- [ ] T019 [P] [US1] `pipeline/DefendantTypeResolverTest` — goldens from T004: Applicant default,
+- [x] T019 [P] [US1] `pipeline/DefendantTypeResolverTest` — goldens from T004: Applicant default,
       Appellant (appeal + applicantAppellant flags with applicant masterDefendant), Respondent
       (respondent masterDefendantId among defendants), null when no court application; the
       as-at-hearing deviation pinned (`respondents_are_read_from_the_hearing_not_the_aggregate`).
       Red: seam throws → failing equality.
-- [ ] T020 [P] [US1] `application/DistributionPipelineTest` (extend) — in `record` mode the pipeline
+- [x] T020 [P] [US1] `application/DistributionPipelineTest` (extend) — in `record` mode the pipeline
       calls `RegisterStore.record` with the validated document, defendant type and flag state and
       completes `recorded`; SCHEMA_INVALID is raised before any record; store failure ⇒ abandon +
       suspend; in `progression-post` mode the 001 submission path is used unchanged. Red: reason is
       `submitted`.
-- [ ] T021 [P] [US1] `pipeline/RegisterTransformationChainTest` (extend) — the chain sets
+- [x] T021 [P] [US1] `pipeline/RegisterTransformationChainTest` (extend) — the chain sets
       `defendantType` on the document; the 001 goldens are otherwise byte-identical. Red: field absent.
 
 ### Implementation
 
-- [ ] T022 [US1] `pipeline/DefendantTypeResolver` — port of `PROG CourtRegisterHandler.getDefendantType`
+- [x] T022 [US1] `pipeline/DefendantTypeResolver` — port of `PROG CourtRegisterHandler.getDefendantType`
       (`:131-153`) over `hearing.courtApplications[]` by `courtApplicationId`. Green: T019.
-- [ ] T023 [US1] `pipeline/RegisterTransformationChain` (extend) wires the resolver; `domain/CourtRegisterDocument`
+- [x] T023 [US1] `pipeline/RegisterTransformationChain` (extend) wires the resolver; `domain/CourtRegisterDocument`
       gains `defendantType` (already a legal field in the frozen schema — confirm with
       `OutboundContractValidationTest`). Green: T021.
-- [ ] T024 [US1] `application/DistributionPipeline` — `RegisterStore` replaces `RegisterSubmissionClient`
+- [x] T024 [US1] `application/DistributionPipeline` — `RegisterStore` replaces `RegisterSubmissionClient`
       in `record` mode; `config/PipelineConfig` selects by `courtregister.output`; `adapter/progression`
       retained behind `progression-post`. Green: T020.
-- [ ] T024a [US1] V3 partial unique index enforcing one active row per `(hearing_id,
+- [x] T024a [US1] V3 partial unique index enforcing one active row per `(hearing_id,
       court_centre_id, register_date)` and the unique-violation retry path in
       `JdbcRegisterStore.record`; `RegisterStoreIT` case
       `two_concurrent_re_shares_leave_exactly_one_active_row` red first (T020 group), then the
       migration + code. Green: that case.
-- [ ] T025 [A] [US1] `e2e/RecordEndToEndIT` — emulator + Postgres + real payload cache: command →
+- [x] T025 [A] [US1] `e2e/RecordEndToEndIT` — emulator + Postgres + real payload cache: command →
       RECORDED row with digest of the stored document, reason `recorded`, **zero** requests to the
       progression WireMock; re-share ⇒ supersession; schema-invalid ⇒ dead-letter, no row. Record the
       first observed result.
@@ -273,22 +273,22 @@ CLI refuses without `--ignore-flag`.
 
 ### Tests first ⚠️
 
-- [ ] T026 [P] [US4] `adapter/appconfig/AppConfigurationFlagReaderTest` (WireMock on the App
+- [x] T026 [P] [US4] `adapter/appconfig/AppConfigurationFlagReaderTest` (WireMock on the App
       Configuration `kv` endpoint) — `enabled:true` ⇒ ON; `false` ⇒ OFF; 404 / 403 / 5xx / timeout /
       malformed ⇒ UNREADABLE with a bounded reason; label and key are passed; never throws. Red: seam
       throws.
-- [ ] T027 [P] [US4] `batch/FeatureFlagGateTest` — OFF/UNREADABLE ⇒ `Skipped(reason)` + metric
+- [x] T027 [P] [US4] `batch/FeatureFlagGateTest` — OFF/UNREADABLE ⇒ `Skipped(reason)` + metric
       `generation.skipped{reason}` + `flag_read_ok` gauge; ON ⇒ `Proceed`; `ignoreFlag=true` ⇒
       `Proceed(overridden)` logged. Red: proceeds on OFF.
-- [ ] T028 [P] [US4] `inbound/RecordedFlagStateTest` — the listener attaches the last flag read
+- [x] T028 [P] [US4] `inbound/RecordedFlagStateTest` — the listener attaches the last flag read
       (≤ 60 s old) as ON/OFF, UNKNOWN when none; recording never waits on a read. Red: state absent.
 
 ### Implementation
 
-- [ ] T029 [US4] `adapter/appconfig/AppConfigurationFlagReader` (`ConfigurationClient` +
+- [x] T029 [US4] `adapter/appconfig/AppConfigurationFlagReader` (`ConfigurationClient` +
       `WorkloadIdentityCredential`, 2 s timeout, feature-flag JSON `enabled`) + `config/LiveFeatureFlagConfig`.
       Green: T026.
-- [ ] T030 [US4] `batch/FeatureFlagGate` + `inbound` flag-state attachment (`RecordedFlagState` on the
+- [x] T030 [US4] `batch/FeatureFlagGate` + `inbound` flag-state attachment (`RecordedFlagState` on the
       command context, stamped by `RegisterStore.record`). Green: T027, T028.
 
 **Checkpoint**: `check-flag` semantics proven at unit level; wiring to the job lands in Phase 5. Codex
