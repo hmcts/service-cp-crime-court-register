@@ -872,6 +872,84 @@ class RegisterStoreIT {
                     .as("and the stamp this ending would have released is still on the register")
                     .isEqualTo(1);
         }
+
+        /**
+         * The second generator-attributed ending, in the direction that refuses.
+         *
+         * <p>GENERATION_TIMED_OUT is the only one of the six the reconciler itself decides: the
+         * grace period passed and systemdocgenerator still had no verdict, so the reconciler's
+         * having gone and asked is the whole of what the row records about the ending. A timeout
+         * that names nobody is a row saying an outcome was chased and refusing to say by what, and
+         * the {@code reconciled} metric - which exists to count exactly these - cannot be computed
+         * from it. The store answers for both attributed reasons alike, and the case that pins the
+         * other one would not have noticed had this one been left out of the rule.
+         */
+        @Test
+        void a_timed_out_generation_without_attribution_is_refused() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = store.assemble(
+                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+            }).as(WALKED).doesNotThrowAnyException();
+            final UUID batchId = batchIdOn(MONDAY);
+
+            softly.assertThatThrownBy(() -> store.markFailed(batchId,
+                            BatchFailureReason.GENERATION_TIMED_OUT, null, null))
+                    .as("the grace period passing is a verdict somebody reached by going and "
+                            + "looking, and the row is the only place that says who looked")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("GENERATION_TIMED_OUT");
+            softly.assertThat(batchOn(MONDAY))
+                    .as("and nothing is written: the batch is still the one the reconciler is "
+                            + "waiting on")
+                    .contains(new BatchOutcome(GENERATING, null, null));
+            softly.assertThat(completedByOn(MONDAY))
+                    .as("nothing was attributed, because nothing was written")
+                    .isEmpty();
+        }
+
+        /**
+         * And the direction that accepts, which is the ordinary path the reconciler walks.
+         *
+         * <p>RECONCILER rather than EVENT: a timeout is by definition an ending no event carried,
+         * so the mechanism that learned it is always the one that went and asked. The row keeps the
+         * bounded code, the attribution and the stamp on its registers, because systemdocgenerator
+         * was asked and a document may yet exist under that correlation.
+         */
+        @Test
+        void a_timed_out_generation_the_reconciler_reported_should_be_recorded_as_its_verdict() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = store.assemble(
+                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_TIMED_OUT, null,
+                        CompletedBy.RECONCILER);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the bounded code is what the batches counter labels the outcome with, and "
+                            + "the renderer said nothing for sdg_reason to hold")
+                    .contains(new BatchOutcome(FAILED, "GENERATION_TIMED_OUT", null));
+            softly.assertThat(completedByOn(MONDAY))
+                    .as("a timeout is an ending no event carried, so the mechanism that learned it "
+                            + "is always the one that went and asked")
+                    .contains("RECONCILER");
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("and the stamp stays: systemdocgenerator was asked, so a document may yet "
+                            + "exist under that correlation and re-rendering is a person's decision")
+                    .isEqualTo(1);
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("the register was never sent, so it stays exactly what it was")
+                    .containsExactly(RECORDED);
+        }
     }
 
     /**

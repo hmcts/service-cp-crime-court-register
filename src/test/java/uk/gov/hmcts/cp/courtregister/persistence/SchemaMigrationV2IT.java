@@ -332,6 +332,20 @@ class SchemaMigrationV2IT {
     }
 
     /**
+     * A FAILED {@code register_batch} row under the given reason, attributed or not.
+     *
+     * <p>Valid in every other respect, so the only thing a refusal can be about is whether that
+     * reason is one somebody outside this service reported.
+     */
+    private static String insertFailedBatch(final String reason, final String completedBy) {
+        return "INSERT INTO " + BATCH_TABLE + " (batch_id, court_centre_id, register_date, "
+                + "file_name, status, system_generated, failure_reason, completed_by) VALUES ('"
+                + UUID.randomUUID() + "', '" + UUID.randomUUID() + "', DATE '2026-08-20', "
+                + "'courtregister_2026-08-20.json', 'FAILED', true, '" + reason + "', "
+                + (completedBy == null ? "null" : "'" + completedBy + "'") + ")";
+    }
+
+    /**
      * The smallest valid {@code register_notification} row for the given batch and recipient.
      */
     private static String insertNotification(final UUID batchId, final String emailAddress) {
@@ -798,6 +812,42 @@ class SchemaMigrationV2IT {
                     insertBatchNaming("GENERATING", "RECONCILER")))
                     .isInstanceOf(SQLException.class)
                     .hasMessageContaining("register_batch_completed_by_shape_chk");
+        }
+
+        /**
+         * The second generator-attributed reason, in both directions.
+         *
+         * <p>The shape check enumerates two reasons and the case above probes one of them from each
+         * side, which a rule that had only ever named GENERATION_FAILED would also pass.
+         * GENERATION_TIMED_OUT is the reconciler's verdict about systemdocgenerator's silence: it
+         * arrived because something went and asked, so the row names what asked, and a row that
+         * does not is the one the {@code reconciled} metric cannot be computed from.
+         */
+        @Test
+        void completed_by_shape_check_should_require_a_mechanism_on_a_timed_out_generation() {
+            assertThatCode(() -> inRolledBackTransaction(
+                    insertFailedBatch("GENERATION_TIMED_OUT", "RECONCILER")))
+                    .doesNotThrowAnyException();
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    insertFailedBatch("GENERATION_TIMED_OUT", null)))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("register_batch_completed_by_shape_chk");
+        }
+
+        /**
+         * The shape check speaks about every state, and says so in its own text.
+         *
+         * <p>It is written as three implications, each about one family of states, so a state added
+         * to {@code BatchStatus} and to {@code register_batch_status_chk} without being classified
+         * here would be constrained by none of the three and could carry anything. Reading the
+         * enumeration against the constraint's definition is what makes widening the vocabulary a
+         * migration that widens both.
+         */
+        @Test
+        void completed_by_shape_check_should_name_every_batch_state() throws SQLException {
+            assertThat(constraintsOf(BATCH_TABLE).get("register_batch_completed_by_shape_chk"))
+                    .isNotNull()
+                    .contains(vocabularyOf(BatchStatus.class));
         }
 
         @Test
