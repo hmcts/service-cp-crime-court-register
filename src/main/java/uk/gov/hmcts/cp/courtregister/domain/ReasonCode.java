@@ -170,6 +170,18 @@ public enum ReasonCode {
     STORE_UNAVAILABLE("STORE_UNAVAILABLE"),
 
     /**
+     * The register store refused the recording for a reason no redelivery can change.
+     *
+     * <p>Distinct from {@link #STORE_UNAVAILABLE}, which says nothing about the register: this is
+     * the store <em>answering</em>, over a connection that plainly worked, and answering that the
+     * row may not be written. The only refusals the recorder settles itself are the two it knows -
+     * this command delivered again, and the race for the day's active-register key - so anything
+     * else is a constraint nobody has accounted for, and delivering the same register into it four
+     * more times would reach the same answer four more times.
+     */
+    REGISTER_NOT_RECORDED("REGISTER_NOT_RECORDED"),
+
+    /**
      * A run reached its processing deadline and stopped itself.
      *
      * <p>Distinct from an ordinary transient failure on purpose: the run did not fail, it ran out of

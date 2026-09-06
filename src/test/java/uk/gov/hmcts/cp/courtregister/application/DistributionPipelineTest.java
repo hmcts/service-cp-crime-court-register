@@ -37,6 +37,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DuplicateKeyException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.adapter.progression.OutboundContractValidator;
@@ -64,6 +65,7 @@ import uk.gov.hmcts.cp.courtregister.domain.ProcessedOutputClaim;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
+import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
@@ -1180,6 +1182,38 @@ class DistributionPipelineTest {
                     any(CompletionReason.class));
             verify(guard, never()).recordTransientFailure(any(RunClaim.class),
                     any(ReasonCode.class));
+        }
+
+        /**
+         * The other half of the same distinction, and the half that decides a delivery's fate.
+         *
+         * <p>A store that went away is a suspension; a store that was reached and declined to hold
+         * this row is one register to look at. The recorder settles the two refusals it accounts
+         * for itself, so what reaches here is a constraint nobody wrote this recording against, and
+         * the same register meets it on every delivery. It is parked here and now under the reason
+         * the store named, rather than classified transient by the catch-all and redelivered four
+         * more times to be parked under an exhaustion that says the service ran out of tries.
+         */
+        @Test
+        @DisplayName("parks a recording the store refused for a reason no redelivery can change")
+        void a_register_the_store_refused_is_parked_under_its_own_reason() {
+            when(registerStore.record(any(DistributionCommand.class),
+                        any(CourtRegisterDocument.class), any(), any(),
+                        any(RecordedFlagState.class)))
+                    .thenThrow(new RegisterNotRecordedException(
+                            "the recording was refused by a constraint the store does not account "
+                                    + "for", new DuplicateKeyException("duplicate key value")));
+
+            final GuardDecision decision = runRecording();
+
+            assertThat(decision)
+                    .as("the throw site classified this and the pipeline never second-guesses a "
+                            + "classification by reading the exception's Java type")
+                    .isEqualTo(new GuardDecision.DeadLetter(
+                            DeadLetterReason.NON_TRANSIENT, ReasonCode.REGISTER_NOT_RECORDED));
+            verify(guard).recordNonTransientFailure(claim, ReasonCode.REGISTER_NOT_RECORDED);
+            verify(guard, never()).recordCompletion(any(RunClaim.class),
+                    any(CompletionReason.class));
         }
 
         @Test

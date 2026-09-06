@@ -24,6 +24,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
@@ -34,6 +35,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.dao.ConcurrencyFailureException;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
@@ -46,8 +48,10 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterHearingVenue;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
+import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 import uk.gov.hmcts.cp.courtregister.domain.RequestFingerprint;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
@@ -409,6 +413,51 @@ class RegisterStoreIT {
             softly.assertThat(rowsAtCourtCentre())
                     .as("three commands, three registers: the redelivery records nothing")
                     .isEqualTo(3);
+        }
+
+        /**
+         * A refusal the recorder does not account for, which is not the race and is not retried.
+         *
+         * <p>The recorder knows two unique keys and settles both itself:
+         * {@code processed_output_unique_request} is this command arriving beside itself and is
+         * answered from the row that landed, and {@code idx_output_active_register_key} is the race
+         * for the day's active register and is read again and recorded against the winner. Reading
+         * every <em>other</em> duplicate-key refusal as the race spends three attempts on a
+         * constraint no attempt can satisfy and then reports contention - a transient failure the
+         * broker redelivers - for a register that will be refused in exactly the same way on every
+         * delivery until the queue parks it under an exhaustion nobody can explain.
+         *
+         * <p>The constraint is made rather than imagined: a unique index over {@code court_house},
+         * partial on this case's own court centre so no other suite can meet it, refuses the second
+         * of two registers for two different hearings at the same court house. Neither key the
+         * recorder knows is touched - the hearings differ and so do the commands - so what the
+         * store meets is precisely the case this asserts.
+         */
+        @Test
+        void a_unique_violation_that_is_not_the_active_row_race_is_propagated_not_retried() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED),
+                            APPLICANT, RecordedFlagState.ON))
+                    .as(WALKED)
+                    .doesNotThrowAnyException();
+            withACourtHouseUniqueIndex(() -> softly
+                    .assertThatThrownBy(() -> record(second,
+                            document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                            RecordedFlagState.ON))
+                    .as("a constraint the recorder does not account for is the store answering "
+                            + "that this row may not be written, which no redelivery changes - not "
+                            + "a race to try again and report as contention")
+                    .isInstanceOf(RegisterNotRecordedException.class)
+                    .isNotInstanceOf(ConcurrencyFailureException.class)
+                    .asInstanceOf(InstanceOfAssertFactories.type(RegisterNotRecordedException.class))
+                    .extracting(RegisterNotRecordedException::classification)
+                    .isEqualTo(FailureClassification.NON_TRANSIENT));
+
+            softly.assertThat(rowsAtCourtCentre())
+                    .as("and the refused recording left nothing behind it")
+                    .isEqualTo(1);
         }
     }
 
@@ -1342,6 +1391,29 @@ class RegisterStoreIT {
             final CourtRegisterDocument document, final String defendantType,
             final RecordedFlagState flagState) {
         return store.record(command, document, OU_CODE, defendantType, flagState);
+    }
+
+    /**
+     * Runs the body with a unique constraint the recorder has never heard of in place.
+     *
+     * <p>Over {@code court_house} and partial on this case's court centre, so it refuses a second
+     * register at the same court house and is invisible to every other suite sharing the container.
+     * Dropped whatever the body does: an index left behind would refuse the next case to record two
+     * hearings here, and the failure would name a constraint that is not in any migration.
+     *
+     * @param refused what is expected to meet the constraint
+     */
+    private void withACourtHouseUniqueIndex(final Runnable refused) {
+        final String index = "test_only_court_house_" + courtCentre.toString().replace("-", "");
+        ProcessedLogTestSupport.jdbcClient()
+                .sql("CREATE UNIQUE INDEX " + index + " ON processed_output (court_house) "
+                        + "WHERE court_centre_id = '" + courtCentre + "'")
+                .update();
+        try {
+            refused.run();
+        } finally {
+            ProcessedLogTestSupport.jdbcClient().sql("DROP INDEX " + index).update();
+        }
     }
 
     /**
