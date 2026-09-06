@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
+import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
@@ -206,7 +207,7 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch notified = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId,
                     DOCUMENT_FILE_ID, BatchStatus.NOTIFIED, null, null, true,
-                    RegisterBatch.CompletedBy.EVENT, ASSEMBLED_AT, REQUESTED_AT, GENERATED_AT,
+                    CompletedBy.EVENT, ASSEMBLED_AT, REQUESTED_AT, GENERATED_AT,
                     NOTIFIED_AT, null, 1);
 
             final boolean moved = repository.compareAndSet(notified, BatchStatus.GENERATED);
@@ -228,7 +229,7 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch failed = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, SDG_REASON, true,
-                    RegisterBatch.CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null, null,
+                    CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null, null,
                     FAILED_AT, 2);
 
             assertThat(repository.compareAndSet(failed, BatchStatus.PENDING)).isTrue();
@@ -252,7 +253,7 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch failed = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, OVERSIZED_SDG_REASON,
-                    true, RegisterBatch.CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null,
+                    true, CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null,
                     null, FAILED_AT, 2);
 
             assertThat(repository.compareAndSet(failed, BatchStatus.PENDING))
@@ -293,7 +294,7 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch failed = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, SDG_REASON, true,
-                    RegisterBatch.CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null, null,
+                    CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null, null,
                     FAILED_AT, 2);
             repository.compareAndSet(failed, BatchStatus.PENDING);
             final RegisterBatch revived = generating(assembled, payloadFileId, REQUESTED_AT);
@@ -375,7 +376,7 @@ class RegisterBatchRepositoryIT {
     private RegisterBatch generated(final RegisterBatch batch) {
         return new RegisterBatch(batch.batchId(), courtCentre, OU_CODE, COURT_HOUSE,
                 batch.registerDate(), batch.fileName(), payloadFileId, DOCUMENT_FILE_ID,
-                BatchStatus.GENERATED, null, null, true, RegisterBatch.CompletedBy.EVENT,
+                BatchStatus.GENERATED, null, null, true, CompletedBy.EVENT,
                 ASSEMBLED_AT, REQUESTED_AT, GENERATED_AT, null, null, 1);
     }
 

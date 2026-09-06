@@ -29,9 +29,9 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
+import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
-import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 
 /**
@@ -48,7 +48,7 @@ import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
  *
  * <p>The bounded vocabularies are asserted <strong>against the domain enumerations rather than
  * against copies of them</strong>. {@code BatchStatus}, {@code BatchFailureReason},
- * {@code NotificationStatus}, {@code RecordedFlagState} and {@code RegisterBatch.CompletedBy} each
+ * {@code NotificationStatus}, {@code RecordedFlagState} and {@code CompletedBy} each
  * say in their own javadoc that their constant names are the values the check constraint
  * enumerates; reading them here is what makes that true, so a constant added in Java without the
  * matching migration fails this suite rather than failing at the first insert in production.
@@ -711,7 +711,7 @@ class SchemaMigrationV2IT {
                 throws SQLException {
             assertThat(constraintsOf(BATCH_TABLE).get("register_batch_completed_by_chk"))
                     .isNotNull()
-                    .contains(vocabularyOf(RegisterBatch.CompletedBy.class));
+                    .contains(vocabularyOf(CompletedBy.class));
         }
 
         @Test

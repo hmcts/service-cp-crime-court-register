@@ -13,6 +13,7 @@ import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
+import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 
 /**
@@ -282,8 +283,8 @@ public class RegisterBatchRepository {
         return value == null ? null : BatchFailureReason.valueOf(value);
     }
 
-    private static RegisterBatch.CompletedBy completedBy(final String value) {
-        return value == null ? null : RegisterBatch.CompletedBy.valueOf(value);
+    private static CompletedBy completedBy(final String value) {
+        return value == null ? null : CompletedBy.valueOf(value);
     }
 
     private static String name(final Enum<?> value) {

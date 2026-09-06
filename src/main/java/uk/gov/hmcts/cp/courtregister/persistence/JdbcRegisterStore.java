@@ -25,6 +25,7 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
+import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.CourtCentreDay;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
@@ -499,7 +500,7 @@ public class JdbcRegisterStore implements RegisterStore {
      */
     @Override
     public void markGenerated(final UUID batchId, final UUID documentFileId,
-            final Instant generatedAt) {
+            final Instant generatedAt, final CompletedBy completedBy) {
         final BatchStatus expected = permitted(batchId, BatchStatus.GENERATED);
         settle(jdbcClient.sql(MARK_GENERATED)
                 .param(BATCH_ID, batchId)
@@ -518,7 +519,7 @@ public class JdbcRegisterStore implements RegisterStore {
      */
     @Override
     public void markFailed(final UUID batchId, final BatchFailureReason reason,
-            final String sdgReason) {
+            final String sdgReason, final CompletedBy completedBy) {
         final BatchStatus expected = permitted(batchId, BatchStatus.FAILED);
         settle(jdbcClient.sql(MARK_FAILED)
                 .param(BATCH_ID, batchId)

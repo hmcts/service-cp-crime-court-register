@@ -2,6 +2,7 @@ package uk.gov.hmcts.cp.courtregister.application;
 
 import java.time.Instant;
 import java.util.UUID;
+import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 
 /**
  * Where a rendering outcome is applied, whoever learned it.
@@ -15,6 +16,12 @@ import java.util.UUID;
  *
  * <p>Nothing here names JMS, a message or an envelope. The listener parses those and calls this with
  * the four facts an outcome is: which batch, which payload, what happened, and when.
+ *
+ * <p><strong>And who learned it.</strong> Each caller names itself - the listener EVENT, the
+ * reconciler RECONCILER - because the store writes {@code completed_by} in the same statement that
+ * moves the batch, and a compare-and-set leaves no second moment to write it in. It is a parameter
+ * rather than something the implementation infers from which class called it, so the one code path
+ * both drivers share can stay one code path.
  */
 public interface DocumentOutcomeSink {
 
@@ -30,9 +37,11 @@ public interface DocumentOutcomeSink {
      * @param payloadFileId  the payload the document was rendered from
      * @param documentFileId the rendered document's file-service id
      * @param generatedAt    when it was generated
+     * @param completedBy    the caller naming itself: EVENT from the listener, RECONCILER from the
+     *                       grace-period reconciler
      */
     void documentAvailable(UUID correlationId, UUID payloadFileId, UUID documentFileId,
-            Instant generatedAt);
+            Instant generatedAt, CompletedBy completedBy);
 
     /**
      * Applies a generation that failed.
@@ -43,6 +52,9 @@ public interface DocumentOutcomeSink {
      * @param reason        systemdocgenerator's own words, kept for support and never logged at
      *                      INFO; the batch's own reason is the bounded GENERATION_FAILED
      * @param failedAt      when the generation failed
+     * @param completedBy   the caller naming itself: EVENT from the listener, RECONCILER from the
+     *                      grace-period reconciler
      */
-    void generationFailed(UUID correlationId, UUID payloadFileId, String reason, Instant failedAt);
+    void generationFailed(UUID correlationId, UUID payloadFileId, String reason, Instant failedAt,
+            CompletedBy completedBy);
 }

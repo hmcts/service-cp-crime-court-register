@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
+import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.CourtCentreDay;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
@@ -99,21 +100,40 @@ public interface RegisterStore {
      *
      * <p><strong>This batch's rows and no others (defect fix P3).</strong>
      *
+     * <p>Which mechanism learned the outcome is an argument rather than a later write. A batch state
+     * change is a compare-and-set through {@code BatchStatus}, so there is no moment either side of
+     * the transition in which {@code completed_by} could be set on its own: before the mark the
+     * batch is still GENERATING and the write would have to guess the outcome, and after it the only
+     * move left is GENERATED to GENERATED, which the machine refuses. It travels with the mark and
+     * is written by the mark's own statement.
+     *
      * @param batchId        the batch the document belongs to
      * @param documentFileId the rendered document's file-service id
      * @param generatedAt    when systemdocgenerator generated it
+     * @param completedBy    the mechanism that learned the document exists: the event listener or
+     *                       the grace-period reconciler
      */
-    void markGenerated(UUID batchId, UUID documentFileId, Instant generatedAt);
+    void markGenerated(UUID batchId, UUID documentFileId, Instant generatedAt,
+            CompletedBy completedBy);
 
     /**
      * Fails the batch under a bounded reason, leaving its rows where the reason says they belong.
      *
-     * @param batchId   the batch that failed
-     * @param reason    the bounded reason it is failed under
-     * @param sdgReason systemdocgenerator's own words, for support only, or {@code null} where it
-     *                  said nothing
+     * <p>{@code completedBy} is nullable here and only here: four of the six reasons are this
+     * service's own verdict about a render it could not ask for or could not get an answer about,
+     * and naming a completion mechanism for those would credit a decision nobody outside this
+     * service made. The two that are somebody's answer - a {@code generation-failed} event, a
+     * reconciled query - carry EVENT and RECONCILER respectively.
+     *
+     * @param batchId     the batch that failed
+     * @param reason      the bounded reason it is failed under
+     * @param sdgReason   systemdocgenerator's own words, for support only, or {@code null} where it
+     *                    said nothing
+     * @param completedBy the mechanism that learned the render failed, or {@code null} where this
+     *                    service failed the batch on its own account
      */
-    void markFailed(UUID batchId, BatchFailureReason reason, String sdgReason);
+    void markFailed(UUID batchId, BatchFailureReason reason, String sdgReason,
+            CompletedBy completedBy);
 
     /**
      * Settles the batch on its notification tally, and moves its rows to NOTIFIED.

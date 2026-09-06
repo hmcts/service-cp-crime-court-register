@@ -36,7 +36,8 @@ import java.util.UUID;
  *                          never logged at INFO, bounded by {@link #boundedReason(String)};
  *                          {@code null} where it said nothing
  * @param systemGenerated   true from the nightly schedule, false from the operations CLI
- * @param completedBy       which mechanism learned the outcome, or {@code null} while it is pending
+ * @param completedBy       which mechanism learned the outcome ({@link CompletedBy}), or
+ *                          {@code null} while it is pending
  * @param assembledAt       when the batch was grouped and stamped
  * @param requestedAt       when systemdocgenerator accepted the render request, or {@code null}
  * @param generatedAt       when the document was generated, or {@code null}
@@ -104,22 +105,6 @@ public record RegisterBatch(
                 ? reason
                 : reason.substring(0, REASON_LIMIT - TRUNCATION_MARKER.length())
                         + TRUNCATION_MARKER;
-    }
-
-    /**
-     * Which of the two completion mechanisms learned a batch's outcome.
-     *
-     * <p>Recorded rather than inferred, and it is what the {@code reconciled} metric counts: a run
-     * whose outcomes all arrive by RECONCILER is a broker or a subscription to look at, and nothing
-     * else in the flow would say so.
-     */
-    public enum CompletedBy {
-
-        /** The {@code public.event} listener, which is the platform pattern and the default. */
-        EVENT,
-
-        /** The grace-period reconciler asking systemdocgenerator's query API. */
-        RECONCILER
     }
 
     /**

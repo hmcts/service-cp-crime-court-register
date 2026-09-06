@@ -32,6 +32,7 @@ import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
+import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.CourtCentreDay;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDefendant;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
@@ -563,7 +564,8 @@ class RegisterStoreIT {
                         new CourtCentreDay(courtCentre, MONDAY), recordsOn(waiting, MONDAY));
                 store.assemble(new CourtCentreDay(courtCentre, TUESDAY), recordsOn(waiting, TUESDAY));
                 store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
-                store.markGenerated(monday.batchId(), DOCUMENT_FILE_ID, GENERATED_AT);
+                store.markGenerated(monday.batchId(), DOCUMENT_FILE_ID, GENERATED_AT,
+                        CompletedBy.EVENT);
             }).as(PENDING).doesNotThrowAnyException();
 
             softly.assertThat(statusesOn(MONDAY))
@@ -577,6 +579,55 @@ class RegisterStoreIT {
             softly.assertThat(generatedRowsAtCourtCentre())
                     .as("two rows generated, not four: the count is the whole of defect fix P3")
                     .isEqualTo(2);
+        }
+
+        /**
+         * Which mechanism learned the outcome, written by the mark that learned it.
+         *
+         * <p>{@code completed_by} is what the {@code reconciled} metric counts, and a run whose
+         * outcomes all arrive by RECONCILER is a broker or a subscription somebody has to look at.
+         * Nothing else in the flow records it, so a batch that does not carry it is a batch whose
+         * completion mechanism is lost.
+         *
+         * <p>It cannot be a second write. Batch state changes are compare-and-set through
+         * {@code BatchStatus}: written before the mark, the batch is still GENERATING and the update
+         * would be guessing at an outcome that has not arrived; written after it, the only move left
+         * is GENERATED to GENERATED, which the machine refuses. The mark therefore carries it, and
+         * this case asserts that the mark's own statement is where it lands - both endings that
+         * somebody outside this service reported, so the EVENT path and the RECONCILER path are
+         * pinned by the same test rather than by one and an assumption.
+         */
+        @Test
+        void generation_records_who_completed_the_batch() {
+            final DistributionCommand listenedFor = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reconciledFor = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(listenedFor, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(reconciledFor, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> waiting = mine(store.activeUnbatched());
+                final RegisterBatch listened = store.assemble(
+                        new CourtCentreDay(courtCentre, MONDAY), recordsOn(waiting, MONDAY));
+                final RegisterBatch reconciled = store.assemble(
+                        new CourtCentreDay(courtCentre, TUESDAY), recordsOn(waiting, TUESDAY));
+                store.markRequested(listened.batchId(), PAYLOAD_FILE_ID);
+                store.markGenerated(listened.batchId(), DOCUMENT_FILE_ID, GENERATED_AT,
+                        CompletedBy.EVENT);
+                store.markRequested(reconciled.batchId(), SECOND_PAYLOAD_FILE_ID);
+                store.markFailed(reconciled.batchId(), BatchFailureReason.GENERATION_FAILED,
+                        SDG_REASON, CompletedBy.RECONCILER);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(completedByOn(MONDAY))
+                    .as("the document arrived on the public event, and the row that says the batch "
+                            + "is generated says so in the same breath")
+                    .contains("EVENT");
+            softly.assertThat(completedByOn(TUESDAY))
+                    .as("and the failure the grace-period reconciler went and asked for is the "
+                            + "other mechanism, which is the one the metric exists to count")
+                    .contains("RECONCILER");
         }
     }
 
@@ -612,7 +663,7 @@ class RegisterStoreIT {
                 final RegisterBatch monday = store.assemble(
                         new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
                 store.markFailed(monday.batchId(),
-                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null);
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
             }).as(WALKED).doesNotThrowAnyException();
 
             softly.assertThat(batchOn(MONDAY))
@@ -645,7 +696,8 @@ class RegisterStoreIT {
                 final RegisterBatch monday = store.assemble(
                         new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
                 store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
-                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
             }).as(WALKED).doesNotThrowAnyException();
 
             softly.assertThat(batchOn(MONDAY))
@@ -683,7 +735,7 @@ class RegisterStoreIT {
                         new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
                 store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
                 store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED,
-                        OVERSIZED_SDG_REASON);
+                        OVERSIZED_SDG_REASON, CompletedBy.EVENT);
             }).as("the failure is recorded whatever the renderer chose to say")
                     .doesNotThrowAnyException();
 
@@ -818,7 +870,7 @@ class RegisterStoreIT {
         private void generate(final RegisterBatch batch, final UUID payloadFileId,
                 final UUID documentFileId) {
             store.markRequested(batch.batchId(), payloadFileId);
-            store.markGenerated(batch.batchId(), documentFileId, GENERATED_AT);
+            store.markGenerated(batch.batchId(), documentFileId, GENERATED_AT, CompletedBy.EVENT);
         }
 
         /**
@@ -998,6 +1050,20 @@ class RegisterStoreIT {
                 .param("registerDate", registerDate)
                 .query((rs, rowNumber) -> new BatchOutcome(rs.getString("status"),
                         rs.getString("failure_reason"), rs.getString("sdg_reason")))
+                .optional();
+    }
+
+    /** Which mechanism the batch's ending was learned from, read back out of the column. */
+    private Optional<String> completedByOn(final LocalDate registerDate) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT completed_by
+                          FROM register_batch
+                         WHERE court_centre_id = :courtCentre AND register_date = :registerDate
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("registerDate", registerDate)
+                .query(String.class)
                 .optional();
     }
 
