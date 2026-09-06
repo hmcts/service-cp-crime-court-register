@@ -1,7 +1,13 @@
 package uk.gov.hmcts.cp.courtregister.inbound;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.domain.FlagStateSnapshot;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
@@ -27,27 +33,37 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
  * an executor inside it would put a second concern on the class whose single concern is the whole of
  * its correctness (constitution Principle V).
  *
- * <p><strong>Seam.</strong> {@link #current()} is T030's, together with
- * {@link FlagStateSnapshot#stateFor}, and its green run is {@code RecordedFlagStateTest} (T028).
+ * <p><strong>At most one read per window, and at most one in flight.</strong> A refresh is asked for
+ * only where the reading in hand no longer stands for anything, so a stack taking a command every
+ * few seconds asks App Configuration once a minute rather than once a command; and a second arrival
+ * during a read that has not come back yet joins the first one's refresh rather than starting
+ * another. The pair is what keeps a busy queue from turning a labelling rule into a load test of
+ * somebody else's store.
  */
 public class RecordedFlagStateSource {
 
-    /** The task that replaces the refusal below with the reading, the window and the refresh. */
-    private static final String PENDING_TASK =
-            "T030 implements the inbound flag-state attachment; RecordedFlagStateTest (T028) "
-                    + "guards it";
+    private static final Logger LOG = LoggerFactory.getLogger(RecordedFlagStateSource.class);
 
     /** The same reader the nightly job uses, which is what makes the flag one lever. */
-    @SuppressWarnings("PMD.UnusedPrivateField")
     private final FeatureFlagReader reader;
 
     /** Where a refresh is handed to, so that no delivery thread is ever inside a read. */
-    @SuppressWarnings("PMD.UnusedPrivateField")
     private final Executor refreshes;
 
     /** What a reading's age is measured against. */
-    @SuppressWarnings("PMD.UnusedPrivateField")
     private final Clock clock;
+
+    /**
+     * The reading every delivery is labelled from, and {@code null} until the first read returns.
+     *
+     * <p>Written by whichever thread the executor ran a refresh on and read by every delivery
+     * thread, so the reference is atomic and the snapshot it holds is immutable: a delivery sees the
+     * reading whole or sees the one before it, and never half of each.
+     */
+    private final AtomicReference<FlagStateSnapshot> reading = new AtomicReference<>();
+
+    /** Whether a refresh is already on its way, so that arrivals behind it do not start another. */
+    private final AtomicBoolean refreshing = new AtomicBoolean();
 
     /**
      * Creates the source; the reading it hands out is its own and is shared by every delivery.
@@ -66,10 +82,60 @@ public class RecordedFlagStateSource {
     /**
      * What a command arriving now is labelled with, answered from what is already known.
      *
+     * <p>Answered before anything is asked of App Configuration, and the refresh this arrival may
+     * schedule is for the commands behind it. The two orderings are not interchangeable: a label
+     * read on this thread would put another service's timeout inside every recording.
+     *
      * @return the state the last reading stands for now, or {@link RecordedFlagState#UNKNOWN} where
      *         there is no reading or it has aged out of its window
      */
     public RecordedFlagState current() {
-        throw new UnsupportedOperationException(PENDING_TASK);
+        final FlagStateSnapshot known = reading.get();
+        final RecordedFlagState state = known == null
+                ? RecordedFlagState.UNKNOWN
+                : known.stateFor(clock.instant());
+        if (state == RecordedFlagState.UNKNOWN) {
+            scheduleRefresh();
+        }
+        return state;
+    }
+
+    /**
+     * Hands a read to the executor, unless one is already on its way.
+     *
+     * <p>A rejected hand-over is reported and no more: the executor refusing work is a pod that is
+     * shutting down or an outage in this service's own plumbing, and neither is a reason to fail a
+     * delivery that has a register to build. The next arrival asks again. What it must not do is
+     * leave the in-flight flag raised over a refresh that never ran, which would silence every
+     * later one and label every row {@code UNKNOWN} for the life of the pod.
+     */
+    private void scheduleRefresh() {
+        if (refreshing.compareAndSet(false, true)) {
+            try {
+                refreshes.execute(this::refresh);
+            } catch (RejectedExecutionException notTaken) {
+                refreshing.set(false);
+                LOG.warn("A flag refresh could not be handed over, so the commands behind this one "
+                        + "are labelled from what is already known. type={}",
+                        notTaken.getClass().getName());
+            }
+        }
+    }
+
+    /**
+     * The read itself, on the executor's thread and never on a delivery's.
+     *
+     * <p>The reading is timed by the same clock the window is measured with, and it is timed when
+     * the flag was asked rather than when the answer came back: a store that took two seconds
+     * answered about a flag as it stood when it was asked, and stamping the return would let a slow
+     * read quietly lengthen the window its answer speaks for.
+     */
+    private void refresh() {
+        try {
+            final Instant asked = clock.instant();
+            reading.set(new FlagStateSnapshot(reader.read(), asked));
+        } finally {
+            refreshing.set(false);
+        }
     }
 }

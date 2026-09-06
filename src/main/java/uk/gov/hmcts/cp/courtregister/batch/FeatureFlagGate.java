@@ -1,8 +1,14 @@
 package uk.gov.hmcts.cp.courtregister.batch;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
+import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 import uk.gov.hmcts.cp.courtregister.domain.GateDecision;
+import uk.gov.hmcts.cp.courtregister.domain.GateDecision.Proceed;
+import uk.gov.hmcts.cp.courtregister.domain.GateDecision.Reason;
+import uk.gov.hmcts.cp.courtregister.domain.GateDecision.Skipped;
 
 /**
  * The first thing a generation run does, and the only thing that lets it do anything else.
@@ -19,22 +25,23 @@ import uk.gov.hmcts.cp.courtregister.domain.GateDecision;
  *
  * <p>Both the reading and the decision are counted here rather than by the caller: the
  * {@code flag_read_ok} gauge is what says whether the App Configuration store is answering at all,
- * and it must move on the read that failed as well as on the one that succeeded.
+ * and it must move on the read that failed as well as on the one that succeeded. The two
+ * vocabularies stay apart for the same reason - the gauge says whether the store answered, the
+ * skipped counter says what it answered - so a flag read as off leaves the gauge up and moves the
+ * counter, and a store that could not be reached moves both.
  *
- * <p><strong>Seam.</strong> T030 replaces the refusal below with the read, the mapping and the two
- * instruments; its green run is {@code FeatureFlagGateTest} (T027).
+ * <p>A skipped run is written down as well as counted, because it is the one outcome that leaves no
+ * other trace at all: no batch, no request, no row. Every value in that line, and in the override's
+ * warning, is a bounded code from {@link Reason} or from the reading itself, so a batch, an endpoint
+ * or another system's words about the store cannot reach the index by interpolation (constitution
+ * Principle VII).
  */
 public class FeatureFlagGate {
 
-    /** The task that replaces the refusal in this class with the read and the mapping. */
-    private static final String PENDING_TASK =
-            "T030 implements FeatureFlagGate; FeatureFlagGateTest (T027) guards it";
+    private static final Logger LOG = LoggerFactory.getLogger(FeatureFlagGate.class);
 
-    // Both are read by T030, which replaces the refusal below with the read it counts.
-    @SuppressWarnings("PMD.UnusedPrivateField")
     private final FeatureFlagReader reader;
 
-    @SuppressWarnings("PMD.UnusedPrivateField")
     private final GenerationMetrics metrics;
 
     /**
@@ -51,11 +58,50 @@ public class FeatureFlagGate {
     /**
      * Reads the flag and says whether this run may generate.
      *
+     * <p>The read happens on every decision, override included: the override changes what this
+     * service does, not whether App Configuration replied, and a gauge that stopped moving on the
+     * runs an operator forced would go quiet exactly during a cutover.
+     *
      * @param ignoreFlag whether the caller has deliberately overridden the flag, which only the CLI
      *                   may do and only by being asked to
      * @return {@code Proceed}, or {@code Skipped} carrying the bounded reason it was skipped under
      */
     public GateDecision decide(final boolean ignoreFlag) {
-        throw new UnsupportedOperationException(PENDING_TASK);
+        final FlagDecision reading = reader.read();
+        metrics.flagRead(reading);
+
+        final GateDecision decision;
+        if (reading.generates()) {
+            // An override on a stack that is already cut over overrode nothing, and a run report
+            // that said otherwise would make every CLI run look like one taken against the
+            // platform's wishes.
+            decision = new Proceed(false);
+        } else if (ignoreFlag) {
+            LOG.warn("A generation run went ahead over a flag that did not say on, because an "
+                    + "operator overrode it. reason={} flag={}", Reason.OVERRIDDEN.code(),
+                    reading.code());
+            decision = new Proceed(true);
+        } else {
+            decision = skip(reading);
+        }
+        return decision;
+    }
+
+    /**
+     * Fail-closed: the flag did not say on and nobody overrode it, so nothing is generated.
+     *
+     * <p>Counted under what the flag said rather than under what was decided, so that the six causes
+     * of an unreadable flag keep their own series - an absent endpoint, a refused identity and a
+     * slow store are three different things to go and fix - while the decision itself has the one
+     * reason a run either starts or does not.
+     */
+    private GateDecision skip(final FlagDecision reading) {
+        metrics.runSkipped(reading);
+        final Reason reason = reading instanceof FlagDecision.Unreadable
+                ? Reason.FLAG_UNREADABLE
+                : Reason.FLAG_OFF;
+        LOG.info("The flag did not say on, so no register was generated. reason={} flag={}",
+                reason.code(), reading.code());
+        return new Skipped(reason);
     }
 }
