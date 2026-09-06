@@ -13,6 +13,9 @@ import com.azure.data.appconfiguration.ConfigurationClientBuilder;
 import com.azure.data.appconfiguration.models.ConfigurationSetting;
 import java.net.SocketTimeoutException;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,6 +50,14 @@ import uk.gov.hmcts.cp.courtregister.domain.FlagDecision.UnreadableReason;
  * nothing: three SDK attempts inside a two-second budget would spend the run's decision on the
  * first attempt's back-off and answer nothing.
  *
+ * <p><strong>"The whole of the read" is meant literally, and is enforced twice.</strong> Every leg
+ * the HTTP client can see - connect, write, read, response - carries the budget, and the call itself
+ * is then made under an outer bound of the budget plus a small margin, because the legs it cannot
+ * see are real: a credential the identity endpoint answers slowly, a handshake that stalls after the
+ * connection is accepted. The job asks this question before it does anything else and waits on the
+ * answer, so a read that outlasts the budget is not a slow read, it is a nightly run that never
+ * started - and at 18:00 that is indistinguishable from a healthy stack with nothing to generate.
+ *
  * <p><strong>Only a boolean {@code enabled} generates.</strong> The value is parsed here rather
  * than taken from the SDK's typed feature-flag view, because the shapes short of the contract are
  * the ones that matter: a value with no verdict in it, and one whose verdict is the string
@@ -71,6 +82,16 @@ public class AppConfigurationFlagReader implements FeatureFlagReader {
     /** The read is the whole budget, so the SDK is asked once and never asked again. */
     private static final RetryOptions NO_RETRIES =
             new RetryOptions(new FixedDelayOptions(0, Duration.ZERO));
+
+    /**
+     * What the outer bound allows the client on top of the budget before it answers for it.
+     *
+     * <p>Small, and deliberately not a setting: it exists so that an ordinary slow read is ended by
+     * the client, which knows which leg it was waiting on, rather than by a stopwatch that only
+     * knows the read did not finish. A budget that has been overrun by this much has not been
+     * overrun by a leg the client is bounding.
+     */
+    private static final Duration MARGIN = Duration.ofMillis(500);
 
     /** The endpoint, the key, the stack label and the read's budget all come from here. */
     private final FeatureFlagProperties properties;
@@ -125,9 +146,13 @@ public class AppConfigurationFlagReader implements FeatureFlagReader {
     /**
      * The client the deployed pod reads through: this stack's store, on this pod's identity.
      *
-     * <p>The budget lands on the HTTP client's response timeout, which is where the whole of it
-     * belongs: the read is one attempt, so the moment the store has not answered inside
-     * {@code courtregister.feature.timeout} the run has its decision.
+     * <p><strong>Every leg carries the budget, not just the response.</strong> A response timeout
+     * bounds the wait for an answer to a request that was sent; it says nothing about a connection
+     * that is never established, a request that cannot be written, or a body that arrives a byte at
+     * a time. Each of those is a way the one lever's read can hang, and each of them at 18:00 is a
+     * run that has not started rather than a run that was skipped, so all four take
+     * {@code courtregister.feature.timeout}. The read is one attempt - the client retries nothing -
+     * so there is no schedule for the four to add up across.
      */
     private static ConfigurationClient clientFor(
             final FeatureFlagProperties properties, final TokenCredential credential) {
@@ -138,22 +163,79 @@ public class AppConfigurationFlagReader implements FeatureFlagReader {
                 .endpoint(properties.endpoint())
                 .credential(credential)
                 .retryOptions(NO_RETRIES)
-                .httpClient(HttpClient.createDefault(
-                        new HttpClientOptions().setResponseTimeout(properties.timeout())))
+                .httpClient(HttpClient.createDefault(new HttpClientOptions()
+                        .setConnectTimeout(properties.timeout())
+                        .setReadTimeout(properties.timeout())
+                        .setWriteTimeout(properties.timeout())
+                        .setResponseTimeout(properties.timeout())))
                 .buildClient();
     }
 
-    // PMD.AvoidCatchingGenericException: the port's contract is that this method never throws, and
-    // the SDK's failures are not a closed set - a status it maps to its own exception type, a
-    // serialiser that refused a body, a connection that died. It is a catch-and-record: the cause
-    // is turned into a bounded decision the caller acts on, and nothing is ignored (constitution
-    // Principle VI).
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     @Override
     public FlagDecision read() {
         if (client == null) {
             return refused(UnreadableReason.NOT_CONFIGURED);
         }
+        return bounded();
+    }
+
+    /**
+     * The read, held to the budget as a whole rather than to the budget of its slowest leg.
+     *
+     * <p>The client's four timeouts bound the parts of a call the HTTP layer can see; this bounds
+     * the call. Between the two sit the legs it cannot: a credential the identity endpoint answers
+     * slowly, a TLS handshake that stalls after the connection is accepted, a pool with nothing free
+     * in it. Any of them makes the read outlast a budget every one of its legs respected, and the
+     * consequence is not a slow read but a nightly run that has not started - which at 18:00 looks
+     * exactly like a healthy stack with nothing to generate.
+     *
+     * <p>The wait is the budget plus {@link #MARGIN}, so the client's own timeout is what normally
+     * ends a slow read and reports the leg it ended: this is the outer bound, and a decision it made
+     * rather than the client is still {@link UnreadableReason#TIMED_OUT}, which is what happened.
+     * The abandoned read is interrupted and left to unwind on its own thread - a virtual one, so
+     * abandoning it costs a platform thread nothing - and its answer, if one ever arrives, is
+     * dropped: the run has already been given its decision, and a second one would be a flag read
+     * for a run that is over.
+     *
+     * @return the verdict, or the bounded cause there is none
+     */
+    // PMD.AvoidCatchingGenericException: the port's contract is that this method never throws, and
+    // neither the SDK's failures nor an executor's are a closed set. It is a catch-and-record: every
+    // cause becomes a bounded decision the caller acts on, and nothing is ignored (constitution
+    // Principle VI).
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private FlagDecision bounded() {
+        final CompletableFuture<FlagDecision> answer = new CompletableFuture<>();
+        final Thread read = Thread.ofVirtual()
+                .name("courtregister-flag-read")
+                .unstarted(() -> answer.complete(attempted()));
+        read.start();
+        try {
+            return answer.get(properties.timeout().plus(MARGIN).toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException late) {
+            read.interrupt();
+            return refused(UnreadableReason.TIMED_OUT);
+        } catch (InterruptedException stopped) {
+            // The pod is going down mid-read. The flag is restored so nothing above this mistakes a
+            // shutdown for a working thread, and the run is skipped with a cause like any other.
+            read.interrupt();
+            Thread.currentThread().interrupt();
+            return refused(UnreadableReason.CALL_FAILED);
+        } catch (ExecutionException | RuntimeException noAnswer) {
+            return refused(UnreadableReason.CALL_FAILED);
+        }
+    }
+
+    /**
+     * One attempt at the setting, with every way it can fail turned into a bounded cause.
+     *
+     * @return the verdict, or the bounded cause there is none
+     */
+    // PMD.AvoidCatchingGenericException: see the note on the caller. The SDK's failures are a status
+    // it maps to its own exception type, a serialiser that refused a body, a connection that died -
+    // not a closed set, and every one of them is a run to skip rather than a failure to raise.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private FlagDecision attempted() {
         try {
             final ConfigurationSetting setting =
                     client.getConfigurationSetting(properties.key(), properties.label());
