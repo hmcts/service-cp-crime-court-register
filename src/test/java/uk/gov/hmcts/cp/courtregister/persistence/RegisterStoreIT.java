@@ -357,6 +357,59 @@ class RegisterStoreIT {
                     .isEqualTo(new RecordOutcome(outputIdOf(reshare).orElse(null),
                             outputIdOf(first).orElse(null)));
         }
+
+        /**
+         * The same redelivery, once a second register has also come to name the one it answers with.
+         *
+         * <p>Two rows can point at one register, and the store writes them both itself. A re-share
+         * supersedes the register it replaces and names itself on it; and an <em>earlier</em> share
+         * that arrives afterwards - a redelivery that overtook the register it belongs behind, or
+         * the loser of a race between two deliveries - is recorded SUPERSEDED against that same
+         * later register. Both of them then carry it in {@code superseded_by}.
+         *
+         * <p>So a read of "the row naming this one" is a read of two rows, and the redelivery it is
+         * for - a pod that stopped between the recording and the completion - is exactly when it is
+         * asked. What the redelivery must be answered with is the register this recording actually
+         * replaced, which is the answer its first delivery was given; a refusal here would fail a
+         * command whose register is recorded and active, on every delivery, until the broker parked
+         * it.
+         */
+        @Test
+        void a_redelivered_re_share_is_answered_though_a_later_arrival_names_it_too() {
+            final DistributionCommand shared = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED_AGAIN);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final CourtRegisterDocument resharedDocument =
+                    document(HEARING_ONE, MONDAY, MONDAY_RESHARED_AGAIN);
+            final AtomicReference<RecordOutcome> redelivered = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(shared, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(reshare, resharedDocument, APPLICANT, RecordedFlagState.ON);
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                redelivered.set(record(reshare, resharedDocument, APPLICANT,
+                        RecordedFlagState.ON));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(statusOf(overtaken))
+                    .as("the earlier results that arrived late do not displace the register that "
+                            + "replaced them")
+                    .contains(SUPERSEDED);
+            softly.assertThat(supersessionOf(overtaken))
+                    .as("and they name that register, which is the second row to do so")
+                    .hasValueSatisfying(pair -> softly.assertThat(pair.supersededBy())
+                            .isEqualTo(outputIdOf(reshare).orElse(null)));
+            softly.assertThat(redelivered.get())
+                    .as("the redelivery is still answered with the register the re-share itself "
+                            + "replaced, and not refused because a later arrival names the same row")
+                    .isEqualTo(new RecordOutcome(outputIdOf(reshare).orElse(null),
+                            outputIdOf(shared).orElse(null)));
+            softly.assertThat(rowsAtCourtCentre())
+                    .as("three commands, three registers: the redelivery records nothing")
+                    .isEqualTo(3);
+        }
     }
 
     /**
