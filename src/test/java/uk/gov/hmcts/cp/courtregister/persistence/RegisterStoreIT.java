@@ -899,6 +899,185 @@ class RegisterStoreIT {
     }
 
     /**
+     * The registers one batch was assembled from, read back by identity.
+     *
+     * <p>{@code BATCH_REGISTERS} landed with no automated case of its own, and it is what the whole
+     * render is built from: the payload is progression's array of documents in the order the batch
+     * holds them, and the first record names the file. Three properties therefore decide what
+     * document a Youth Offending Team receives - that the read answers exactly the rows that were
+     * stamped, that it answers them in the assembly order, and that another batch's rows are not
+     * among them.
+     *
+     * <p>Asked of two batches at one court centre rather than one, because "exactly this batch's
+     * rows" is a claim no single-batch case can fail: a read that had gone back to the court centre
+     * and day, or dropped the predicate altogether, would satisfy every assertion a one-batch
+     * scenario could make.
+     */
+    @Nested
+    @DisplayName("the registers of a batch")
+    class BatchRegisters {
+
+        @Test
+        void a_batchs_registers_should_be_exactly_its_own_rows_in_the_assembly_order() {
+            final List<UUID> mondayHearings = new ArrayList<>();
+            final AtomicReference<UUID> monday = new AtomicReference<>();
+            final AtomicReference<UUID> tuesday = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                // Recorded out of order on purpose: the read is ordered by the register instant, so
+                // a statement that answered in insertion order would still pass a case whose rows
+                // were written oldest first.
+                record(seededCommand(HEARING_TWO, MONDAY_RESHARED),
+                        document(HEARING_TWO, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(seededCommand(HEARING_ONE, MONDAY_SHARED),
+                        document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(seededCommand(HEARING_THREE, TUESDAY_SHARED),
+                        document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> waiting = mine(store.activeUnbatched());
+                monday.set(store.assemble(new CourtCentreDay(courtCentre, MONDAY),
+                        recordsOn(waiting, MONDAY)).batchId());
+                tuesday.set(store.assemble(new CourtCentreDay(courtCentre, TUESDAY),
+                        recordsOn(waiting, TUESDAY)).batchId());
+                store.batched(monday.get()).forEach(
+                        register -> mondayHearings.add(register.hearingId()));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(mondayHearings)
+                    .as("the payload is the batch's documents in the order the batch holds them, "
+                            + "and the first of them names the file; oldest first by the register "
+                            + "instant, not by the order the rows happened to be written")
+                    .containsExactly(HEARING_ONE, HEARING_TWO);
+        }
+
+        @Test
+        void another_batchs_registers_should_not_be_among_them() {
+            final List<UUID> tuesdayHearings = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(seededCommand(HEARING_ONE, MONDAY_SHARED),
+                        document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(seededCommand(HEARING_THREE, TUESDAY_SHARED),
+                        document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> waiting = mine(store.activeUnbatched());
+                store.assemble(new CourtCentreDay(courtCentre, MONDAY),
+                        recordsOn(waiting, MONDAY));
+                final RegisterBatch tuesday = store.assemble(
+                        new CourtCentreDay(courtCentre, TUESDAY), recordsOn(waiting, TUESDAY));
+                store.batched(tuesday.batchId()).forEach(
+                        register -> tuesdayHearings.add(register.hearingId()));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(tuesdayHearings)
+                    .as("one court centre sitting on two days is the shape P3 is about, asked of "
+                            + "the read instead of the write: a document built from the court "
+                            + "centre rather than from the batch would carry Monday's children "
+                            + "into Tuesday's register")
+                    .containsExactly(HEARING_THREE);
+        }
+
+        @Test
+        void a_batch_nobody_assembled_should_hold_no_registers() {
+            final List<RegisterRecord> answered = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(seededCommand(HEARING_ONE, MONDAY_SHARED),
+                        document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                store.assemble(new CourtCentreDay(courtCentre, MONDAY),
+                        mine(store.activeUnbatched()));
+                answered.addAll(store.batched(UUID.randomUUID()));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(answered)
+                    .as("an identity nothing was stamped with holds nothing; the generation "
+                            + "service reads this and fails the batch ASSEMBLY_FAILED, which is a "
+                            + "batch that ends rather than one that renders somebody else's rows")
+                    .isEmpty();
+        }
+    }
+
+    /**
+     * The payload id, written down before it is used and never written twice.
+     *
+     * <p>{@code MARK_PAYLOAD_MINTED} landed with no automated case either, and it is the one write
+     * in the store that settles no transition. What it protects is attribution: an id minted, used
+     * for a file-service insert and only then written down is an id that exists in the file service
+     * and nowhere in this service if the pod dies in between - and, if the render request got out
+     * first, a document that comes back attributable to nothing.
+     *
+     * <p>So it is fenced on PENDING and it is not a transition. A batch already GENERATING has had a
+     * render asked for about the id it carries, and a second mint over the top of it would leave the
+     * outcome event for the first payload correlated to a row naming the second.
+     */
+    @Nested
+    @DisplayName("minting a batch's payload id")
+    class PayloadMinting {
+
+        @Test
+        void a_pending_batch_should_take_the_payload_id_and_stay_pending() {
+            softly.assertThatCode(() -> {
+                record(seededCommand(HEARING_ONE, MONDAY_SHARED),
+                        document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = store.assemble(
+                        new CourtCentreDay(courtCentre, MONDAY), mine(store.activeUnbatched()));
+                store.markPayloadMinted(monday.batchId(), PAYLOAD_FILE_ID);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(payloadFileIdOn(MONDAY))
+                    .as("written before the file-service insert, so nothing downstream is ever "
+                            + "asked about an identifier this service has not already written down")
+                    .contains(PAYLOAD_FILE_ID);
+            softly.assertThat(batchOn(MONDAY).map(BatchOutcome::status))
+                    .as("and the batch has not moved: the id says which payload the render will be "
+                            + "about, not that one was asked for")
+                    .contains("PENDING");
+        }
+
+        @Test
+        void a_batch_that_has_already_been_requested_should_refuse_a_second_payload_id() {
+            final AtomicReference<UUID> monday = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(seededCommand(HEARING_ONE, MONDAY_SHARED),
+                        document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                monday.set(store.assemble(new CourtCentreDay(courtCentre, MONDAY),
+                        mine(store.activeUnbatched())).batchId());
+                store.markPayloadMinted(monday.get(), PAYLOAD_FILE_ID);
+                store.markRequested(monday.get(), PAYLOAD_FILE_ID);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThatThrownBy(
+                            () -> store.markPayloadMinted(monday.get(), SECOND_PAYLOAD_FILE_ID))
+                    .as("systemdocgenerator has been asked about the first payload and will "
+                            + "announce its outcome against this batch; a second id over the top "
+                            + "would leave that announcement naming a payload nobody rendered")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("was not given a payload id");
+            softly.assertThat(payloadFileIdOn(MONDAY))
+                    .as("and the refusal changed nothing")
+                    .contains(PAYLOAD_FILE_ID);
+            softly.assertThat(batchOn(MONDAY).map(BatchOutcome::status)).contains(GENERATING);
+        }
+
+        @Test
+        void a_batch_nobody_assembled_should_refuse_a_payload_id() {
+            softly.assertThatThrownBy(
+                            () -> store.markPayloadMinted(UUID.randomUUID(), PAYLOAD_FILE_ID))
+                    .as("an id minted against no batch is a payload in the file service that "
+                            + "nothing in this service points at")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("was not given a payload id");
+        }
+    }
+
+    /**
      * Defect fix P3, stated as the count progression gets wrong.
      *
      * <p>Progression's generation marks a court centre's rows generated, not a batch's. One court
@@ -1769,6 +1948,20 @@ class RegisterStoreIT {
                 .param("courtCentre", courtCentre)
                 .param("registerDate", registerDate)
                 .query(String.class)
+                .optional();
+    }
+
+    /** The payload id a batch carries, read back out of {@code register_batch}. */
+    private Optional<UUID> payloadFileIdOn(final LocalDate registerDate) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT payload_file_id
+                          FROM register_batch
+                         WHERE court_centre_id = :courtCentre AND register_date = :registerDate
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("registerDate", registerDate)
+                .query(UUID.class)
                 .optional();
     }
 
