@@ -1,9 +1,9 @@
 package uk.gov.hmcts.cp.courtregister.adapter.stub;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.PayloadMetadata;
 

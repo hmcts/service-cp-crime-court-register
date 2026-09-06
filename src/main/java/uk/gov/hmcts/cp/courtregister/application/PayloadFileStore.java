@@ -1,7 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import java.util.UUID;
+import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.domain.PayloadStoreUnavailableException;
 
 /**
