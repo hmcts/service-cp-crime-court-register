@@ -205,6 +205,11 @@ re-share supersedes; schema-invalid fails SCHEMA_INVALID with no row.
 - [ ] T024 [US1] `application/DistributionPipeline` — `RegisterStore` replaces `RegisterSubmissionClient`
       in `record` mode; `config/PipelineConfig` selects by `courtregister.output`; `adapter/progression`
       retained behind `progression-post`. Green: T020.
+- [ ] T024a [US1] V3 partial unique index enforcing one active row per `(hearing_id,
+      court_centre_id, register_date)` and the unique-violation retry path in
+      `JdbcRegisterStore.record`; `RegisterStoreIT` case
+      `two_concurrent_re_shares_leave_exactly_one_active_row` red first (T020 group), then the
+      migration + code. Green: that case.
 - [ ] T025 [A] [US1] `e2e/RecordEndToEndIT` — emulator + Postgres + real payload cache: command →
       RECORDED row with digest of the stored document, reason `recorded`, **zero** requests to the
       progression WireMock; re-share ⇒ supersession; schema-invalid ⇒ dead-letter, no row. Record the
@@ -305,7 +310,8 @@ GENERATED / FAILED with reason; grace period → reconciler.
 
 - [ ] T042 [US2] `pipeline/PdfPayloadMapper` — Java→Java port of `PROG CourtRegisterPdfPayloadGenerator`
       (364 ln), `javax.json` → Jackson tree, every helper verbatim. Green: T031.
-- [ ] T043 [P] [US2] `batch/BatchAssembler`. Green: T032.
+- [ ] T043 [P] [US2] `batch/BatchAssembler` (resolve data-model.md's open question / design Q27
+      first). Green: T032.
 - [ ] T044 [P] [US2] `adapter/fileservice/FileServicePayloadStore` (JdbcClient over the second
       DataSource; the two INSERTs from data-model.md). Green: T033.
 - [ ] T045 [P] [US2] `adapter/systemdocgenerator/SystemDocGeneratorClient` implementing

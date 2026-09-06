@@ -36,6 +36,12 @@ Invariants (asserted by `RegisterStoreIT`):
 - A row with a `batch_id` is never superseded and never edited except by `mark*` for its own batch.
 - `superseded_by` points to a row with the same `hearing_id` and batch key and a later `register_time`.
 
+Enforcement: the "at most one active row" invariant is asserted by `RegisterStoreIT` but not yet
+enforced by the database; two concurrent re-shares of one hearing could both insert. V3 (task T024a,
+Phase 3) adds a partial unique index on `(hearing_id, court_centre_id, register_date) WHERE status =
+'RECORDED' AND superseded_at IS NULL AND batch_id IS NULL`, and `RegisterStore.record` handles the
+unique violation by re-reading and superseding.
+
 ## `register_batch`
 
 | Column | Type | Notes |
@@ -58,6 +64,13 @@ Invariants (asserted by `RegisterStoreIT`):
 
 Constraint: `UNIQUE (court_centre_id, register_date) WHERE status <> 'FAILED'` (partial unique) — one
 live batch per key; a FAILED batch may be re-assembled (new `batch_id`, rows re-stamped).
+
+**Open design question (before T043/T050).** A same-day re-share recorded after that day's batch is
+GENERATED or NOTIFIED becomes a fresh active unbatched row whose key already has a live batch, so the
+partial unique constraint above blocks a second batch for that key. The options are (a) permit a
+second live batch once the first is terminal, (b) a supplementary batch attached to the first, or
+(c) surface such rows via list-batches for CLI generation. The decision is recorded in the design as
+Q27 and is needed before `BatchAssembler` (T043) and the job (T050).
 
 ## `register_notification`
 
