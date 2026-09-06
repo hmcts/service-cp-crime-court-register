@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.stubbing.Answer;
+import org.springframework.dao.DataAccessResourceFailureException;
 import uk.gov.hmcts.cp.courtregister.application.DistributionPipeline;
 import uk.gov.hmcts.cp.courtregister.application.HearingPayloadSource;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
@@ -41,6 +42,7 @@ import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.support.QueueHealthTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.StoreGateTestSupport;
 
@@ -394,6 +396,49 @@ class MessageListenerSettlementTest {
 
             verify(context).abandon();
             verify(context, never()).complete();
+            assertSettledExactlyOnce(context);
+        }
+    }
+
+    /**
+     * A store that answered the precondition and then went away underneath the run.
+     *
+     * <p>The two obligations are separate and both are owed: the delivery back, because a store
+     * outage is not the message's fault, and intake stopped, because otherwise the next delivery
+     * meets the same dead store, and the next, until the broker's budget is spent and recoverable
+     * work is parked under a reason that describes the retry count rather than the fault (spec
+     * FR-015).
+     *
+     * <p>It is told apart by the failure's own type and never by where it was thrown: this service's
+     * store is reached from more than one stage of a run and the answer is the same wherever it went
+     * away. That type is a domain one, because the listener is an adapter and the core it calls may
+     * not import a JDBC type to raise (constitution Principle V) - the persistence layer translates
+     * the outage classes, and this is the signal both of them read.
+     */
+    @Nested
+    @DisplayName("a store that went away underneath the run")
+    class StoreWentAway {
+
+        @Test
+        @DisplayName("hands the delivery back and asks for intake to stop")
+        void should_hand_the_delivery_back_and_suspend_intake() {
+            final ServiceBusReceivedMessageContext context = validDelivery();
+            final StoreGateTestSupport.Recording gate = StoreGateTestSupport.open();
+            when(pipeline.process(any(DistributionCommand.class), any(DeliveryIdentity.class),
+                any(RecordedFlagState.class)))
+                    .thenThrow(new StoreUnavailableException(
+                            "the processed log cannot be reached",
+                            new DataAccessResourceFailureException("connection refused")));
+
+            listenerOver(gate).onMessage(context);
+
+            assertThat(gate.suspensionsRequested())
+                    .as("a delivery handed back into a running consumer meets the same dead store, "
+                            + "and so does every message behind it")
+                    .isEqualTo(1);
+            verify(context).abandon();
+            verify(context, never()).complete();
+            verify(context, never()).deadLetter(any(DeadLetterOptions.class));
             assertSettledExactlyOnce(context);
         }
     }

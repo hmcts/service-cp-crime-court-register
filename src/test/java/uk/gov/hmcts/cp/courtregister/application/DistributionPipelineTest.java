@@ -67,6 +67,7 @@ import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
@@ -1161,6 +1162,37 @@ class DistributionPipelineTest {
                                 outage.getClass().getSimpleName())
                         .isSameAs(outage);
             }
+
+            verify(guard, never()).recordCompletion(any(RunClaim.class),
+                    any(CompletionReason.class));
+            verify(guard, never()).recordTransientFailure(any(RunClaim.class),
+                    any(ReasonCode.class));
+        }
+
+        /**
+         * The same rule as the case above, stated against the signal the core is allowed to know.
+         *
+         * <p>A dead store is discovered by JDBC and the core may not import a JDBC type
+         * (constitution Principle V), so the persistence layer translates the outage classes into
+         * {@link StoreUnavailableException} and this is what the core meets. The behaviour is
+         * unchanged and has to be: the run classifies nothing, records nothing and lets the signal
+         * out, because the only useful answer is a suspension and that is the transport's.
+         */
+        @Test
+        @DisplayName("lets a domain store-unavailable signal out to the transport, unclassified")
+        void a_domain_store_unavailable_signal_is_left_for_the_transport() {
+            final StoreUnavailableException gone = new StoreUnavailableException(
+                    "the register store cannot be reached",
+                    new DataAccessResourceFailureException("connection refused"));
+            when(registerStore.record(any(DistributionCommand.class),
+                        any(CourtRegisterDocument.class), any(), any(),
+                        any(RecordedFlagState.class)))
+                    .thenThrow(gone);
+
+            assertThatThrownBy(this::runRecording)
+                    .as("a store that went away was classified inside the run instead of reaching "
+                            + "the transport, which is the only place that can stop intake")
+                    .isSameAs(gone);
 
             verify(guard, never()).recordCompletion(any(RunClaim.class),
                     any(CompletionReason.class));
