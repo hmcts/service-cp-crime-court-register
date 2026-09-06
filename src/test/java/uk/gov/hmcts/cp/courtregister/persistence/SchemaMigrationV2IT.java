@@ -319,6 +319,25 @@ class SchemaMigrationV2IT {
     }
 
     /**
+     * A supplementary {@code register_batch} row: the same key as an earlier batch, linked to it.
+     *
+     * <p>What a same-day re-share recorded after its key's batch has finished is assembled into
+     * (design Q27). The link is the row's own account of why a second batch for that key exists at
+     * all, and the index is the position in the sequence that names its file.
+     */
+    private static String insertSupplementaryBatch(final UUID batchId, final UUID courtCentreId,
+                                                   final String status, final UUID supplementOf,
+                                                   final int supplementIndex) {
+        final String completedBy = COMPLETED_STATUSES.contains(status) ? "'EVENT'" : "null";
+        return "INSERT INTO " + BATCH_TABLE + " (batch_id, court_centre_id, register_date, "
+                + "file_name, status, system_generated, completed_by, supplement_of, "
+                + "supplement_index) VALUES ('" + batchId + "', '" + courtCentreId + "', "
+                + "DATE '2026-08-20', 'courtregister_2026-08-20-supplementary-" + supplementIndex
+                + ".json', '" + status + "', true, " + completedBy + ", '" + supplementOf + "', "
+                + supplementIndex + ")";
+    }
+
+    /**
      * A {@code register_batch} row in the given state that names a completion mechanism.
      *
      * <p>Valid in every other respect, so the only thing a refusal can be about is whether that
@@ -608,7 +627,40 @@ class SchemaMigrationV2IT {
                     "register_date", "file_name", "payload_file_id", "document_file_id", "status",
                     "failure_reason", "sdg_reason", "system_generated", "completed_by",
                     "assembled_at", "requested_at", "generated_at", "notified_at", "failed_at",
-                    "attempts");
+                    "attempts", "supplement_of", "supplement_index");
+        }
+
+        @Test
+        void supplementary_columns_should_link_a_later_batch_to_the_one_it_supplements()
+                throws SQLException {
+            // Design Q27: a same-day re-share recorded after its key's batch is terminal is
+            // assembled into a supplementary batch for the same key. `supplement_of` is null on a
+            // day's first batch and names the batch this one follows on every later one;
+            // `supplement_index` is 0 on the first and counts up from 1, which is what the file
+            // name a supplementary batch carries is built from.
+            final Map<String, Column> columns = columnsOf(BATCH_TABLE);
+            assertThat(columns.get("supplement_of")).isEqualTo(new Column("uuid", true, null));
+            assertThat(columns.get("supplement_index"))
+                    .isEqualTo(new Column("integer", false, "0"));
+        }
+
+        @Test
+        void supplement_of_foreign_key_should_point_at_another_batch() throws SQLException {
+            // Self-referential because a supplement is a relationship between two batches for one
+            // key, not a state one of them holds alone - the same shape as `superseded_by` on
+            // `processed_output`, and for the same reason.
+            assertThat(constraintsOf(BATCH_TABLE).get("register_batch_supplement_of_fk"))
+                    .isNotNull()
+                    .contains("FOREIGN KEY (supplement_of) REFERENCES register_batch(batch_id)");
+        }
+
+        @Test
+        void a_batch_supplementing_one_that_does_not_exist_should_be_refused() {
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    insertSupplementaryBatch(UUID.randomUUID(), UUID.randomUUID(), "PENDING",
+                            UUID.randomUUID(), 1)))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("register_batch_supplement_of_fk");
         }
 
         @Test
@@ -851,23 +903,46 @@ class SchemaMigrationV2IT {
         }
 
         @Test
-        void live_key_index_should_be_unique_and_partial_on_the_unfailed_batches() throws SQLException {
-            // One live batch per (court centre, register day). Partial rather than a plain unique
-            // constraint because a FAILED batch is re-assemblable under a new batch_id, and a total
-            // constraint would make the first failure permanent for that day.
+        void live_key_index_should_be_unique_and_partial_on_the_in_flight_batches()
+                throws SQLException {
+            // One batch per (court centre, register day) *in flight*, which is the invariant the
+            // day's rendering actually needs: PENDING, GENERATING and GENERATED are the states in
+            // which a batch is still owed something - a render request, a render outcome, an
+            // e-mail - and two of those for one key would render one day's registers twice.
+            //
+            // The predicate names those three rather than excluding FAILED, because the terminal
+            // states are all alike here: a FAILED batch is re-assemblable under a new batch_id, and
+            // a NOTIFIED one has to be followable by the supplementary batch a late re-share is
+            // assembled into (design Q27). Excluding only FAILED would make every other ending as
+            // permanent for that day as the first failure would have been.
             assertThat(indexesOf(BATCH_TABLE).get("idx_register_batch_live_key"))
                     .isNotNull()
                     .contains("UNIQUE")
                     .contains("court_centre_id, register_date")
-                    .contains("'FAILED'");
+                    .contains("'PENDING'", "'GENERATING'", "'GENERATED'")
+                    .doesNotContain("'NOTIFIED'");
         }
 
         @Test
         void a_second_live_batch_for_the_same_court_centre_and_day_should_be_rejected() {
+            // The half the narrowing must not lose: two batches for one key that are both still
+            // owed a render outcome are two documents for one day.
             final UUID courtCentreId = UUID.randomUUID();
             assertThatThrownBy(() -> inRolledBackTransaction(
                     insertBatch(UUID.randomUUID(), courtCentreId, "PENDING"),
                     insertBatch(UUID.randomUUID(), courtCentreId, "GENERATING")))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("idx_register_batch_live_key");
+        }
+
+        @Test
+        void a_second_batch_should_be_rejected_while_the_first_is_only_generated() {
+            // GENERATED is in flight and not terminal: the document exists and nobody has been
+            // told about it yet, so the day's registers are still that batch's to deliver.
+            final UUID courtCentreId = UUID.randomUUID();
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    insertBatch(UUID.randomUUID(), courtCentreId, "GENERATED"),
+                    insertBatch(UUID.randomUUID(), courtCentreId, "PENDING")))
                     .isInstanceOf(SQLException.class)
                     .hasMessageContaining("idx_register_batch_live_key");
         }
@@ -878,6 +953,22 @@ class SchemaMigrationV2IT {
             assertThatCode(() -> inRolledBackTransaction(
                     insertBatch(UUID.randomUUID(), courtCentreId, "FAILED"),
                     insertBatch(UUID.randomUUID(), courtCentreId, "PENDING")))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        void a_supplementary_batch_should_be_allowed_beside_a_notified_one_for_the_same_key() {
+            // Design Q27. A hearing re-shared after 18:00 is recorded as a fresh active row for a
+            // key whose batch has already been rendered and e-mailed, and it has to reach the
+            // Youth Offending Teams somehow. Once every earlier batch for the key is terminal, the
+            // next run assembles it into a supplementary batch that names the batch it follows;
+            // an index that admitted no second batch at all would leave that register unsendable
+            // until the following day's key opened.
+            final UUID courtCentreId = UUID.randomUUID();
+            final UUID first = UUID.randomUUID();
+            assertThatCode(() -> inRolledBackTransaction(
+                    insertBatch(first, courtCentreId, "NOTIFIED"),
+                    insertSupplementaryBatch(UUID.randomUUID(), courtCentreId, "PENDING", first, 1)))
                     .doesNotThrowAnyException();
         }
     }
