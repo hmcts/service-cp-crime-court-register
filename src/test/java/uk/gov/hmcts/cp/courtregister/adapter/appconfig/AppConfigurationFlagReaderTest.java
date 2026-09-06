@@ -19,6 +19,7 @@ import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.http.Fault;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.concurrent.atomic.AtomicReference;
@@ -171,6 +172,28 @@ class AppConfigurationFlagReaderTest {
                 .httpClient(new NettyAsyncHttpClientBuilder()
                         .responseTimeout(properties.timeout())
                         .build())
+                .buildClient();
+    }
+
+    /**
+     * The same client with no timeout of its own, which is the shape a black-holed store produces.
+     *
+     * <p>Every case above hands the reader a client the suite has already bounded, so what they
+     * assert is the reader's reading of an answer that came. This one asserts the part that is the
+     * reader's whether the client was bounded or not: the budget is the whole read, and a leg of it
+     * the HTTP client's own timeouts do not cover - a connection that is accepted and never
+     * answered, a slow identity endpoint in front of the store, an SDK layer between the two - must
+     * still leave the job with a decision inside the budget it was given.
+     *
+     * @param properties where the flag is read from
+     * @return a client that will wait on the SDK's own defaults
+     */
+    private static ConfigurationClient unboundedClientFor(final FeatureFlagProperties properties) {
+        return new ConfigurationClientBuilder()
+                .connectionString("Endpoint=" + properties.endpoint()
+                        + ";Id=" + FIXED_TEST_ID + ";Secret=" + FIXED_TEST_SECRET)
+                .retryOptions(new RetryOptions(new FixedDelayOptions(0, Duration.ZERO)))
+                .httpClient(new NettyAsyncHttpClientBuilder().build())
                 .buildClient();
     }
 
@@ -378,6 +401,51 @@ class AppConfigurationFlagReaderTest {
                     .asInstanceOf(InstanceOfAssertFactories.type(FlagDecision.Unreadable.class))
                     .extracting(FlagDecision.Unreadable::reason)
                     .isNotNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("the budget is the whole read")
+    class TheWholeRead {
+
+        /**
+         * A store that answers so late the budget cannot be what brought the read back.
+         *
+         * <p>Comfortably longer than {@link #SHORT_BUDGET} plus the margin below, and comfortably
+         * shorter than the suite's own patience: what it stands for is an endpoint that has
+         * accepted the connection and will not answer.
+         */
+        private static final int BLACK_HOLED_MS = 5000;
+
+        /** What the reader is allowed on top of the budget to turn a refusal into a decision. */
+        private static final Duration MARGIN = Duration.ofSeconds(1);
+
+        /**
+         * The nightly job asks this question first and does nothing until it is answered, so a read
+         * that outlasts its budget is a run that has not started: at 18:00 the difference between a
+         * skipped run and a stalled one is an alert nobody gets. The budget is therefore the whole
+         * read and not the one leg of it the HTTP client happens to bound.
+         */
+        @Test
+        @DisplayName("a black-holed store is unreadable inside the budget, not whenever the SDK "
+                + "gives up")
+        void a_black_holed_store_answers_inside_the_budget() {
+            answeringAfter(BLACK_HOLED_MS, settingCarrying(flagValue(true)));
+            final FeatureFlagProperties properties =
+                    new FeatureFlagProperties(server.baseUrl(), KEY, LABEL, SHORT_BUDGET);
+            final AppConfigurationFlagReader reader =
+                    new AppConfigurationFlagReader(properties, unboundedClientFor(properties));
+
+            final Instant asked = Instant.now();
+            final FlagDecision decision = decisionOf(reader);
+            final Duration waited = Duration.between(asked, Instant.now());
+
+            assertThat(decision)
+                    .as("a read that did not answer in time is a skipped run with a cause on it")
+                    .isEqualTo(unreadable(UnreadableReason.TIMED_OUT));
+            assertThat(waited)
+                    .as("and it says so inside the budget the deployment set, plus a margin")
+                    .isLessThan(SHORT_BUDGET.plus(MARGIN));
         }
     }
 
