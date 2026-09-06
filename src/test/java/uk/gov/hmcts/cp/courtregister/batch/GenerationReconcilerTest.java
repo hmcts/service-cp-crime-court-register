@@ -584,6 +584,16 @@ class GenerationReconcilerTest {
      * systemdocgenerator says about the payload, applied through the sink; and, where it says
      * nothing, this service's own RENDER_REQUEST_FAILED - the reason the run itself would have used
      * for a request it could not get accepted, and the one an operator reads as "ask for it again".
+     *
+     * <p><strong>"Says nothing" is one of two answers, not both of them.</strong> A query that finds
+     * no payload under the id is systemdocgenerator having no record of the request at all, and that
+     * is what RENDER_REQUEST_FAILED describes: nothing outside this service ever accepted it, so
+     * nothing outside this service is attributed. A query that answers about the payload and names
+     * neither a document nor a refusal is the opposite reading - the request arrived, the renderer
+     * took it, and the renderer is the one that has not finished. That batch is GENERATION_TIMED_OUT
+     * and names RECONCILER, exactly as an overdue GENERATING batch with the same empty answer is: it
+     * is the same silence from the same system about a render it is holding, and the state this
+     * service's own mark was lost from says nothing about whose silence it is.
      */
     @Nested
     @DisplayName("a batch whose render request was never recorded")
@@ -639,6 +649,19 @@ class GenerationReconcilerTest {
 
             verify(sink).generationFailed(batch.batchId(), batch.payloadFileId(), SDG_REASON,
                     FAILED_AT, CompletedBy.RECONCILER);
+        }
+
+        @Test
+        void a_stale_pending_batch_the_renderer_knows_about_should_be_timed_out_not_never_requested() {
+            generatingSince();
+            pendingSince(batch);
+            answers(batch, new DocumentStatus(null, null, null, null));
+
+            reconcile();
+
+            verify(store).markFailed(batch.batchId(), BatchFailureReason.GENERATION_TIMED_OUT,
+                    null, CompletedBy.RECONCILER);
+            verifyNoInteractions(sink);
         }
 
         @Test
