@@ -2,6 +2,8 @@ package uk.gov.hmcts.cp.courtregister.adapter.systemdocgenerator;
 
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.web.client.RestClient;
+import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DocumentStatus;
@@ -35,10 +37,49 @@ import uk.gov.hmcts.cp.courtregister.domain.RenderRequest;
  * no judgement about what the combination means: that is the reconciler's, which knows the grace
  * period.
  *
+ * <p><strong>One attempt per call, classified and handed back.</strong> The taxonomy is the shared
+ * one - 408, 429 and every 5xx are worth asking again, any other 4xx is a refusal - but the waiting
+ * and the counting are not this class's, because the bound on them is the run deadline and this
+ * class is not told what is left of it: {@code DocumentRenderer.requestRender} takes a request and a
+ * caller and nothing else. {@code application/RegisterGenerationService} holds the deadline and
+ * therefore holds the loop, and a client that retried underneath it would spend a budget it cannot
+ * see.
+ *
  * <p><strong>Seam only.</strong> The client lands with T045; until then both methods throw, so that
- * {@code SystemDocGeneratorClientTest} records a failing assertion rather than a compile error.
+ * {@code SystemDocGeneratorClientTest} records a failing assertion rather than a compile error. The
+ * constructor is the seam that suite needed: it states what the adapter is built from, so the tests
+ * can build one the way {@code LiveGenerationConfig} eventually will.
  */
+// PMD.UnusedPrivateField: the three below are what the adapter is built from, and both methods that
+// would read them throw until T045 lands. Holding them now is what lets the suite build this client
+// the way a deployment does; the suppression goes when the two conversations do.
+@SuppressWarnings("PMD.UnusedPrivateField")
 public class SystemDocGeneratorClient implements DocumentRenderer {
+
+    /** The client, carrying the systemdocgenerator base URL and its timeouts. */
+    private final RestClient restClient;
+
+    /** The {@code CJSCPPUID} identity for a run naming no user; a secret, never logged. */
+    private final String systemUserId;
+
+    /** The shared mapper, so a body is written and an answer read exactly as any other JSON is. */
+    private final ObjectMapper objectMapper;
+
+    /**
+     * Builds the client over an already-configured HTTP client.
+     *
+     * @param restClient   the client, carrying the systemdocgenerator base URL and its timeouts
+     * @param systemUserId the {@code CJSCPPUID} identity for a run naming no user; a secret, never
+     *                     logged
+     * @param objectMapper the shared mapper, so the command body and the query answer are written
+     *                     and read exactly as every other JSON in this service is
+     */
+    public SystemDocGeneratorClient(final RestClient restClient, final String systemUserId,
+            final ObjectMapper objectMapper) {
+        this.restClient = restClient;
+        this.systemUserId = systemUserId;
+        this.objectMapper = objectMapper;
+    }
 
     @Override
     public void requestRender(final RenderRequest request, final CallerIdentity caller)
