@@ -619,14 +619,22 @@ public class DistributionPipeline {
     }
 
     /**
-     * Writes one register into this service's own store and records the run only once it is there.
+     * Writes one register into this service's own store and completes the command with it.
      *
      * <p>The register stops being progression's to hold: nothing leaves the pod, and the row the
-     * store writes is the register (spec US1). The write and the supersession of the hearing's
-     * earlier active row for the day are the store's own single transaction, so no reader can ever
-     * see two active registers for one hearing and one day (research §8), and a hearing whose
-     * results are shared twice before the nightly run therefore ends with one register rather than
-     * two.
+     * store writes is the register (spec US1). The write, the supersession of the hearing's earlier
+     * active row for the day and the completion of the command are the store's own single
+     * transaction, so no reader can ever see two active registers for one hearing and one day
+     * (research §8), a hearing whose results are shared twice before the nightly run ends with one
+     * register rather than two, and no delivery can stop between the register and the completion it
+     * belongs to.
+     *
+     * <p><strong>The completion is still the guard's, and travels as one.</strong> This stage hands
+     * the store {@code guard.recordCompletion(claim, recorded)} to run inside that transaction
+     * rather than calling it afterwards: what a completion means is the guard's, and the commit
+     * boundary is the store's, so each says the part it owns. A completion the guard refuses - the
+     * claim was reclaimed while this run worked - takes the recording back with it, which is what
+     * the budget check below used to be relied on to make unlikely.
      *
      * <p><strong>Four answers go into the write and this stage invents none of them.</strong> The
      * document is the one the transformation validated; the OU code travels beside it because the
@@ -647,9 +655,10 @@ public class DistributionPipeline {
      *
      * <p><strong>The budget is read once more before the write</strong>, for the reason the send
      * reads it: past the deadline the claim behind this run may already have been reclaimed, and a
-     * row written under a claim somebody else holds is a register the redelivery will record again
-     * and this one will only supersede. The completion that follows a write that <em>did</em> happen
-     * is not withheld for the budget, exactly as it is not on the submission arm.
+     * transaction opened under a claim somebody else holds is work the redelivery will do again.
+     * Where the write does happen the completion happens with it, in the same transaction, so
+     * there is no completion left to withhold for the budget - which is exactly what it never was
+     * on the submission arm.
      *
      * @param command   the validated request
      * @param register  the register the transformation produced
@@ -670,16 +679,22 @@ public class DistributionPipeline {
             outcome = overran(claim, budget);
         } else {
             validated(command, register.document());
-            final RecordOutcome recording = registerStore.record(command, register.document(),
-                    register.courtCentreOuCode(), register.document().defendantType(), flagState);
-            // The identities of the two rows and nothing from inside either of them: a register is a
-            // document about children (Principle VII). `superseded` is the fact support needs when a
-            // hearing is re-shared - the register that will not be sent is the one this line names.
-            LOG.info("Register recorded. source={} requestId={} hearingId={} outputId={} "
-                            + "supersededOutputId={}",
-                    command.source(), command.requestId(), command.hearingId(),
-                    recording.outputId(), recording.supersededOutputId());
-            outcome = completed(claim, CompletionReason.RECORDED);
+            final RecordedCompletion recorded = registerStore.recordAndComplete(command,
+                    register.document(), register.courtCentreOuCode(),
+                    register.document().defendantType(), flagState,
+                    () -> guard.recordCompletion(claim, CompletionReason.RECORDED));
+            if (recorded.completion() instanceof GuardDecision.Complete) {
+                // The identities of the two rows and nothing from inside either of them: a register
+                // is a document about children (Principle VII). `superseded` is the fact support
+                // needs when a hearing is re-shared - the register that will not be sent is the one
+                // this line names. It is logged only where the completion beside it stood, because
+                // a recording the transaction took back is not a register anybody holds.
+                LOG.info("Register recorded. source={} requestId={} hearingId={} outputId={} "
+                                + "supersededOutputId={}",
+                        command.source(), command.requestId(), command.hearingId(),
+                        recorded.recording().outputId(), recorded.recording().supersededOutputId());
+            }
+            outcome = settled(recorded.completion(), claim, CompletionReason.RECORDED);
         }
         return outcome;
     }
@@ -886,7 +901,25 @@ public class DistributionPipeline {
      * Four of them send nothing, and a single undifferentiated success is the legacy defect C33.
      */
     private GuardDecision completed(final RunClaim claim, final CompletionReason reason) {
-        final GuardDecision outcome = guard.recordCompletion(claim, reason);
+        return settled(guard.recordCompletion(claim, reason), claim, reason);
+    }
+
+    /**
+     * What a completion that has already been written is worth to the run that wrote it.
+     *
+     * <p>Split from {@link #completed} because one completion in this pipeline is not written here:
+     * a recording and its command's completion are one transaction, so the store writes both and
+     * this is handed the answer. What follows the answer is the same either way - the line support
+     * reads the run's ending from, and the two instruments the ending is counted on - and a
+     * completion the guard did not admit is counted as nothing, because nothing was recorded.
+     *
+     * @param outcome what the guard made of the completion
+     * @param claim   the claim the run was made under
+     * @param reason  the reason the completion was written under
+     * @return the settlement the delivery is handed
+     */
+    private GuardDecision settled(final GuardDecision outcome, final RunClaim claim,
+            final CompletionReason reason) {
         if (outcome instanceof GuardDecision.Complete) {
             LOG.info("Run finished. source={} requestId={} reason={}",
                     claim.source(), claim.requestId(), reason.value());

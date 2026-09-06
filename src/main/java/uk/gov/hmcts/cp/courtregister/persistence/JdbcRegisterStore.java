@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DuplicateKeyException;
@@ -25,6 +26,7 @@ import org.springframework.transaction.support.TransactionOperations;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
+import uk.gov.hmcts.cp.courtregister.application.RecordedCompletion;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
@@ -33,6 +35,7 @@ import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.CourtCentreDay;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
+import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
@@ -553,11 +556,14 @@ public class JdbcRegisterStore implements RegisterStore {
      *                                     wrote, or if the statement recorded nothing
      */
     @Override
-    public RecordOutcome record(final DistributionCommand command,
+    public RecordedCompletion recordAndComplete(final DistributionCommand command,
             final CourtRegisterDocument document, final String courtCentreOuCode,
-            final String defendantType, final RecordedFlagState flagState) {
-        return StoreOutage.translating("record a register", () -> attemptedRecording(
-                command, document, courtCentreOuCode, defendantType, flagState));
+            final String defendantType, final RecordedFlagState flagState,
+            final Supplier<GuardDecision> completion) {
+        final RecordOutcome recording = StoreOutage.translating("record a register",
+                () -> attemptedRecording(
+                        command, document, courtCentreOuCode, defendantType, flagState));
+        return new RecordedCompletion(recording, completion.get());
     }
 
     /**

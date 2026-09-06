@@ -3,11 +3,13 @@ package uk.gov.hmcts.cp.courtregister.application;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.CourtCentreDay;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
+import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
@@ -21,9 +23,10 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * {@code courtregister.output=progression-post} is set for the documented fallback sequencing.
  *
  * <p>Nothing here names SQL, a transaction manager or a row. The adapter behind it owns all three,
- * and it is the adapter that makes {@link #record} atomic - the insert and the supersession of the
- * hearing's earlier active row are one transaction, so no reader can see two active registers for
- * one hearing and one day (research §8).
+ * and it is the adapter that makes {@link #recordAndComplete} atomic - the insert, the supersession
+ * of the hearing's earlier active row and the completion of the command are one transaction, so no
+ * reader can see two active registers for one hearing and one day (research §8) and no delivery can
+ * stop between the register and the completion it belongs to.
  *
  * <p><strong>Every {@code mark} is scoped to one batch.</strong> That is defect fix P3 stated as a
  * signature: progression flips rows by court centre, so a document generated for Monday marks
@@ -33,20 +36,33 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 public interface RegisterStore {
 
     /**
-     * Records one hearing's register, superseding that hearing's earlier active row for the day.
+     * Records one hearing's register and completes the command that produced it, in one transaction.
      *
-     * <p>One transaction: the new row is inserted RECORDED and any earlier RECORDED, unsuperseded,
-     * unbatched row for the same hearing within the same {@link CourtCentreDay} is marked SUPERSEDED
-     * and pointed at the new one. A row that already carries a {@code batch_id} is never touched -
-     * it is on its way to a PDF, and rewriting it would take a register out of a batch the renderer
-     * has already been asked about.
+     * <p>One transaction, and the whole of it: the new row is inserted RECORDED, any earlier
+     * RECORDED, unsuperseded, unbatched row for the same hearing within the same
+     * {@link CourtCentreDay} is marked SUPERSEDED and pointed at the new one, and the completion of
+     * the command is written beside them. A row that already carries a {@code batch_id} is never
+     * touched - it is on its way to a PDF, and rewriting it would take a register out of a batch the
+     * renderer has already been asked about.
      *
-     * <p><strong>Idempotent on the command.</strong> The completion of a command is written after
-     * this call and not inside it, so a delivery that stopped in between leaves a register recorded
-     * against a request the broker will deliver again. A command that has been recorded before is
-     * answered with the row it already wrote - the row it superseded included - and nothing is
-     * written a second time, so the redelivery completes rather than failing on a register that is
-     * safely recorded.
+     * <p><strong>The completion is passed in rather than written here.</strong> What a completion
+     * means, and what it is worth when the claim behind it has been reclaimed, belongs to
+     * {@link IdempotencyGuard} and to nothing in this package; what belongs here is the commit
+     * boundary the two writes share. So the caller hands over the completion as the thing to do
+     * inside the transaction, the adapter runs it there, and the guard's own contract is untouched -
+     * every other outcome a run can have is still written by the guard alone, outside any store.
+     *
+     * <p><strong>They stand or fall together.</strong> A completion that throws takes the recording
+     * back with it, and so does a completion the guard did not admit: a register recorded under a
+     * claim somebody else holds is a register the redelivery records again and this one only
+     * supersedes. There is therefore no window in which a register is recorded against a request the
+     * broker will deliver again.
+     *
+     * <p><strong>Idempotent on the command even so.</strong> A delivery can still arrive for a
+     * command this store has recorded - the transaction committed and the broker never learned the
+     * message was settled - and it is answered with the row that was already written, the row it
+     * superseded included, with nothing written a second time. The guard settles most of those
+     * before they reach here; this is what makes the ones that do reach here harmless.
      *
      * <p>The court centre's OU code is an argument because it is the one fact the batch needs that
      * the document does not carry: the transformation resolves it from reference data (001 carries
@@ -63,10 +79,15 @@ public interface RegisterStore {
      *                           {@code null} where the hearing carried no court application
      * @param flagState          the cutover flag as last read, which decides whether the row is
      *                           batched automatically at all (research §12)
-     * @return the row that was written and the row it superseded, if any
+     * @param completion         the completion of this command, run inside the recording's own
+     *                           transaction; a decision other than
+     *                           {@link GuardDecision.Complete} takes the recording back with it
+     * @return the row that was written, the row it superseded if any, and what the completion
+     *         answered
      */
-    RecordOutcome record(DistributionCommand command, CourtRegisterDocument document,
-            String courtCentreOuCode, String defendantType, RecordedFlagState flagState);
+    RecordedCompletion recordAndComplete(DistributionCommand command,
+            CourtRegisterDocument document, String courtCentreOuCode, String defendantType,
+            RecordedFlagState flagState, Supplier<GuardDecision> completion);
 
     /**
      * The registers waiting to be batched.

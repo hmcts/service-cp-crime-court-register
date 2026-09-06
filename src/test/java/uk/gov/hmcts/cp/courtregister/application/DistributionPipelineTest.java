@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -28,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -1009,10 +1012,12 @@ class DistributionPipelineTest {
             when(transformer.transform(any(DistributionCommand.class), any(JsonNode.class),
                         any(JsonNode.class), any()))
                     .thenReturn(new TransformationResult.Register(recorded, OU_CODE));
-            when(registerStore.record(any(DistributionCommand.class),
+            when(registerStore.recordAndComplete(any(DistributionCommand.class),
                         any(CourtRegisterDocument.class), any(), any(),
-                        any(RecordedFlagState.class)))
-                    .thenReturn(new RecordOutcome(OUTPUT_ID, null));
+                        any(RecordedFlagState.class), any()))
+                    .thenAnswer(recording -> new RecordedCompletion(
+                            new RecordOutcome(OUTPUT_ID, null),
+                            recording.<Supplier<GuardDecision>>getArgument(5).get()));
         }
 
         @Test
@@ -1023,8 +1028,8 @@ class DistributionPipelineTest {
             final InOrder stages = inOrder(transformer, registerStore, guard);
             stages.verify(transformer).transform(eqCommand(), any(JsonNode.class),
                     any(JsonNode.class), any());
-            stages.verify(registerStore).record(command, recorded, OU_CODE, DEFENDANT_TYPE,
-                    RecordedFlagState.UNKNOWN);
+            stages.verify(registerStore).recordAndComplete(eq(command), eq(recorded), eq(OU_CODE),
+                    eq(DEFENDANT_TYPE), eq(RecordedFlagState.UNKNOWN), any());
             stages.verify(guard).recordCompletion(claim, CompletionReason.RECORDED);
 
             assertThat(decision).isInstanceOf(GuardDecision.Complete.class);
@@ -1041,8 +1046,8 @@ class DistributionPipelineTest {
 
             runRecording();
 
-            verify(registerStore).record(eqCommand(), written.capture(), ouCode.capture(),
-                    any(), any(RecordedFlagState.class));
+            verify(registerStore).recordAndComplete(eqCommand(), written.capture(), ouCode.capture(),
+                    any(), any(RecordedFlagState.class), any());
             assertThat(written.getValue()).isEqualTo(recorded);
             assertThat(ouCode.getValue())
                     .as("the batch's file name and render payload are built from it, and nothing "
@@ -1057,8 +1062,8 @@ class DistributionPipelineTest {
 
             runRecording();
 
-            verify(registerStore).record(eqCommand(), any(CourtRegisterDocument.class), any(),
-                    defendantType.capture(), any(RecordedFlagState.class));
+            verify(registerStore).recordAndComplete(eqCommand(), any(CourtRegisterDocument.class),
+                    any(), defendantType.capture(), any(RecordedFlagState.class), any());
             assertThat(defendantType.getValue()).isEqualTo(DEFENDANT_TYPE);
         }
 
@@ -1071,8 +1076,8 @@ class DistributionPipelineTest {
 
             runRecording();
 
-            verify(registerStore).record(command, document, OU_CODE, null,
-                    RecordedFlagState.UNKNOWN);
+            verify(registerStore).recordAndComplete(eq(command), eq(document), eq(OU_CODE), isNull(),
+                    eq(RecordedFlagState.UNKNOWN), any());
         }
 
         @Test
@@ -1083,8 +1088,8 @@ class DistributionPipelineTest {
 
             runRecording();
 
-            verify(registerStore).record(eqCommand(), any(CourtRegisterDocument.class), any(),
-                    any(), flagState.capture());
+            verify(registerStore).recordAndComplete(eqCommand(), any(CourtRegisterDocument.class),
+                    any(), any(), flagState.capture(), any());
             assertThat(flagState.getValue())
                     .as("a row written without a flag read says so, rather than claiming ON or OFF")
                     .isEqualTo(RecordedFlagState.UNKNOWN);
@@ -1103,8 +1108,8 @@ class DistributionPipelineTest {
 
             recordingPipeline().process(command, delivery(), attached);
 
-            verify(registerStore).record(eqCommand(), any(CourtRegisterDocument.class), any(),
-                    any(), flagState.capture());
+            verify(registerStore).recordAndComplete(eqCommand(), any(CourtRegisterDocument.class),
+                    any(), any(), flagState.capture(), any());
             assertThat(flagState.getValue())
                     .as("the row says what the delivery was told about the flag, not what a run "
                             + "with no reading behind it would have to say")
@@ -1116,8 +1121,9 @@ class DistributionPipelineTest {
         void records_exactly_once_per_document() {
             runRecording();
 
-            verify(registerStore, times(1)).record(any(DistributionCommand.class),
-                    any(CourtRegisterDocument.class), any(), any(), any(RecordedFlagState.class));
+            verify(registerStore, times(1)).recordAndComplete(any(DistributionCommand.class),
+                    any(CourtRegisterDocument.class), any(), any(), any(RecordedFlagState.class),
+                    any());
         }
 
         @Test
@@ -1147,8 +1153,9 @@ class DistributionPipelineTest {
 
             assertThat(decision).isEqualTo(new GuardDecision.DeadLetter(
                     DeadLetterReason.NON_TRANSIENT, ReasonCode.OUTBOUND_CONTRACT_VIOLATION));
-            verify(registerStore, never()).record(any(DistributionCommand.class),
-                    any(CourtRegisterDocument.class), any(), any(), any(RecordedFlagState.class));
+            verify(registerStore, never()).recordAndComplete(any(DistributionCommand.class),
+                    any(CourtRegisterDocument.class), any(), any(), any(RecordedFlagState.class),
+                    any());
             verify(guard, never()).recordCompletion(any(RunClaim.class),
                     any(CompletionReason.class));
         }
@@ -1168,9 +1175,9 @@ class DistributionPipelineTest {
             final StoreUnavailableException gone = new StoreUnavailableException(
                     "the register store cannot be reached",
                     new DataAccessResourceFailureException("connection refused"));
-            when(registerStore.record(any(DistributionCommand.class),
+            when(registerStore.recordAndComplete(any(DistributionCommand.class),
                         any(CourtRegisterDocument.class), any(), any(),
-                        any(RecordedFlagState.class)))
+                        any(RecordedFlagState.class), any()))
                     .thenThrow(gone);
 
             assertThatThrownBy(this::runRecording)
@@ -1197,9 +1204,9 @@ class DistributionPipelineTest {
         @Test
         @DisplayName("parks a recording the store refused for a reason no redelivery can change")
         void a_register_the_store_refused_is_parked_under_its_own_reason() {
-            when(registerStore.record(any(DistributionCommand.class),
+            when(registerStore.recordAndComplete(any(DistributionCommand.class),
                         any(CourtRegisterDocument.class), any(), any(),
-                        any(RecordedFlagState.class)))
+                        any(RecordedFlagState.class), any()))
                     .thenThrow(new RegisterNotRecordedException(
                             "the recording was refused by a constraint the store does not account "
                                     + "for", new DuplicateKeyException("duplicate key value")));
@@ -1227,8 +1234,9 @@ class DistributionPipelineTest {
             verify(submissionClient).submit(any(RegisterSubmission.class));
             verify(guard).recordCompletion(claim, CompletionReason.SUBMITTED);
             assertThat(completions("submitted")).isEqualTo(1);
-            verify(registerStore, never()).record(any(DistributionCommand.class),
-                    any(CourtRegisterDocument.class), any(), any(), any(RecordedFlagState.class));
+            verify(registerStore, never()).recordAndComplete(any(DistributionCommand.class),
+                    any(CourtRegisterDocument.class), any(), any(), any(RecordedFlagState.class),
+                    any());
         }
 
         /**
@@ -1311,10 +1319,12 @@ class DistributionPipelineTest {
 
         @BeforeEach
         void theStoreWouldAcceptAnything() {
-            when(registerStore.record(any(DistributionCommand.class),
+            when(registerStore.recordAndComplete(any(DistributionCommand.class),
                         any(CourtRegisterDocument.class), any(), any(),
-                        any(RecordedFlagState.class)))
-                    .thenReturn(new RecordOutcome(OUTPUT_ID, null));
+                        any(RecordedFlagState.class), any()))
+                    .thenAnswer(recording -> new RecordedCompletion(
+                            new RecordOutcome(OUTPUT_ID, null),
+                            recording.<Supplier<GuardDecision>>getArgument(5).get()));
         }
 
         /**
@@ -1338,8 +1348,9 @@ class DistributionPipelineTest {
                     .isEqualTo(new GuardDecision.DeadLetter(
                             DeadLetterReason.NON_TRANSIENT,
                             ReasonCode.OUTBOUND_CONTRACT_VIOLATION));
-            verify(registerStore, never()).record(any(DistributionCommand.class),
-                    any(CourtRegisterDocument.class), any(), any(), any(RecordedFlagState.class));
+            verify(registerStore, never()).recordAndComplete(any(DistributionCommand.class),
+                    any(CourtRegisterDocument.class), any(), any(), any(RecordedFlagState.class),
+                    any());
         }
 
         /**
@@ -1358,8 +1369,8 @@ class DistributionPipelineTest {
                     recordingOver(OutboundContractValidator.overTheRegisterDocument(mapper));
 
             assertThat(decision).isInstanceOf(GuardDecision.Complete.class);
-            verify(registerStore).record(eqCommand(), any(CourtRegisterDocument.class), any(),
-                    any(), any(RecordedFlagState.class));
+            verify(registerStore).recordAndComplete(eqCommand(), any(CourtRegisterDocument.class),
+                    any(), any(), any(RecordedFlagState.class), any());
         }
 
         private void transformerProduces(final CourtRegisterDocument register) {
@@ -1628,7 +1639,7 @@ class DistributionPipelineTest {
      * @return a matcher for the command under test
      */
     private DistributionCommand eqCommand() {
-        return org.mockito.ArgumentMatchers.eq(command);
+        return eq(command);
     }
 
     /**

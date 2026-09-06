@@ -24,6 +24,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
@@ -36,8 +37,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.dao.ConcurrencyFailureException;
+import org.springframework.dao.DataAccessResourceFailureException;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
+import uk.gov.hmcts.cp.courtregister.application.RecordedCompletion;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
@@ -49,12 +52,15 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterHearingVenue;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
+import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 import uk.gov.hmcts.cp.courtregister.domain.RequestFingerprint;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 
@@ -147,6 +153,38 @@ class RegisterStoreIT {
 
     private static final String APPLICANT = "Applicant";
     private static final String RESPONDENT = "Respondent";
+
+    /**
+     * A completion that could not be written, which is the pod dying between the two writes.
+     *
+     * <p>{@link StoreUnavailableException} rather than an invented type: the guard writes through
+     * the same package this store does, so a completion that fails because the store went away
+     * arrives as the signal that package raises for it.
+     */
+    private static final Supplier<GuardDecision> COMPLETION_THAT_FAILED = () -> {
+        throw new StoreUnavailableException("the completion could not be written",
+                new DataAccessResourceFailureException("connection reset by peer"));
+    };
+
+    /**
+     * A completion the guard declined to write: this runner's claim was reclaimed while it worked.
+     *
+     * <p>Not an exception - the guard answers rather than throws - and the answer is the whole of
+     * the decision the store has to act on.
+     */
+    private static final Supplier<GuardDecision> COMPLETION_REFUSED =
+            () -> new GuardDecision.Abandon(ReasonCode.STALE_RUNNER);
+
+    /**
+     * The completion an ordinary case hands the store: admitted, and writing nothing of its own.
+     *
+     * <p>The store's contract is about what the completion <em>answers</em> and whether it throws -
+     * the commit boundary is the store's, the meaning of a completion is the guard's - so a case
+     * that is not about the completion says the least it can and still exercises the transaction
+     * the recording runs in.
+     */
+    private static final Supplier<GuardDecision> COMPLETED =
+            () -> new GuardDecision.Complete(ReasonCode.RUN_COMPLETED);
 
     private static final String RECORDED = "RECORDED";
     private static final String SUPERSEDED = "SUPERSEDED";
@@ -272,8 +310,8 @@ class RegisterStoreIT {
             final DistributionCommand command = seededCommand(HEARING_ONE, MONDAY_SHARED);
 
             softly.assertThatCode(() -> {
-                store.record(command, document(HEARING_ONE, MONDAY, MONDAY_SHARED), OU_CODE,
-                        APPLICANT, RecordedFlagState.ON);
+                store.recordAndComplete(command, document(HEARING_ONE, MONDAY, MONDAY_SHARED),
+                        OU_CODE, APPLICANT, RecordedFlagState.ON, COMPLETED);
                 store.assemble(new CourtCentreDay(courtCentre, MONDAY),
                         mine(store.activeUnbatched()));
             }).as(WALKED).doesNotThrowAnyException();
@@ -413,6 +451,67 @@ class RegisterStoreIT {
             softly.assertThat(rowsAtCourtCentre())
                     .as("three commands, three registers: the redelivery records nothing")
                     .isEqualTo(3);
+        }
+
+        /**
+         * The recording and the completion of the command stand or fall together.
+         *
+         * <p>The data model says the row is written RECORDED in the transaction that completes the
+         * command, and this is what that sentence is worth: a completion that could not be written
+         * takes the register back with it. Two statements committing separately would leave the
+         * register behind and the request unfinished, and the broker would deliver the command
+         * again into a store that already holds its answer - safe, because the recording is
+         * idempotent on the command, but only because of that. Here there is no window at all.
+         */
+        @Test
+        void a_completion_that_could_not_be_written_takes_the_recording_with_it() {
+            final DistributionCommand command = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatThrownBy(() -> store.recordAndComplete(command,
+                            document(HEARING_ONE, MONDAY, MONDAY_SHARED), OU_CODE, APPLICANT,
+                            RecordedFlagState.ON, COMPLETION_THAT_FAILED))
+                    .as("the completion failed and nothing hid it: the signal reaches the caller, "
+                            + "which is the only place that can stop intake")
+                    .isInstanceOf(StoreUnavailableException.class);
+
+            softly.assertThat(rowsAtCourtCentre())
+                    .as("and no register survives it - the insert and the completion are one "
+                            + "transaction, so a completion that did not happen is a recording "
+                            + "that did not happen")
+                    .isZero();
+            softly.assertThat(statusOf(command))
+                    .as("there is no row at all, rather than a row in some intermediate state")
+                    .isEmpty();
+        }
+
+        /**
+         * The same rule, for the completion the guard refuses rather than fails on.
+         *
+         * <p>A claim reclaimed while this run worked means another delivery owns the request, and
+         * the guard writes nothing. A register left behind by that run is a register the new owner
+         * records again and this one only supersedes: two rows for one hearing, one of them
+         * belonging to a run whose outcome was discarded. The transaction takes it back, and the
+         * decision the caller settles on is the guard's own.
+         */
+        @Test
+        void a_completion_the_guard_refused_takes_the_recording_with_it() {
+            final DistributionCommand command = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final AtomicReference<RecordedCompletion> answered = new AtomicReference<>();
+
+            softly.assertThatCode(() -> answered.set(store.recordAndComplete(command,
+                            document(HEARING_ONE, MONDAY, MONDAY_SHARED), OU_CODE, APPLICANT,
+                            RecordedFlagState.ON, COMPLETION_REFUSED)))
+                    .as("a refusal is an answer rather than a failure, and it comes back as one")
+                    .doesNotThrowAnyException();
+
+            softly.assertThat(answered.get())
+                    .extracting(RecordedCompletion::completion)
+                    .as("the guard's decision reaches the caller unchanged; the store decides what "
+                            + "becomes of the row, not what becomes of the delivery")
+                    .isEqualTo(new GuardDecision.Abandon(ReasonCode.STALE_RUNNER));
+            softly.assertThat(rowsAtCourtCentre())
+                    .as("and the register goes back with the completion nobody admitted")
+                    .isZero();
         }
 
         /**
@@ -1386,11 +1485,17 @@ class RegisterStoreIT {
      * <p>The code is a fact about the court centre rather than about any one case, so it is named
      * once here instead of at each of the thirty call sites. The case that is <em>about</em> the OU
      * code calls the port directly, so the port's own shape is still asserted somewhere.
+     *
+     * <p>The completion these cases hand over is {@link #COMPLETED}: what the store does with the
+     * answer is this suite's subject, and what a real completion writes is the guard's and is
+     * asserted where the two meet, in {@code CrashWindowIT}. The two cases that are about the
+     * completion pass their own.
      */
     private RecordOutcome record(final DistributionCommand command,
             final CourtRegisterDocument document, final String defendantType,
             final RecordedFlagState flagState) {
-        return store.record(command, document, OU_CODE, defendantType, flagState);
+        return store.recordAndComplete(command, document, OU_CODE, defendantType, flagState,
+                COMPLETED).recording();
     }
 
     /**
