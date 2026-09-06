@@ -18,8 +18,8 @@ import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.GateDecision;
 import uk.gov.hmcts.cp.courtregister.domain.RunReport;
-import uk.gov.hmcts.cp.courtregister.support.GenerationStackSupport;
 import uk.gov.hmcts.cp.courtregister.support.GeneratedRegisters;
+import uk.gov.hmcts.cp.courtregister.support.GenerationStackSupport;
 import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 
@@ -48,6 +48,15 @@ class FlagGateEndToEndIT {
 
     private static final Instant REGISTER_TIME = Instant.parse("2026-08-20T16:30:00Z");
 
+    /**
+     * This case's registers, at a court centre nobody else holds a row for.
+     *
+     * <p>Minted per case rather than per suite, so a case reads only its own rows and no case has to
+     * empty a table another is using.
+     */
+    private final GeneratedRegisters registers =
+            new GeneratedRegisters(service, UUID.randomUUID());
+
     private static GenerationStackSupport stack;
 
     private static ConfigurableApplicationContext service;
@@ -65,15 +74,6 @@ class FlagGateEndToEndIT {
         service.close();
         stack.close();
     }
-
-    /**
-     * This case's registers, at a court centre nobody else holds a row for.
-     *
-     * <p>Minted per case rather than per suite, so a case reads only its own rows and no case has to
-     * empty a table another is using.
-     */
-    private final GeneratedRegisters registers =
-            new GeneratedRegisters(service, UUID.randomUUID());
 
     @BeforeEach
     void oneRegisterWaitingForTonight() {

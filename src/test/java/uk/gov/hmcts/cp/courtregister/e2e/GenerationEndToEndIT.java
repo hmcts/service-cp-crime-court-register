@@ -77,6 +77,15 @@ class GenerationEndToEndIT {
     /** The shared contract mapper, which is what wrote the metadata row being read back. */
     private static final ObjectMapper MAPPER = JacksonConfig.contractObjectMapper();
 
+    /**
+     * This case's registers, at a court centre nobody else holds a row for.
+     *
+     * <p>Minted per case, so what this suite asserts about a batch is about its own batch: the
+     * shared store holds other suites' active registers and a night is entitled to batch those too.
+     */
+    private final GeneratedRegisters registers =
+            new GeneratedRegisters(service, UUID.randomUUID());
+
     private static GenerationStackSupport stack;
 
     private static ConfigurableApplicationContext service;
@@ -94,15 +103,6 @@ class GenerationEndToEndIT {
         service.close();
         stack.close();
     }
-
-    /**
-     * This case's registers, at a court centre nobody else holds a row for.
-     *
-     * <p>Minted per case, so what this suite asserts about a batch is about its own batch: the
-     * shared store holds other suites' active registers and a night is entitled to batch those too.
-     */
-    private final GeneratedRegisters registers =
-            new GeneratedRegisters(service, UUID.randomUUID());
 
     @BeforeEach
     void aNightWithOneCourtCentreWaiting() {

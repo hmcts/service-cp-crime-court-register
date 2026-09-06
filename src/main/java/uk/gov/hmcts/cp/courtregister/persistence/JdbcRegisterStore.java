@@ -942,6 +942,9 @@ public class JdbcRegisterStore implements RegisterStore {
      * cross product - another day's finished batch offered as this day's history - and the
      * supplementary index would be counted off a document for a different set of children.
      */
+    // PMD.OnlyOneReturn: "no keys" is answered without issuing anything, and saying so where it is
+    // decided is the whole of the guard - an empty IN list is a statement Postgres refuses.
+    @SuppressWarnings("PMD.OnlyOneReturn")
     @Override
     public List<RegisterBatch> batchesFor(final Collection<CourtCentreDay> keys) {
         if (keys.isEmpty()) {

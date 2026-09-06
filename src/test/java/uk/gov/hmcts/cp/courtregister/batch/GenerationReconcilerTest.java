@@ -677,7 +677,7 @@ class GenerationReconcilerTest {
             generatingSince(batch);
             saysNothingAbout(batch);
 
-            softly.assertThatCode(() -> reconciler.reconcileScheduled())
+            softly.assertThatCode(reconciler::reconcileScheduled)
                     .as("the schedule's entry point is the counting one with its answer dropped, "
                             + "not a second reconciler")
                     .doesNotThrowAnyException();

@@ -9,6 +9,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.verification.LoggedRequest;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -87,7 +88,7 @@ public final class GenerationStackSupport implements AutoCloseable {
     private static final Path FILE_SERVICE_SCHEMA = Path.of("docker", "fileservice", "init.sql");
 
     /** The file-service database's URL, created once per JVM however many suites ask for it. */
-    private static String fileServiceUrl;
+    private static String fileServiceDatabaseUrl;
 
     private final WireMockServer contexts;
 
@@ -245,7 +246,7 @@ public final class GenerationStackSupport implements AutoCloseable {
         return contexts.findAll(postRequestedFor(
                         urlEqualTo(SystemDocGeneratorClient.COMMAND_PATH)))
                 .stream()
-                .map(request -> request.getBodyAsString())
+                .map(LoggedRequest::getBodyAsString)
                 .toList();
     }
 
@@ -301,12 +302,12 @@ public final class GenerationStackSupport implements AutoCloseable {
      * would make the second datasource a fiction.
      */
     private static synchronized String fileServiceUrl() {
-        if (fileServiceUrl == null) {
+        if (fileServiceDatabaseUrl == null) {
             final String url = PostgresTestSupport.createEmptyDatabase(DATABASE);
             applyFileServiceSchema(url);
-            fileServiceUrl = url;
+            fileServiceDatabaseUrl = url;
         }
-        return fileServiceUrl;
+        return fileServiceDatabaseUrl;
     }
 
     private static DataSource fileServiceDataSource() {

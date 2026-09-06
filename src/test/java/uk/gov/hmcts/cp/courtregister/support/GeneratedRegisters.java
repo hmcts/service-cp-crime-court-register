@@ -69,11 +69,6 @@ public final class GeneratedRegisters {
         this.courtCentre = courtCentreId;
     }
 
-    /** The court centre every row this fixture writes and reads belongs to. */
-    public UUID courtCentre() {
-        return courtCentre;
-    }
-
     /**
      * The file name every register this fixture records carries, and therefore the batch's.
      *

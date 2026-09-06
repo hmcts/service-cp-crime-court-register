@@ -304,7 +304,10 @@ public class RegisterGenerationJob {
     // PMD.AvoidCatchingGenericException: the stamp refuses through IllegalStateException and the
     // store translates an outage into its own unchecked type; both mean the same thing here - this
     // batch was not written down - and a narrower catch would leave one of them ending the run.
-    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    // PMD.OnlyOneReturn: the two exits are the two things that can happen to a batch, and each says
+    // so where it is decided; funnelling them through one would turn a verdict into a flag carried
+    // past the call that must not be made once it exists.
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
     private BatchStatus requested(final AssembledBatch assembled, final Deadline deadline) {
         final RegisterBatch batch;
         try {

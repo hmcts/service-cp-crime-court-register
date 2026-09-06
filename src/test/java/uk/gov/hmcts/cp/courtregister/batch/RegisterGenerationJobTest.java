@@ -660,7 +660,7 @@ class RegisterGenerationJobTest {
             run();
 
             verifyNoInteractions(reconciler);
-            softly.assertThat(GenerationReconciler.class.getDeclaredMethod("reconcile")
+            softly.assertThat(GenerationReconciler.class.getDeclaredMethod("reconcileScheduled")
                             .getAnnotation(Scheduled.class))
                     .as("a night this service may not generate on is still a night it owns the "
                             + "batches it asked for yesterday; without a schedule of its own the "
