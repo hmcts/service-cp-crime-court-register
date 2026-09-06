@@ -203,7 +203,10 @@ PENDING ──payload stored + 202──▶ GENERATING ──document-available�
    │                                 └─ grace period → reconcile → GENERATED | FAILED(GENERATION_FAILED | GENERATION_TIMED_OUT)
    ├─ store unavailable ──▶ FAILED(PAYLOAD_STORE_UNAVAILABLE)   [rows stay RECORDED; next run re-assembles]
    ├─ request rejected / exhausted ──▶ FAILED(RENDER_REQUEST_*)
-   └─ grace period, payload_file_id set → reconcile → GENERATED | FAILED(RENDER_REQUEST_FAILED)
+   └─ grace period, payload_file_id set → reconcile → GENERATED
+                                                    | FAILED(GENERATION_FAILED
+                                                            | GENERATION_TIMED_OUT
+                                                            | RENDER_REQUEST_FAILED)
 PARTIALLY_NOTIFIED ──notify-register --batch (resend FAILED only)──▶ NOTIFIED
 FAILED ──generate-register --batch (new batch_id)──▶ PENDING
 ```
@@ -217,10 +220,16 @@ nothing revisited it: the reconciler read `generatingSince()` only, the stamped 
 and `oldest_generating_age` reads GENERATING. So the reconciler also sweeps PENDING batches whose
 `payload_file_id` is set and whose `assembled_at` is older than the grace period, asks
 systemdocgenerator about that payload, and applies the answer through the same `DocumentOutcomeSink`:
-a document makes the batch **GENERATED** (`completed_by = RECONCILER`), a refusal FAILED
-`GENERATION_FAILED`, and no record at all FAILED **`RENDER_REQUEST_FAILED`** with `completed_by` NULL
-- this service's own verdict about a request it cannot show was ever accepted. Their age is published
-on `courtregister_oldest_pending_age`, the fifth gauge.
+a document makes the batch **GENERATED** (`completed_by = RECONCILER`) and a refusal FAILED
+`GENERATION_FAILED`. The two endings that are not an answer are told apart on whether
+systemdocgenerator knows the payload at all, and not on which read found the batch. An answer that
+names neither a document nor a refusal is a payload systemdocgenerator has and is still rendering, so
+the request did reach the renderer and the renderer is what has not come back: FAILED
+**`GENERATION_TIMED_OUT`** with `completed_by = RECONCILER`, exactly as an overdue GENERATING batch
+with the same empty answer is failed. No record of the payload at all is the only shape that shows
+the request never arrived: FAILED **`RENDER_REQUEST_FAILED`** with `completed_by` NULL - this
+service's own verdict about a request it cannot show was ever accepted. Their age is published on
+`courtregister_oldest_pending_age`, the fifth gauge.
 
 `PENDING → GENERATED` is therefore a drawn arrow rather than a batch skipping GENERATING: the render
 really was accepted and the mark that says so is what was lost, and refusing the move would throw

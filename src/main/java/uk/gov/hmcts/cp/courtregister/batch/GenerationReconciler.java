@@ -42,10 +42,10 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * only, the stamped rows are outside {@code activeUnbatched}, and the live-key index defers every
  * later re-share of that key behind it. So a second read, over PENDING batches that minted a
  * payload before the same grace period, asks systemdocgenerator the same question by the same
- * payload id and applies the answer through the same sink. Where it has none, the batch is failed
- * RENDER_REQUEST_FAILED - this service's own verdict about a request it cannot show was ever
- * accepted, which is the reason the run itself would have used and the one an operator reads as
- * "ask for it again".
+ * payload id and applies the answer through the same sink. Where systemdocgenerator has no record of
+ * that payload at all, the batch is failed RENDER_REQUEST_FAILED - this service's own verdict about
+ * a request it cannot show was ever accepted, which is the reason the run itself would have used and
+ * the one an operator reads as "ask for it again".
  *
  * <p>A batch the query has nothing to say about is failed GENERATION_TIMED_OUT rather than asked
  * again. Two systems have now been given the chance to report an outcome and neither has one, and a
@@ -53,6 +53,14 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * goes through {@link RegisterStore#markFailed} rather than through the sink, because it is this
  * service's own verdict about a silence and not an answer anybody gave - and it still names
  * RECONCILER, which is what {@code BatchFailureReason.isGeneratorAttributed()} requires of it.
+ *
+ * <p><strong>Being answered about and being known are the same thing, and neither read changes
+ * that.</strong> A query that answers about the payload and names neither a document nor a refusal
+ * is systemdocgenerator saying it has the payload and is still rendering it, so that batch is
+ * GENERATION_TIMED_OUT whichever of the two reads found it: the request reached the renderer, and
+ * the state this service's own {@code markRequested} was lost from says nothing about whose silence
+ * this is. RENDER_REQUEST_FAILED is for the other answer only - no record of the payload at all,
+ * which is the one shape that shows the request never arrived.
  *
  * <p>The count is the broker's health seen from here: a run whose outcomes all arrive by
  * reconciliation is a subscription to investigate, and the {@code reconciled} metric and the run
@@ -119,11 +127,19 @@ public class GenerationReconciler {
      */
     private static final String GRACE_PERIOD = "${courtregister.generation.grace-period}";
 
-    /** What a GENERATING batch nobody has an outcome for is ended as. */
+    /**
+     * What a batch systemdocgenerator answered about without a verdict is ended as.
+     *
+     * <p>The silence of a GENERATING batch, and also the silence of a stale PENDING one that
+     * systemdocgenerator turns out to hold a payload for: in both cases the request reached the
+     * renderer and the renderer is the one that has not finished, so the reason is the generator's
+     * and the row names RECONCILER, which is what {@code BatchFailureReason.isGeneratorAttributed()}
+     * requires of GENERATION_TIMED_OUT.
+     */
     private static final Ending TIMED_OUT =
             new Ending(BatchFailureReason.GENERATION_TIMED_OUT, CompletedBy.RECONCILER);
 
-    /** What a PENDING batch systemdocgenerator holds no payload for is ended as. */
+    /** What a PENDING batch systemdocgenerator holds no payload for at all is ended as. */
     private static final Ending NEVER_REQUESTED =
             new Ending(BatchFailureReason.RENDER_REQUEST_FAILED, null);
 
@@ -210,11 +226,11 @@ public class GenerationReconciler {
      * Asks about every batch of one read and counts the ones this pass settled.
      *
      * <p>Every batch is its own attempt, and the two reads are the same attempt made about two
-     * states: what systemdocgenerator says is applied through the sink either way, and only what a
-     * silence means differs, which is why the silence is the argument.
+     * states: what systemdocgenerator says is applied through the sink either way, and the reads
+     * differ only in what an unknown payload means, which is why that ending is the argument.
      *
      * @param overdue the batches this pass read, oldest first
-     * @param silence what a batch systemdocgenerator has nothing to say about is ended as
+     * @param silence what a batch systemdocgenerator has no record of at all is ended as
      * @return how many of them this pass completed
      */
     private int settle(final List<RegisterBatch> overdue, final Ending silence) {
@@ -286,7 +302,7 @@ public class GenerationReconciler {
      * broker, is what tonight's stuck batches are waiting on.
      *
      * @param batch   the overdue batch, as the read returned it
-     * @param silence what this batch is ended as if systemdocgenerator has nothing to say about it
+     * @param silence what this batch is ended as if systemdocgenerator has no record of its payload
      * @return whether this batch was completed by the reconciler
      */
     private boolean reconcileOne(final RegisterBatch batch, final Ending silence) {
@@ -294,7 +310,7 @@ public class GenerationReconciler {
         try {
             final Optional<DocumentStatus> answer =
                     renderer.query(batch.payloadFileId(), CallerIdentity.SYSTEM);
-            completed = answer.map(status -> apply(batch, status, silence))
+            completed = answer.map(status -> apply(batch, status))
                     .orElseGet(() -> end(batch, silence));
         } catch (GenerationFailedException e) {
             LOG.warn("Batch {} is past its grace period and systemdocgenerator could not answer "
@@ -313,16 +329,23 @@ public class GenerationReconciler {
      * record systemdocgenerator opened and has not filled in, and taking it for a document would
      * send a Youth Offending Team an attachment nothing had rendered yet. A refusal is the instant
      * it failed, with or without words about why - the words are for support and the batch's own
-     * reason is the bounded GENERATION_FAILED the sink applies. An answer that says neither is the
-     * renderer having nothing to say, which is the silence below.
+     * reason is the bounded GENERATION_FAILED the sink applies. An answer that says neither is a
+     * payload systemdocgenerator has and is still rendering.
      *
-     * @param batch   the overdue batch the answer is about
-     * @param status  what systemdocgenerator said became of its payload
-     * @param silence what this batch is ended as if the answer says neither
+     * <p><strong>An answer is not the same silence as no answer.</strong> This ending is
+     * {@link #TIMED_OUT} whichever read found the batch, and that is the whole difference between
+     * being answered about and not being known: systemdocgenerator has replied about this payload,
+     * so the request did reach the renderer and the renderer is what has not finished - which is
+     * true of a stale PENDING batch whose {@code markRequested} was lost exactly as it is of a
+     * GENERATING one. {@link #NEVER_REQUESTED} belongs to the other case only, the query that finds
+     * no record of the payload at all, and it is applied where that case is: on the empty answer in
+     * {@link #reconcileOne}.
+     *
+     * @param batch  the overdue batch the answer is about
+     * @param status what systemdocgenerator said became of its payload
      * @return whether this batch was completed by the reconciler
      */
-    private boolean apply(final RegisterBatch batch, final DocumentStatus status,
-            final Ending silence) {
+    private boolean apply(final RegisterBatch batch, final DocumentStatus status) {
         final boolean completed;
         if (status.documentFileServiceId() != null && status.generatedTime() != null) {
             LOG.info("Batch {} has a document systemdocgenerator generated and no event delivered, "
@@ -339,7 +362,7 @@ public class GenerationReconciler {
                     status.failedTime(), CompletedBy.RECONCILER);
             completed = true;
         } else {
-            completed = end(batch, silence);
+            completed = end(batch, TIMED_OUT);
         }
         return completed;
     }
@@ -366,14 +389,15 @@ public class GenerationReconciler {
 
     /**
      * How a batch the topic and the query API both said nothing about is ended, which depends on
-     * which of the two reads found it.
+     * what the query answered rather than on which read found the batch.
      *
-     * <p>A GENERATING batch was asked for and accepted, so the silence is systemdocgenerator's and
-     * the row names RECONCILER, which is what {@code BatchFailureReason.isGeneratorAttributed()}
-     * requires of GENERATION_TIMED_OUT. A PENDING one was never recorded as requested and
-     * systemdocgenerator holds no payload under its id, so the silence says the request never
-     * arrived: that is this service's own RENDER_REQUEST_FAILED verdict and names no mechanism,
-     * because nobody outside this service answered for it.
+     * <p>A batch systemdocgenerator answered about without naming a document or a refusal was asked
+     * for and accepted, so the silence is systemdocgenerator's and the row names RECONCILER, which
+     * is what {@code BatchFailureReason.isGeneratorAttributed()} requires of GENERATION_TIMED_OUT.
+     * A stale PENDING batch systemdocgenerator has no record of at all is the other case: it was
+     * never recorded as requested and no payload is held under its id, so the silence says the
+     * request never arrived, which is this service's own RENDER_REQUEST_FAILED verdict and names no
+     * mechanism, because nobody outside this service answered for it.
      *
      * @param reason      the bounded reason the batch is failed under
      * @param completedBy the mechanism that learned the outcome, or {@code null} where this is this
