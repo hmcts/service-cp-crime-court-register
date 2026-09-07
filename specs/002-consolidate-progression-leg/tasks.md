@@ -528,6 +528,36 @@ PARTIALLY_NOTIFIED; resend ⇒ NOTIFIED.
 
 **Checkpoint**: the whole downstream leg works against stubs; six P rows FIXED. Codex review 6.
 
+### Approved TDD exceptions (Phase 6)
+
+One, and it is recorded here rather than argued for in a commit body, which is where it was argued
+for until this entry existed. Approver: **design owner, 2026-09-07**. Anything else in Phase 6 that
+arrived test-after is a defect, not a precedent.
+
+1. **`1b1bf17` "test(notify): pin the hand-on from a generated batch to its recipients", written
+   after `322fc07`.** T059 (`322fc07`) wired `DocumentOutcomeSinkImpl.documentAvailable` to mark the
+   batch GENERATED and then call `RegisterNotifierService.notify`, and no case held either half of
+   that down: `DocumentOutcomeSinkTest` gained the mock and the constructor argument and nothing
+   else. So the claim that a redelivered `document-available` is recognised and never notified twice
+   - made in the sink's javadoc, in that suite's, and in `data-model.md` - was pinned nowhere at unit
+   level, and the rewritten `GenerationEndToEndIT` was green on its first observed run, so it is not
+   the red half either. `1b1bf17` added seven cases in one nested class over the seams the suite
+   already had.
+   **Why no red run was recorded**: they are **[A]** characterisations of behaviour that already
+   existed, so the run recorded is a passing one, exactly as the Phase 3 and Phase 5 blocks record
+   for the same shape.
+   **Non-vacuity was shown by mutation instead**, and the runs are in the commit body: with
+   `notifier.notify(...)` removed from `documentAvailable`,
+   `a_redelivered_document_available_should_tell_the_recipients_once` and
+   `a_generated_batch_should_be_marked_before_its_recipients_are_told(CompletedBy)[1]` fail on
+   "Wanted but not invoked: registerNotifierService.notify(" (20 tests completed, 2 failed, 1
+   skipped); with `notify` moved ahead of `markGenerated`, the same parameterised case fails on
+   "Verification in order failure / Wanted but not invoked:" and
+   `a_mark_that_did_not_take_should_not_be_followed_by_an_e_mail` fails with it (20 tests completed,
+   2 failed, 1 skipped). The sink is unchanged and green under both mutations reverted.
+   No production code and no defect-register row moved in that commit: P1 stays pinned by
+   `RegisterNotifierServiceTest`.
+
 ---
 
 ## Phase 7: User Story 5 — operations CLI in the image (Priority: P2)
