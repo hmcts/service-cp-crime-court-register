@@ -57,6 +57,8 @@ public class GenerationMetrics {
     public static final String GENERATION_RECONCILED = "courtregister_generation_reconciled_total";
     public static final String GENERATION_SKIPPED = "courtregister_generation_skipped_total";
     public static final String NOTIFICATIONS = "courtregister_notifications_total";
+    public static final String NOTIFICATIONS_IGNORED =
+            "courtregister_notifications_ignored_total";
     public static final String PUBLIC_EVENTS_IGNORED =
             "courtregister_public_events_ignored_total";
     public static final String OLDEST_RECORDED_UNBATCHED_AGE =
@@ -119,6 +121,26 @@ public class GenerationMetrics {
      * registers, so it is counted here and applied nowhere.
      */
     public static final String PAYLOAD_MISMATCH = "payload-mismatch";
+
+    /**
+     * The {@code reason} label of a settlement that arrived after the row was already accepted.
+     *
+     * <p>A team that has been told has been told, so the write that would have demoted its row to
+     * FAILED changes nothing - and something that changes nothing has to be visible, or the only
+     * trace of two notifiers racing over one batch is a row that looks untouched. Zero is the
+     * expected reading on a pod whose claim is doing its job.
+     */
+    public static final String LATE_FAILURE_IGNORED = "late-failure-ignored";
+
+    /**
+     * The {@code reason} label of a notifier that found the batch already claimed by another.
+     *
+     * <p>Not a failure: the outcome sink on a delivered {@code document-available} and an
+     * operator's resend can reach one generated batch at the same moment, and the one that does not
+     * get the claim has nothing left to do. It is counted so that a batch nobody can ever claim -
+     * a claim left behind by a pod that died - reads as a series rather than as silence.
+     */
+    public static final String ALREADY_NOTIFYING = "already-notifying";
 
     private static final int READABLE = 1;
     private static final int UNREADABLE = 0;

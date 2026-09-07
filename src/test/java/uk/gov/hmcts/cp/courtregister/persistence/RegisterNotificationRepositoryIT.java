@@ -55,6 +55,12 @@ class RegisterNotificationRepositoryIT {
     /** The single row a write of one notification is expected to change. */
     private static final int ONE_ROW = 1;
 
+    /** One POST made for the row, which is what a settlement adds to the attempt total. */
+    private static final int ONE_POST = 1;
+
+    /** A call that spent two of its attempt budget before it settled the row. */
+    private static final int TWO_POSTS = 2;
+
     private static final LocalDate MONDAY = LocalDate.of(2026, 8, 24);
     private static final Instant ASSEMBLED_AT = Instant.parse("2026-08-24T17:00:00Z");
     private static final Instant REQUESTED_AT = Instant.parse("2026-08-24T17:00:04Z");
@@ -80,6 +86,12 @@ class RegisterNotificationRepositoryIT {
     private static final String MERTON = "merton.yot@example.gov.uk";
 
     private static final int ACCEPTED = 202;
+
+    /** notificationnotify could not take the command; a late attempt that answered this. */
+    private static final int UNAVAILABLE = 503;
+
+    /** A second settlement instant, later than the first, so an overwrite would be visible. */
+    private static final Instant LATER = Instant.parse("2026-08-24T17:09:38Z");
 
     private final UUID courtCentre = UUID.randomUUID();
 
@@ -198,10 +210,11 @@ class RegisterNotificationRepositoryIT {
             repository.insert(accepted);
             repository.insert(refused);
             repository.insert(abandoned);
-            repository.update(settled(accepted, NotificationStatus.ACCEPTED, ACCEPTED, SENT_AT));
+            repository.update(settled(accepted, NotificationStatus.ACCEPTED, ACCEPTED, SENT_AT),
+                    ONE_POST);
             final RegisterNotification failed =
                     settled(refused, NotificationStatus.FAILED, null, null);
-            repository.update(failed);
+            repository.update(failed, ONE_POST);
 
             assertThat(repository.findUnsettledByBatchId(batchId))
                     .as("a resend attempts the recipients that were not told and nobody else, and "
@@ -209,7 +222,7 @@ class RegisterNotificationRepositoryIT {
                             + "between the POST and the settlement, so the team is owed its e-mail "
                             + "exactly as a refused one is, while re-sending an accepted row would "
                             + "deliver the register twice")
-                    .containsExactly(failed, abandoned);
+                    .containsExactly(withAttempts(failed, ONE_POST), abandoned);
         }
 
         @Test
@@ -235,13 +248,13 @@ class RegisterNotificationRepositoryIT {
             final RegisterNotification accepted =
                     settled(pending, NotificationStatus.ACCEPTED, ACCEPTED, SENT_AT);
 
-            assertThat(repository.update(accepted))
+            assertThat(repository.update(accepted, ONE_POST))
                     .as("the affected-row count is the decision, and never a read-back")
                     .isEqualTo(ONE_ROW);
             assertThat(repository.findByBatchId(batchId))
                     .as("202 and nothing else is acceptance, and the row says which attempt under "
                             + "this identity it was")
-                    .containsExactly(accepted);
+                    .containsExactly(withAttempts(accepted, ONE_POST));
         }
 
         @Test
@@ -252,13 +265,76 @@ class RegisterNotificationRepositoryIT {
             final RegisterNotification failed =
                     settled(pending, NotificationStatus.FAILED, null, null);
 
-            assertThat(repository.update(failed)).isEqualTo(ONE_ROW);
+            assertThat(repository.update(failed, ONE_POST)).isEqualTo(ONE_ROW);
 
             assertThat(repository.findByBatchId(batchId))
                     .as("a connect failure has no status line and no settlement instant, and a row "
                             + "carrying an invented one would say an attempt was answered when "
                             + "nothing answered at all")
-                    .containsExactly(failed);
+                    .containsExactly(withAttempts(failed, ONE_POST));
+        }
+
+        /**
+         * ACCEPTED is terminal at the row level, and this is the statement that makes it so.
+         *
+         * <p>Two mechanisms can reach one generated batch at the same moment - the outcome sink on
+         * a delivered {@code document-available} and an operator's resend - so a run can read a row
+         * as unsettled, POST for it, and only then find that the other run's POST was accepted in
+         * between. An unconditional settlement would write FAILED over that ACCEPTED row: the team
+         * that has been told reads as untold, the batch goes back to PARTIALLY_NOTIFIED, and the
+         * resend that follows sends a register about children to a team that already has it.
+         *
+         * <p>Nought rows changed is the answer, and the caller counts it rather than believing the
+         * write landed.
+         */
+        @Test
+        void settling_a_recipient_already_accepted_should_change_nothing_and_say_so() {
+            seededBatch();
+            final RegisterNotification pending = pending(WANDSWORTH, "Wandsworth YOT");
+            repository.insert(pending);
+            final RegisterNotification accepted =
+                    settled(pending, NotificationStatus.ACCEPTED, ACCEPTED, SENT_AT);
+            repository.update(accepted, ONE_POST);
+
+            assertThat(repository.update(
+                    settled(pending, NotificationStatus.FAILED, UNAVAILABLE, LATER), ONE_POST))
+                    .as("a team that has been told has been told: the write that would demote its "
+                            + "row is refused by the statement rather than by the caller "
+                            + "remembering to check")
+                    .isZero();
+            assertThat(repository.findByBatchId(batchId))
+                    .as("and nothing about the row moved - not the status, not the status line, "
+                            + "not the settlement instant and not the attempt total")
+                    .containsExactly(withAttempts(accepted, ONE_POST));
+        }
+
+        /**
+         * The attempt total is the statement's arithmetic, not the caller's.
+         *
+         * <p>Two runs that each read the row at nought and each write an absolute total both write
+         * the same number, so one run's attempts are simply lost: a row that was POSTed for four
+         * times reads as two, and the count support uses to tell an exhausted budget from a route
+         * that stopped reaching the command endpoint is wrong in the direction that hides work.
+         * The column accumulates the POSTs made for the row, so the number added is the number this
+         * call made and the total is computed where the row is.
+         */
+        @Test
+        void two_settlements_computed_from_one_read_should_each_add_their_own_attempts() {
+            seededBatch();
+            final RegisterNotification pending = pending(WANDSWORTH, "Wandsworth YOT");
+            repository.insert(pending);
+
+            repository.update(
+                    settled(pending, NotificationStatus.FAILED, UNAVAILABLE, SENT_AT), ONE_POST);
+            repository.update(
+                    settled(pending, NotificationStatus.FAILED, UNAVAILABLE, LATER), TWO_POSTS);
+
+            assertThat(repository.findByBatchId(batchId))
+                    .as("three POSTs were made for this team, and both callers read the row at "
+                            + "nought: an absolute write would have recorded the second one's two "
+                            + "and thrown the first one's away")
+                    .extracting(RegisterNotification::attempts)
+                    .containsExactly(ONE_POST + TWO_POSTS);
         }
 
         @Test
@@ -266,7 +342,7 @@ class RegisterNotificationRepositoryIT {
             seededBatch();
             final RegisterNotification absent = pending(WANDSWORTH, "Wandsworth YOT");
 
-            assertThat(repository.update(absent))
+            assertThat(repository.update(absent, ONE_POST))
                     .as("nought rows changed is an identity this service never sent under, which "
                             + "is a caller settling an attempt that was never made")
                     .isZero();
@@ -316,12 +392,27 @@ class RegisterNotificationRepositoryIT {
                 TEMPLATE_NAME, TEMPLATE_ID, NotificationStatus.PENDING, null, null, 0);
     }
 
-    /** The same row after the attempt ended, under the identity it was first attempted with. */
+    /**
+     * The same row after the attempt ended, under the identity it was first attempted with.
+     *
+     * <p>{@code attempts} is carried through rather than incremented, exactly as
+     * {@code RegisterNotifierService} carries it: how many POSTs a call made travels beside the row
+     * and the total is the statement's arithmetic, so a caller that stated a total would be stating
+     * one it read before another run wrote to the same column.
+     */
     private static RegisterNotification settled(final RegisterNotification notification,
             final NotificationStatus status, final Integer responseCode, final Instant sentAt) {
         return new RegisterNotification(notification.notificationId(), notification.batchId(),
                 notification.emailAddress(), notification.recipientName(),
                 notification.templateName(), notification.templateId(), status, responseCode,
-                sentAt, notification.attempts() + 1);
+                sentAt, notification.attempts());
+    }
+
+    /** The row as the table then holds it, once the statement has added this call's POSTs. */
+    private static RegisterNotification withAttempts(
+            final RegisterNotification row, final int attempts) {
+        return new RegisterNotification(row.notificationId(), row.batchId(), row.emailAddress(),
+                row.recipientName(), row.templateName(), row.templateId(), row.status(),
+                row.responseCode(), row.sentAt(), attempts);
     }
 }

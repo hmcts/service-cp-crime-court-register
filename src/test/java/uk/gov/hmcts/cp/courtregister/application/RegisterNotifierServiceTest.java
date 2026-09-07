@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -26,7 +27,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 import org.assertj.core.api.SoftAssertions;
@@ -174,6 +177,10 @@ class RegisterNotifierServiceTest {
     /** The attempt count of a row nothing has been posted for yet, which is the column's default. */
     private static final int MINTED_NEVER_SETTLED = 0;
 
+    /** What a settlement statement answers when it changed the row, and when it changed nothing. */
+    private static final int ONE_ROW = 1;
+    private static final int NO_ROW = 0;
+
     /** The attempt a transiently-refused address is refused on, and only that one. */
     private static final int FIRST_ATTEMPT = 1;
 
@@ -242,6 +249,16 @@ class RegisterNotifierServiceTest {
     /** What the batch was settled on, in the order the settlements were made. */
     private final List<BatchSettlement> settlements = new ArrayList<>();
 
+    /**
+     * The batch's notification claim, held by one notifier at a time, as the store holds it.
+     *
+     * <p>An {@code AtomicReference} rather than a fixed answer, because the whole subject of the
+     * race group is that the second notifier's claim attempt is refused <em>while the first one is
+     * still working</em> and admitted once it has released. A stub that answered true twice or
+     * false twice could not tell those two moments apart.
+     */
+    private final AtomicReference<UUID> claim = new AtomicReference<>();
+
     private final RegisterNotifierService service = new RegisterNotifierService(
             store, batches, notifications, notifier, metrics, TEMPLATE_ID, retryPolicy, pause,
             clock);
@@ -257,11 +274,13 @@ class RegisterNotifierServiceTest {
                 registerRecord(List.of(recipient(YOT_B, ADDRESS_B), recipient(YOT_C, ADDRESS_C)))));
 
         doAnswer(this::mint).when(notifications).insert(any());
-        doAnswer(this::settle).when(notifications).update(any());
+        doAnswer(this::settle).when(notifications).update(any(), anyInt());
         doAnswer(this::rowsOf).when(notifications).findByBatchId(any());
         doAnswer(this::unsettledRowsOf).when(notifications).findUnsettledByBatchId(any());
         doAnswer(this::recordSettlement).when(store).markNotified(any(), any());
         doAnswer(this::acceptThePost).when(notifier).send(any(), any(), any());
+        doAnswer(this::takeTheClaim).when(batches).claimForNotification(any(), any());
+        doAnswer(this::releaseTheClaim).when(batches).releaseNotificationClaim(any(), any());
     }
 
     /** The batch as the outcome sink left it: GENERATED, with the document it may now send. */
@@ -508,11 +527,46 @@ class RegisterNotifierServiceTest {
         return null;
     }
 
+    /**
+     * The settlement statement, including the two things it decides for itself.
+     *
+     * <p>ACCEPTED is terminal at the row level, so a settlement that meets an accepted row changes
+     * nothing and says so with nought rows: a team that has been told has been told, and a late
+     * refusal that demoted its row would put the batch back to PARTIALLY_NOTIFIED and invite a
+     * resend of a register about children that has already been sent.
+     *
+     * <p>And the attempt total is the statement's arithmetic and not the caller's. What arrives is
+     * how many POSTs the call made; what is written is that added to whatever the row holds now, so
+     * two settlements computed from one read cannot each write the same total.
+     */
     private Object settle(final InvocationOnMock invocation) {
-        final RegisterNotification row = invocation.getArgument(0);
-        settled.add(row);
-        ledger.put(row.notificationId(), row);
-        return 1;
+        final RegisterNotification asked = invocation.getArgument(0);
+        final int posts = invocation.getArgument(1);
+        final RegisterNotification held = ledger.get(asked.notificationId());
+        final int changed;
+
+        if (held == null || held.status() == NotificationStatus.ACCEPTED) {
+            changed = NO_ROW;
+        } else {
+            final RegisterNotification row = new RegisterNotification(asked.notificationId(),
+                    asked.batchId(), asked.emailAddress(), asked.recipientName(),
+                    asked.templateName(), asked.templateId(), asked.status(), asked.responseCode(),
+                    asked.sentAt(), held.attempts() + posts);
+            settled.add(row);
+            ledger.put(row.notificationId(), row);
+            changed = ONE_ROW;
+        }
+        return changed;
+    }
+
+    /** The claim, taken by whichever notifier asks while nobody holds it. */
+    private Object takeTheClaim(final InvocationOnMock invocation) {
+        return claim.compareAndSet(null, invocation.getArgument(1));
+    }
+
+    /** The claim, released only by the notifier whose token it was taken under. */
+    private Object releaseTheClaim(final InvocationOnMock invocation) {
+        return claim.compareAndSet(invocation.getArgument(1), null);
     }
 
     private Object rowsOf(final InvocationOnMock invocation) {
@@ -567,6 +621,19 @@ class RegisterNotifierServiceTest {
         final Counter counter = registry.find(GenerationMetrics.NOTIFICATIONS)
                 .tag(GenerationMetrics.STATUS_TAG, code(status))
                 .tag(GenerationMetrics.RESPONSE_CODE_TAG, responseCode)
+                .counter();
+        return counter == null ? ABSENT : counter.count();
+    }
+
+    /**
+     * What {@code courtregister_notifications_ignored_total} reads for one bounded reason.
+     *
+     * @param reason the bounded label, from {@link GenerationMetrics}'s own constants
+     * @return the count, or {@link #ABSENT} where the series was never registered at all
+     */
+    private double notificationIgnoredCount(final String reason) {
+        final Counter counter = registry.find(GenerationMetrics.NOTIFICATIONS_IGNORED)
+                .tag(GenerationMetrics.REASON_TAG, reason)
                 .counter();
         return counter == null ? ABSENT : counter.count();
     }
@@ -1241,6 +1308,180 @@ class RegisterNotifierServiceTest {
                     .as("and the batch reaches NOTIFIED over all three of its recipients rather "
                             + "than over the one row it happened to hold")
                     .isEqualTo(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
+        }
+    }
+
+    /**
+     * Two notifiers reaching one batch, and the one that may post.
+     *
+     * <p>The outcome sink on a delivered {@code document-available} and an operator's resend are
+     * two mechanisms over one batch, and they derive the same owed set from the same records. Before
+     * the claim they both posted it: each read the batch's rows, each found them PENDING or FAILED,
+     * each POSTed for every one of them and each then wrote an absolute settlement over the row the
+     * other had just written. A Youth Offending Team got the register twice, an ACCEPTED row could
+     * be overwritten FAILED by the loser of the second write, the attempt counts of the two runs
+     * were lost against each other, and the batch was settled twice on two tallies of the same
+     * table taken at two different moments.
+     *
+     * <p><strong>The race is run re-entrantly rather than on two threads</strong>, and deliberately:
+     * what a unit suite can hold down is that the service asks for the claim before it posts and
+     * that a service refused the claim posts nothing, and a second notifier arriving from inside the
+     * first one's slow POST is exactly that moment with no scheduler in it. The serialisation itself
+     * is Postgres's - an advisory lock and a compare-and-set on the claim columns - and is pinned by
+     * {@code RegisterBatchRepositoryIT}; a suite that started threads here would be asserting on the
+     * JVM's timing rather than on the store's.
+     */
+    @Nested
+    @DisplayName("two notifiers on one batch")
+    class TwoNotifiersOnOneBatch {
+
+        /** Guards the re-entry, so the second notifier arrives once rather than for ever. */
+        private final AtomicBoolean secondNotifierHasArrived = new AtomicBoolean();
+
+        /** What the second notifier answered, recorded from inside the first one's POST. */
+        private final List<NotificationSummary> second = new ArrayList<>();
+
+        /**
+         * Lets a second notifier reach the batch while the first one's first POST is in flight.
+         *
+         * <p>The stand-in for a slow notificationnotify: the first POST is where a real run spends
+         * most of its time, and it is where the operator's resend or the redelivered event actually
+         * lands.
+         */
+        @BeforeEach
+        void letASecondNotifierInDuringTheFirstPost() {
+            doAnswer(invocation -> {
+                if (secondNotifierHasArrived.compareAndSet(false, true)) {
+                    second.add(service.notify(BATCH_ID));
+                }
+                return acceptThePost(invocation);
+            }).when(notifier).send(any(), any(), any());
+        }
+
+        @Test
+        void only_one_of_two_notifiers_should_post_for_the_batch() {
+            notifyBatch();
+
+            softly.assertThat(postedAddresses())
+                    .as("one set of POSTs for one batch: the notifier that did not get the claim "
+                            + "posts nothing, because a second POST under the row's own identity "
+                            + "is a second e-mail about the same children to the same team")
+                    .containsExactly(ADDRESS_A, ADDRESS_B, ADDRESS_C);
+        }
+
+        @Test
+        void the_notifier_that_lost_the_claim_should_answer_that_the_batch_is_already_being_told() {
+            final NotificationSummary summary = notifyBatch();
+
+            softly.assertThat(second)
+                    .as("the loser answers rather than throwing: the batch is being told by "
+                            + "somebody else, which is not a failure and leaves it nothing to do")
+                    .hasSize(1);
+            softly.assertThat(second.get(0).disposition())
+                    .as("a bounded disposition and not a tally, because the counts a loser can "
+                            + "read are the winner's work part-done")
+                    .isEqualTo(NotificationDisposition.ALREADY_NOTIFYING);
+            softly.assertThat(summary)
+                    .as("and the notifier that held the claim is the one that settled the batch")
+                    .isEqualTo(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
+        }
+
+        @Test
+        void the_batch_should_be_settled_once_by_the_notifier_that_held_the_claim() {
+            notifyBatch();
+
+            softly.assertThat(settlements)
+                    .as("two settlements on one batch are two tallies of the same table taken at "
+                            + "two different moments, and the earlier one is a tally over rows the "
+                            + "other notifier had not finished writing")
+                    .hasSize(1);
+            softly.assertThat(settlements)
+                    .extracting(BatchSettlement::summary)
+                    .containsExactly(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
+        }
+
+        @Test
+        void the_loser_should_be_counted_so_that_a_claim_nobody_can_take_is_visible() {
+            notifyBatch();
+
+            softly.assertThat(
+                    notificationIgnoredCount(GenerationMetrics.ALREADY_NOTIFYING))
+                    .as("a batch nobody can ever claim - a claim left behind by a pod that died - "
+                            + "has to read as a series rather than as silence")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void the_claim_should_be_released_so_a_later_run_can_recover_the_batch() {
+            notifyBatch();
+
+            softly.assertThat(claim.get())
+                    .as("a claim held past the run that took it is a batch no resend and no "
+                            + "reconciliation could ever pick up, which is the state defect fix P1 "
+                            + "is about wearing a different hat")
+                    .isNull();
+        }
+    }
+
+    /**
+     * The settlement that arrives after the team has already been told.
+     */
+    @Nested
+    @DisplayName("the row an acceptance has made terminal")
+    class AnAcceptedRowIsTerminal {
+
+        @Test
+        void a_settlement_the_store_refused_should_not_be_taken_for_one_that_landed() {
+            final RegisterNotification alreadyTold = seeded(YOT_A, ADDRESS_A,
+                    NotificationStatus.ACCEPTED, ACCEPTED);
+            // The row is read as unsettled and refused at the write, which is the window the
+            // compare-and-set exists for: another notifier accepted it between this run's read and
+            // its own settlement.
+            ledger.put(alreadyTold.notificationId(), alreadyTold);
+            when(store.batched(BATCH_ID)).thenReturn(
+                    List.of(registerRecord(List.of(recipient(YOT_A, ADDRESS_A)))));
+            refuses(ADDRESS_A, UNAVAILABLE);
+            when(notifications.findByBatchId(BATCH_ID)).thenReturn(
+                    List.of(new RegisterNotification(alreadyTold.notificationId(), BATCH_ID,
+                            ADDRESS_A, YOT_A, RegisterNotifierService.TEMPLATE_NAME, TEMPLATE_ID,
+                            NotificationStatus.PENDING, null, null, MINTED_NEVER_SETTLED)));
+
+            notifyBatch();
+
+            softly.assertThat(rowsAsTheyStand())
+                    .as("a team that has been told has been told: a late refusal that demoted its "
+                            + "row would put the batch back to PARTIALLY_NOTIFIED and invite a "
+                            + "resend of a register about children that has already been sent")
+                    .containsExactly(tuple(ADDRESS_A, NotificationStatus.ACCEPTED, ACCEPTED));
+            softly.assertThat(notificationIgnoredCount(GenerationMetrics.LATE_FAILURE_IGNORED))
+                    .as("and something that changed nothing has to be visible, or the only trace "
+                            + "of two notifiers racing over one batch is a row that looks "
+                            + "untouched")
+                    .isEqualTo(1);
+        }
+    }
+
+    /**
+     * The tally the batch is settled on, taken after the POSTs rather than before them.
+     */
+    @Nested
+    @DisplayName("the batch as it stands when the tally is taken")
+    class SettlingFromTheBatchAsItNowStands {
+
+        @Test
+        void a_batch_another_mechanism_moved_should_be_recognised_rather_than_re_settled() {
+            when(batches.findById(BATCH_ID))
+                    .thenReturn(Optional.of(generated()))
+                    .thenReturn(Optional.of(batch(BatchStatus.NOTIFIED, NOTIFIED_AT)));
+
+            notifyBatch();
+
+            softly.assertThat(settlements)
+                    .as("the batch is settled from where it stands when the tally is taken and not "
+                            + "from where it stood when the run started: a mark written against a "
+                            + "state hours out of date is the whole reason the store's own marks "
+                            + "are compare-and-set")
+                    .isEmpty();
         }
     }
 

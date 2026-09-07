@@ -143,6 +143,7 @@ public class RegisterNotificationRepository {
                         .param("recipientName", notification.recipientName(), Types.VARCHAR)
                         .param("templateName", notification.templateName())
                         .param("templateId", notification.templateId()), notification)
+                        .param("attempts", notification.attempts())
                         .update());
     }
 
@@ -183,18 +184,30 @@ public class RegisterNotificationRepository {
     /**
      * Statement 4 - settles one recipient's row on what notificationnotify answered.
      *
-     * @param notification the row as it should now stand
+     * <p>The attempts this call made are handed over as a count rather than as a total, and the
+     * total the row reaches is the statement's business. What the column accumulates is the POSTs
+     * made for the row and not the runs that made them, so what a caller knows is how many it
+     * made; the number it should be added to is whatever the row says at the moment of the write.
+     *
+     * @param notification the row as it should now stand, carrying the identity it was minted under
+     * @param posts        how many POSTs this call made for the row
      * @return how many rows the statement changed, which is the decision and never a read-back
      */
-    public int update(final RegisterNotification notification) {
+    public int update(final RegisterNotification notification, final int posts) {
         return StoreOutage.translating("settle a recipient's notification row",
                 () -> settlement(jdbcClient.sql(UPDATE_NOTIFICATION)
                         .param("notificationId", notification.notificationId()), notification)
+                        .param("attempts", notification.attempts() + posts)
                         .update());
     }
 
     /**
-     * The four columns an attempt writes, bound once for the two statements that write them.
+     * The three columns an attempt's verdict writes, bound once for the two statements that write
+     * them.
+     *
+     * <p>{@code attempts} is not among them: the insert states the count a minted row starts at and
+     * a settlement states how many POSTs to add to whatever the row already holds, which are two
+     * different numbers, so each of the two callers binds its own.
      *
      * <p>{@code response_code} and {@code sent_at} are typed nulls: a connect failure or a timeout
      * has no status line and no settlement instant to record, and a row that carried an invented one
@@ -205,8 +218,7 @@ public class RegisterNotificationRepository {
         return statement
                 .param("status", notification.status().name())
                 .param("responseCode", notification.responseCode(), Types.INTEGER)
-                .param("sentAt", offsetOf(notification.sentAt()), Types.TIMESTAMP_WITH_TIMEZONE)
-                .param("attempts", notification.attempts());
+                .param("sentAt", offsetOf(notification.sentAt()), Types.TIMESTAMP_WITH_TIMEZONE);
     }
 
     private static RegisterNotification notification(final ResultSet rs) throws SQLException {

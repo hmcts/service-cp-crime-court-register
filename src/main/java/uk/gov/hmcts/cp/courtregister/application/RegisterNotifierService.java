@@ -428,7 +428,7 @@ public class RegisterNotifierService {
             final Attempted attempted = attempt(row, documentFileId);
             final NotificationOutcome outcome = attempted.outcome();
             metrics.notificationSettled(outcome.status(), outcome.responseCode());
-            notifications.update(settledAs(row, outcome, attempted.posts()));
+            notifications.update(settledAs(row, outcome), attempted.posts());
         }
     }
 
@@ -555,19 +555,22 @@ public class RegisterNotifierService {
      * only say how it ended. {@code sent_at} is this pod's reading of now for a failure as much as
      * for an acceptance, because what it records is when the attempt was settled.
      *
+     * <p>{@code attempts} is carried through untouched, and the count this call made travels beside
+     * the row instead. What the column accumulates is the POSTs made for the row and not the runs
+     * that made them, so what this service knows is how many it made; the total the row reaches is
+     * arithmetic over whatever the row holds at the moment of the write, which is the statement's
+     * to do.
+     *
      * @param row     the row as it stood before this attempt
      * @param outcome what notificationnotify answered, or did not
-     * @param posts   how many POSTs this call made for the row, which is what {@code attempts}
-     *                accumulates: the column counts the times an e-mail was asked for and not the
-     *                times a run asked
      * @return the row as it should now stand
      */
-    private RegisterNotification settledAs(final RegisterNotification row,
-            final NotificationOutcome outcome, final int posts) {
+    private RegisterNotification settledAs(
+            final RegisterNotification row, final NotificationOutcome outcome) {
 
         return new RegisterNotification(row.notificationId(), row.batchId(), row.emailAddress(),
                 row.recipientName(), row.templateName(), row.templateId(), outcome.status(),
-                outcome.responseCode(), clock.instant(), row.attempts() + posts);
+                outcome.responseCode(), clock.instant(), row.attempts());
     }
 
     /**

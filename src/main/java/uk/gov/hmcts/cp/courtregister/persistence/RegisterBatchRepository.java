@@ -305,6 +305,36 @@ public class RegisterBatchRepository {
     }
 
     /**
+     * Statement 7 - claims the batch for notification, or answers that another notifier holds it.
+     *
+     * <p>A compile-safe seam. Implemented by the fix that makes the notifying leg single-runner;
+     * the claim design is in {@code data-model.md} under {@code register_batch}.
+     *
+     * @param batchId the batch to claim
+     * @param token   the token this notifier claims under, minted fresh for the attempt
+     * @return whether this notifier took the claim
+     */
+    public boolean claimForNotification(final UUID batchId, final UUID token) {
+        throw new UnsupportedOperationException("the notification claim is taken by the fix that "
+                + "makes the notifying leg single-runner; batch " + batchId + " token " + token);
+    }
+
+    /**
+     * Statement 8 - releases a notification claim this notifier holds.
+     *
+     * <p>A compile-safe seam, as {@link #claimForNotification} is.
+     *
+     * @param batchId the batch to release
+     * @param token   the token the claim was taken under; a release under any other changes nothing
+     * @return whether the claim was this notifier's to release
+     */
+    public boolean releaseNotificationClaim(final UUID batchId, final UUID token) {
+        throw new UnsupportedOperationException("the notification claim is released by the fix "
+                + "that makes the notifying leg single-runner; batch " + batchId + " token "
+                + token);
+    }
+
+    /**
      * A batch that has not finished has been completed by nothing, refused before either write.
      *
      * <p>Both statements here bind {@code completed_by} from the batch they are handed - the insert
