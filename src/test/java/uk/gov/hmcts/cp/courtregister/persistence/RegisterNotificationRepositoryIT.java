@@ -379,6 +379,47 @@ class RegisterNotificationRepositoryIT {
                     .containsExactly(ONE_POST + TWO_POSTS);
         }
 
+        /**
+         * The tally without the settlement, which is what a lost claim leaves owing.
+         *
+         * <p>A notifier whose claim is taken over between its POST and the settlement that would
+         * have recorded it may not write a status: the notifier that now holds the batch is
+         * deriving the same owed set from the same records, and a settlement from here would be
+         * written over its work. The POST was still really made, so the row's lifetime total moves
+         * and nothing else does - not the status, not the status line, not the settlement instant.
+         */
+        @Test
+        void tallying_the_posts_a_lost_claim_made_should_move_the_total_and_nothing_else() {
+            seededBatch();
+            final RegisterNotification pending = pending(WANDSWORTH, "Wandsworth YOT");
+            repository.insert(pending);
+            final RegisterNotification failed =
+                    settled(pending, NotificationStatus.FAILED, UNAVAILABLE, SENT_AT);
+            repository.update(failed, ONE_POST);
+
+            assertThat(repository.tallyAttempts(pending.notificationId(), TWO_POSTS))
+                    .as("the store holds the row, so the POSTs a notifier spent before it lost the "
+                            + "batch are on it")
+                    .isTrue();
+            assertThat(repository.findByBatchId(batchId))
+                    .as("attempts and nothing else: the verdict the row carries is the one the last "
+                            + "settlement wrote, because a run that has lost the claim may not say "
+                            + "how an attempt ended - only that it was made")
+                    .containsExactly(withAttempts(failed, ONE_POST + TWO_POSTS));
+        }
+
+        @Test
+        void tallying_for_a_row_the_store_does_not_hold_should_say_there_is_no_such_row() {
+            seededBatch();
+            final RegisterNotification absent = pending(WANDSWORTH, "Wandsworth YOT");
+
+            assertThat(repository.tallyAttempts(absent.notificationId(), ONE_POST))
+                    .as("a row this service posted under and the store no longer holds is the same "
+                            + "fault the settlement's own ABSENT names, and it is answered rather "
+                            + "than written silently into nowhere")
+                    .isFalse();
+        }
+
         @Test
         void settling_a_recipient_this_service_never_minted_should_say_there_is_no_such_row() {
             seededBatch();

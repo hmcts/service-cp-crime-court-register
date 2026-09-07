@@ -283,6 +283,7 @@ class RegisterNotifierServiceTest {
 
         doAnswer(this::mint).when(notifications).insert(any());
         doAnswer(this::settle).when(notifications).update(any(), anyInt());
+        doAnswer(this::tallyTheAttempts).when(notifications).tallyAttempts(any(), anyInt());
         doAnswer(this::rowsOf).when(notifications).findByBatchId(any());
         doAnswer(this::unsettledRowsOf).when(notifications).findUnsettledByBatchId(any());
         doAnswer(this::recordSettlement).when(store).markNotified(any(), any());
@@ -581,6 +582,27 @@ class RegisterNotifierServiceTest {
     }
 
     /**
+     * The tally-only write: this call's POSTs added to whatever the row holds, and nothing else.
+     *
+     * <p>What a notifier that lost the claim between its POST and the settlement is left able to
+     * say. The settlement columns are untouched - the notifier that now holds the batch is the one
+     * entitled to write them - and the POST is on the lifetime total, because it was really made.
+     */
+    private Object tallyTheAttempts(final InvocationOnMock invocation) {
+        final UUID notificationId = invocation.getArgument(0);
+        final int posts = invocation.getArgument(1);
+        final RegisterNotification held = ledger.get(notificationId);
+
+        if (held != null) {
+            ledger.put(notificationId, new RegisterNotification(held.notificationId(),
+                    held.batchId(), held.emailAddress(), held.recipientName(), held.templateName(),
+                    held.templateId(), held.status(), held.responseCode(), held.sentAt(),
+                    held.attempts() + posts));
+        }
+        return held != null;
+    }
+
+    /**
      * The claim, taken by whichever notifier asks while nobody holds it.
      *
      * <p>Three answers, because a compare-and-set that changed no row carries two unrelated
@@ -661,6 +683,22 @@ class RegisterNotifierServiceTest {
     private List<Tuple> rowsAsTheyStand() {
         return ledger.values().stream()
                 .map(row -> tuple(row.emailAddress(), row.status(), row.responseCode()))
+                .toList();
+    }
+
+    /**
+     * Every row the table now holds, as the three settlement components and the attempt total.
+     *
+     * <p>The wider reading {@link #rowsAsTheyStand()} gives, for the cases about a write that may
+     * move the total and may not move anything else.
+     *
+     * @return one (address, status, response code, settlement instant, attempts) tuple per row, in
+     *     the order the rows were minted
+     */
+    private List<Tuple> rowsWithTheirAttempts() {
+        return ledger.values().stream()
+                .map(row -> tuple(row.emailAddress(), row.status(), row.responseCode(),
+                        row.sentAt(), row.attempts()))
                 .toList();
     }
 
@@ -1576,6 +1614,59 @@ class RegisterNotifierServiceTest {
             softly.assertThat(notificationIgnoredCount(GenerationMetrics.CLAIM_LOST))
                     .as("and it is the reading the notification lease is raised on, so it has to "
                             + "be a series rather than a warn nobody queries")
+                    .isEqualTo(1);
+        }
+
+        /**
+         * The one thing a notifier that lost the claim still owes the row it posted for.
+         *
+         * <p>Stopping is right about the settlement and wrong about the tally. The POSTs this run
+         * made were really made - notificationnotify has them, and a Youth Offending Team may have
+         * the e-mail - so leaving them off the row's lifetime total loses exactly the attempts made
+         * in the window two notifiers were in the cycle at once, which is the window the count is
+         * reached for. A row two notifiers posted for reads as one notifier's work, and the number
+         * support tells an exhausted budget from a broken route by is wrong in the direction that
+         * hides work.
+         *
+         * <p>So the attempt is tallied and nothing else is: the status, the status line and the
+         * settlement instant stay where the row had them, because how the attempt ended is the
+         * verdict of a notifier that no longer holds the batch.
+         */
+        @Test
+        void a_post_made_before_the_claim_was_lost_should_still_be_tallied_on_its_row() {
+            aSecondNotifierTakesTheBatchOverDuringTheFirstPost();
+
+            notifyBatch();
+
+            softly.assertThat(rowsWithTheirAttempts())
+                    .as("the POST this run made is on the row it was made for and the settlement "
+                            + "columns are untouched; the two teams it never reached carry no "
+                            + "attempt at all, because nothing was posted for them")
+                    .containsExactly(
+                            tuple(ADDRESS_A, NotificationStatus.PENDING, null, null, 1),
+                            tuple(ADDRESS_B, NotificationStatus.PENDING, null, null,
+                                    MINTED_NEVER_SETTLED),
+                            tuple(ADDRESS_C, NotificationStatus.PENDING, null, null,
+                                    MINTED_NEVER_SETTLED));
+        }
+
+        @Test
+        void a_row_the_store_has_lost_should_be_reported_when_the_tally_cannot_find_it() {
+            when(store.batched(BATCH_ID)).thenReturn(
+                    List.of(registerRecord(List.of(recipient(YOT_A, ADDRESS_A)))));
+            when(notifications.findByBatchId(BATCH_ID)).thenReturn(
+                    List.of(new RegisterNotification(UUID.randomUUID(), BATCH_ID, ADDRESS_A, YOT_A,
+                            RegisterNotifierService.TEMPLATE_NAME, TEMPLATE_ID,
+                            NotificationStatus.PENDING, null, null, MINTED_NEVER_SETTLED)));
+            aSecondNotifierTakesTheBatchOverDuringTheFirstPost();
+
+            notifyBatch();
+
+            softly.assertThat(notificationIgnoredCount(GenerationMetrics.SETTLEMENT_ROW_ABSENT))
+                    .as("a tally that found no row to add the POST to is the same fault the "
+                            + "settlement's own reading names - a row this service posted under and "
+                            + "the store no longer holds - and a write that recorded the attempt "
+                            + "nowhere may not be the quietest of the two paths")
                     .isEqualTo(1);
         }
 

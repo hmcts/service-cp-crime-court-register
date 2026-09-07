@@ -260,6 +260,37 @@ public class RegisterNotificationRepository {
     }
 
     /**
+     * Adds the POSTs a call made to one row's lifetime total, and settles nothing.
+     *
+     * <p>The write a notifier makes on its way out. A cycle whose claim was taken over between its
+     * POST and the settlement that would have recorded it may not touch the settlement columns - the
+     * notifier that now holds the batch is deriving the same owed set from the same records, and a
+     * status written from here would be written over its work - but the POST was really made, and
+     * what {@code attempts} accumulates is the POSTs made for the row. Leaving them off made a row
+     * two notifiers posted for read as one notifier's work, in the one situation where knowing
+     * otherwise matters.
+     *
+     * <p>So this statement is the tally without the settlement: {@code attempts = attempts + :posts}
+     * and no other column, fenced on the row's identity and on nothing else. It is not fenced on the
+     * claim, because the claim has already gone; it is not fenced on the row's status, because an
+     * accepted row's total is moved by a POST as readily as a pending row's is (the reason
+     * {@link #update} stopped fencing the tally); and the number added is this call's own, so two
+     * runs computing a total from one read cannot each write the same one.
+     *
+     * @param notificationId the identity the POSTs were made under
+     * @param posts          how many POSTs this call made for the row
+     * @return whether this store holds a row under that identity, which is the same fault
+     *     {@link NotificationSettlement#ABSENT} names: a row this service wrote and the store no
+     *     longer has
+     */
+    public boolean tallyAttempts(final UUID notificationId, final int posts) {
+        // The statement arrives with the implementation. Until then the honest seam is that nothing
+        // was tallied, so the cases waiting on it record a failing assertion rather than a false
+        // green.
+        return StoreOutage.translating("tally the POSTs a lost claim made", () -> false);
+    }
+
+    /**
      * The statement's own account of what it did, as the three answers a caller acts on.
      *
      * @param applied what the statement returned: whether the row was still unsettled when it ran,
