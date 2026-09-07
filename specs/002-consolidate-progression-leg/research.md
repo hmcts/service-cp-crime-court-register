@@ -78,9 +78,17 @@ Service*, rev 2.1) is the authority; this file records what the plan derived fro
   informant PH.04 shape (IR-DESIGN §7.1) and the `cp-case-document-knowledge-service` precedent.
 - **Alternatives**: keep system-scheduling calling a new endpoint — rejected: no REST API, and a
   second cross-context dependency on cutover.
-- **Verification outstanding** (design §13 Q21): `select trigger_name, cron_expression, time_zone_id
-  from qrtz_cron_triggers where trigger_name = 'Daily Court Register'` in SIT's systemscheduling
-  Quartz database — for the cutover comms, not for the implementation.
+- **Verified in SIT, 2026-09-07** (design §13 Q21): `select trigger_name, cron_expression,
+  time_zone_id from qrtz_cron_triggers where trigger_name = 'Daily Court Register'` against
+  `systemschedulingviewstore` on `psf-sit-ccm01-supporting` answers `0 0 18 ? * MON-FRI *` with
+  `time_zone_id = UTC` (`Daily Informant Register` is the same expression at 19:00 UTC). So the
+  ambiguity the rationale above names is settled, and not in the courts' favour: the trigger row
+  carries **UTC**, so the legacy court register goes out at **19:00 BST** through the summer and at
+  18:00 only in winter. This service's `Europe/London` schedule corrects that rather than
+  reproducing it - the requirement is 18:00 wall-clock in BST and GMT alike - which makes it a
+  **cutover-comms item**: from the switch, the summer register lands an hour earlier than the courts
+  have been receiving it. PRD is to be confirmed with the same query before the switch; SIT is
+  evidence about the configuration, not about PRD's copy of it.
 
 ## 5. `defendantType` — from the hearing's own court application
 
