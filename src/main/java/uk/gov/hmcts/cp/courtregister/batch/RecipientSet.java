@@ -1,6 +1,8 @@
 package uk.gov.hmcts.cp.courtregister.batch;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 
@@ -23,12 +25,18 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * <p>The order is the order the addresses were first seen, so a batch read twice produces the same
  * recipients in the same order, and a run report a person compares by eye reads the same way twice.
  *
+ * <p><strong>Two recorded addresses are one recipient only when the strings are equal</strong>, as
+ * progression. The legacy compares addresses nowhere at all - it keeps a list whole - so there is no
+ * case-folding behaviour to port, and folding case here would be an uncatalogued content change in
+ * the direction that loses an e-mail: two subscriptions whose reference data spells one mailbox
+ * differently are two rows in {@code register_notification} and two teams who each get the register,
+ * not one team chosen by whichever spelling was recorded first. Nothing is trimmed or re-written
+ * either, because the recipient mapper already trimmed the address and dropped the matched
+ * subscription that carried none (C29).
+ *
  * <p>Nothing here reaches a log. An address and a recipient name are the two components that never
  * appear at INFO or above (constitution Principle VII); this class hands them to the notification
  * rows, which are the only place that may hold them.
- *
- * <p><strong>Seam only.</strong> The union lands with T057; until then this throws, so that
- * {@code RecipientSetTest} records a failing assertion rather than a compile error.
  */
 public final class RecipientSet {
 
@@ -43,12 +51,22 @@ public final class RecipientSet {
      * document's own list, because empty and absent are the same statement to a union and the
      * document distinguishes them only because progression's schemas do.
      *
+     * <p>The first occurrence of an address wins whole rather than component by component: the
+     * template decides which e-mail notificationnotify renders, so a recipient whose name came from
+     * one record and whose template came from another would be a message no record ever described.
+     *
      * @param records the batch's registers, in the order the batch holds them
      * @return one recipient per distinct {@code emailAddress1}, named from its first occurrence, in
      *     the order the addresses were first seen; empty where no record matched anybody, which is
      *     the batch that ends NOTIFIED_NOBODY (defect fix P1)
      */
     public static List<CourtRegisterRecipient> unionOf(final List<RegisterRecord> records) {
-        throw new UnsupportedOperationException("T057");
+        final Map<String, CourtRegisterRecipient> byAddress = new LinkedHashMap<>();
+        for (final RegisterRecord record : records) {
+            for (final CourtRegisterRecipient recipient : record.recipients()) {
+                byAddress.putIfAbsent(recipient.emailAddress1(), recipient);
+            }
+        }
+        return List.copyOf(byAddress.values());
     }
 }
