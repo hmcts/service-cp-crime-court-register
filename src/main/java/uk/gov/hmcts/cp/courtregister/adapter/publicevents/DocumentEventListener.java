@@ -34,7 +34,10 @@ import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
  *       back to the rows the document was built from. An event of ours that names none is
  *       acknowledged and counted under {@code unknown-correlation}, the same reason the sink counts
  *       a correlation this store holds no batch for: both are announcements that reached this
- *       subscription and were applied to nothing.</li>
+ *       subscription and were applied to nothing. One that names its batch and leaves out
+ *       {@code payloadFileServiceId} is dropped just the same and counted under
+ *       {@code missing-payload-id} instead, because its correlation was never in doubt and the
+ *       reading that says otherwise sends support after a batch identity nothing lost.</li>
  * </ul>
  *
  * <p>What it does with a message it recognises is call
@@ -68,7 +71,7 @@ import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
  * condition - "this pod generates" - govern the subscription and everything it needs.
  */
 // PMD.OnlyOneReturn: every filter below is a reason to acknowledge and stop, and each says so where
-// it is decided. Funnelling them through one exit would turn four distinct refusals into a flag.
+// it is decided. Funnelling them through one exit would turn each distinct refusal into a flag.
 @SuppressWarnings("PMD.OnlyOneReturn")
 public class DocumentEventListener {
 
@@ -216,8 +219,7 @@ public class DocumentEventListener {
             return;
         }
         final UUID correlationId = uuid(payload, SOURCE_CORRELATION_ID);
-        final UUID payloadFileId = uuid(payload, PAYLOAD_FILE_SERVICE_ID);
-        if (correlationId == null || payloadFileId == null) {
+        if (correlationId == null) {
             // Counted before it is dropped. This one carries our own source, so it is not the
             // foreign-source reading; it is an announcement this service asked for that names
             // nothing to apply itself to, and a drop with no reading behind it is an outcome that
@@ -226,6 +228,19 @@ public class DocumentEventListener {
             LOG.warn("A {} named no batch to apply it to, so it is acknowledged and dropped: "
                     + "inventing one from the payload would be this service guessing at somebody "
                     + "else's document.", eventName);
+            return;
+        }
+        final UUID payloadFileId = uuid(payload, PAYLOAD_FILE_SERVICE_ID);
+        if (payloadFileId == null) {
+            // The same drop and a different reading. The correlation is the one this service asked
+            // for, so counting this as an unknown correlation would send support after a batch
+            // identity that was never lost; what is missing is the cross-check, without which the
+            // sink cannot tell this outcome from one that has crossed its correlation.
+            metrics.missingPayloadIdIgnored();
+            LOG.warn("A {} for batch {} named no payload to check the batch against, so it is "
+                    + "acknowledged and dropped: an outcome that cannot be cross-checked is how a "
+                    + "crossed correlation would complete the wrong night's registers.", eventName,
+                    correlationId);
             return;
         }
         if (DOCUMENT_AVAILABLE.equals(eventName)) {

@@ -231,10 +231,24 @@ public class GenerationMetrics {
      * <p>The same counter the foreign source is counted on, under its own bounded reason, because
      * the question they answer together is the one a night's outcomes going nowhere is read by:
      * how many announcements reached this subscription and were applied to nothing, and which of
-     * the three ways it happened.
+     * the four ways it happened.
      */
     public void unknownCorrelationIgnored() {
         counter(PUBLIC_EVENTS_IGNORED, REASON_TAG, UNKNOWN_CORRELATION).increment();
+    }
+
+    /**
+     * Counts an outcome of ours that names its batch and not the payload it was rendered from.
+     *
+     * <p>The correlation is there and the identifier it is cross-checked against is not, so there
+     * is nothing to apply and nothing to check it with. Counted here rather than under
+     * {@link #UNKNOWN_CORRELATION} because that reading is about a correlation this service cannot
+     * place, and this event's correlation is exactly the one it asked for: what went missing is
+     * systemdocgenerator's account of the payload, which is a renderer or a broker to look at and
+     * not a batch to go looking for.
+     */
+    public void missingPayloadIdIgnored() {
+        counter(PUBLIC_EVENTS_IGNORED, REASON_TAG, MISSING_PAYLOAD_ID).increment();
     }
 
     /**
