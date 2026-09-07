@@ -633,6 +633,41 @@ class GenerateRegisterCliTest {
                     .isEqualTo(CliMain.SUCCESS);
         }
 
+        /**
+         * A release is not undoable, so it is not made for a batch this run will not re-assemble.
+         *
+         * <p>The rows of a FAILED batch are outside {@code activeUnbatched()} only while the stamp
+         * is on them. Clearing it off a key the assembler is going to defer - because another batch
+         * for the key is still being rendered - hands those registers to the 18:00 run instead,
+         * where they are batched as {@code system_generated=true}: not the operator's re-render, not
+         * under the operator's bound, and reported as the schedule's work.
+         */
+        @Test
+        void a_failed_batch_whose_key_is_still_being_rendered_should_be_left_where_it_is() {
+            theFlagIsOn();
+            final RegisterBatch inFlight = batch(new CourtCentreDay(LEEDS, THURSDAY), LEEDS_HOUSE,
+                    BatchStatus.GENERATING);
+            final RegisterBatch failed = batch(new CourtCentreDay(LEEDS, THURSDAY), LEEDS_HOUSE,
+                    BatchStatus.FAILED);
+            theDayHolds(inFlight, leedsRegister());
+            theDayHolds(failed, leedsRegister());
+
+            final int code = run("--" + Args.DATE, THURSDAY.toString());
+
+            softly.assertThat(released)
+                    .as("the assembler defers a key with a batch in flight, so a release made "
+                            + "first would leave the rows active and unbatched for the schedule to "
+                            + "pick up as its own")
+                    .isEmpty();
+            softly.assertThat(terminal())
+                    .as("and the operator is told which batch was left alone and why, because a "
+                            + "day that did nothing silently is a day somebody re-runs")
+                    .contains("batch=" + failed.batchId() + " outcome=withheld reason=key-in-flight");
+            softly.assertThat(code)
+                    .as("a batch that has to wait for another to finish is not a failed command")
+                    .isEqualTo(CliMain.SUCCESS);
+        }
+
         @Test
         void the_days_batches_should_be_the_history_the_supplement_is_decided_from() {
             theFlagIsOn();
@@ -789,6 +824,44 @@ class GenerateRegisterCliTest {
                             + "up what has arrived since; the bound excludes the instant itself, "
                             + "so a run bounded at what it already did cannot repeat it")
                     .isEqualTo(List.of(morning.hearingId()));
+        }
+
+        /**
+         * The bound is the whole point of the argument, so nothing may leave it by being released.
+         *
+         * <p>A row released from a FAILED batch and then dropped by the bound is a row nobody asked
+         * about that is now active, unbatched and flag-ON: the 18:00 run assembles it as
+         * {@code system_generated=true}, which is exactly the "picking up what has arrived since"
+         * this argument exists to prevent. The batch is therefore left carrying its stamp, which is
+         * where it was, and the operator is told.
+         */
+        @Test
+        void a_failed_batch_holding_a_register_outside_the_bound_should_be_left_where_it_is() {
+            theFlagIsOn();
+            final RegisterBatch failed = batch(new CourtCentreDay(LEEDS, THURSDAY), LEEDS_HOUSE,
+                    BatchStatus.FAILED);
+            theDayHolds(failed, register(LEEDS, THURSDAY, LEEDS_HOUSE, MORNING),
+                    register(LEEDS, THURSDAY, LEEDS_HOUSE, SIX_PM));
+
+            final int code = run("--" + Args.DATE, THURSDAY.toString(),
+                    "--" + Args.RECORDED_BEFORE, SIX_PM.toString());
+
+            softly.assertThat(released)
+                    .as("a release the run then bounds out of itself is a register handed to the "
+                            + "schedule, outside the bound the operator stated and written down as "
+                            + "the schedule's own work")
+                    .isEmpty();
+            softly.assertThat(hearingsGrouped())
+                    .as("so nothing of that batch is grouped either")
+                    .isEmpty();
+            softly.assertThat(terminal())
+                    .as("and the batch that was left alone is named, with the bounded reason it "
+                            + "was left under")
+                    .contains("batch=" + failed.batchId()
+                            + " outcome=withheld reason=outside-the-bound");
+            softly.assertThat(code)
+                    .as("a bound that excluded a batch is the argument working, not a failure")
+                    .isEqualTo(CliMain.SUCCESS);
         }
 
         @Test
