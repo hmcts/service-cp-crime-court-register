@@ -228,9 +228,16 @@ public class RegisterNotificationRepository {
      * a settlement states how many POSTs to add to whatever the row already holds, which are two
      * different numbers, so each of the two callers binds its own.
      *
-     * <p>{@code response_code} and {@code sent_at} are typed nulls: a connect failure or a timeout
-     * has no status line and no settlement instant to record, and a row that carried an invented one
-     * would say an attempt was answered when nothing answered at all.
+     * <p>{@code response_code} is a typed null because an attempt can end with no status line at
+     * all - a connect failure or a read timeout reaches no verdict - and a row carrying an invented
+     * one would say an attempt was answered when nothing answered.
+     *
+     * <p><strong>{@code sent_at} is the settlement instant of every terminal attempt</strong>, an
+     * acceptance and a refusal alike: what it records is when this service decided how the attempt
+     * ended, not when notificationnotify accepted anything. So a FAILED row carries it too, and a
+     * connect failure that reached no verdict is settled at the instant the run gave up on it. It
+     * is typed for the other row shape, the one this column really is empty on: a minted row,
+     * written PENDING before its POST, which has nothing to stamp yet.
      */
     private static JdbcClient.StatementSpec settlement(
             final JdbcClient.StatementSpec statement, final RegisterNotification notification) {

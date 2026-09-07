@@ -10,7 +10,11 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 
 /**
- * The one retry policy, shared by the three clients that make this service's outbound calls.
+ * The one retry policy, shared by the four clients that make this service's outbound calls.
+ *
+ * <p>The four are C3's original three - the progression command gateway, the payload query and the
+ * reference-data read - and the notification client 002 added, which classifies its own single
+ * attempt through this object rather than growing a fourth opinion about what is worth asking again.
  *
  * <p><strong>Defect fix C3, stated once.</strong> The register's fix row promises "a config-driven
  * retry policy applied identically to all three named clients", and three clients that each

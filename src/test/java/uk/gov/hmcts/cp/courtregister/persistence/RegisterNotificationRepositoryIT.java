@@ -35,10 +35,12 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  * so a column dropped from the insert would first be noticed by a resend that could not tell which
  * recipients had already been told.
  *
- * <p><strong>The typed nulls.</strong> {@code response_code} and {@code sent_at} are empty on a row
- * minted before its POST and on a row whose POST was never answered at all - a connect failure has
- * no status line and no settlement instant - so both statements are exercised with them absent as
- * well as present.
+ * <p><strong>The typed nulls.</strong> {@code response_code} is empty on a row minted before its
+ * POST and on a row whose POST reached no verdict at all, because a connect failure has no status
+ * line. {@code sent_at} is empty on the minted row only: it is the settlement instant of every
+ * terminal attempt, so the service stamps it on a refusal as readily as on an acceptance. Both
+ * statements are exercised with the pair absent as well as present, because the statement has to
+ * bind an absent one whichever row shape asked for it.
  *
  * <p>{@code SchemaMigrationV2IT} pins {@code UNIQUE (batch_id, email_address)} as a fact about the
  * table. It is asserted again here, through the repository's own insert, because what matters to a
@@ -273,9 +275,10 @@ class RegisterNotificationRepositoryIT {
             assertThat(repository.update(failed, ONE_POST)).isEqualTo(ONE_ROW);
 
             assertThat(repository.findByBatchId(batchId))
-                    .as("a connect failure has no status line and no settlement instant, and a row "
-                            + "carrying an invented one would say an attempt was answered when "
-                            + "nothing answered at all")
+                    .as("the statement binds both settlement columns absent, which is the shape "
+                            + "a minted row has and the shape a caller with no status line to "
+                            + "record asks for; an invented status would say an attempt was "
+                            + "answered when nothing answered at all")
                     .containsExactly(withAttempts(failed, ONE_POST));
         }
 

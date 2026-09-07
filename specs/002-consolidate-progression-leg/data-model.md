@@ -195,7 +195,7 @@ attributable, and leaves the nightly job able to send them without being asked.
 | `template_id` | `uuid NOT NULL` | Resolved at startup |
 | `status` | `text NOT NULL` | `PENDING` → `ACCEPTED` \| `FAILED` |
 | `response_code` | `int` | |
-| `sent_at` | `timestamptz` | |
+| `sent_at` | `timestamptz` | **The settlement instant of every terminal attempt**, an acceptance and a refusal alike: what it records is when this service decided how the attempt ended, not when NN accepted anything. So a FAILED row carries it too, and a connect failure that reached no verdict is settled at the instant the run gave up on it. Empty on one row shape only - a minted row, written PENDING before its POST, which has nothing to stamp yet |
 | `attempts` | `int NOT NULL DEFAULT 0` | Accumulates the POSTs made for the row, not the runs that made them: a transient refusal retried inside one call adds each attempt |
 
 Constraint: `UNIQUE (batch_id, email_address)`.
