@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
 import java.time.Duration;
+import java.util.Locale;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -27,9 +28,10 @@ import org.springframework.stereotype.Component;
  * schedule read in the wrong zone, a lock that expires before the run it locks is allowed to end, a
  * notification claim whose lease cannot cover one recipient's POST cycle, a run with no payload
  * store, no flag, no renderer or no notifier, an event-driven completion with no broker to hear
- * from, a stub reachable where registers are really produced, and a blank or malformed e-mail
- * template id (fix P9). None of them is discovered before 18:00, and by then the night's registers
- * are already not going out (research §11).
+ * from, a stub reachable where registers are really produced, the local flag credential anywhere a
+ * real flag is read, and a blank or malformed e-mail template id (fix P9). None of them is
+ * discovered before 18:00, and by then the night's registers are already not going out
+ * (research §11).
  */
 @Component
 // The properties records are registered here, explicitly, rather than left to a scan: without them
@@ -127,6 +129,7 @@ public class PropertiesValidator implements InitializingBean {
     private static final String FILESERVICE_URL = "courtregister.fileservice.url";
     private static final String FEATURE_ENDPOINT = "courtregister.feature.endpoint";
     private static final String FEATURE_LABEL = "courtregister.feature.label";
+    private static final String FEATURE_CREDENTIAL = "courtregister.feature.credential";
     private static final String ENDPOINTS = "courtregister.endpoints";
     private static final String ENDPOINTS_MAX_ATTEMPTS = ENDPOINTS + MAX_ATTEMPTS_SUFFIX;
     private static final String ENDPOINTS_CONNECT_TIMEOUT = ENDPOINTS + CONNECT_TIMEOUT_SUFFIX;
@@ -145,6 +148,23 @@ public class PropertiesValidator implements InitializingBean {
 
     /** Shared so the wording of a stub-in-the-wrong-place refusal is one string and not five. */
     private static final String IS_STUB_WHILE = " is STUB while ";
+
+    /** Shared so the wording of the local-credential refusals is one string and not two. */
+    private static final String IS_LOCAL_TEST_WHILE =
+            " is " + FeatureFlagProperties.LOCAL_TEST + " while ";
+
+    /**
+     * What a real Azure App Configuration endpoint looks like, and the estate has no other shape.
+     *
+     * <p>Matched on the authority rather than searched for anywhere in the string, so that the
+     * question asked is the one that matters - whether the <em>host</em> ends {@code .azconfig.io} -
+     * and a path or a query mentioning it is not mistaken for a store. A value that is not an
+     * endpoint at all matches nothing and is refused nothing: it names no store either way, and the
+     * flag read fails on it as a skipped run with a cause rather than as a deployment nobody can
+     * start.
+     */
+    private static final Pattern REAL_FLAG_STORE = Pattern.compile(
+            "[a-z][a-z0-9+.\\-]*://[^/?#]*\\.azconfig\\.io([:/?#].*)?");
 
     /** Shared so the wording of a required-setting refusal is one string and not four. */
     private static final String MUST_BE_SET_WHEN = " must be set when ";
@@ -230,6 +250,7 @@ public class PropertiesValidator implements InitializingBean {
         validateTheNotificationClaimOutlastsOnePostCycle(properties);
         feature.validate();
         validateTheStubsAreNotWhereRegistersAreProduced(properties, generation);
+        validateTheLocalCredentialIsNowhereARealFlagIsRead(properties, feature);
         validateGenerationHasTheDownstreamsItNeeds(properties, generation, feature);
         validateTheCompletionMechanismCanHearAnOutcome(generation, brokerUrl);
     }
@@ -924,6 +945,65 @@ public class PropertiesValidator implements InitializingBean {
                                 + " against a stand-in");
             }
         }
+    }
+
+    /**
+     * The same rule again, on the identity the one lever is read under.
+     *
+     * <p>{@code courtregister.feature.credential=local-test} is not a stub - the reader, the SDK
+     * client and the fail-closed parsing are all the deployed ones - but the identity it signs the
+     * read with is a fixed, published pair that no Azure store has ever been given. So it fails in
+     * precisely the way the four STUB refusals above exist to prevent: the pod starts, reports
+     * itself healthy, waits until 18:00 and is refused by the store, which is UNREADABLE, which is
+     * a run skipped and counted and indistinguishable from an outage. It exists for the compose
+     * loop, whose App Configuration is a WireMock mapping that checks no credential at all, and
+     * that is the only place it belongs.
+     *
+     * <p>Two discriminators. A {@code .azconfig.io} endpoint is a real store whatever else is
+     * configured - the mode cannot read it and would never have been meant to. And a Service Bus
+     * namespace means workload identity, which means a deployed pod: the same discriminator the
+     * STUB refusals draw deployment on, so the two rules agree about where "deployed" is.
+     *
+     * <p>Unconditional on the master switch, for the reason the zone and lock rules are: a job that
+     * happens to be disabled in this deployment is no reason to accept a credential that cannot
+     * read the flag in the next one.
+     *
+     * @param properties the bound settings, for the credential source
+     * @param feature    where the one lever is read from, and under which identity
+     * @throws IllegalStateException if the local credential is anywhere the reading could matter
+     */
+    private static void validateTheLocalCredentialIsNowhereARealFlagIsRead(
+            final CourtRegisterProperties properties, final FeatureFlagProperties feature) {
+
+        if (feature.credential() == FeatureFlagProperties.Credential.LOCAL_TEST) {
+            if (namesARealFlagStore(feature.endpoint())) {
+                throw new IllegalStateException(
+                        FEATURE_CREDENTIAL + IS_LOCAL_TEST_WHILE + FEATURE_ENDPOINT + " ("
+                                + feature.endpoint() + ") names a real App Configuration store -"
+                                + " the local identity is a published pair no store authorises, so"
+                                + " every run would be refused the flag and skip, and the legacy"
+                                + " would be presumed to be generating");
+            }
+            if (hasText(properties.servicebus().namespace())) {
+                throw new IllegalStateException(
+                        FEATURE_CREDENTIAL + IS_LOCAL_TEST_WHILE + NAMESPACE + " is set, which is a"
+                                + " deployed environment - the flag is read on this pod's own"
+                                + " workload identity there, and a published local pair in its"
+                                + " place is a night's registers skipped on a flag nobody could"
+                                + " read");
+            }
+        }
+    }
+
+    /**
+     * Whether the configured endpoint is a real Azure App Configuration store.
+     *
+     * @param endpoint what the deployment supplied, blank where it supplied nothing
+     * @return true where the host ends {@code .azconfig.io}
+     */
+    private static boolean namesARealFlagStore(final String endpoint) {
+        return hasText(endpoint)
+                && REAL_FLAG_STORE.matcher(endpoint.trim().toLowerCase(Locale.ROOT)).matches();
     }
 
     /**
