@@ -439,23 +439,29 @@ public class RegisterBatchRepository {
      *
      * @param batchId the batch to claim
      * @param token   the token this notifier claims under, minted fresh for the attempt
-     * @return whether this notifier took the claim; false means another notifier holds it and is
-     *     telling this batch's recipients now
+     * @return whether this notifier took the claim, another notifier holds one, or this store holds
+     *     no such batch at all
      */
-    public boolean claimForNotification(final UUID batchId, final UUID token) {
+    public NotificationClaim claimForNotification(final UUID batchId, final UUID token) {
         return StoreOutage.translating("claim a batch for notification", () -> {
-            final Boolean claimed = transactions.execute(oneTransaction -> {
+            final NotificationClaim claim = transactions.execute(oneTransaction -> {
                 jdbcClient.sql(SERIALISE_NOTIFIERS)
                         .param(BATCH_KEY, batchId.toString())
                         .query(Boolean.class)
                         .single();
+                // The two answers a failed compare-and-set carries apart from each other are the
+                // statement's to distinguish, and the statement that does it arrives with the
+                // existence read. Until then a failure reads as contention, as it always did, so
+                // the cases waiting on it record a failing assertion.
                 return jdbcClient.sql(CLAIM_FOR_NOTIFICATION)
                         .param(BATCH_ID, batchId)
                         .param(TOKEN, token)
                         .param(LEASE_PARAM, lease())
-                        .update() > 0;
+                        .update() > 0
+                        ? NotificationClaim.CLAIMED
+                        : NotificationClaim.ALREADY_CLAIMED;
             });
-            return Boolean.TRUE.equals(claimed);
+            return claim == null ? NotificationClaim.ALREADY_CLAIMED : claim;
         });
     }
 

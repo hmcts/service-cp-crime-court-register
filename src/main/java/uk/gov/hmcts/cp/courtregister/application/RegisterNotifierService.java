@@ -24,6 +24,7 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
 import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
+import uk.gov.hmcts.cp.courtregister.persistence.NotificationClaim;
 import uk.gov.hmcts.cp.courtregister.persistence.NotificationSettlement;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
@@ -326,7 +327,7 @@ public class RegisterNotifierService {
     private NotificationSummary underTheClaim(final UUID batchId) {
         final UUID token = UUID.randomUUID();
 
-        if (!batches.claimForNotification(batchId, token)) {
+        if (batches.claimForNotification(batchId, token) != NotificationClaim.CLAIMED) {
             metrics.alreadyNotifying();
             LOG.info("Batch {} is already being notified by another mechanism, so this run posts "
                     + "nothing for it: two runs telling one batch's recipients is a second e-mail "

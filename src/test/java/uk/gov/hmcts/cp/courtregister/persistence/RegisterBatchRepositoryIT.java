@@ -82,9 +82,9 @@ class RegisterBatchRepositoryIT {
     /**
      * How long a notification claim stays live in these cases.
      *
-     * <p>The deployed value is the reconciler's grace period; a suite that waited ten minutes to
-     * see a claim expire would be a suite nobody runs, so the lease is short and the expiry case
-     * waits it out.
+     * <p>The deployed value is {@code courtregister.notification.claim-lease}, fifteen minutes; a
+     * suite that waited that long to see a claim expire would be a suite nobody runs, so the lease
+     * is short here and the expiry case waits it out.
      */
     private static final Duration NOTIFIER_LEASE = Duration.ofMillis(250);
 
@@ -545,7 +545,7 @@ class RegisterBatchRepositoryIT {
             assertThat(repository.claimForNotification(generated.batchId(), token))
                     .as("the batch is unclaimed, so the notifier that asked may tell its "
                             + "recipients")
-                    .isTrue();
+                    .isEqualTo(NotificationClaim.CLAIMED);
             assertThat(claimHolderOf(generated.batchId()))
                     .as("and the claim is on the row under this notifier's own token, which is "
                             + "what a release and a takeover are both fenced on")
@@ -562,8 +562,9 @@ class RegisterBatchRepositoryIT {
             assertThat(repository.claimForNotification(generated.batchId(), second))
                     .as("one notifier per batch at a time: the second POST under a row's own "
                             + "identity is a second e-mail about the same children to the same "
-                            + "team")
-                    .isFalse();
+                            + "team, and this answer says the batch is being told rather than "
+                            + "that there is no batch")
+                    .isEqualTo(NotificationClaim.ALREADY_CLAIMED);
             assertThat(claimHolderOf(generated.batchId()))
                     .as("and the refusal changed nothing, so the claim is still the first "
                             + "notifier's to release")
@@ -584,7 +585,7 @@ class RegisterBatchRepositoryIT {
                     .isNull();
             assertThat(repository.claimForNotification(generated.batchId(), UUID.randomUUID()))
                     .as("so an operator's resend of a PARTIALLY_NOTIFIED batch can have it")
-                    .isTrue();
+                    .isEqualTo(NotificationClaim.CLAIMED);
         }
 
         /**
@@ -628,7 +629,7 @@ class RegisterBatchRepositoryIT {
             assertThat(repository.claimForNotification(generated.batchId(), recovering))
                     .as("the pod that held this claim is gone, and the batch still has Youth "
                             + "Offending Teams it owes a register")
-                    .isTrue();
+                    .isEqualTo(NotificationClaim.CLAIMED);
             assertThat(claimHolderOf(generated.batchId()))
                     .as("and the claim is now the recovering notifier's, so the dead one's "
                             + "release would change nothing")
@@ -711,13 +712,25 @@ class RegisterBatchRepositoryIT {
                     .isEqualTo(takenOver);
         }
 
+        /**
+         * A batch this store never assembled is not a batch somebody else is telling.
+         *
+         * <p>Nought rows changed carried both readings and the caller had to pick one before it
+         * could know which: contention, which is an ordinary night, or a caller acting on a
+         * correlation nothing was ever assembled under, which is the not-found failure. Counting
+         * the second as the first put a lost correlation into the reading a claim nobody can take
+         * is chased by, and reported a batch that does not exist as a batch somebody is busy with.
+         *
+         * <p>The existence read is made inside the same short transaction, under the same advisory
+         * lock, so the two answers are two readings of one moment rather than of two.
+         */
         @Test
-        void claiming_a_batch_this_store_never_assembled_should_be_refused() {
+        void claiming_a_batch_this_store_never_assembled_should_say_there_is_no_such_batch() {
             assertThat(repository.claimForNotification(UUID.randomUUID(), UUID.randomUUID()))
-                    .as("nought rows changed is a caller naming an identity nothing was ever "
-                            + "assembled under, which is not a batch whose recipients are owed "
-                            + "anything")
-                    .isFalse();
+                    .as("no notifier is telling this batch's recipients, because there are no "
+                            + "recipients and no batch: this is the caller's correlation being "
+                            + "wrong and not a claim it lost")
+                    .isEqualTo(NotificationClaim.ABSENT);
         }
     }
 

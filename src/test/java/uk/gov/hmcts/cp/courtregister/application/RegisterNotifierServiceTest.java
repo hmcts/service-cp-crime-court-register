@@ -61,6 +61,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
+import uk.gov.hmcts.cp.courtregister.persistence.NotificationClaim;
 import uk.gov.hmcts.cp.courtregister.persistence.NotificationSettlement;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
@@ -256,6 +257,15 @@ class RegisterNotifierServiceTest {
      * false twice could not tell those two moments apart.
      */
     private final AtomicReference<UUID> claim = new AtomicReference<>();
+
+    /**
+     * Whether this store holds the batch at all, which is what the claim's existence read answers.
+     *
+     * <p>True for every case but the one about a correlation nothing was ever assembled under: a
+     * claim attempt on a batch that is not there changed no row exactly as a claim attempt on a
+     * batch somebody else holds does, and the two are not the same night.
+     */
+    private final AtomicBoolean recorded = new AtomicBoolean(true);
 
     private final RegisterNotifierService service = new RegisterNotifierService(
             store, batches, notifications, notifier, metrics, TEMPLATE_ID, retryPolicy, pause,
@@ -570,9 +580,24 @@ class RegisterNotifierServiceTest {
         return did;
     }
 
-    /** The claim, taken by whichever notifier asks while nobody holds it. */
+    /**
+     * The claim, taken by whichever notifier asks while nobody holds it.
+     *
+     * <p>Three answers, because a compare-and-set that changed no row carries two unrelated
+     * meanings: another notifier holds the claim, or this store holds no such batch. The double
+     * models the existence read the statement makes inside its own transaction, so the service is
+     * asked the question the store really answers.
+     */
     private Object takeTheClaim(final InvocationOnMock invocation) {
-        return claim.compareAndSet(null, invocation.getArgument(1));
+        final NotificationClaim answer;
+        if (recorded.get()) {
+            answer = claim.compareAndSet(null, invocation.getArgument(1))
+                    ? NotificationClaim.CLAIMED
+                    : NotificationClaim.ALREADY_CLAIMED;
+        } else {
+            answer = NotificationClaim.ABSENT;
+        }
+        return answer;
     }
 
     /**
@@ -1442,6 +1467,40 @@ class RegisterNotifierServiceTest {
                             + "reconciliation could ever pick up, which is the state defect fix P1 "
                             + "is about wearing a different hat")
                     .isNull();
+        }
+    }
+
+    /**
+     * The batch that is not there, which a failed claim attempt used to be indistinguishable from.
+     *
+     * <p>The compare-and-set changes no row whether another notifier holds the claim or this store
+     * holds no such batch, and the service counted contention before it knew which. That put a lost
+     * correlation - a caller acting on an identity nothing was ever assembled under - into the
+     * reading a claim nobody can take is chased by, and reported a batch that does not exist as a
+     * batch somebody else is busy telling. The store answers the two apart, and only the true case
+     * is counted and logged; the absent one is the not-found failure this service already had.
+     */
+    @Nested
+    @DisplayName("a batch this store never recorded")
+    class AnAbsentBatchIsNotContention {
+
+        @Test
+        void a_batch_this_store_never_recorded_should_not_be_counted_as_contention() {
+            recorded.set(false);
+            when(batches.findById(BATCH_ID)).thenReturn(Optional.empty());
+
+            softly.assertThatThrownBy(() -> service.notify(BATCH_ID))
+                    .as("naming an identity nothing was ever assembled under is the caller's own "
+                            + "correlation being wrong, and it is the failure this service already "
+                            + "had for it")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining(BATCH_ID.toString());
+            softly.assertThat(notificationIgnoredCount(GenerationMetrics.ALREADY_NOTIFYING))
+                    .as("and it is not contention: no notifier is telling this batch's recipients, "
+                            + "because there are no recipients and no batch, so the series that "
+                            + "says a claim is stuck must not move for it")
+                    .isEqualTo(ABSENT);
+            verify(notifier, never()).send(any(), any(), any());
         }
     }
 
