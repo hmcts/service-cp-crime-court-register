@@ -114,6 +114,12 @@ class NotificationNotifyClientTest {
     /** The one status the contract calls success. */
     private static final int ACCEPTED = 202;
 
+    /** The header notificationnotify says when to come back in, honoured on any retryable answer. */
+    private static final String RETRY_AFTER = "Retry-After";
+
+    /** Three seconds, in the delta-seconds form this service acts on and no other. */
+    private static final String RETRY_AFTER_SECONDS = "3";
+
     /** The row's own identity, minted and persisted before the POST and reused on every retry. */
     private static final UUID NOTIFICATION_ID =
             UUID.fromString("3f4b8c07-1d92-4e6a-b5c8-7a0d2e9f4b61");
@@ -239,6 +245,19 @@ class NotificationNotifyClientTest {
     private void commandAnswering(final int status) {
         notificationNotify.stubFor(post(urlEqualTo(commandPath(NOTIFICATION_ID)))
                 .willReturn(aResponse().withStatus(status)));
+    }
+
+    /**
+     * The same answer, carrying a {@code Retry-After} exactly as notificationnotify would send one.
+     *
+     * @param status     the status the command is refused with
+     * @param retryAfter the header's value, verbatim
+     */
+    private void commandAnswering(final int status, final String retryAfter) {
+        notificationNotify.stubFor(post(urlEqualTo(commandPath(NOTIFICATION_ID)))
+                .willReturn(aResponse()
+                        .withStatus(status)
+                        .withHeader(RETRY_AFTER, retryAfter)));
     }
 
     /**
@@ -531,6 +550,47 @@ class NotificationNotifyClientTest {
                                 .isEqualTo(FailureClassification.TRANSIENT);
                         assertThat(failure.responseCode()).isEqualTo(OptionalInt.of(status));
                     });
+        }
+
+        /**
+         * The header handed back with the refusal, because the waiting belongs to the run.
+         *
+         * <p>A {@code Retry-After} is notificationnotify saying when it expects to be able to take
+         * the command, and this client is the only participant that sees it - so it reads it, in
+         * the delta-seconds-only form the shared policy defines, and hands it on with the
+         * classification. The object holding the attempt budget is what decides whether there is
+         * room for another attempt and spends the wait, bounded by {@code max-backoff}.
+         */
+        @ParameterizedTest(name = "a {0} carrying Retry-After hands the wait back")
+        @ValueSource(ints = {429, 503})
+        @DisplayName("a Retry-After is read and handed back with the refusal")
+        void a_retry_after_is_handed_back_with_the_refusal(final int status) {
+            commandAnswering(status, RETRY_AFTER_SECONDS);
+
+            assertThat(catchThrowable(() -> client().send(NOTIFICATION, DOCUMENT_FILE_ID, CALLER)))
+                    .asInstanceOf(InstanceOfAssertFactories.type(NotificationFailedException.class))
+                    .satisfies(failure -> assertThat(failure.retryAfter())
+                            .as("read on any retryable answer rather than on a 429 alone: a 503 "
+                                    + "carrying one is a service saying when it expects to be back")
+                            .contains(Duration.ofSeconds(3)));
+        }
+
+        /**
+         * RFC 9110 also permits an HTTP-date, and acting on one would mean measuring another
+         * system's clock against this pod's. The shared policy recognises the form before it reads
+         * it, so an unusable value is the same outcome as no header at all: the back-off.
+         */
+        @Test
+        @DisplayName("a Retry-After this service cannot act on is not handed back")
+        void a_retry_after_this_service_cannot_act_on_is_not_handed_back() {
+            commandAnswering(503, "Wed, 21 Oct 2026 07:28:00 GMT");
+
+            assertThat(catchThrowable(() -> client().send(NOTIFICATION, DOCUMENT_FILE_ID, CALLER)))
+                    .asInstanceOf(InstanceOfAssertFactories.type(NotificationFailedException.class))
+                    .satisfies(failure -> assertThat(failure.retryAfter())
+                            .as("delta-seconds only, so a date falls back to the schedule rather "
+                                    + "than parking a run on a remote clock")
+                            .isEmpty());
         }
 
         /**

@@ -183,6 +183,17 @@ class RegisterNotifierServiceTest {
     /** notificationnotify could not take the command now; another attempt may answer 202. */
     private static final int UNAVAILABLE = 503;
 
+    /** notificationnotify is being asked for too much at once, and says when to come back. */
+    private static final int TOO_MANY = 429;
+
+    /**
+     * The wait a {@code Retry-After: 3} asks for, which is longer than this suite's ceiling.
+     *
+     * <p>Deliberately past {@code max-backoff}: what the policy hands out is bounded whoever asked
+     * for it, because every wait is spent inside a run that holds a bounded budget.
+     */
+    private static final Duration ASKED_TO_WAIT = Duration.ofSeconds(3);
+
     /** The shared transport's own defaults, which are what the run's budget is made of. */
     private static final int MAX_ATTEMPTS = 3;
     private static final Duration INITIAL_BACKOFF = Duration.ofSeconds(1);
@@ -456,6 +467,26 @@ class RegisterNotifierServiceTest {
         doAnswer(invocation -> {
             recordPost(invocation);
             throw new NotificationFailedException(FailureClassification.TRANSIENT, code);
+        }).when(notifier).send(argThat(sentTo(address)), any(), any());
+    }
+
+    /**
+     * One address notificationnotify cannot take the command for, and says when to come back.
+     *
+     * <p>The header is read by the shared policy before it reaches here, exactly as the client
+     * reads it off the response: what this suite is about is whether the object holding the attempt
+     * budget spends the wait the answer asked for or its own schedule.
+     *
+     * @param address    the address every attempt is refused for
+     * @param code       the status each of them is refused with
+     * @param retryAfter the wait the answer asked for
+     */
+    private void refusesAskingToBeAskedLater(final String address, final int code,
+            final Duration retryAfter) {
+        doAnswer(invocation -> {
+            recordPost(invocation);
+            throw new NotificationFailedException(
+                    FailureClassification.TRANSIENT, code, retryAfter);
         }).when(notifier).send(argThat(sentTo(address)), any(), any());
     }
 
@@ -999,6 +1030,36 @@ class RegisterNotifierServiceTest {
                             + "one policy every client of this service holds: a client with a "
                             + "back-off of its own is what defect fix C3 removed")
                     .containsExactly(INITIAL_BACKOFF, MAX_BACKOFF);
+        }
+
+        /**
+         * The header the other three clients have honoured since C3, honoured on this leg too.
+         *
+         * <p>A {@code Retry-After} is notificationnotify saying when it expects to be able to take
+         * the command, and the point of the header is that it knows that better than this service's
+         * schedule: asking again in a second because that is step one of the back-off is how a
+         * notifier under load is kept under load. It is read on any retryable answer rather than on
+         * a 429 alone, in delta-seconds only, and bounded by {@code max-backoff} - the ceiling the
+         * shared policy puts over every wait it hands out, server-supplied or not - so three
+         * seconds against a two-second ceiling is spent as two.
+         *
+         * <p>Asserted through the injected pause, which records what would have been waited: the
+         * difference from the schedule is on the <em>first</em> wait, which the back-off would have
+         * made {@code initial-backoff}.
+         */
+        @Test
+        void a_retry_after_should_be_spent_as_the_shared_policy_bounds_it() {
+            refusesAskingToBeAskedLater(ADDRESS_B, TOO_MANY, ASKED_TO_WAIT);
+
+            notifyBatch();
+
+            softly.assertThat(waited)
+                    .as("the answer asked for %s and the ceiling is %s, so both waits are the "
+                            + "bounded reading of what notificationnotify asked for rather than "
+                            + "the back-off's first step - a client with a schedule of its own in "
+                            + "the face of a server saying otherwise is what defect fix C3 removed",
+                            ASKED_TO_WAIT, MAX_BACKOFF)
+                    .containsExactly(MAX_BACKOFF, MAX_BACKOFF);
         }
 
         @Test
