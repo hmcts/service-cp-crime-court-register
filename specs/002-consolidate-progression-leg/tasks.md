@@ -479,32 +479,52 @@ PARTIALLY_NOTIFIED; resend ⇒ NOTIFIED.
 
 ### Tests first ⚠️
 
-- [ ] T054 [P] [US3] `batch/RecipientSetTest` — union by `emailAddress1`, name from first occurrence,
+- [x] T054 [P] [US3] `batch/RecipientSetTest` — union by `emailAddress1`, name from first occurrence,
       order stable; **P4 pin: `recipients_are_the_union_across_the_batch_not_the_first_rows`** (fails
-      against first-row-only). Red: seam throws.
-- [ ] T055 [P] [US3] `adapter/notificationnotify/NotificationNotifyClientTest` (WireMock) — body
+      against first-row-only). Red: seam throws. (red at `6e2d7e1`, over the compile-safe seam
+      `56eef87`.)
+- [x] T055 [P] [US3] `adapter/notificationnotify/NotificationNotifyClientTest` (WireMock) — body
       verbatim (`templateId`, `sendToAddress`, `fileId`, `personalisation.yotsName`) with no
       `notificationId` in it, media type `application/vnd.notificationnotify.email+json`, `CJSCPPUID`,
       path `/notifications/{notificationId}` carrying the id; 202 only; retry reuses the same id in
-      the path; `retry_taxonomy_matches_the_submission_client`. Red: seam throws.
-- [ ] T056 [P] [US3] `application/RegisterNotifierServiceTest` — rows minted PENDING before any POST;
+      the path; `retry_taxonomy_matches_the_submission_client`. Red: seam throws. (red at `8ef978c`.)
+- [x] T056 [P] [US3] `application/RegisterNotifierServiceTest` — rows minted PENDING before any POST;
       ACCEPTED/FAILED per recipient; batch NOTIFIED / PARTIALLY_NOTIFIED; **P1 pin:
       `a_batch_with_no_recipients_ends_notified_nobody_not_generated_forever`**; `resendFailed(batchId)`
-      re-requests FAILED only. Red: seam throws.
+      re-requests FAILED only. Red: seam throws. (red at `86db5b5`.)
 
 ### Implementation
 
-- [ ] T057 [US3] `batch/RecipientSet`. Green: T054 — **flip P4 to FIXED in this commit** (sign-off
-      marker stays).
-- [ ] T058 [P] [US3] `adapter/notificationnotify/NotificationNotifyClient` implementing
-      `RegisterNotifier`. Green: T055.
-- [ ] T059 [US3] `application/RegisterNotifierService` (+ wiring from `DocumentOutcomeSinkImpl` on
-      GENERATED). Green: T056 — **flip P1 to FIXED in this commit.**
-- [ ] T060 [A] [US3] `e2e/GenerationEndToEndIT` (complete) — … → NN WireMock received one request per
-      distinct recipient with the document id → NOTIFIED; run report counts. Record.
-- [ ] T061 [A] [US3] `e2e/GenerationFailureEndToEndIT` — `generation-failed` ⇒ FAILED with reason; no
+- [x] T057 [US3] `batch/RecipientSet`. Green: T054 — **flip P4 to FIXED in this commit** (sign-off
+      marker stays). (`11e077a`; P4 flipped to FIXED there, sign-off marker kept.)
+- [x] T058 [P] [US3] `adapter/notificationnotify/NotificationNotifyClient` implementing
+      `RegisterNotifier`. Green: T055. (`fbce03e`.)
+- [x] T059 [US3] `application/RegisterNotifierService` (+ wiring from `DocumentOutcomeSinkImpl` on
+      GENERATED). Green: T056 — **flip P1 to FIXED in this commit.** (`322fc07`; P1 flipped to FIXED
+      there.)
+- [x] T060 [A] [US3] `e2e/GenerationEndToEndIT` (complete) — … → NN WireMock received one request per
+      distinct recipient with the document id → NOTIFIED; run report counts. Record. (**first observed
+      run of the completed suite: GREEN**, all three cases, at `1337c78`. The suite as T052 left it was
+      **RED at `322fc07`** and it is the only thing that was: the full `./gradlew build` failed on its
+      one case, whose 30s await for GENERATED could not be met, because wiring the notifying leg to
+      the mark that records the document means a delivered outcome no longer leaves a batch at
+      GENERATED - the stack stubbed no notificationnotify, so every e-mail was refused 404 and the
+      batch settled PARTIALLY_NOTIFIED. That is what "complete" meant here, so the case was rewritten
+      rather than adjusted: two hearings, three distinct recipients, one POST each at
+      `/notifications/{id}` under the identity its own `register_notification` row was minted with,
+      `fileId` the document's id rather than the payload's, and all three rows ACCEPTED on 202. The run
+      report is asserted for what it can say - a GENERATING batch and no notified one, since the
+      document arrives long after the run has ended.)
+- [x] T061 [A] [US3] `e2e/GenerationFailureEndToEndIT` — `generation-failed` ⇒ FAILED with reason; no
       event ⇒ reconciler completes; NN 500 for one recipient ⇒ PARTIALLY_NOTIFIED; resend via the
-      service ⇒ NOTIFIED. Record.
+      service ⇒ NOTIFIED. Record. (**first observed run: GREEN**, all four cases, at `0d85ead`. The
+      un-answered batch reaches the reconciler by having its own `requested_at` moved into the past
+      rather than by shortening the grace period, because that read is over a `register_batch` table
+      every suite in this JVM shares and shortening it would make every other suite's in-flight batch
+      overdue at the same moment; for the same reason the reconciled count is asserted positive rather
+      than exactly one. The resend case asserts the WireMock paths: three POSTs, two of them the
+      refused team's own path, which is the whole of what makes the retry reach the attempt it is
+      retrying rather than send a second e-mail.)
 
 **Checkpoint**: the whole downstream leg works against stubs; six P rows FIXED. Codex review 6.
 
