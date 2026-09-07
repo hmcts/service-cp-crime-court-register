@@ -52,6 +52,13 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * <p>Every batch it assembles is written down as not system-generated, which is progression's own
  * flag and is what tells a later reader that a person asked for this document rather than 18:00.
  *
+ * <p><strong>A batch is released only where this run will re-assemble it.</strong> Clearing the
+ * stamp is not undoable, and a row this run then leaves out is a row the 18:00 schedule picks up as
+ * its own. So a FAILED batch whose key still has a batch in flight, and one holding a register the
+ * narrowing excludes, are left carrying their stamps and named on their own line under the reason -
+ * which is where an operator learns that a batch they asked about has to wait rather than that
+ * nothing happened.
+ *
  * <p><strong>A register is handed to the assembler once.</strong> A row released from its failed
  * batch is answered by {@link RegisterStore#activeUnbatched()} as well, and the store cannot tell a
  * caller which of the two reads happened first - so the two sources are merged on the register's own
@@ -69,6 +76,15 @@ public class GenerateRegisterCli {
 
     /** What this command could not finish, as the bounded reason the line carries. */
     private static final String NOT_GENERATED = "generation-failed";
+
+    /** What a batch left carrying its stamp is reported as, which is not a failure. */
+    private static final String WITHHELD = "withheld";
+
+    /** The key has a batch in flight, so the assembler would defer it whatever this run released. */
+    private static final String KEY_IN_FLIGHT = "key-in-flight";
+
+    /** The batch holds a register the operator's own narrowing excludes from this run. */
+    private static final String OUTSIDE_THE_BOUND = "outside-the-bound";
 
     /**
      * False, because this is a person asking rather than the schedule.
@@ -238,7 +254,7 @@ public class GenerateRegisterCli {
     private int generate(final Selection selection) {
         try {
             final List<RegisterBatch> day = store.batchesOn(selection.registerDate());
-            final List<RegisterRecord> released = released(narrowed(day, selection));
+            final List<RegisterRecord> released = released(narrowed(day, selection), day, selection);
             final List<RegisterRecord> registers = registers(released, selection);
             final BatchAssembly assembly = assembler.assemble(registers, day, BY_HAND);
             final int requested = request(assembly);
@@ -295,15 +311,68 @@ public class GenerateRegisterCli {
      * one systemdocgenerator is still rendering is a second document for the day, and a notified
      * one's registers have already reached the Youth Offending Team.
      *
-     * @param narrowed the day's batches this run is about
+     * <p><strong>And a batch this run will not re-assemble is left where it is too.</strong> A
+     * release is not undoable: the moment the stamp is off, the rows are what
+     * {@link RegisterStore#activeUnbatched()} answers, so any row this run then drops belongs to the
+     * 18:00 schedule instead - batched as system-generated, and outside the bound the operator
+     * stated. The two ways that happens are decided before the release rather than discovered after
+     * it, and the batch left alone is named on its own line under the reason it was left.
+     *
+     * @param narrowed  the day's batches this run may release
+     * @param day       every batch the day holds, which is where a key's other batches are
+     * @param selection the day and the narrowing every register is held to
      * @return the registers whose stamp was cleared
      */
-    private List<RegisterRecord> released(final List<RegisterBatch> narrowed) {
+    private List<RegisterRecord> released(final List<RegisterBatch> narrowed,
+            final List<RegisterBatch> day, final Selection selection) {
+
         final List<RegisterRecord> released = new ArrayList<>();
         narrowed.stream()
                 .filter(batch -> batch.status() == BatchStatus.FAILED)
-                .forEach(batch -> released.addAll(store.releaseFailed(batch.batchId())));
+                .forEach(batch -> {
+                    final String withheld = withheldReason(batch, day, selection);
+                    if (withheld == null) {
+                        released.addAll(store.releaseFailed(batch.batchId()));
+                    } else {
+                        LOG.warn("The registers of batch {} were left where they are, because this "
+                                + "run would not have re-assembled them. reason={}",
+                                batch.batchId(), withheld);
+                        output.accept("batch=" + batch.batchId() + " outcome=" + WITHHELD
+                                + " reason=" + withheld);
+                    }
+                });
         return released;
+    }
+
+    /**
+     * Why one FAILED batch is not released, or {@code null} where it is.
+     *
+     * <p>{@link #KEY_IN_FLIGHT} is the assembler's own deferral asked before the release rather than
+     * after it: a key with a batch still being rendered is left for a later run, so releasing its
+     * rows first would only move them from this batch to the schedule. {@link #OUTSIDE_THE_BOUND} is
+     * the operator's narrowing: a batch is re-assembled whole, so one holding a register the bound
+     * or the court house excludes cannot be released without handing that register to the 18:00 run.
+     *
+     * <p>The registers are read while the stamp is still on them, which is the only moment they can
+     * be read at all - after the release they are indistinguishable from the day's other waiting
+     * rows.
+     *
+     * @param batch     one FAILED batch of the day, narrowed to this run
+     * @param day       every batch the day holds
+     * @param selection the day and the narrowing every register is held to
+     * @return the bounded reason it is left alone, or {@code null} where it may be released
+     */
+    private String withheldReason(final RegisterBatch batch, final List<RegisterBatch> day,
+            final Selection selection) {
+
+        String reason = null;
+        if (day.stream().anyMatch(other -> batch.key().equals(other.key())
+                && BatchAssembler.inFlight(other.status()))) {
+            reason = KEY_IN_FLIGHT;
+        } else if (!store.batched(batch.batchId()).stream().allMatch(selection::holds)) {
+            reason = OUTSIDE_THE_BOUND;
+        }
+        return reason;
     }
 
     /**

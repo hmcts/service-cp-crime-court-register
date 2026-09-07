@@ -99,6 +99,22 @@ public class BatchAssembler {
                     .thenComparing(RegisterBatch::batchId);
 
     /**
+     * Whether a batch in this state is why its key may not be batched again yet.
+     *
+     * <p>Asked here rather than restated by a caller: an operator's regeneration has to know the
+     * answer before it releases a FAILED batch, because a key this class is going to defer is a key
+     * whose released rows would fall to the schedule instead
+     * ({@code batch/cli/GenerateRegisterCli}). One rule, so a state added to the machine cannot mean
+     * "in flight" here and "finished" there.
+     *
+     * @param status where a batch of the key has got to
+     * @return true where a render request, a render outcome or an e-mail is still outstanding
+     */
+    public static boolean inFlight(final BatchStatus status) {
+        return IN_FLIGHT.contains(status);
+    }
+
+    /**
      * Groups the active records into the batches this run will ask to be rendered.
      *
      * <p>The batches already recorded for the keys in play are an argument rather than a read of
@@ -125,7 +141,7 @@ public class BatchAssembler {
 
         groupByKey(active).forEach((key, records) -> {
             final List<RegisterBatch> history = recordedFor(key, existing);
-            if (history.stream().anyMatch(batch -> IN_FLIGHT.contains(batch.status()))) {
+            if (history.stream().anyMatch(batch -> inFlight(batch.status()))) {
                 deferred.add(key);
             } else {
                 assembled.add(new AssembledBatch(
