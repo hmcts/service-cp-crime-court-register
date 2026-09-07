@@ -374,7 +374,7 @@ public class RegisterNotifierService {
     @SuppressWarnings("PMD.OnlyOneReturn")
     private Attempted attempt(final RegisterNotification row, final UUID documentFileId) {
         final int maxAttempts = retryPolicy.maxAttempts();
-        Integer responseCode = null;
+        OptionalInt lastAnswer = OptionalInt.empty();
         int posts = 0;
 
         while (posts < maxAttempts) {
@@ -383,12 +383,11 @@ public class RegisterNotifierService {
                 return new Attempted(
                         notifier.send(row, documentFileId, CallerIdentity.SYSTEM), posts);
             } catch (NotificationFailedException refused) {
-                final OptionalInt answered = refused.responseCode();
-                responseCode = answered.isPresent() ? answered.getAsInt() : null;
+                lastAnswer = refused.responseCode();
                 LOG.warn("notificationnotify did not accept a register e-mail on attempt {} of {}. "
                         + "notificationId={} batchId={} responseCode={} classification={}",
-                        posts, maxAttempts, row.notificationId(), row.batchId(), responseCode,
-                        refused.classification(), refused);
+                        posts, maxAttempts, row.notificationId(), row.batchId(),
+                        statusOf(lastAnswer), refused.classification(), refused);
                 if (refused.classification() != FailureClassification.TRANSIENT
                         || posts == maxAttempts
                         || !waitFor(row, retryPolicy.waitAfter(posts, Optional.empty()))) {
@@ -399,9 +398,21 @@ public class RegisterNotifierService {
         LOG.warn("The register e-mail for one recipient of batch {} was not accepted, so its row "
                 + "records the attempts and the batch carries on to the recipients after it. "
                 + "notificationId={} attempts={} responseCode={}", row.batchId(),
-                row.notificationId(), posts, responseCode);
-        return new Attempted(new NotificationOutcome(NotificationStatus.FAILED, responseCode),
-                posts);
+                row.notificationId(), posts, statusOf(lastAnswer));
+        return new Attempted(
+                new NotificationOutcome(NotificationStatus.FAILED, statusOf(lastAnswer)), posts);
+    }
+
+    /**
+     * The status the last attempt carried, where it carried one.
+     *
+     * @param answered what notificationnotify answered, which is nothing at all where the attempt
+     *                 reached no verdict
+     * @return the status, or {@code null} - a row carrying an invented one would say an attempt was
+     *     answered when nothing answered
+     */
+    private static Integer statusOf(final OptionalInt answered) {
+        return answered.isPresent() ? answered.getAsInt() : null;
     }
 
     /**

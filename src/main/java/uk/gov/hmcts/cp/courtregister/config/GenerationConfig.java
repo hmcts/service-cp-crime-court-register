@@ -142,16 +142,16 @@ public class GenerationConfig {
      * statement of a rule that has already been enforced, kept because a bean is not entitled to
      * assume the order beans are built in.
      *
-     * @param store         where the batch's registers are read and the batch is settled
-     * @param batches       the {@code register_batch} read that gives the generated document's id
-     * @param notifications the {@code register_notification} rows
-     * @param notifier      notificationnotify, LIVE or STUB as the mode chose
      * <p><strong>The retry policy is the same object the generation leg is given</strong>, built
      * from the same five settings: {@code courtregister.endpoints.max-attempts} and the two
      * back-off bounds are the transport the systemdocgenerator and notificationnotify clients share,
      * so the taxonomy is stated once (defect fix C3) and only the loop belongs to whoever holds the
      * budget an attempt is spent out of.
      *
+     * @param store         where the batch's registers are read and the batch is settled
+     * @param batches       the {@code register_batch} read that gives the generated document's id
+     * @param notifications the {@code register_notification} rows
+     * @param notifier      notificationnotify, LIVE or STUB as the mode chose
      * @param metrics       where each recipient and each terminal batch state is counted
      * @param properties    the bound settings, for the {@code cr_standard} template id and the
      *                      shared transport

@@ -173,6 +173,9 @@ class RegisterNotifierServiceTest {
     /** The attempt count of a row nothing has been posted for yet, which is the column's default. */
     private static final int MINTED_NEVER_SETTLED = 0;
 
+    /** The attempt a transiently-refused address is refused on, and only that one. */
+    private static final int FIRST_ATTEMPT = 1;
+
     /** notificationnotify refused the command outright; another attempt answers the same. */
     private static final int REFUSED = 400;
 
@@ -410,7 +413,7 @@ class RegisterNotifierServiceTest {
         final AtomicInteger attempts = new AtomicInteger();
         doAnswer(invocation -> {
             recordPost(invocation);
-            if (attempts.incrementAndGet() == 1) {
+            if (attempts.incrementAndGet() == FIRST_ATTEMPT) {
                 throw new NotificationFailedException(FailureClassification.TRANSIENT, code);
             }
             return new NotificationOutcome(NotificationStatus.ACCEPTED, ACCEPTED);
