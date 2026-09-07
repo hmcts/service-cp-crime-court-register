@@ -288,11 +288,13 @@ public class RegisterBatchRepository {
      * reading a national date reads it a court house at a time, and the identity breaks the tie a
      * date's several batches for one court house would otherwise leave to the planner. A court house
      * the hearing venue never named sorts last, which is where a row that cannot say where it sat
-     * belongs in a listing read by court house.
+     * belongs in a listing read by court house - and it is written {@code NULLS LAST} rather than
+     * left to be ascending's default, because the rule is this statement's to state and a reader
+     * checking it against the javadoc should not have to know which way round a planner sorts nulls.
      */
     private static final String FIND_BY_REGISTER_DATE = SELECT_BATCH + """
              WHERE register_date = :registerDate
-             ORDER BY court_house, batch_id
+             ORDER BY court_house NULLS LAST, batch_id
             """;
 
     private static final String BATCH_KEY = "batchKey";
