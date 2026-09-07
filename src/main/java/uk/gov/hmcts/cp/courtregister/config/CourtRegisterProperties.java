@@ -106,9 +106,11 @@ public record CourtRegisterProperties(
      * under the notifier holding it puts a second notifier into the cycle, and a Youth Offending
      * Team is sent a register about children twice.
      *
-     * <p>Renewed before every write the cycle makes, so the number here bounds one recipient's turn
-     * rather than the whole batch, and startup holds it to twice the longest single POST cycle
-     * ({@code PropertiesValidator}).
+     * <p>Renewed before every POST the cycle makes - the retries of one recipient included - and
+     * before every settlement, so the number here bounds one recipient's retry cycle rather than the
+     * whole batch. Startup holds it to twice the longest single POST cycle over the shared
+     * {@code courtregister.endpoints.*} transport, which is 98s at the shipped values
+     * ({@code PropertiesValidator.validateTheNotificationClaimOutlastsOnePostCycle}).
      *
      * @param claimLease how long a notification claim stays live before another notifier may take
      *                   it over, measured from the last renewal

@@ -120,16 +120,20 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * not as contention, because a lost correlation counted as contention makes the reading a stuck
  * claim is chased by mean nothing.
  *
- * <p><strong>The lease is the notifying leg's own and is renewed before every write.</strong>
+ * <p><strong>The lease is the notifying leg's own, and is renewed before every POST and before
+ * every settlement.</strong>
  * {@code courtregister.notification.claim-lease} rather than the reconciler's grace period, which
  * answers a different question: how long a batch may hold a document before the safety net looks is
  * no bound at all on telling that batch's recipients, whose cost is the number of Youth Offending
  * Teams the batch is addressed to times whatever notificationnotify makes of each of them. So what
  * the lease is asked to cover is the retry cycle one recipient's turn can become - every attempt's
- * connect and read timeout with the bounded waits between them, which is what startup holds it to -
- * and {@code renewNotificationClaim(batchId, token)} - one token-fenced statement that re-checks
- * ownership and extends the lease together - is asked before every one of those POSTs, retries
- * included, before each row's settlement and before the batch's own. A notifier whose renewal is refused has been taken
+ * connect and read timeout with the bounded waits between them, which is the cycle startup holds it
+ * to twice over - and {@code renewNotificationClaim(batchId, token)} - one token-fenced statement
+ * that re-checks ownership and extends the lease together - is asked before every one of those
+ * POSTs, the retries of one recipient included, before each row's settlement and before the batch's
+ * own. Before every POST and not once per recipient: one renewal spent across a recipient's whole
+ * cycle fenced the first attempt and none of the others, and the others are the ones made after a
+ * read timeout and a back-off wait. A notifier whose renewal is refused has been taken
  * over: it stops, settles nothing further and answers
  * {@link NotificationDisposition#CLAIM_LOST}, counted apart from the notifier that never started,
  * because the rows it left unsettled are re-requested by a later run under the identities they
@@ -145,13 +149,17 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * <p>A claim rather than one transaction around the cycle, and for the same reason the intake half
  * holds a {@code RunClaim}: the cycle POSTs to notificationnotify once per recipient and waits
  * between its own retries, and a database transaction open across that would hold a connection and
- * a row lock for as long as another service takes to answer. The row-level writes are fenced
- * independently of the claim as well - a settlement is held off where the row is already ACCEPTED,
- * and the attempt total is computed in SQL - because defence at the row is what survives a claim
- * whose lease ran out under the run that held it. <strong>The attempt tally is the one part of that
- * write which is not fenced</strong>, and deliberately: a POST made in the very window the fence
+ * a row lock for as long as another service takes to answer. <strong>Every settlement write this leg
+ * makes - each row's and the batch's own - is fenced by a token ownership re-check</strong>, the
+ * renewal statement being that re-check. The row-level writes are fenced independently of the claim
+ * as well - a settlement is held off where the row is already ACCEPTED, and the attempt total is
+ * computed in SQL - because defence at the row is what survives a claim whose lease ran out under
+ * the run that held it. <strong>The one write that is deliberately unfenced is the tally after a
+ * lost claim</strong>, which touches {@code attempts} and no settlement column, on the row's
+ * identity and neither the claim nor the row's status: a POST made in the very window the fence
  * exists for is still a POST, and leaving it off the total made a row two notifiers posted for read
- * as one notifier's work.
+ * as one notifier's work. The tally inside the settlement statement sits outside that statement's
+ * own ACCEPTED fence for the same reason.
  *
  * <p><strong>Notification is asked once per batch, because the mark that precedes it is.</strong>
  * {@code markGenerated} is a compare-and-set, so of two mechanisms racing to move one batch to
@@ -888,11 +896,13 @@ public class RegisterNotifierService {
      * than {@code max-backoff} however long the other side asked for. An unusable value and no
      * header at all are the same thing, the back-off (defect fix C3).
      *
-     * <p>No deadline is checked, and that is the one place this differs from the generation leg.
-     * That leg runs inside a claim the nightly run holds and measures each attempt against what is
-     * left of it; a notification is driven by the outcome sink on a public-event delivery or by an
-     * operator's resend, and holds no claim at all. What bounds it is therefore the attempt budget
-     * and {@code max-backoff}, which is what bounds every wait this policy hands out.
+     * <p>No deadline is measured against each attempt, and that is the one place this differs from
+     * the generation leg. That leg runs inside the nightly run's claim and charges every attempt
+     * against what is left of it; this leg holds a claim too - the batch's own, taken by
+     * {@code claimForNotification} - but bounds itself by renewing the lease before every POST
+     * rather than by counting down against a deadline. So what bounds one recipient's cycle is the
+     * attempt budget and {@code max-backoff}, which is what bounds every wait this policy hands out,
+     * and {@code courtregister.notification.claim-lease} is held at startup to twice that cycle.
      *
      * <p><strong>But the claim is asked about again before every retry, because a retry is a POST
      * like any other.</strong> The caller renews before the first attempt and this loop renews

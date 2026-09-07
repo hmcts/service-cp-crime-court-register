@@ -9,7 +9,7 @@ package uk.gov.hmcts.cp.courtregister.application;
  * a tally cannot say it: the counts a loser reads are the winner's work in progress, and a batch
  * state is where the batch stands rather than what this call decided.
  *
- * <p>Bounded, and deliberately two constants rather than a message. A caller branches on it, a
+ * <p>Bounded, and deliberately four constants rather than a message. A caller branches on it, a
  * {@code reason} label is derived from it, and neither may ever carry a court centre, a batch
  * identity or a recipient (constitution Principle VII).
  */
@@ -38,12 +38,17 @@ public enum NotificationDisposition {
      * then found the batch was no longer its own. So some POSTs were really made and the rows and
      * the batch are part-written, by two notifiers rather than one.
      *
-     * <p>The claim is renewed before every POST and before every write, so what this says is that a
-     * renewal was refused: the lease ran out under this notifier - it is telling more recipients than
-     * the lease covers, or notificationnotify is answering more slowly than the lease allows - and
-     * something else has taken the batch over. The run stops there rather than writing over the work
-     * of the notifier that now holds it, and the rows it did not settle are re-requested by a later
-     * run under the identities they already hold.
+     * <p>The claim is renewed before every POST and before every settlement, so what this says is
+     * that a renewal was refused: the lease ran out under this notifier - notificationnotify is
+     * answering one recipient more slowly than the lease covers - and something else has taken the
+     * batch over. The run stops there rather than writing over the work of the notifier that now
+     * holds it, and the rows it did not settle are re-requested by a later run under the identities
+     * they already hold.
+     *
+     * <p>The one write it does still make is the attempt tally, deliberately unfenced: the POSTs it
+     * had already made are added to their row's lifetime {@code attempts} by a statement that
+     * touches no settlement column, because a POST made in the window the fence exists for was
+     * still really made.
      */
     CLAIM_LOST,
 
@@ -64,7 +69,9 @@ public enum NotificationDisposition {
      * could revisit it. So the cycle stops, the claim is given back, and the batch stays where it
      * stands with whatever rows are settled: GENERATED is a state {@code notify-register --batch}
      * and the reconciler both recover, and {@code courtregister_oldest_generated_age} is the
-     * reading that says a batch has been standing there.
+     * reading that says a batch has been standing there. A later run derives the owed set from the
+     * records again, mints the row the store has no record of, posts under it and settles the batch
+     * on a tally that then accounts for every recipient.
      *
      * <p>The bounded reason it is counted under is {@code settlement-row-absent}, which is the
      * fault itself; this is what the call did about it.

@@ -696,7 +696,7 @@ public class PropertiesValidator implements InitializingBean {
     /**
      * The shared retry policy's two waits, held to what a wait has to be to be takeable.
      *
-     * <p>One rule for all three clients, because there is one policy: {@code initial-backoff} and
+     * <p>One rule for all four clients, because there is one policy: {@code initial-backoff} and
      * {@code max-backoff} mean the same thing wherever they are read, and so does a configuration
      * that makes them unusable. A negative first wait throws from inside the retry rather than being
      * taken, and a ceiling below the first wait shortens the very wait it exists to bound.
@@ -726,7 +726,7 @@ public class PropertiesValidator implements InitializingBean {
      *
      * <p><strong>{@code max-backoff} per wait, not the doubling schedule.</strong> The schedule is
      * what the client waits when nothing tells it otherwise, and it is not the bound: a
-     * {@code Retry-After} is honoured on <em>every</em> retryable answer in all three clients, and
+     * {@code Retry-After} is honoured on <em>every</em> retryable answer in all four clients, and
      * the only thing limiting what a remote service can ask for is {@code max-backoff}. So a service
      * answering {@code Retry-After: 3600} on every attempt costs a full ceiling per wait, and a
      * budget computed from the doubling would licence a run that cannot finish inside its claim —
@@ -807,8 +807,9 @@ public class PropertiesValidator implements InitializingBean {
      * <p>The notification claim's lease bounds work whose length it cannot know from itself: a batch
      * is addressed to as many Youth Offending Teams as subscribed to its court centre, and each of
      * them costs up to {@code max-attempts} POSTs with a connect timeout, a read timeout and a
-     * back-off wait apiece. The claim is renewed before every POST and before every write, so what
-     * the lease has to cover is the retry cycle one recipient's turn can become - and a lease
+     * back-off wait apiece. The claim is renewed before every POST - the retries of one recipient
+     * included - and before every settlement, so what the lease has to cover is the retry cycle one
+     * recipient's turn can become - and a lease
      * shorter than that expires under a notifier still waiting on a socket, after which a second
      * notifier takes the batch over, derives the same owed set from the same records, and a Youth
      * Offending Team is sent a register about children twice.
@@ -821,6 +822,11 @@ public class PropertiesValidator implements InitializingBean {
      * <pre>
      *   max-attempts x (connect-timeout + read-timeout) + (max-attempts - 1) x max-backoff
      * </pre>
+     *
+     * <p>At the shipped {@code courtregister.endpoints.*} values that is
+     * {@code 2 x (3 x (5s + 10s) + 2 x 2s)} = 98s, which the shipped fifteen-minute lease clears
+     * comfortably; the rule bites on the deployment that lengthens a timeout or raises the attempt
+     * budget and leaves the lease where it was.
      *
      * <p><strong>The connect timeout is charged</strong>, because an attempt that hangs on the
      * connect and then on the read is the longest single thing an outbound call does and it is the
