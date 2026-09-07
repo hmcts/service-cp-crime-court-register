@@ -29,9 +29,10 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
  * ordinary one, because a run whose outcomes all arrive by reconciliation is a broker to look at
  * rather than a renderer.
  *
- * <p>The six gauges are the state a nightly flow cannot be understood without between runs: how
+ * <p>The seven gauges are the state a nightly flow cannot be understood without between runs: how
  * old the oldest unbatched record is, how long the oldest batch has been waiting for a document,
- * how long the oldest batch that never reached the renderer has been stuck, how many batches the
+ * how long the oldest batch that never reached the renderer has been stuck, how long the oldest
+ * batch holding a document nobody was told about has stood there, how many batches the
  * run deadline left behind, how many court centre days a run passed over, and whether the flag was
  * readable at all. Like {@link ProcessingMetrics}'s two, they are registered from construction,
  * because a dashboard must be able to read them from a pod that has not yet run.
@@ -125,13 +126,14 @@ public class GenerationMetrics {
     private final MeterRegistry registry;
 
     /**
-     * Gauge state, held here rather than read from a collaborator so the six gauges exist from
+     * Gauge state, held here rather than read from a collaborator so the seven gauges exist from
      * construction: a nightly flow is read between runs as much as during one, and a gauge that
      * only appears after the first run is not an alerting surface.
      */
     private final AtomicLong oldestRecordedUnbatchedSeconds = new AtomicLong();
     private final AtomicLong oldestGeneratingSeconds = new AtomicLong();
     private final AtomicLong oldestPendingSeconds = new AtomicLong();
+    private final AtomicLong oldestGeneratedSeconds = new AtomicLong();
     private final AtomicInteger pendingAfterDeadlineBatches = new AtomicInteger();
     private final AtomicInteger deferredCourtCentreDays = new AtomicInteger();
 
@@ -158,6 +160,10 @@ public class GenerationMetrics {
                 .register(registry);
         Gauge.builder(OLDEST_PENDING_AGE, oldestPendingSeconds, AtomicLong::doubleValue)
                 .description("Age in seconds of the oldest batch that never reached the renderer")
+                .register(registry);
+        Gauge.builder(OLDEST_GENERATED_AGE, oldestGeneratedSeconds, AtomicLong::doubleValue)
+                .description("Age in seconds of the oldest batch holding a document nobody was "
+                        + "told about")
                 .register(registry);
         Gauge.builder(PENDING_AFTER_DEADLINE, pendingAfterDeadlineBatches,
                         AtomicInteger::doubleValue)
@@ -332,14 +338,19 @@ public class GenerationMetrics {
     /**
      * Reports how long the oldest batch that holds a document nobody was told about has waited.
      *
-     * <p>Compile-safe seam: the gauge behind it is registered by the paired fix, so the cases
-     * guarding this reading fail on their assertions rather than on a missing method.
+     * <p>The third batch nothing else can see, and the third reading that exists because of one.
+     * Notification follows the mark that records the document in one step of one code path, so a
+     * store that went away in between - or a listener session that rolled the delivery back after
+     * that mark had committed - leaves the batch at GENERATED with rows nothing settled.
+     * {@link #OLDEST_GENERATING_AGE} reads GENERATING and {@link #OLDEST_PENDING_AGE} reads
+     * PENDING, so without this the one state that leaves a Youth Offending Team untold is the one
+     * state no reading moves for - defect fix P1's failure mode reached by another route.
      *
      * @param age the age of the oldest batch parked at GENERATED, or {@link Duration#ZERO} where
      *            there is none
      */
     public void oldestGeneratedAge(final Duration age) {
-        // The gauge the paired fix registers and sets from this.
+        oldestGeneratedSeconds.set(age.toSeconds());
     }
 
     /**

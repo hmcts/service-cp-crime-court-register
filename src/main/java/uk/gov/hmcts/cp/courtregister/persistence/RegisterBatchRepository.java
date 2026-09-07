@@ -133,7 +133,27 @@ public class RegisterBatchRepository {
             """;
 
     /**
-     * Statement 5 - the batch as it should now stand, if it still stands where the caller left it.
+     * Statement 5 - the batches holding a document nobody was told about, oldest first.
+     *
+     * <p>The third read the safety net makes, and the third batch nothing else in the flow can see.
+     * Notification follows {@code markGenerated} in one step of one code path, so a store that went
+     * away in between - or a listener session that rolled the JMS delivery back after that mark had
+     * already committed - leaves the batch at GENERATED with rows that were never settled.
+     * {@link #generatingSince(Instant)} reads GENERATING and {@link #pendingSince(Instant)} reads
+     * PENDING, so the one state that leaves a Youth Offending Team untold is the one state no
+     * reading moves for.
+     *
+     * <p>The cutoff is read against {@code generated_at} because that is when the batch became the
+     * notifying leg's to finish, and a batch whose document arrived a moment ago is one that leg is
+     * still working through.
+     */
+    private static final String GENERATED_SINCE = SELECT_BATCH + """
+             WHERE status = 'GENERATED' AND generated_at < :generatedBefore
+             ORDER BY generated_at, batch_id
+            """;
+
+    /**
+     * Statement 6 - the batch as it should now stand, if it still stands where the caller left it.
      *
      * <p>The whole mutable row, so a caller that read a batch, decided about it and writes it back
      * cannot leave half of its decision behind. The key and the assembly facts are not among the
@@ -244,21 +264,20 @@ public class RegisterBatchRepository {
     }
 
     /**
-     * The batches that have held a document since before the given instant without being notified.
-     *
-     * <p>Compile-safe seam: the statement behind it is written by the paired fix, so the cases
-     * guarding the reading it feeds fail on their assertions rather than on a missing method.
+     * Statement 5 - the batches that have held a document since before the given instant.
      *
      * @param generatedBefore the far edge of the grace period, measured from the document
-     * @return every batch parked at GENERATED, oldest first
+     * @return every batch parked at GENERATED with nobody told, oldest first
      */
     public List<RegisterBatch> generatedSince(final Instant generatedBefore) {
-        // The read the paired fix gives a statement of its own.
-        return List.of();
+        return jdbcClient.sql(GENERATED_SINCE)
+                .param("generatedBefore", offsetOf(generatedBefore))
+                .query((rs, rowNumber) -> batch(rs))
+                .list();
     }
 
     /**
-     * Statement 5 - moves a batch from the state the caller read it in to the state it decided on.
+     * Statement 6 - moves a batch from the state the caller read it in to the state it decided on.
      *
      * <p>The move is asked of {@link BatchStatus} before it is attempted, so the state machine is
      * the domain's and not this statement's, and a move nobody drew is refused where it is made

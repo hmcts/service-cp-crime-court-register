@@ -79,12 +79,22 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * only ever ran when there was nothing to catch. The run still calls it, because the run report
  * names what the night had to fetch.
  *
- * <p>Every pass also publishes {@code courtregister_oldest_generating_age} and
- * {@code courtregister_oldest_pending_age} from the two reads it has just made: how long the batch
- * that has been waiting longest for its document has been waiting, and how long the oldest batch
- * that never reached the renderer has been stuck. They are the readings a nightly flow cannot be
- * understood without between runs, and until this schedule existed there was nowhere for them to be
- * taken.
+ * <p>Every pass also publishes {@code courtregister_oldest_generating_age},
+ * {@code courtregister_oldest_pending_age} and {@code courtregister_oldest_generated_age} from the
+ * three reads it has just made: how long the batch that has been waiting longest for its document
+ * has been waiting, how long the oldest batch that never reached the renderer has been stuck, and
+ * how long the oldest batch holding a document nobody was told about has stood there. They are the
+ * readings a nightly flow cannot be understood without between runs, and until this schedule
+ * existed there was nowhere for them to be taken.
+ *
+ * <p><strong>The third read is a reading and not an ending.</strong> Notification follows the mark
+ * that records the document in one step of one code path, so a store that went away in between - or
+ * a listener session that rolled the JMS delivery back after that mark had already committed -
+ * leaves the batch at GENERATED with rows nothing settled, and neither read above it moves for
+ * that. But there is nothing to ask systemdocgenerator about a document it has already produced and
+ * nothing to fail: the batch is owed its e-mails, and both
+ * {@code RegisterNotifierService.resendFailed} and {@code notify-register --batch} are re-entrant
+ * and will send exactly those. So this pass names the batch, publishes its age and settles nothing.
  *
  * <p><strong>Collaborators, and why these.</strong> The overdue read is
  * {@link RegisterBatchRepository#generatingSince}, which is a single-table read the store has no
@@ -219,7 +229,36 @@ public class GenerationReconciler {
         final List<RegisterBatch> stalled = batches.pendingSince(cutoff);
         metrics.oldestPendingAge(oldestOf(stalled, now, RegisterBatch::assembledAt));
 
+        final List<RegisterBatch> parked = batches.generatedSince(cutoff);
+        metrics.oldestGeneratedAge(oldestOf(parked, now, RegisterBatch::generatedAt));
+        report(parked);
+
         return settle(overdue, TIMED_OUT) + settle(stalled, NEVER_REQUESTED);
+    }
+
+    /**
+     * Names the batches that hold a document nobody was told about, and settles none of them.
+     *
+     * <p>Reported rather than ended, which is the difference between this read and the two above
+     * it. Those two are about a render that may never have happened; this one is about a document
+     * that certainly did, so there is nothing to ask systemdocgenerator and nothing to fail - the
+     * batch is owed its e-mails, and {@code RegisterNotifierService.resendFailed} and
+     * {@code notify-register --batch} are what owe them. Both are re-entrant, so the recovery is
+     * the operator's to start and not this pass's to guess at; failing the batch here would throw
+     * away a document that exists.
+     *
+     * <p>The line carries the identities and the count, which is all a parked batch is: how many
+     * teams it is owed by is on its own rows.
+     *
+     * @param parked the batches this pass read, oldest first
+     */
+    private static void report(final List<RegisterBatch> parked) {
+        if (!parked.isEmpty()) {
+            LOG.warn("{} batches hold a document nobody has been told about, the oldest since {}; "
+                    + "each is owed its e-mails and reaches them through a resend rather than "
+                    + "through this pass. oldest={}", parked.size(),
+                    parked.getFirst().generatedAt(), parked.getFirst().batchId());
+        }
     }
 
     /**
