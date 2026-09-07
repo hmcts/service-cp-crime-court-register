@@ -9,6 +9,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static uk.gov.hmcts.cp.courtregister.config.FeatureFlagProperties.Credential.LOCAL_TEST;
 
 import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
 import com.azure.core.http.policy.FixedDelayOptions;
@@ -152,7 +153,8 @@ class AppConfigurationFlagReaderTest {
     private static AppConfigurationFlagReader readerFor(
             final String key, final String label, final Duration budget) {
         final FeatureFlagProperties properties =
-                new FeatureFlagProperties(server.baseUrl(), key, label, budget);
+                new FeatureFlagProperties(
+                        server.baseUrl(), key, label, budget, LOCAL_TEST);
         return new AppConfigurationFlagReader(properties, clientFor(properties));
     }
 
@@ -442,7 +444,8 @@ class AppConfigurationFlagReaderTest {
         void a_black_holed_store_answers_inside_the_budget() {
             answeringAfter(BLACK_HOLED_MS, settingCarrying(flagValue(true)));
             final FeatureFlagProperties properties =
-                    new FeatureFlagProperties(server.baseUrl(), KEY, LABEL, SHORT_BUDGET);
+                    new FeatureFlagProperties(
+                            server.baseUrl(), KEY, LABEL, SHORT_BUDGET, LOCAL_TEST);
             final AppConfigurationFlagReader reader =
                     new AppConfigurationFlagReader(properties, unboundedClientFor(properties));
 

@@ -1807,6 +1807,75 @@ class ConfigurationValidationTest {
     }
 
     /**
+     * The same rule again, on the identity the flag read is authorised with.
+     *
+     * <p>{@code courtregister.feature.credential=local-test} is not a stub - the reader, the SDK
+     * client and the fail-closed parsing are all the deployed ones - but the identity it reads under
+     * is a fixed, published one that no real store will ever authorise. So it fails in the one way
+     * the STUB refusals exist to prevent: a pod that starts, reports itself healthy, and at 18:00
+     * reads nothing, skips the run and counts it, indistinguishable from a store outage.
+     *
+     * <p>Two discriminators, and the second is the one the STUB refusals already draw deployment on.
+     * A {@code .azconfig.io} endpoint is a real Azure App Configuration store whatever else is
+     * configured, and a Service Bus namespace means workload identity, which means a deployed pod.
+     * Both are unconditional on the master switch, for the reason the zone and lock rules are: a job
+     * that happens to be disabled in this deployment is no reason to accept a credential that cannot
+     * read the flag in the next one.
+     */
+    @Nested
+    @DisplayName("the local-test credential is nowhere a real flag is read")
+    class LocalTestCredential {
+
+        /** What a real store's endpoint looks like; the estate has no other shape. */
+        private static final String REAL_STORE =
+                "courtregister.feature.endpoint=https://courtregister-ste86.azconfig.io";
+
+        private static final String LOCAL_TEST_PROPERTY =
+                "courtregister.feature.credential=local-test";
+
+        @Test
+        void the_local_test_credential_against_a_real_store_should_fail_startup() {
+            generating.withPropertyValues(REAL_STORE, LOCAL_TEST_PROPERTY).run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("courtregister.feature.credential")
+                        .hasMessageContaining("courtregister.feature.endpoint");
+            });
+        }
+
+        @Test
+        void the_local_test_credential_on_a_deployed_pod_should_fail_startup() {
+            runner.withPropertyValues(NAMESPACE_PROPERTY, LOCAL_TEST_PROPERTY).run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("courtregister.feature.credential")
+                        .hasMessageContaining("courtregister.servicebus.namespace");
+            });
+        }
+
+        /**
+         * Which leaves the one place it exists for: the compose loop, whose App Configuration is a
+         * WireMock stub on plain HTTP and whose credential source is a connection string.
+         */
+        @Test
+        void the_local_test_credential_against_the_compose_stub_should_start() {
+            generating.withPropertyValues(
+                    "courtregister.feature.endpoint=http://wiremock:8080", LOCAL_TEST_PROPERTY)
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        @Test
+        void the_deployed_credential_against_a_real_store_should_start() {
+            generating.withPropertyValues(REAL_STORE).run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context.getBean(FeatureFlagProperties.class).credential())
+                        .as("workload-identity is what an environment that says nothing gets")
+                        .isEqualTo(FeatureFlagProperties.Credential.WORKLOAD_IDENTITY);
+            });
+        }
+    }
+
+    /**
      * What the shipped {@code application.yaml} actually binds.
      *
      * <p>Asserted against the real file rather than against property values a test invents, because
