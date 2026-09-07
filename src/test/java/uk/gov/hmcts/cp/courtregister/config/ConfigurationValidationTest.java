@@ -1431,16 +1431,22 @@ class ConfigurationValidationTest {
      *
      * <p>A notification claim's lease is a bound on work whose length it cannot know from itself: a
      * batch is addressed to as many Youth Offending Teams as subscribed to its court centre, and
-     * each of them costs up to {@code max-attempts} POSTs with a read timeout and a back-off wait
-     * apiece. The lease is renewed before every POST and before every write, so what it has to cover
-     * is one recipient's turn - and a lease shorter than that expires under a notifier still waiting
-     * on a socket, after which a second notifier takes the batch over and the team is sent a
-     * register about children twice.
+     * each of them costs up to {@code max-attempts} POSTs with a connect timeout, a read timeout and
+     * a back-off wait apiece. The lease is renewed before every POST and before every write, so what
+     * it has to cover is the retry cycle one recipient's turn can become - and a lease shorter than
+     * that expires under a notifier still waiting on a socket, after which a second notifier takes
+     * the batch over and the team is sent a register about children twice.
      *
-     * <p>So the rule is the transport's own worst case for one recipient,
-     * {@code max-attempts x (read-timeout + max-backoff)}, doubled as margin. Unconditional, like
-     * the zone and lock rules: a job that happens to be disabled in this deployment is not a reason
-     * to accept a lease that cannot cover a POST cycle in the next one.
+     * <p>So the rule is the transport's own worst case for one recipient, the same arithmetic the
+     * per-step run budgets are computed from -
+     * {@code max-attempts x (connect-timeout + read-timeout) + (max-attempts - 1) x max-backoff} -
+     * doubled as margin. <strong>The connect timeout is part of it</strong>, because a POST that
+     * hangs on the connect and then on the read is the longest single thing this leg does and a
+     * bound that charged only the read would licence a lease the first such attempt outlives; and
+     * the waits are the gaps <em>between</em> attempts, of which there is one fewer than there are
+     * attempts. Unconditional, like the zone and lock rules: a job that happens to be disabled in
+     * this deployment is not a reason to accept a lease that cannot cover a POST cycle in the next
+     * one.
      */
     @Nested
     @DisplayName("the notification claim must outlast one recipient's POST cycle")
@@ -1454,6 +1460,7 @@ class ConfigurationValidationTest {
                         assertThat(context.getStartupFailure())
                                 .hasMessageContaining("courtregister.notification.claim-lease")
                                 .hasMessageContaining("courtregister.endpoints.max-attempts")
+                                .hasMessageContaining("courtregister.endpoints.connect-timeout")
                                 .hasMessageContaining("courtregister.endpoints.read-timeout")
                                 .hasMessageContaining("courtregister.endpoints.max-backoff");
                     });
@@ -1463,10 +1470,13 @@ class ConfigurationValidationTest {
          * The margin is fixed rather than configured, for the reason the scheduler lock's is: a
          * lease that expires the instant the longest POST cycle does is a lease that recipient
          * races.
+         *
+         * <p>Forty-nine seconds is that cycle exactly at the shipped transport: three attempts of a
+         * five-second connect and a ten-second read, with two two-second waits between them.
          */
         @Test
         void a_lease_that_only_just_covers_one_post_cycle_refuses_to_start() {
-            generating.withPropertyValues("courtregister.notification.claim-lease=36s")
+            generating.withPropertyValues("courtregister.notification.claim-lease=49s")
                     .run(context -> {
                         assertThat(context).hasFailed();
                         assertThat(context.getStartupFailure())
@@ -1476,8 +1486,30 @@ class ConfigurationValidationTest {
 
         @Test
         void a_lease_that_covers_one_post_cycle_twice_over_should_start() {
-            generating.withPropertyValues("courtregister.notification.claim-lease=72s")
+            generating.withPropertyValues("courtregister.notification.claim-lease=98s")
                     .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /**
+         * The connect timeout is half of what one attempt can cost, and the half a lease is likeliest
+         * to be short of.
+         *
+         * <p>A POST that hangs on the connect and then on the read is the longest single thing this
+         * leg does, and it is the shape a claim is really lost inside: a notifier waiting on a
+         * socket is a notifier not renewing. A bound computed from the read timeout alone said a
+         * five-minute connect cost nothing at all, so a deployment could lengthen it and keep a
+         * lease that the very first attempt of the night outlives - after which a second notifier
+         * takes the batch over and a court centre's register goes out twice.
+         */
+        @Test
+        void a_connect_timeout_the_lease_cannot_cover_refuses_to_start() {
+            generating.withPropertyValues("courtregister.endpoints.connect-timeout=5m")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.notification.claim-lease")
+                                .hasMessageContaining("courtregister.endpoints.connect-timeout");
+                    });
         }
 
         /**
@@ -1515,12 +1547,15 @@ class ConfigurationValidationTest {
 
                 assertThat(properties.notification().claimLease())
                         .as("the shipped lease against the shipped transport's worst case for one "
-                                + "recipient, doubled: %s attempts of a %s read plus a %s wait",
-                                endpoints.maxAttempts(), endpoints.readTimeout(),
-                                endpoints.maxBackoff())
-                        .isGreaterThanOrEqualTo(endpoints.readTimeout()
-                                .plus(endpoints.maxBackoff())
+                                + "recipient, doubled: %s attempts of a %s connect and a %s read, "
+                                + "with a %s wait between two of them",
+                                endpoints.maxAttempts(), endpoints.connectTimeout(),
+                                endpoints.readTimeout(), endpoints.maxBackoff())
+                        .isGreaterThanOrEqualTo(endpoints.connectTimeout()
+                                .plus(endpoints.readTimeout())
                                 .multipliedBy(endpoints.maxAttempts())
+                                .plus(endpoints.maxBackoff()
+                                        .multipliedBy(endpoints.maxAttempts() - 1L))
                                 .multipliedBy(PropertiesValidator.NOTIFICATION_LEASE_MARGIN));
             });
         }

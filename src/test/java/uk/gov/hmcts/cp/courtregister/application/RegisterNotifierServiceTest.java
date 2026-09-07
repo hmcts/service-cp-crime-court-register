@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
@@ -130,6 +131,9 @@ class RegisterNotifierServiceTest {
     /** What the recorder writes when a row is minted, and when a POST is made. */
     private static final String MINTED = "minted";
     private static final String POSTED = "posted";
+
+    /** What the recorder writes when the claim is renewed, which is what a per-POST lease means. */
+    private static final String RENEWED = "renewed";
 
     private static final UUID BATCH_ID = UUID.fromString("a4c1f0d2-7e6b-4c8a-9f31-2d5b6e0a7c14");
     private static final UUID COURT_CENTRE =
@@ -234,6 +238,15 @@ class RegisterNotifierServiceTest {
 
     /** Mint and POST in the order they happened, which is the first group's whole subject. */
     private final List<String> sequence = new ArrayList<>();
+
+    /**
+     * Renewal and POST in the order they happened, which is what the lease is asked to cover.
+     *
+     * <p>Kept apart from {@link #sequence} because the two questions are different: that one is
+     * about a row being written before the call it is evidence of, and this one is about the claim
+     * being asked for again in front of every call made under it.
+     */
+    private final List<String> leaseAndPosts = new ArrayList<>();
 
     /** Each row exactly as it was inserted, before any settlement overwrote it in the ledger. */
     private final List<RegisterNotification> minted = new ArrayList<>();
@@ -525,8 +538,27 @@ class RegisterNotifierServiceTest {
 
     private void recordPost(final InvocationOnMock invocation) {
         sequence.add(POSTED);
+        leaseAndPosts.add(POSTED);
         posted.add(invocation.getArgument(0));
         postedDocuments.add(invocation.getArgument(1));
+    }
+
+    /**
+     * How many POSTs were made with a claim renewal immediately in front of them.
+     *
+     * <p>The reading a lease has to be measured by: the claim is a bound on the calls made under
+     * it, so what matters is not how often it was renewed but whether it was renewed before each
+     * of them. A renewal taken once and then spent across a whole retry cycle leaves every attempt
+     * after the first unfenced, which is exactly where the lease runs out - a notifier waiting on
+     * notificationnotify is a notifier not renewing.
+     *
+     * @return how many of this case's POSTs were preceded directly by a renewal
+     */
+    private long postsWithARenewalInFront() {
+        return IntStream.range(1, leaseAndPosts.size())
+                .filter(step -> POSTED.equals(leaseAndPosts.get(step))
+                        && RENEWED.equals(leaseAndPosts.get(step - 1)))
+                .count();
     }
 
     private Object mint(final InvocationOnMock invocation) {
@@ -630,6 +662,7 @@ class RegisterNotifierServiceTest {
      * on. A notifier whose claim has been taken over reads false here and stops.
      */
     private Object renewTheClaim(final InvocationOnMock invocation) {
+        leaseAndPosts.add(RENEWED);
         return invocation.getArgument(1).equals(claim.get());
     }
 
@@ -1615,6 +1648,80 @@ class RegisterNotifierServiceTest {
                     .as("and it is the reading the notification lease is raised on, so it has to "
                             + "be a series rather than a warn nobody queries")
                     .isEqualTo(1);
+        }
+
+        /**
+         * Something else takes the batch over while a transiently refused POST is in flight.
+         *
+         * <p>The same moment as the helper above, on the recipient the retry loop is about: one
+         * team refused with a 503 costs up to {@code max-attempts} POSTs with a read timeout and a
+         * wait apiece, which is the longest a single recipient's turn can be and the likeliest
+         * place for a lease to run out.
+         */
+        private void aSecondNotifierTakesTheBatchOverDuringATransientRefusal() {
+            doAnswer(invocation -> {
+                recordPost(invocation);
+                if (takenOver.compareAndSet(false, true)) {
+                    claim.set(UUID.randomUUID());
+                }
+                throw new NotificationFailedException(
+                        FailureClassification.TRANSIENT, UNAVAILABLE);
+            }).when(notifier).send(any(), any(), any());
+        }
+
+        /**
+         * The lease is a bound on the POSTs made under it, so it is renewed in front of each one.
+         *
+         * <p>A renewal taken once for a recipient and then spent across that recipient's whole
+         * retry cycle fences only the first of its POSTs. The rest are made by a notifier that has
+         * not asked since - and they are the ones made after a read timeout and a wait, which is
+         * precisely when the lease it is relying on has run out. So the notifier that has been
+         * taken over goes on POSTing for teams the notifier that now holds the batch is telling,
+         * which is a second register about the same children to each of them.
+         */
+        @Test
+        void the_claim_should_be_renewed_in_front_of_every_one_of_a_recipients_posts() {
+            when(store.batched(BATCH_ID)).thenReturn(
+                    List.of(registerRecord(List.of(recipient(YOT_A, ADDRESS_A)))));
+            refusesTransiently(ADDRESS_A, UNAVAILABLE);
+
+            notifyBatch();
+
+            softly.assertThat(postedAddresses())
+                    .as("the whole attempt budget is spent on the one team this batch is addressed "
+                            + "to, which is the longest a single recipient's turn can be")
+                    .hasSize(MAX_ATTEMPTS);
+            softly.assertThat(postsWithARenewalInFront())
+                    .as("and every one of those POSTs was made by a notifier that had just asked "
+                            + "whether the batch was still its own: a renewal spent across a retry "
+                            + "cycle fences the first attempt and none of the attempts the waits "
+                            + "and the read timeouts come before")
+                    .isEqualTo(MAX_ATTEMPTS);
+        }
+
+        @Test
+        void a_claim_taken_over_between_two_attempts_should_stop_the_retries() {
+            when(store.batched(BATCH_ID)).thenReturn(
+                    List.of(registerRecord(List.of(recipient(YOT_A, ADDRESS_A)))));
+            aSecondNotifierTakesTheBatchOverDuringATransientRefusal();
+
+            final NotificationSummary summary = notifyBatch();
+
+            softly.assertThat(postedAddresses())
+                    .as("the retry is a POST like any other, so the notifier that has been taken "
+                            + "over does not get to spend the rest of its budget on a team the "
+                            + "notifier that now holds the batch is telling")
+                    .containsExactly(ADDRESS_A);
+            softly.assertThat(rowsWithTheirAttempts())
+                    .as("the one POST it did make is on the row and the settlement columns are "
+                            + "untouched, because how the attempt ended is the other notifier's to "
+                            + "say")
+                    .containsExactly(tuple(ADDRESS_A, NotificationStatus.PENDING, null, null, 1));
+            softly.assertThat(summary)
+                    .extracting(NotificationSummary::disposition)
+                    .as("and it stops on the disposition of a notifier that started, told part of "
+                            + "the batch and lost it")
+                    .isEqualTo(NotificationDisposition.CLAIM_LOST);
         }
 
         /**
