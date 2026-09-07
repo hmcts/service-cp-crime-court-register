@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Container smoke: build the image, run it against the committed compose dependencies, and require
-# it to report readiness inside the 60-second budget (spec SC-101/SC-103, container half). Tears the stack down
+# Container smoke: build the image, run it against the committed compose dependencies, require it to
+# report readiness inside the 60-second budget (spec SC-101/SC-103, container half), and then run one
+# operations command through the entrypoint that dispatches them (FR-016). Tears the stack down
 # on every exit path, success or failure.
 #
 # This is the local equivalent of the "Container smoke" step in
@@ -93,3 +94,46 @@ until curl --silent --fail --max-time 2 "$READINESS_URL" | grep -q '"status":"UP
 done
 
 log "PASS: readiness reported UP within the ${READINESS_BUDGET_SECONDS}s budget"
+
+# The other half of what the image has to do. A deployed pod serves the actuator and nothing else,
+# so the only way support regenerates a date, resends a batch's failed recipients or reads the
+# cutover flag is `kubectl exec ... -- ./startup.sh <command>` (FR-016, research 13) - and that path
+# is in the entrypoint, not in the application, so no JUnit suite covers it. What is proved here is
+# what only the built image can prove: the five names reach CliMain out of the fat jar rather than
+# starting a second application, the script is executable at the path the runbooks name, and the
+# code the command answered with is the code the container exits on.
+#
+# `check-flag` is the one to run: it reads and changes nothing, so a smoke run cannot leave a batch
+# or an e-mail behind it. The reading is taken through the stubbed reader, because the LIVE one
+# authorises its App Configuration read on the pod's workload identity - AZURE_CLIENT_ID, the tenant
+# and the projected federated token - and a compose container holds none of the three. That read
+# itself is covered against WireMock by `AppConfigurationFlagReaderTest`; what is left for the image
+# to answer is the dispatch, which is what this step asks it.
+readonly CLI_FLAG_MODE="COURTREGISTER_GENERATION_FLAG_MODE=STUB"
+
+log "running check-flag through the entrypoint"
+# In the `if` deliberately: errexit does not apply to a condition, so a non-zero code is read and
+# reported here rather than ending the script with no line saying which command failed. `--no-TTY`
+# because CI has no terminal to allocate and `docker compose exec` insists on one by default.
+if cli_output=$(compose exec --no-TTY --env "$CLI_FLAG_MODE" app ./startup.sh check-flag 2>&1); then
+  cli_status=0
+else
+  cli_status=$?
+fi
+
+if [ "$cli_status" -ne 0 ]; then
+  log "FAIL: startup.sh check-flag exited ${cli_status}, and 0 is the only code a flag that answers"
+  log "      carries - 1 is a refusal and 2 is a flag nobody could read"
+  printf '%s\n' "$cli_output" | grep -E '^(flag|command)=' || printf '%s\n' "$cli_output" | tail -5
+  exit 1
+fi
+
+# Exit 0 alone is not the whole assertion: a script that dispatched nothing and returned would also
+# be 0, and the line is what a runbook step greps for.
+if ! printf '%s\n' "$cli_output" | grep -q '^flag=ON$'; then
+  log "FAIL: startup.sh check-flag exited 0 without printing the reading a runbook step reads"
+  printf '%s\n' "$cli_output" | tail -5
+  exit 1
+fi
+
+log "PASS: startup.sh check-flag printed flag=ON and exited 0"
