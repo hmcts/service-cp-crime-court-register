@@ -56,6 +56,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
+import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
@@ -332,6 +333,31 @@ class RegisterNotifierServiceTest {
                 NotificationStatus.PENDING, null, null, MINTED_NEVER_SETTLED);
         ledger.put(row.notificationId(), row);
         return row;
+    }
+
+    /**
+     * One address another mechanism mints a row for between this run's read and its own insert.
+     *
+     * <p>The operator's resend and the outcome sink can reach one batch at the same time, so the
+     * (batch, address) key is a race two ordinary runs can lose - and the row the winner wrote is
+     * the row notificationnotify's aggregate is keyed by. The double writes it to the ledger at the
+     * moment of the refusal, which is exactly when it becomes visible to the loser.
+     *
+     * @param name    the team's name
+     * @param address the team's address
+     * @return the row that won, under the identity the winner minted it with
+     */
+    private RegisterNotification racedTo(final String name, final String address) {
+        final RegisterNotification winner = new RegisterNotification(UUID.randomUUID(), BATCH_ID,
+                address, name, RegisterNotifierService.TEMPLATE_NAME, TEMPLATE_ID,
+                NotificationStatus.PENDING, null, null, MINTED_NEVER_SETTLED);
+        doAnswer(invocation -> {
+            ledger.put(winner.notificationId(), winner);
+            throw new StoreRefusedRowException("the store refused a notification row for one "
+                    + "recipient of batch " + BATCH_ID + ", which "
+                    + "register_notification_unique_recipient does when the row is already held");
+        }).when(notifications).insert(argThat(sentTo(address)));
+        return winner;
     }
 
     /**
@@ -1098,6 +1124,40 @@ class RegisterNotifierServiceTest {
                             + "produce")
                     .containsExactly(new BatchSettlement(BATCH_ID,
                             new NotificationSummary(3, 0, BatchStatus.NOTIFIED)));
+        }
+
+        /**
+         * The (batch, address) key lost to another mechanism, which is a night rather than a bug.
+         *
+         * <p>An operator's resend and the outcome sink can reach one batch at the same time, and
+         * both derive the same owed set from the same records: whichever gets to the insert second
+         * is refused by {@code UNIQUE (batch_id, email_address)}. The row that won is the row
+         * notificationnotify's aggregate is keyed by, so the loser reads it back and posts under
+         * that identity - a run that let the refusal out instead would leave a team untold with the
+         * whole batch's remaining recipients behind it, and one that minted a fresh identity would
+         * send the same children's register twice.
+         */
+        @Test
+        void a_row_another_mechanism_minted_first_should_be_read_back_and_posted_for_once() {
+            final RegisterNotification winner = racedTo(YOT_B, ADDRESS_B);
+
+            final NotificationSummary summary = notifyBatch();
+
+            softly.assertThat(posted)
+                    .as("the POST goes out under the identity the row that won holds, because that "
+                            + "identity is the path parameter and the key of notificationnotify's "
+                            + "own aggregate; the identity this run minted was refused and is not "
+                            + "an e-mail anybody can be shown to have asked for")
+                    .extracting(RegisterNotification::notificationId)
+                    .contains(winner.notificationId());
+            softly.assertThat(postedAddresses())
+                    .as("and the team is asked for exactly once, with the teams after it still "
+                            + "told: losing a key is two mechanisms doing the same work, not a "
+                            + "reason to end the batch")
+                    .containsExactly(ADDRESS_A, ADDRESS_B, ADDRESS_C);
+            softly.assertThat(summary)
+                    .as("so the batch reaches NOTIFIED over its three recipients")
+                    .isEqualTo(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
         }
 
         @Test

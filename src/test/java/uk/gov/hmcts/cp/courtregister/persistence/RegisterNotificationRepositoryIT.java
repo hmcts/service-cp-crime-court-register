@@ -10,12 +10,12 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.DataIntegrityViolationException;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
+import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
 import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 
@@ -42,7 +42,10 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  * <p>{@code SchemaMigrationV2IT} pins {@code UNIQUE (batch_id, email_address)} as a fact about the
  * table. It is asserted again here, through the repository's own insert, because what matters to a
  * caller is that the refusal reaches it: a second attempt at an address is a second e-mail, and a
- * repository that absorbed the refusal would turn defect fix P4 into a duplicate nobody sees.
+ * repository that absorbed the refusal would turn defect fix P4 into a duplicate nobody sees. What
+ * reaches the caller is the domain's own {@code StoreRefusedRowException} carrying this repository's
+ * bounded words, because the driver's are about the key it refused and that key is an e-mail
+ * address (constitution Principle VII).
  *
  * <p>Every case mints its own batch, so the suites sharing one container share no rows.
  */
@@ -134,8 +137,37 @@ class RegisterNotificationRepositoryIT {
                     .as("the persistence half of defect fix P4: the union is computed once at "
                             + "assembly, and the database refuses a second attempt at the same "
                             + "address for the same batch rather than sending it twice")
-                    .isInstanceOf(DataIntegrityViolationException.class)
-                    .hasMessageContaining("register_notification_unique_recipient");
+                    .isInstanceOf(StoreRefusedRowException.class)
+                    .hasMessageContaining("register_notification_unique_recipient")
+                    .hasMessageContaining(batchId.toString());
+        }
+
+        /**
+         * The refusal a race actually produces, and what it may not carry.
+         *
+         * <p>The operator's resend and the outcome sink can reach one batch at the same time, so
+         * losing this key is an ordinary night rather than a defect - and the loser reads back the
+         * row that won. Postgres reports the violation with a detail line quoting the colliding
+         * key's values, one of which is the recipient's address: a component that may never reach a
+         * log line at INFO or above, a metric label or the estate's log index (constitution
+         * Principle VII), and an unhandled exception's stack trace is all three. So what reaches the
+         * caller is this repository's own bounded words - the rule that refused the row and the
+         * batch it was for - and the driver's are dropped with the cause.
+         */
+        @Test
+        void the_refusal_should_name_the_rule_and_never_the_address_it_was_refused_for() {
+            seededBatch();
+            repository.insert(pending(WANDSWORTH, "Wandsworth YOT"));
+
+            assertThatThrownBy(() -> repository.insert(pending(WANDSWORTH, "Wandsworth YOT")))
+                    .as("an address in an exception message is an address in every log index the "
+                            + "estate ships it to, and every defendant on the register it is about "
+                            + "is a child")
+                    .hasMessageNotContaining(WANDSWORTH)
+                    .hasMessageNotContaining("Wandsworth YOT")
+                    .as("the driver's detail line quotes the key it refused, so the cause is not "
+                            + "attached either - which rule said no is in the message instead")
+                    .hasNoCause();
         }
     }
 
