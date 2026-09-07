@@ -114,12 +114,22 @@ exceptions of this kind are pre-approved. **Never two committing agents at once.
       because `CourtRegisterHandler` cannot be compiled in isolation; and the Applicant/Appellant/
       Respondent branches are reached through six synthesised inputs, because no base fixture reaches
       those branches)
-- [ ] T005 [P] [A] Verify the vendored file-service DDL against the deployed schema: in an STE stack,
+- [x] T005 [P] [A] Verify the vendored file-service DDL against the deployed schema: in an STE stack,
       `\d metadata` and `\d content` on the `fileservice` database match
       `contracts/fileservice/` changesets 001–006 (columns, types, defaults). Record the result in
       `contracts/README.md` (date, stack). If it differs, re-vendor and note the delta **before the
-      first deploy of the generation half to any stack**. (deferred: needs STE access. T033 and T044
-      landed on 2026-09-06 against the unverified DDL rather than waiting for it; see checkpoint note)
+      first deploy of the generation half to any stack**.
+      **Done 2026-09-07, against SIT rather than STE** (read-only): verified against SIT
+      `fileservice` on server `psf-sit-ccm01-fileservice`. `metadata(file_id uuid PK, metadata jsonb
+      NOT NULL, FK file_id -> content)` and `content(file_id uuid PK, content bytea, deleted boolean
+      NOT NULL DEFAULT false, deleted_at timestamptz)` match changesets 001, 002, 004, 005, 006 (003
+      is H2-only and not applied). **Nothing re-vendored**: the vendored DDL is a faithful copy of
+      the deployed schema for both tables, so the `FileServicePayloadStoreIT` seed pins what the two
+      inserts really run against. The deployed `databasechangelog` additionally lists
+      `008-add-index-on-deleted-at-column-in-content-table` (2025-08-04), an index
+      `content_deleted_at_index` on `deleted_at` that the local `framework-libraries` clone
+      (`58aad8664`, 2023-12-22) predates and that does not affect the two inserts; it is recorded by
+      name in `contracts/fileservice/008-DEPLOYED-NOTE.md`, because no local clone holds its XML.
 - [x] T006 [P] Append rows **P1–P9** to `doc/DEFECT-FIXES.md` as **PLANNED** (P6, P7 as RETIRED with the
       retirement-PR pointer; P8 as MOOT with the index citation), each with the progression `file:line`
       citation from the design §3.4, the fixed behaviour from §7.3 and the pinning test name from the
@@ -128,8 +138,22 @@ exceptions of this kind are pre-approved. **Never two committing agents at once.
 
 **Checkpoint**: build green, compose up, goldens present, register carries the P rows. Codex review 1.
 
-**Checkpoint note - T005 deferral (2026-09-05, restated 2026-09-06)**: T005 is **not done** and its
-box stays unticked.
+**Checkpoint note - T005 closed (2026-09-07)**: T005 is **done** and its box is ticked. The check
+was run read-only against **SIT** rather than an STE stack, which is the one departure from the task
+as written: SIT's `fileservice` was reachable and answers the same question, and the task's point was
+a live schema rather than a particular stack number. `metadata` and `content` match the vendored
+changesets 001, 002, 004, 005 and 006 (003 is H2-only and not applied), so **nothing was
+re-vendored** and the `FileServicePayloadStoreIT` seed is a faithful copy of the deployed schema.
+The deployed `databasechangelog` carries one changeset the vendored set does not,
+`008-add-index-on-deleted-at-column-in-content-table` (2025-08-04) - an index on `content.deleted_at`
+that no local `framework-libraries` clone holds the XML for and that this service's two inserts
+neither read nor plan against; it is recorded by name in
+`contracts/fileservice/008-DEPLOYED-NOTE.md`. The deadline below - before the first deploy of the
+generation half to any stack - is therefore met, and the record of why it was owed is kept as
+written.
+
+The deferral as it stood until then, kept because it is the account of a risk that was carried for
+two days:
 
 - **Not verified**: that `contracts/fileservice/` changesets 001–006 (vendored from `framework-libraries`
   `58aad8664`, **2023-12-22**) still match the deployed `fileservice` schema - the columns, types and
@@ -671,8 +695,9 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
   file is shared (`DistributionPipeline`, `RegisterTransformationChain`, `PipelineConfig`,
   `PropertiesValidator`, `DocumentOutcomeSinkImpl`).
 - T004 (goldens) blocks T031 and T019. T005 (DDL verification) blocks nothing in code and did not
-  hold up T033/T044, which landed against the unverified DDL on 2026-09-06; it must be recorded
-  before the first deploy of the generation half to any stack (checkpoint note above). T006 (P rows
+  hold up T033/T044, which landed against the unverified DDL on 2026-09-06; it was **closed on
+  2026-09-07 against SIT with no delta** (checkpoint note above), so the deploy deadline it carried
+  is met. T006 (P rows
   PLANNED) blocks every "flip P# to FIXED" commit.
 
 ## Notes
