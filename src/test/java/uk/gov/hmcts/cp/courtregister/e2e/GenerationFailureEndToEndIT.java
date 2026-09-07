@@ -109,6 +109,14 @@ class GenerationFailureEndToEndIT {
      */
     private static final int SERVER_ERROR = 500;
 
+    /**
+     * The shared attempt budget, as {@code courtregister.endpoints.max-attempts} configures it.
+     *
+     * <p>A 500 is transient under the one policy all this service's clients hold, so the refused
+     * team's row carries the whole budget rather than a single attempt.
+     */
+    private static final int MAX_ATTEMPTS = 3;
+
     /** How long an outcome is given to travel the topic and reach the batch row. */
     private static final Duration DELIVERED_WITHIN = Duration.ofSeconds(30);
 
@@ -234,7 +242,9 @@ class GenerationFailureEndToEndIT {
                 .containsExactly(BatchStatus.PARTIALLY_NOTIFIED.name());
         assertThat(registers.notifications())
                 .as("each recipient settled on its own answer, and the refusal carries the status "
-                        + "that made it one")
+                        + "that made it one - after the shared attempt budget was spent on it, "
+                        + "because a 500 is transient and one of them says nothing about whether "
+                        + "the next would be accepted")
                 .containsExactly(
                         new Notified(idOf(DURHAM), DURHAM.emailAddress1(), DURHAM.recipientName(),
                                 RegisterNotifierService.TEMPLATE_NAME,
@@ -242,11 +252,13 @@ class GenerationFailureEndToEndIT {
                                 NotificationNotifyClient.ACCEPTED, 1),
                         new Notified(idOf(GATESHEAD), GATESHEAD.emailAddress1(),
                                 GATESHEAD.recipientName(), RegisterNotifierService.TEMPLATE_NAME,
-                                NotificationStatus.FAILED.name(), SERVER_ERROR, 1));
+                                NotificationStatus.FAILED.name(), SERVER_ERROR, MAX_ATTEMPTS));
         assertThat(addressedTo(stack.emailsSent()))
                 .as("the recipient behind the refusal was still asked for: one team's refusal says "
-                        + "nothing about another team's e-mail")
-                .containsExactlyInAnyOrder(DURHAM.emailAddress1(), GATESHEAD.emailAddress1());
+                        + "nothing about another team's e-mail - and the refused team was asked "
+                        + "for its whole budget, because a 500 is transient")
+                .containsExactly(DURHAM.emailAddress1(), GATESHEAD.emailAddress1(),
+                        GATESHEAD.emailAddress1(), GATESHEAD.emailAddress1());
         assertThat(registers.statuses())
                 .as("the registers move with the batch, because the day's document exists and was "
                         + "sent to somebody")
@@ -278,13 +290,16 @@ class GenerationFailureEndToEndIT {
                         tuple(idOf(DURHAM), NotificationStatus.ACCEPTED.name(),
                                 NotificationNotifyClient.ACCEPTED, 1),
                         tuple(refused, NotificationStatus.ACCEPTED.name(),
-                                NotificationNotifyClient.ACCEPTED, 2));
+                                NotificationNotifyClient.ACCEPTED, MAX_ATTEMPTS + 1));
         assertThat(pathsAsked())
-                .as("and the second POST went to the path the first one did, which is what makes it "
-                        + "idempotent on notificationnotify's side: three requests in all, two of "
-                        + "them the refused team's own")
+                .as("and every POST for that team went to the path the first one did, which is what "
+                        + "makes it idempotent on notificationnotify's side: five requests in all, "
+                        + "four of them the refused team's own - three inside the run's budget and "
+                        + "the fifth the resend that was accepted")
                 .containsExactly(
                         GenerationStackSupport.notificationPathFor(idOf(DURHAM)),
+                        GenerationStackSupport.notificationPathFor(refused),
+                        GenerationStackSupport.notificationPathFor(refused),
                         GenerationStackSupport.notificationPathFor(refused),
                         GenerationStackSupport.notificationPathFor(refused));
     }
