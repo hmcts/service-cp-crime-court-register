@@ -193,7 +193,12 @@ public class CliMain {
     @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
     public int dispatch(final String[] args, final Consumer<String> output) {
         final String name = args == null || args.length == 0 ? null : args[0];
-        if (!COMMANDS.contains(name)) {
+        // A missing name is answered before the registry is asked about it, because COMMANDS is an
+        // immutable list and those refuse a null lookup with an exception of their own: an
+        // invocation whose argument was never set would have ended on a stack trace and, out of
+        // main, on the exit code that means "declined" - having printed none of the five names the
+        // person who typed it needs.
+        if (name == null || !COMMANDS.contains(name)) {
             usage(output);
             return REFUSED;
         }
