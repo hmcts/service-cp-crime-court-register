@@ -735,6 +735,45 @@ class GenerateRegisterCliTest {
                     .isEqualTo(List.of(chosenLeft.hearingId()));
         }
 
+        /**
+         * The narrowing says which batches this run may release. It does not say what the day held.
+         *
+         * <p>The supplementary link, the file name and the deferral are all decided from the key's
+         * history (design Q27), so a run handed only the batch an operator named would reckon the
+         * key had none: a failed supplement would be re-assembled at index 0 under the name of the
+         * document the Youth Offending Team already has, and a key with another batch still in
+         * flight would be released and then refused by {@code idx_register_batch_live_key} with its
+         * rows already given back. {@code --court-house} narrows the same list, so it is the same
+         * claim.
+         */
+        @Test
+        void batch_should_narrow_what_is_released_and_not_the_history_it_is_reckoned_from() {
+            theFlagIsOn();
+            final RegisterBatch sent = batch(new CourtCentreDay(LEEDS, THURSDAY), LEEDS_HOUSE,
+                    BatchStatus.NOTIFIED);
+            final RegisterBatch failed = batch(new CourtCentreDay(LEEDS, THURSDAY), LEEDS_HOUSE,
+                    BatchStatus.FAILED);
+            final RegisterRecord left = leedsRegister();
+            theDayHolds(sent, leedsRegister());
+            theDayHolds(failed, left);
+
+            run("--" + Args.DATE, THURSDAY.toString(),
+                    "--" + Args.BATCH, failed.batchId().toString());
+
+            softly.assertThat(released)
+                    .as("one batch is released, which is the whole of what the narrowing is for")
+                    .isEqualTo(List.of(failed.batchId()));
+            softly.assertThat(groupings.stream().map(Grouping::history).findFirst().orElse(null))
+                    .as("and the assembler is still told what the key holds: a history narrowed to "
+                            + "the named batch answers 'no earlier batch' for a key that has "
+                            + "already been rendered and e-mailed, so the day's supplement is "
+                            + "named as its first document (design Q27)")
+                    .isEqualTo(List.of(sent, failed));
+            softly.assertThat(hearingsGrouped())
+                    .as("what is grouped is unchanged: the registers of the batch that was named")
+                    .isEqualTo(List.of(left.hearingId()));
+        }
+
         @Test
         void recorded_before_should_bound_the_run_to_what_had_been_recorded_by_then() {
             theFlagIsOn();
