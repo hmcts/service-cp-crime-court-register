@@ -1849,16 +1849,108 @@ class RegisterStoreIT {
      * is not active and unbatched. Re-rendering that day is therefore a decision a person makes, and
      * this is the statement the decision is written as.
      *
-     * <p><strong>The refusal matters more than the release, so four of the six cases are
+     * <p><strong>The refusal matters more than the release, so four of the eight cases are
      * refusals.</strong> A stamp cleared off a GENERATING batch's rows would let the next run
      * assemble a second batch for a day systemdocgenerator is still rendering and both would reach
      * the same Youth Offending Team; a GENERATED batch holds a document and a NOTIFIED one has
      * already been sent. Only the release's own order and the already-released ending are about what
      * it does rather than about what it will not do.
+     *
+     * <p><strong>And two are about the register a re-share has replaced under the stamp.</strong>
+     * The recording predicate only supersedes an incumbent that is active and <em>unbatched</em>, so
+     * a hearing re-shared while its first register is stamped into a batch that has failed leaves
+     * two RECORDED rows for one key - one stamped, one active. Clearing the stamp off the older one
+     * would either collide with {@code idx_output_active_register_key}, failing the whole
+     * regeneration, or - once the re-share has been batched in its turn - hand the superseded
+     * register back as something to render and e-mail after the register that replaced it. So the
+     * release supersedes it as it unstamps it and does not answer with it.
      */
     @Nested
     @DisplayName("giving a failed batch's registers back")
     class Releasing {
+
+        @Test
+        void a_register_a_re_share_has_replaced_should_be_superseded_rather_than_given_back() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final List<RegisterRecord> released = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+                // The re-share arrives while the first register is still stamped into the batch
+                // that failed, which is the one arrangement the recording predicate leaves two
+                // RECORDED rows for: it supersedes an incumbent that is unbatched, and this one is
+                // not.
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                released.addAll(store.releaseFailed(monday.batchId()));
+            }).as(SEAM).doesNotThrowAnyException();
+
+            softly.assertThat(released)
+                    .as("the register the day's batch failed on has already been replaced, so it is "
+                            + "not answered with: a caller re-assembling it would render the "
+                            + "hearing as it stood before the re-share")
+                    .isEmpty();
+            softly.assertThat(supersessionOf(first).map(SupersessionPair::supersededBy))
+                    .as("it is superseded as its stamp is cleared, and by the register that "
+                            + "replaced it - the pair is what says which register replaced which")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("one SUPERSEDED and one RECORDED, which is the invariant the whole batch "
+                            + "half is written against: at most one active row per key")
+                    .containsExactlyInAnyOrder(SUPERSEDED, RECORDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("and the stamp is gone, because the batch that failed holds nothing now")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("so the day's one assemblable register is the re-share and nothing else")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(reshare).orElse(null));
+        }
+
+        @Test
+        void a_register_replaced_by_a_re_share_that_is_itself_batched_should_not_come_back() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final List<RegisterRecord> released = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                // The failed batch is terminal, so the next automatic run assembles the re-share
+                // into a batch of its own before anybody types the release.
+                final RegisterBatch second = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(second.batchId(), SECOND_PAYLOAD_FILE_ID);
+                released.addAll(store.releaseFailed(monday.batchId()));
+            }).as(SEAM).doesNotThrowAnyException();
+
+            softly.assertThat(released)
+                    .as("giving this register back would have the day rendered a second time from "
+                            + "the register the re-share replaced, and a Youth Offending Team would "
+                            + "read the superseded one after the current one")
+                    .isEmpty();
+            softly.assertThat(supersessionOf(first).map(SupersessionPair::supersededBy))
+                    .as("it is superseded against the register that replaced it, whether or not "
+                            + "that one has reached a batch yet")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(activeUnbatched())
+                    .as("and nothing of this day is waiting: the re-share belongs to the batch in "
+                            + "flight and the register it replaced belongs to nothing")
+                    .isEmpty();
+            softly.assertThat(statusesOn(MONDAY))
+                    .containsExactlyInAnyOrder(SUPERSEDED, RECORDED);
+        }
 
         @Test
         void a_failed_batchs_registers_should_be_given_back_in_the_order_the_batch_held_them() {
