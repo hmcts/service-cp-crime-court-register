@@ -237,11 +237,10 @@ public class GenerateRegisterCli {
     @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
     private int generate(final Selection selection) {
         try {
-            final List<RegisterBatch> narrowed = narrowed(store.batchesOn(selection.registerDate()),
-                    selection);
-            final List<RegisterRecord> released = released(narrowed);
+            final List<RegisterBatch> day = store.batchesOn(selection.registerDate());
+            final List<RegisterRecord> released = released(narrowed(day, selection));
             final List<RegisterRecord> registers = registers(released, selection);
-            final BatchAssembly assembly = assembler.assemble(registers, narrowed, BY_HAND);
+            final BatchAssembly assembly = assembler.assemble(registers, day, BY_HAND);
             final int requested = request(assembly);
             output.accept("date=" + selection.registerDate()
                     + " released=" + released.size()
@@ -266,9 +265,15 @@ public class GenerateRegisterCli {
      * on the phone: another court house's registers are a wrong e-mail to a real Youth Offending
      * Team.
      *
+     * <p><strong>This narrows what may be released and nothing else.</strong> The key's history is
+     * the day as the store holds it: the supplementary link, the file name and the deferral are all
+     * decided from it (design Q27), so an assembler told only about the batch an operator named
+     * would name the day's supplement as its first document and would release a key whose other
+     * batch is still being rendered.
+     *
      * @param day       every batch the day holds, whatever state it reached
      * @param selection the narrowing an operator asked for
-     * @return the batches this run may release and reckon its history from
+     * @return the batches this run may release
      */
     private static List<RegisterBatch> narrowed(final List<RegisterBatch> day,
             final Selection selection) {
