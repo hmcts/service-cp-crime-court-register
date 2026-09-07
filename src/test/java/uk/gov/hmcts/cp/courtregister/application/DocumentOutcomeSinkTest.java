@@ -2,6 +2,8 @@ package uk.gov.hmcts.cp.courtregister.application;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -25,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.InOrder;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
@@ -76,6 +79,13 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * identifiers of one batch, moves it once and is counted nowhere: it is attributable, and it is
  * already applied.
  *
+ * <p><strong>And the leg a generated batch is handed on to, which is part of the join.</strong> The
+ * GENERATED mark and {@link RegisterNotifierService#notify} are one step of one code path, so the
+ * order between them and the arrivals that never reach the second of them are this suite's question
+ * too: what the recipients are told is {@code RegisterNotifierServiceTest}'s. Those cases are
+ * characterisations of the wiring T059 landed rather than the red half of a pair, and they are what
+ * pins the never-notified-twice claim this javadoc makes above.
+ *
  * <p>Nothing here reaches a defendant, a recipient or a register. The one piece of free text in the
  * suite is systemdocgenerator's own message about a document, which is carried into
  * {@code sdg_reason} and asserted as an argument rather than as a log line; where it may and may not
@@ -118,9 +128,10 @@ class DocumentOutcomeSinkTest {
     private final GenerationMetrics metrics = new GenerationMetrics(registry);
 
     /**
-     * The leg the sink hands a generated batch on to, doubled because it is not this suite's
-     * subject: what the recipients of a batch are told is {@code RegisterNotifierServiceTest}'s
-     * question, and the join asserted here is which batch an outcome is applied to.
+     * The leg the sink hands a generated batch on to, doubled because what it does is not this
+     * suite's subject: what the recipients of a batch are told is
+     * {@code RegisterNotifierServiceTest}'s question, and what is asked of the double here is only
+     * whether it was reached, with which batch, and after what.
      */
     private final RegisterNotifierService notifier = mock(RegisterNotifierService.class);
 
@@ -184,7 +195,7 @@ class DocumentOutcomeSinkTest {
     }
 
     /**
-     * Asserts one thing the store was or was not told, softly.
+     * Asserts one thing a collaborator was or was not told, softly.
      *
      * <p>A Mockito verification is an assertion that throws, and a case that ended at the first one
      * would hide the rest of what the sink did or failed to do. Wrapping each verification keeps
@@ -538,6 +549,138 @@ class DocumentOutcomeSinkTest {
                             + "record; re-failing it would restate a verdict and move failed_at "
                             + "away from the moment the render was actually refused",
                     () -> verify(store, times(1)).markFailed(any(), any(), any(), any()));
+        }
+    }
+
+    /**
+     * The leg a generated batch is handed on to, and everything that never reaches it.
+     *
+     * <p>A document that exists and has been sent to nobody is the state defect fix P1 is about, so
+     * the moment the batch is recorded as having one is the moment its Youth Offending Teams can be
+     * told: the GENERATED mark and {@link RegisterNotifierService#notify} are one step of one code
+     * path, which is what makes the reconciler's fetched document reach the same e-mails the topic's
+     * delivered one does. What is asked here is the order and the absences, not the content - the
+     * mark is what decides whether anyone is told at all, because the store's compare-and-set is
+     * what refuses the second of two racing mechanisms, so an e-mail sent before that mark, or in
+     * place of it, would be a register announced on a move that never took.
+     *
+     * <p><strong>These cases are characterisations rather than the red half of a pair.</strong> The
+     * wiring landed with {@code RegisterNotifierService} (T059) and they were written afterwards, so
+     * they pass on introduction and accept the join as it stands. They exist because the claim that
+     * a redelivered document-available is recognised and never notified twice - made in this class's
+     * javadoc, in {@code DocumentOutcomeSinkImpl}'s and in {@code data-model.md} - was until now
+     * pinned by nothing at unit level, and it is the claim the whole idempotency of the notifying
+     * leg rests on.
+     */
+    @Nested
+    @DisplayName("the recipients of a batch whose document now exists")
+    class TheRecipientsOfABatchWhoseDocumentNowExists {
+
+        @ParameterizedTest
+        @EnumSource(CompletedBy.class)
+        void a_generated_batch_should_be_marked_before_its_recipients_are_told(
+                final CompletedBy learnedBy) {
+
+            final RegisterBatch batch = inFlight(MONDAY);
+
+            documentAvailable(batch.batchId(), batch.payloadFileId(), learnedBy);
+
+            final InOrder order = inOrder(store, notifier);
+            told("the mark comes first because it is the decision: it refuses where another "
+                            + "mechanism has already moved this batch, and an e-mail sent ahead of "
+                            + "it would be a register announced to a team on the strength of a move "
+                            + "that never took",
+                    () -> order.verify(store).markGenerated(
+                            batch.batchId(), DOCUMENT_FILE_ID, GENERATED_AT, learnedBy));
+            told("and then the recipients are told, in the same step and on this thread, under "
+                            + "both mechanisms - a document the reconciler fetched reaches the same "
+                            + "e-mails a delivered event's does, which is the whole reason one code "
+                            + "path exists",
+                    () -> order.verify(notifier).notify(batch.batchId()));
+            told("once, and for the batch that was marked and no other: the notifying leg reads "
+                            + "the batch back by this id, so a second hand-on would be a second "
+                            + "e-mail to every team the day's register was addressed to",
+                    () -> verify(notifier, times(1)).notify(any()));
+        }
+
+        @Test
+        void a_redelivered_document_available_should_tell_the_recipients_once() {
+            final RegisterBatch batch = generating(MONDAY);
+            when(batches.findById(batch.batchId()))
+                    .thenReturn(Optional.of(batch))
+                    .thenReturn(Optional.of(generated(batch, CompletedBy.EVENT)));
+
+            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
+            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
+
+            told("a durable subscription guarantees the second delivery and a reconciler racing an "
+                            + "in-flight event produces it; the batch already stands where the "
+                            + "outcome would put it, so the second arrival is recognised above and "
+                            + "the teams are e-mailed exactly once",
+                    () -> verify(notifier, times(1)).notify(batch.batchId()));
+        }
+
+        /**
+         * The reconciler arriving after the listener has already finished, which is the shape the
+         * grace-period query is bound to produce: the batch it asks systemdocgenerator about was
+         * GENERATING when the query selected it and is GENERATED by the time the answer is applied.
+         */
+        @Test
+        void a_document_available_for_a_batch_already_generated_should_tell_nobody() {
+            final RegisterBatch batch = generated(generating(MONDAY), CompletedBy.EVENT);
+            when(batches.findById(batch.batchId())).thenReturn(Optional.of(batch));
+
+            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.RECONCILER);
+
+            told("nothing is re-stamped, so there is no mark for a notification to follow",
+                    () -> verify(store, never()).markGenerated(any(), any(), any(), any()));
+            told("and the teams are not told again: the rows the notifying leg would mint are "
+                            + "already there, and a second hand-on is a second e-mail about a "
+                            + "register that has already been sent",
+                    () -> verifyNoInteractions(notifier));
+        }
+
+        @ParameterizedTest
+        @EnumSource(CompletedBy.class)
+        void a_generation_that_failed_should_tell_nobody(final CompletedBy learnedBy) {
+            final RegisterBatch batch = inFlight(MONDAY);
+
+            generationFailed(batch.batchId(), batch.payloadFileId(), learnedBy);
+
+            told("there is no document, so there is nothing to attach and nobody to tell; the "
+                            + "notifying leg is reached from the GENERATED mark alone and a refusal "
+                            + "under either mechanism ends the batch rather than announcing it",
+                    () -> verifyNoInteractions(notifier));
+        }
+
+        /**
+         * The race the compare-and-set exists to settle, seen from the losing side.
+         *
+         * <p>{@code JdbcRegisterStore.permitted} refuses a move the batch has already made with an
+         * {@link IllegalStateException}, so the mark two mechanisms make about one batch at one
+         * moment succeeds for exactly one of them. The refusal is what stops the loser going on to
+         * send, and it is not swallowed here either: the sink lets it out to the caller - the
+         * listener's own error handling, or the reconciler's - rather than turning a mark that did
+         * not take into a run that looks like it worked.
+         */
+        @Test
+        void a_mark_that_did_not_take_should_not_be_followed_by_an_e_mail() {
+            final RegisterBatch batch = inFlight(MONDAY);
+            final String refusal =
+                    "batch " + batch.batchId() + " may not move from GENERATED to GENERATED";
+            doThrow(new IllegalStateException(refusal))
+                    .when(store).markGenerated(any(), any(), any(), any());
+
+            softly.assertThatThrownBy(() -> sink.documentAvailable(batch.batchId(),
+                            batch.payloadFileId(), DOCUMENT_FILE_ID, GENERATED_AT,
+                            CompletedBy.RECONCILER))
+                    .as("the refusal reaches the caller rather than being absorbed here, because a "
+                            + "mark that did not take is not an outcome this service applied")
+                    .isInstanceOf(IllegalStateException.class);
+            told("and nobody is e-mailed on the strength of it: the mark decides, so the mechanism "
+                            + "whose compare-and-set lost the race sends nothing and the one that "
+                            + "won sends everything",
+                    () -> verifyNoInteractions(notifier));
         }
     }
 }
