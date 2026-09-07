@@ -559,13 +559,14 @@ before P10 was appended under review). Codex review 6.
 
 ### Approved TDD exceptions (Phase 6)
 
-Two. They are recorded here rather than argued for in a commit body, which is where the first of
+Three. They are recorded here rather than argued for in a commit body, which is where the first of
 them was argued for until this entry existed. Approver: **design owner, 2026-09-07**. Anything else
 in Phase 6 that arrived test-after is a defect, not a precedent.
 
-This block said "one" until the Codex review of Phase 6 found the second, so the claim of
-completeness it made was wrong for as long as it stood: an exception block is only worth reading if
-it is exhaustive, and the entry below was missing from it rather than judged and allowed.
+This block said "one" until the first Codex review of Phase 6 found the second, and "two" until the
+second review found the third, so the claim of completeness it made was wrong for as long as each of
+those stood: an exception block is only worth reading if it is exhaustive, and the entries below were
+missing from it rather than judged and allowed.
 
 1. **`1b1bf17` "test(notify): pin the hand-on from a generated batch to its recipients", written
    after `322fc07`.** T059 (`322fc07`) wired `DocumentOutcomeSinkImpl.documentAvailable` to mark the
@@ -617,6 +618,31 @@ it is exhaustive, and the entry below was missing from it rather than judged and
    **Approved: design owner, 2026-09-07.**
    No production code moved for it: the configuration is unchanged, and this is the exception being
    recorded rather than a fix being made.
+3. **`31d51bc` "fix(notify): claim the batch before notifying and make accepted rows terminal"
+   landed the claim's repository and schema assertions beside the implementation they pin.** The red
+   half of that pair, `b74e880` "test(notify): two notifiers on one batch post once and never demote
+   an accepted row", covered the service over a doubled repository only: it asserted that a second
+   notifier is refused, posts nothing and answers `ALREADY_NOTIFYING`, and that a settlement the
+   store refused is counted rather than believed. What arrived unpinned-then-pinned-in-one-commit is
+   the store's own half - `RegisterBatchRepositoryIT.Claiming`'s six cases (the advisory lock and
+   compare-and-set, the second notifier's refusal, the token-fenced release, and the takeover once
+   the lease has run out) and `SchemaMigrationV2IT`'s `notifying_since` / `notifier_token` columns
+   and `register_batch_notifier_claim_chk`.
+   **Rationale**: the claim's SQL was shaped by the review finding it answers - two notifiers over
+   one generated batch - and the shape was decided and pinned in the same commit, so there was no
+   design decision left for a red run over the statement to make; the behaviour itself was driven
+   red-first at service level by `b74e880`. Those repository and schema assertions are therefore
+   **[A]** characterisations that arrived with the implementation rather than the red half of a pair,
+   and they are the only assertions in `31d51bc`.
+   **Approved: design owner, 2026-09-07.**
+
+**From this round on, every change to a statement or to the schema has its integration red run
+first**: the failing assertion recorded for it is the `RegisterBatchRepositoryIT` /
+`RegisterNotificationRepositoryIT` / `SchemaMigrationV2IT` case against a real Postgres, never a
+service test over a doubled repository, because a double is free to agree with whatever the caller
+believes the statement does. The three review fixes that follow this entry - the unconditional
+attempt tally, the notification-specific lease with token-fenced renewal, and the three-way claim
+answer - are held to it.
 
 ---
 
