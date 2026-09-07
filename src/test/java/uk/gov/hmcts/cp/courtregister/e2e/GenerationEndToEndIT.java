@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.e2e;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.awaitility.Awaitility.await;
 
 import jakarta.jms.ConnectionFactory;
@@ -10,8 +11,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,21 +24,27 @@ import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.adapter.notificationnotify.NotificationNotifyClient;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DocumentEventListener;
+import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
+import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
 import uk.gov.hmcts.cp.courtregister.domain.GateDecision;
+import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RunReport;
 import uk.gov.hmcts.cp.courtregister.support.GeneratedRegisters;
+import uk.gov.hmcts.cp.courtregister.support.GeneratedRegisters.Notified;
 import uk.gov.hmcts.cp.courtregister.support.GenerationStackSupport;
+import uk.gov.hmcts.cp.courtregister.support.GenerationStackSupport.SentEmail;
 import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 
 /**
- * One night, from a recorded register to a generated batch, through the whole assembled service
- * (T052).
+ * One night, from a recorded register to the e-mails its Youth Offending Teams are told by, through
+ * the whole assembled service (T052, completed at T060).
  *
  * <p>Every stage of this has its own suite and every one of them passes against a double of the
  * stage either side of it. What none of them can say is that the stages are joined: that a run reads
@@ -43,14 +53,24 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  * the answer on a durable subscription and moves the batch and its registers with it. Phase 5
  * shipped with none of that wired, and this is the test that would have said so.
  *
- * <p>Four outsides, three of them real: a Postgres for the register store, a second Postgres for the
- * framework file service seeded from the vendored schema, WireMock for App Configuration and
- * systemdocgenerator, and an in-VM Artemis carrying {@code public.event}. Only the App Configuration
- * credential is stood in for, because a federated-token exchange happens against Entra ID and not
- * against the store.
+ * <p>Five outsides, four of them real: a Postgres for the register store, a second Postgres for the
+ * framework file service seeded from the vendored schema, WireMock for App Configuration,
+ * systemdocgenerator and notificationnotify, and an in-VM Artemis carrying {@code public.event}.
+ * Only the App Configuration credential is stood in for, because a federated-token exchange happens
+ * against Entra ID and not against the store.
  *
- * <p>The notify leg is Phase 6's. The batch is asserted GENERATED here, which is where this
- * increment's US2 ends.
+ * <p><strong>T060 carried the night past GENERATED.</strong> Until Phase 6 the batch stopped there,
+ * because there was nothing wired to tell anybody about it; now the mark that records the document
+ * is the same step that asks notificationnotify for one e-mail per recipient, so the state a
+ * delivered outcome leaves this batch in is NOTIFIED and not GENERATED. This suite is where that
+ * join is asserted end to end - that the recipients the batch is addressed to are the union across
+ * its records (defect fix P4), that each of them is asked for exactly once, under the identity the
+ * {@code register_notification} row was minted with, attaching the document
+ * <em>systemdocgenerator</em> said it rendered rather than the payload it rendered it from.
+ *
+ * <p><strong>Two records, three recipients.</strong> One hearing matched Leeds and Wakefield and the
+ * other Wakefield and Bradford, which is US3's own independent test: the union is three teams, the
+ * team on both hearings is told once, and a first-row-only leg would never write to Bradford at all.
  *
  * <p><strong>An acceptance suite (tasks.md [A]).</strong> Nothing here is driven test-first: it
  * records what the assembled service does.
@@ -61,6 +81,27 @@ class GenerationEndToEndIT {
     private static final LocalDate REGISTER_DAY = LocalDate.parse("2026-08-21");
 
     private static final Instant REGISTER_TIME = Instant.parse("2026-08-21T16:30:00Z");
+
+    /** The day's second hearing, on the same register day and so in the same batch. */
+    private static final Instant LATER_THAT_AFTERNOON = Instant.parse("2026-08-21T16:47:00Z");
+
+    /** A team the first hearing matched and the second did not. */
+    private static final CourtRegisterRecipient LEEDS = new CourtRegisterRecipient(
+            "Leeds Youth Offending Team", "leeds.yot@example.gov.uk", null, "cr_standard");
+
+    /** The team both hearings matched, which is one e-mail and not two. */
+    private static final CourtRegisterRecipient WAKEFIELD = new CourtRegisterRecipient(
+            "Wakefield Youth Offending Team", "wakefield.yot@example.gov.uk", null, "cr_standard");
+
+    /**
+     * A team only the second hearing matched.
+     *
+     * <p>The recipient the progression leg loses: its {@code findFirst()} over the records carrying
+     * a non-empty list keeps the first hearing's teams and discards the rest, so Bradford - matched
+     * for a child listed in the document that is about to be sent - is never written to (P4).
+     */
+    private static final CourtRegisterRecipient BRADFORD = new CourtRegisterRecipient(
+            "Bradford Youth Offending Team", "bradford.yot@example.gov.uk", null, "cr_standard");
 
     /** The document systemdocgenerator says it rendered, which the e-mail would attach. */
     private static final UUID DOCUMENT_FILE_ID =
@@ -108,7 +149,9 @@ class GenerationEndToEndIT {
     void aNightWithOneCourtCentreWaiting() {
         stack.reset();
         stack.flagIs(true);
-        registers.record(UUID.randomUUID(), REGISTER_DAY, REGISTER_TIME);
+        registers.record(UUID.randomUUID(), REGISTER_DAY, REGISTER_TIME, List.of(LEEDS, WAKEFIELD));
+        registers.record(UUID.randomUUID(), REGISTER_DAY, LATER_THAT_AFTERNOON,
+                List.of(WAKEFIELD, BRADFORD));
     }
 
     @Test
@@ -144,30 +187,136 @@ class GenerationEndToEndIT {
     }
 
     @Test
-    @DisplayName("the document-available event moves the batch and its registers to GENERATED")
-    void an_outcome_on_the_public_event_topic_should_generate_the_batch() {
-        run();
+    @DisplayName("the document-available event carries the batch and its registers to NOTIFIED")
+    void an_outcome_on_the_public_event_topic_should_generate_and_notify_the_batch() {
+        final RunReport report = run();
         final UUID batchId = registers.batches().getFirst();
         final UUID payloadFileId = registers.payloadFileId().orElseThrow();
 
+        assertThat(report.outcomes())
+                .as("the report is the requesting half's account of the night, and GENERATING is as "
+                        + "far as a run can carry a batch: the document arrives long after the run "
+                        + "has ended, so no run report can name a notified batch")
+                .containsKey(BatchStatus.GENERATING)
+                .doesNotContainKey(BatchStatus.NOTIFIED);
+        assertThat(report.reconciled())
+                .as("nothing had to be fetched, because the topic delivered")
+                .isZero();
+
         publishDocumentAvailable(batchId, payloadFileId);
 
-        await().alias("the batch reaches GENERATED off the public-event topic")
+        await().alias("the batch reaches NOTIFIED off the public-event topic")
                 .atMost(DELIVERED_WITHIN)
                 .pollInterval(POLL)
                 .until(() -> registers.batchStatuses()
-                        .equals(List.of(BatchStatus.GENERATED.name())));
+                        .equals(List.of(BatchStatus.NOTIFIED.name())));
         assertThat(registers.documentFileId())
-                .as("the rendered document's id, which is what the e-mail attaches")
+                .as("the rendered document's id, which is what every e-mail attached")
                 .contains(DOCUMENT_FILE_ID);
         assertThat(registers.completedBy())
                 .as("the topic learned it, not the reconciler; a run whose outcomes all arrive by "
                         + "reconciliation is a subscription to investigate")
                 .contains(CompletedBy.EVENT.name());
         assertThat(registers.statuses())
-                .as("and the batch's own registers move with it - this batch's rows and no others, "
-                        + "which is defect fix P3")
-                .containsExactly(BatchStatus.GENERATED.name());
+                .as("and the batch's own registers move with it, both of them - this batch's rows "
+                        + "and no others, which is defect fix P3")
+                .containsExactly(BatchStatus.NOTIFIED.name(), BatchStatus.NOTIFIED.name());
+    }
+
+    @Test
+    @DisplayName("every matched team is asked for once, with the document that was rendered")
+    void the_notified_batch_should_have_asked_notificationnotify_once_per_distinct_recipient() {
+        run();
+        publishDocumentAvailable(
+                registers.batches().getFirst(), registers.payloadFileId().orElseThrow());
+        await().alias("the batch reaches NOTIFIED off the public-event topic")
+                .atMost(DELIVERED_WITHIN)
+                .pollInterval(POLL)
+                .until(() -> registers.batchStatuses()
+                        .equals(List.of(BatchStatus.NOTIFIED.name())));
+
+        final List<SentEmail> sent = stack.emailsSent();
+        assertThat(addressedTo(sent))
+                .as("the union across the batch's records, each address once: Wakefield matched "
+                        + "both hearings and is told once, and Bradford - which the progression "
+                        + "leg's first-row-only reading discards - is told at all (P4)")
+                .containsExactlyInAnyOrder(LEEDS.emailAddress1(), WAKEFIELD.emailAddress1(),
+                        BRADFORD.emailAddress1());
+        assertThat(greetedBy(sent))
+                .as("each recipient's own name, which is the one personalisation the cr_standard "
+                        + "template takes")
+                .containsExactlyInAnyOrderEntriesOf(Map.of(
+                        LEEDS.emailAddress1(), LEEDS.recipientName(),
+                        WAKEFIELD.emailAddress1(), WAKEFIELD.recipientName(),
+                        BRADFORD.emailAddress1(), BRADFORD.recipientName()));
+        assertThat(sent).allSatisfy(email -> {
+            assertThat(email.contentType())
+                    .as("the framework routes the command on its media type, so it is not a "
+                            + "formality")
+                    .isEqualTo(NotificationNotifyClient.EMAIL_MEDIA_TYPE);
+            final JsonNode body = MAPPER.readTree(email.body());
+            assertThat(body.path("fileId").stringValue())
+                    .as("the document systemdocgenerator said it rendered, and never the payload "
+                            + "it was rendered from: the register travels by reference")
+                    .isEqualTo(DOCUMENT_FILE_ID.toString());
+            assertThat(body.has("notificationId"))
+                    .as("the identity is the path parameter; the API-side schema declares no such "
+                            + "property and refuses a body that carries one")
+                    .isFalse();
+        });
+
+        final List<Notified> rows = registers.notifications();
+        assertThat(rows)
+                .as("one row per distinct recipient, each accepted on its one attempt under the "
+                        + "one configured template")
+                .extracting(Notified::status, Notified::responseCode, Notified::attempts,
+                        Notified::templateName)
+                .containsOnly(tuple(NotificationStatus.ACCEPTED.name(),
+                        NotificationNotifyClient.ACCEPTED, 1,
+                        RegisterNotifierService.TEMPLATE_NAME));
+        assertThat(sent).extracting(SentEmail::path)
+                .as("and each POST was made under its own row's identity, which is what makes a "
+                        + "resend reach the attempt it is retrying rather than send a second e-mail")
+                .containsExactlyInAnyOrderElementsOf(rows.stream()
+                        .map(row -> GenerationStackSupport.notificationPathFor(
+                                row.notificationId()))
+                        .toList());
+    }
+
+    /**
+     * Which addresses this stack was asked to write to.
+     *
+     * @param sent the e-mails notificationnotify received
+     * @return their {@code sendToAddress} values, in arrival order
+     */
+    private static List<String> addressedTo(final List<SentEmail> sent) {
+        return sent.stream().map(field("sendToAddress")).toList();
+    }
+
+    /**
+     * What each address's e-mail greets its recipient by.
+     *
+     * @param sent the e-mails notificationnotify received
+     * @return address to {@code personalisation.yotsName}
+     */
+    private static Map<String, String> greetedBy(final List<SentEmail> sent) {
+        final Map<String, String> greetings = new LinkedHashMap<>();
+        for (final SentEmail email : sent) {
+            final JsonNode body = MAPPER.readTree(email.body());
+            greetings.put(body.path("sendToAddress").stringValue(),
+                    body.path("personalisation").path("yotsName").stringValue());
+        }
+        return greetings;
+    }
+
+    /**
+     * Reads one top-level string off a command body.
+     *
+     * @param name the field to read
+     * @return the reader
+     */
+    private static Function<SentEmail, String> field(final String name) {
+        return email -> MAPPER.readTree(email.body()).path(name).stringValue();
     }
 
     /**

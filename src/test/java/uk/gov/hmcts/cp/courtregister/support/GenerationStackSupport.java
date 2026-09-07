@@ -1,7 +1,9 @@
 package uk.gov.hmcts.cp.courtregister.support;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
+import static com.github.tomakehurst.wiremock.client.WireMock.matchingJsonPath;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
@@ -18,6 +20,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,24 +33,26 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.Application;
+import uk.gov.hmcts.cp.courtregister.adapter.notificationnotify.NotificationNotifyClient;
 import uk.gov.hmcts.cp.courtregister.adapter.systemdocgenerator.SystemDocGeneratorClient;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 
 /**
  * Everything the nightly run talks to, for the two end-to-end suites that drive it.
  *
- * <p>The run has four outsides and this fixture is three of them: App Configuration, from which the
- * one lever is read; systemdocgenerator's command and query APIs; and the framework file service's
- * own database, which the payload is written into and which nothing in this service migrates. The
- * fourth is the broker, and each suite owns that itself because whether an outcome is published at
- * all is the thing those suites differ about.
+ * <p>The run has five outsides and this fixture is four of them: App Configuration, from which the
+ * one lever is read; systemdocgenerator's command and query APIs; notificationnotify's command API,
+ * which is where a generated register turns into the e-mails the Youth Offending Teams are told by;
+ * and the framework file service's own database, which the payload is written into and which nothing
+ * in this service migrates. The fifth is the broker, and each suite owns that itself because whether
+ * an outcome is published at all is the thing those suites differ about.
  *
- * <p><strong>One WireMock server, two contexts.</strong> The App Configuration {@code kv} resource
- * and systemdocgenerator's two paths are disjoint, so one server can be both; two would be two
- * ports, two lifecycles and two chances to reset the wrong one. What it buys is the assertion
- * {@code FlagGateEndToEndIT} exists to make - that a run the flag stopped reached <em>no</em>
- * socket - because "nothing was requested" is a claim about the one server that would have received
- * it.
+ * <p><strong>One WireMock server, three contexts.</strong> The App Configuration {@code kv}
+ * resource, systemdocgenerator's two paths and notificationnotify's one are disjoint, so one server
+ * can be all three; more would be more ports, more lifecycles and more chances to reset the wrong
+ * one. What it buys is the assertion {@code FlagGateEndToEndIT} exists to make - that a run the flag
+ * stopped reached <em>no</em> socket - because "nothing was requested" is a claim about the one
+ * server that would have received it.
  *
  * <p>The flag is read through a real {@code AppConfigurationFlagReader} over a real SDK client; only
  * the credential is a connection string rather than this pod's workload identity, because a token
@@ -78,6 +83,32 @@ public final class GenerationStackSupport implements AutoCloseable {
 
     /** Any {@code kv} read, whatever key and label the reader asks under. */
     private static final String ANY_KEY_PATH = "/kv/.*";
+
+    /**
+     * Any {@code send-email-notification}, whatever notification identity it was made under.
+     *
+     * <p>The identity is the last path segment and is minted per recipient at run time, so a stub
+     * can only be written against the shape of the path; which identity each e-mail actually went
+     * out under is read back off {@link #emailsSent()} and compared with the row that was minted.
+     */
+    private static final String ANY_NOTIFICATION_PATH = NotificationNotifyClient.COMMAND_PATH
+            .replace("{notificationId}", "[^/]+");
+
+    /** Any document query, whatever payload the reconciler asks about. */
+    private static final String ANY_DOCUMENT_QUERY_PATH = SystemDocGeneratorClient.QUERY_PATH
+            .replace("{payloadFileId}", "[^/]+");
+
+    /**
+     * The precedence a stub about one recipient is registered at.
+     *
+     * <p>Stated rather than left to WireMock's default, because a refusal for one address and the
+     * catch-all that accepts everything else both match that address's request: the two are ordered
+     * here so which one answers is a decision and not an accident of registration order.
+     */
+    private static final int ONE_RECIPIENT = 1;
+
+    /** The precedence the accept-everything stubs are registered at, behind the specific ones. */
+    private static final int EVERY_RECIPIENT = 10;
 
     /** The media type App Configuration answers a key-value read with. */
     private static final String KV_MEDIA_TYPE = "application/vnd.microsoft.appconfig.kv+json";
@@ -110,6 +141,7 @@ public final class GenerationStackSupport implements AutoCloseable {
         final GenerationStackSupport stack =
                 new GenerationStackSupport(contexts, JdbcClient.create(fileServiceDataSource()));
         stack.sdgAcceptsEveryRequest();
+        stack.nnAcceptsEveryEmail();
         return stack;
     }
 
@@ -250,6 +282,113 @@ public final class GenerationStackSupport implements AutoCloseable {
                 .toList();
     }
 
+    /**
+     * systemdocgenerator's query API says it rendered the document, for one payload.
+     *
+     * <p>What the reconciler reads where the topic delivered nothing: the same two components the
+     * event carries, because an id without an instant is a row systemdocgenerator opened and has not
+     * filled in and the client is required to tell those apart.
+     *
+     * @param payloadFileId  the payload the render was asked for, which the query is keyed on
+     * @param documentFileId the document it says it produced
+     * @param generatedAt    when it says it finished
+     */
+    public void sdgQueryAnswersDocument(final UUID payloadFileId, final UUID documentFileId,
+            final Instant generatedAt) {
+
+        contexts.stubFor(get(urlEqualTo(documentQueryPathFor(payloadFileId)))
+                .atPriority(ONE_RECIPIENT)
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", SystemDocGeneratorClient.DOCUMENT_MEDIA_TYPE)
+                        .withBody("{\"documentFileServiceId\":\"" + documentFileId
+                                + "\",\"generatedTime\":\"" + generatedAt + "\"}")));
+    }
+
+    /**
+     * systemdocgenerator's query API has no record of a payload at all.
+     *
+     * <p>Registered behind {@link #sdgQueryAnswersDocument} so a suite can leave every other batch's
+     * payload unknown - which is what a shared store needs, because the reconciler's read is over
+     * the table and not over one suite's rows.
+     */
+    public void sdgQueryKnowsNothing() {
+        contexts.stubFor(get(urlPathMatching(ANY_DOCUMENT_QUERY_PATH))
+                .atPriority(EVERY_RECIPIENT)
+                .willReturn(aResponse().withStatus(404)));
+    }
+
+    // --- notificationnotify ----------------------------------------------------------------------
+
+    /** notificationnotify accepts every e-mail, which is the one success the contract has. */
+    public void nnAcceptsEveryEmail() {
+        contexts.stubFor(post(urlPathMatching(ANY_NOTIFICATION_PATH))
+                .atPriority(EVERY_RECIPIENT)
+                .willReturn(aResponse().withStatus(NotificationNotifyClient.ACCEPTED)));
+    }
+
+    /**
+     * notificationnotify answers one recipient's e-mail with something other than acceptance.
+     *
+     * <p>Matched on the address in the body rather than on the path, because the path carries the
+     * notification identity and that is minted at run time: a suite that had to know it in advance
+     * could not stub anything at all. One address is one recipient and one row, so the address is
+     * exactly as selective as the fix requires.
+     *
+     * @param emailAddress the recipient this answer is for
+     * @param status       what notificationnotify answers that recipient with
+     */
+    public void nnAnswers(final String emailAddress, final int status) {
+        contexts.stubFor(post(urlPathMatching(ANY_NOTIFICATION_PATH))
+                .atPriority(ONE_RECIPIENT)
+                .withRequestBody(matchingJsonPath("$.sendToAddress", equalTo(emailAddress)))
+                .willReturn(aResponse().withStatus(status)));
+    }
+
+    /**
+     * Every {@code send-email-notification} this stack has been sent.
+     *
+     * @return the path, media type and body of each, in arrival order
+     */
+    public List<SentEmail> emailsSent() {
+        return contexts.findAll(postRequestedFor(urlPathMatching(ANY_NOTIFICATION_PATH))).stream()
+                .map(request -> new SentEmail(request.getUrl(),
+                        request.getHeader("Content-Type"), request.getBodyAsString()))
+                .toList();
+    }
+
+    /**
+     * The path one notification's e-mail is asked for under, as the contract writes it.
+     *
+     * @param notificationId the identity the row was minted with
+     * @return the command path carrying it
+     */
+    public static String notificationPathFor(final UUID notificationId) {
+        return NotificationNotifyClient.COMMAND_PATH
+                .replace("{notificationId}", notificationId.toString());
+    }
+
+    /**
+     * The path one payload's render is asked about under.
+     *
+     * @param payloadFileId the payload the render was requested for
+     * @return the query path carrying it
+     */
+    private static String documentQueryPathFor(final UUID payloadFileId) {
+        return SystemDocGeneratorClient.QUERY_PATH
+                .replace("{payloadFileId}", payloadFileId.toString());
+    }
+
+    /**
+     * One e-mail as notificationnotify received it.
+     *
+     * @param path        the command path, whose last segment is the notification identity
+     * @param contentType the media type the framework routes the command on
+     * @param body        the command body, verbatim
+     */
+    public record SentEmail(String path, String contentType, String body) {
+    }
+
     // --- the file service ------------------------------------------------------------------------
 
     /**
@@ -283,10 +422,18 @@ public final class GenerationStackSupport implements AutoCloseable {
 
     // --- lifecycle -------------------------------------------------------------------------------
 
-    /** Forgets every stub and every recorded request, and puts the SDG catch-all back. */
+    /**
+     * Forgets every stub and every recorded request, and puts the two catch-alls back.
+     *
+     * <p>The ordinary night is the one both downstreams accept, so that is what a case starts from
+     * and a case about a refusal says which refusal it means. A stub is not a request: a run the
+     * flag stopped still reaches no socket, which is what {@code FlagGateEndToEndIT} asserts on the
+     * recorded requests rather than on the stubs.
+     */
     public void reset() {
         contexts.resetAll();
         sdgAcceptsEveryRequest();
+        nnAcceptsEveryEmail();
     }
 
     @Override
