@@ -53,7 +53,12 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
  *
  * <p>One attempt per call, classified and handed back, exactly as the renderer's client does it: the
  * waiting and the counting belong to the object that holds the run's budget, and a client that
- * retried underneath it would spend a budget it cannot see.
+ * retried underneath it would spend a budget it cannot see. What a retryable answer's
+ * {@code Retry-After} asked for is handed back with the classification for the same reason in
+ * reverse: this client is the only participant that sees the header, and the object holding the
+ * budget is the only one that can spend the wait. The form is the shared policy's - delta-seconds
+ * only, bounded by {@code max-backoff} - so a fourth client does not get a fourth opinion about it
+ * (defect fix C3).
  *
  * <p>Nothing that identifies a recipient is logged. The address and the recipient name are the two
  * components that never reach a line at INFO or above (constitution Principle VII), so a line here
@@ -182,10 +187,18 @@ public class NotificationNotifyClient implements RegisterNotifier {
                 // 408, 429 and every server error, from the one policy all this service's clients
                 // hold (C3). The asking again is the run's: this client is told nothing about what
                 // is left of the budget, so a loop here would spend one it cannot see.
+                //
+                // What the answer asked to be waited travels with it, because this client is the
+                // only participant that sees the header and the run is the only one that can spend
+                // it. Read on any retryable answer rather than on a 429 alone - a 503 carrying one
+                // is a service saying when it expects to be back - and read by the shared policy,
+                // so the form it accepts (delta-seconds, bounded by max-backoff) is stated once for
+                // all four clients rather than a fourth time here.
                 LOG.warn("notificationnotify could not take the e-mail command, so the run may ask "
                         + "again under the same identity. notificationId={} batchId={} status={}",
                         notification.notificationId(), notification.batchId(), status);
-                throw new NotificationFailedException(FailureClassification.TRANSIENT, status);
+                throw new NotificationFailedException(FailureClassification.TRANSIENT, status,
+                        RetryPolicy.retryAfter(response.getHeaders()).orElse(null));
             }
             // Any other 4xx: the command was understood and declined, and the same command under the
             // same identity will be declined again.

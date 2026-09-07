@@ -6,7 +6,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -454,6 +453,15 @@ public class RegisterNotifierService {
      * aggregate on that id, so the retry reaches the attempt it is retrying instead of asking for a
      * second register about the same children (research §10).
      *
+     * <p><strong>The wait is what the answer asked for where it asked for something.</strong> A
+     * {@code Retry-After} is notificationnotify saying when it expects to be able to take the
+     * command, and the whole point of the header is that it knows that better than this service's
+     * schedule - so it is spent instead of the back-off's next step, on any retryable answer rather
+     * than on a 429 alone. The client read it through the shared {@link RetryPolicy} and this leg
+     * spends it through the same object, which is what bounds it: delta-seconds only, and never more
+     * than {@code max-backoff} however long the other side asked for. An unusable value and no
+     * header at all are the same thing, the back-off (defect fix C3).
+     *
      * <p>No deadline is checked, and that is the one place this differs from the generation leg.
      * That leg runs inside a claim the nightly run holds and measures each attempt against what is
      * left of it; a notification is driven by the outcome sink on a public-event delivery or by an
@@ -488,7 +496,7 @@ public class RegisterNotifierService {
                         statusOf(lastAnswer), refused.classification(), refused);
                 if (refused.classification() != FailureClassification.TRANSIENT
                         || posts == maxAttempts
-                        || !waitFor(row, retryPolicy.waitAfter(posts, Optional.empty()))) {
+                        || !waitFor(row, retryPolicy.waitAfter(posts, refused.retryAfter()))) {
                     break;
                 }
             }
