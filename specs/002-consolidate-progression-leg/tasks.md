@@ -535,9 +535,13 @@ before P10 was appended under review). Codex review 6.
 
 ### Approved TDD exceptions (Phase 6)
 
-One, and it is recorded here rather than argued for in a commit body, which is where it was argued
-for until this entry existed. Approver: **design owner, 2026-09-07**. Anything else in Phase 6 that
-arrived test-after is a defect, not a precedent.
+Two. They are recorded here rather than argued for in a commit body, which is where the first of
+them was argued for until this entry existed. Approver: **design owner, 2026-09-07**. Anything else
+in Phase 6 that arrived test-after is a defect, not a precedent.
+
+This block said "one" until the Codex review of Phase 6 found the second, so the claim of
+completeness it made was wrong for as long as it stood: an exception block is only worth reading if
+it is exhaustive, and the entry below was missing from it rather than judged and allowed.
 
 1. **`1b1bf17` "test(notify): pin the hand-on from a generated batch to its recipients", written
    after `322fc07`.** T059 (`322fc07`) wired `DocumentOutcomeSinkImpl.documentAvailable` to mark the
@@ -562,6 +566,33 @@ arrived test-after is a defect, not a precedent.
    2 failed, 1 skipped). The sink is unchanged and green under both mutations reverted.
    No production code and no defect-register row moved in that commit: P1 stays pinned by
    `RegisterNotifierServiceTest`.
+2. **`56eef87` "test: compile-safe seams for the notification slice" landed the LIVE notifier wiring
+   complete.** The commit is a seams commit and the other three seams in it are what a seams commit
+   is for - `RecipientSet.unionOf`, `NotificationNotifyClient` and `RegisterNotifierService`, each
+   throwing `UnsupportedOperationException` with the task that would implement it. `config/
+   LiveNotificationConfig` is not: it arrived finished, with both conditions
+   (`courtregister.generation.enabled`, `courtregister.generation.nn-mode` LIVE with
+   `matchIfMissing`), the endpoint, the `system-user-id` identity and both timeouts on the request
+   factory. No red run preceded it and no case then held any of it down - the client's own suite
+   builds a `RestClient` by hand and `GenerationWiringContextTest` asks only that a
+   `DocumentRenderer` and a `PayloadFileStore` resolve live - so a condition inverted, an endpoint
+   read off the wrong setting or a timeout left unset would have been found by a deployed pod.
+   **Rationale**: the seam that the three parallel test authors of T057, T058 and T055 had to build
+   against was a real bean graph, and the graph is what this configuration *is* - a
+   `@Configuration` whose bean method throws contributes nothing a context can resolve, so a
+   throwing seam here would have left all three of them without the thing they were writing
+   against. The wiring was therefore carried by the seams commit deliberately, and the cost is that
+   it went in uncharacterised.
+   **Behaviour is now characterised** by `config/LiveNotificationConfigTest` (`d6a4b4a`
+   "test(config): characterise the live notifier wiring"), an **[A]** characterisation labelled as
+   one in its javadoc: eight cases over which notifier a context resolves under each of the two
+   conditions, the test profile and an unnamed mode, and what the live client was built out of - the
+   endpoint and the `CJSCPPUID` identity asked of a real socket, the read timeout asked of a socket
+   that goes quiet, and the template's deliberate absence. Green on introduction, with non-vacuity
+   shown by two mutations quoted in that commit body.
+   **Approved: design owner, 2026-09-07.**
+   No production code moved for it: the configuration is unchanged, and this is the exception being
+   recorded rather than a fix being made.
 
 ---
 
