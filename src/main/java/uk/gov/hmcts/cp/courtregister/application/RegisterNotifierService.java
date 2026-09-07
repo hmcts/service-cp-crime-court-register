@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.application;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -104,6 +105,20 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * {@link NotificationDisposition#ALREADY_NOTIFYING}, which is not a failure but a batch somebody
  * else is telling. The claim carries a lease, because a pod that died mid-notification would
  * otherwise leave a batch nothing could ever pick up.
+ *
+ * <p><strong>The lease is the notifying leg's own and is renewed before every write.</strong>
+ * {@code courtregister.notification.claim-lease} rather than the reconciler's grace period, which
+ * answers a different question: how long a batch may hold a document before the safety net looks is
+ * no bound at all on telling that batch's recipients, whose cost is the number of Youth Offending
+ * Teams the batch is addressed to times whatever notificationnotify makes of each of them. So what
+ * the lease is asked to cover is one recipient's turn, and
+ * {@code renewNotificationClaim(batchId, token)} - one token-fenced statement that re-checks
+ * ownership and extends the lease together - is asked before each recipient's POST, before each
+ * row's settlement and before the batch's own. A notifier whose renewal is refused has been taken
+ * over: it stops, writes nothing further and answers
+ * {@link NotificationDisposition#CLAIM_LOST}, counted apart from the notifier that never started,
+ * because the rows it left unsettled are re-requested by a later run under the identities they
+ * already hold.
  *
  * <p>A claim rather than one transaction around the cycle, and for the same reason the intake half
  * holds a {@code RunClaim}: the cycle POSTs to notificationnotify once per recipient and waits
@@ -322,10 +337,43 @@ public class RegisterNotifierService {
                     seen.accepted(), seen.failed(), standing.status());
         }
         try {
-            return tellWhoeverIsOwed(batchOf(batchId));
+            return tellWhoeverIsOwed(batchOf(batchId), token);
         } finally {
             release(batchId, token);
         }
+    }
+
+    /**
+     * The answer of a notifier that held the claim, started the cycle and lost it inside one.
+     *
+     * <p>What it does about it is stop, which is the whole of the disposition: the notifier that now
+     * holds the batch is deriving the same owed set from the same records, so a POST from here is a
+     * second register about the same children to a team the other run is telling, and a write from
+     * here is over that run's work - a settlement onto a row it is about to POST for, or a batch
+     * tally taken while it is still writing. The rows this run did not settle stay unsettled under
+     * the identities they already hold, which is exactly the state a later run re-requests: the
+     * retry reaches notificationnotify's own aggregate rather than asking for a second e-mail.
+     *
+     * <p>Counted apart from the loser of the claim, because they are different events: that one
+     * never started, and this one told some of the teams. This is the reading
+     * {@code courtregister.notification.claim-lease} is raised on, and the line carries the batch
+     * and nothing else.
+     *
+     * @param batchId the batch this run has stopped telling
+     * @return the rows and the state as they stood when the renewal was refused, carrying
+     *     {@link NotificationDisposition#CLAIM_LOST}
+     */
+    private NotificationSummary claimLost(final UUID batchId) {
+        metrics.claimLost();
+        LOG.warn("Batch {}'s notification claim was taken over while this run was telling its "
+                + "recipients, so it stops here and writes nothing further: the notifier that now "
+                + "holds the batch is telling the teams this run had not reached, and anything "
+                + "written from here would be written over its work. The rows this run did not "
+                + "settle stay under the identities they hold and are re-requested by a later run.",
+                batchId);
+        final NotificationSummary seen = tally(notifications.findByBatchId(batchId));
+        return NotificationSummary.claimLost(
+                seen.accepted(), seen.failed(), batchOf(batchId).status());
     }
 
     /**
@@ -375,15 +423,24 @@ public class RegisterNotifierService {
      * the table at that moment rather than counted in flight, so the two halves of the verdict are
      * read at the same instant and inside the same claim.
      *
+     * <p><strong>And the claim is renewed before the settlement, as it is before every other
+     * write.</strong> The batch's own mark is the last thing this run does and the furthest from the
+     * moment the claim was taken, so it is the write most likely to be made by a notifier that no
+     * longer holds the batch - and it is the one write that decides what the whole night's e-mails
+     * came to. A renewal refused here means the notifier that took the batch over is the one whose
+     * tally should settle it, so this run leaves the batch where it stands.
+     *
      * @param batch the batch as this run read it
+     * @param token the token this run holds the batch's notification claim under
      * @return how many recipients were accepted, how many failed, and the terminal state the batch
-     *     is settled in
+     *     is settled in - or the batch as it stood when this run's claim was taken over
      */
-    private NotificationSummary tellWhoeverIsOwed(final RegisterBatch batch) {
+    private NotificationSummary tellWhoeverIsOwed(final RegisterBatch batch, final UUID token) {
         final UUID batchId = batch.batchId();
         final List<CourtRegisterRecipient> recipients =
                 RecipientSet.unionOf(store.batched(batchId));
         final List<RegisterNotification> held = notifications.findByBatchId(batchId);
+        boolean stillOurs = true;
 
         if (recipients.isEmpty() && held.isEmpty()) {
             LOG.info("Batch {} has a document and no recipients at all, so there is nobody to tell "
@@ -395,9 +452,11 @@ public class RegisterNotifierService {
             LOG.info("Batch {} is addressed to {} recipients and owes {} of them an e-mail, each "
                     + "under the identity its own row holds and each minted before anything is "
                     + "asked of notificationnotify.", batchId, recipients.size(), owed.size());
-            tell(owed, documentFileId);
+            stillOurs = tell(owed, documentFileId, token);
         }
-        return settle(batchOf(batchId));
+        return stillOurs && batches.renewNotificationClaim(batchId, token)
+                ? settle(batchOf(batchId))
+                : claimLost(batchId);
     }
 
     /**
@@ -542,17 +601,69 @@ public class RegisterNotifierService {
      * not holding would stop meaning what it says. Nothing else is done about either, because the
      * tally taken at settlement reads the row as it now stands.
      *
+     * <p><strong>The claim is renewed before each recipient, and the loop ends where a renewal is
+     * refused.</strong> The lease cannot know how long this loop takes - a batch is addressed to as
+     * many Youth Offending Teams as subscribed to its court centre, and each of them costs up to
+     * {@code max-attempts} POSTs with a read timeout and a wait apiece - so what it is asked to
+     * cover is one recipient's turn, renewed each time round. A refusal means the batch has been
+     * taken over, and the notifier that took it is deriving the same owed set from the same records:
+     * every POST from here is a second register about the same children to a team that one is
+     * telling.
+     *
      * @param rows           the rows to post for, each already persisted under its own identity
      * @param documentFileId the rendered document's file-service id, attached by reference
+     * @param token          the token this run holds the batch's notification claim under
+     * @return whether the claim was still this run's throughout, which is whether the batch may now
+     *     be settled on the rows this loop wrote
      */
-    private void tell(final List<RegisterNotification> rows, final UUID documentFileId) {
-        for (final RegisterNotification row : rows) {
+    private boolean tell(final List<RegisterNotification> rows, final UUID documentFileId,
+            final UUID token) {
+
+        final Iterator<RegisterNotification> owed = rows.iterator();
+        boolean stillOurs = true;
+
+        while (stillOurs && owed.hasNext()) {
+            stillOurs = tellOne(owed.next(), documentFileId, token);
+        }
+        return stillOurs;
+    }
+
+    /**
+     * One recipient's turn: the claim renewed, the POST made, and the row settled on the answer.
+     *
+     * <p>Renewed twice, and the second one is the point of the first. The POST is where a run spends
+     * its time, so a notifier waiting on notificationnotify for one recipient is a notifier not
+     * renewing - which is exactly when a lease runs out under it. So ownership is asked again before
+     * the write: a settlement made after the batch has been taken over is written over the work of
+     * the notifier that now holds it, and the row is better left unsettled under the identity it
+     * already holds, because that is the state a later run re-requests and the re-request reaches
+     * notificationnotify's own aggregate rather than asking for a second e-mail.
+     *
+     * <p>The e-mail counter moves once the POST has been made, whether or not the settlement that
+     * follows is this run's to write. What {@code courtregister_notifications_total} answers is how
+     * many e-mails a night asked for and got, and an attempt made is an attempt made.
+     *
+     * @param row            the row to post for, already persisted under its own identity
+     * @param documentFileId the rendered document's file-service id, attached by reference
+     * @param token          the token this run holds the batch's notification claim under
+     * @return whether the claim was still this run's when the row's settlement was written
+     */
+    private boolean tellOne(final RegisterNotification row, final UUID documentFileId,
+            final UUID token) {
+
+        boolean stillOurs = batches.renewNotificationClaim(row.batchId(), token);
+
+        if (stillOurs) {
             final Attempted attempted = attempt(row, documentFileId);
             final NotificationOutcome outcome = attempted.outcome();
             metrics.notificationSettled(outcome.status(), outcome.responseCode());
-            recordWhatTheStoreDid(
-                    notifications.update(settledAs(row, outcome), attempted.posts()), row, outcome);
+            stillOurs = batches.renewNotificationClaim(row.batchId(), token);
+            if (stillOurs) {
+                recordWhatTheStoreDid(notifications.update(settledAs(row, outcome),
+                        attempted.posts()), row, outcome);
+            }
         }
+        return stillOurs;
     }
 
     /**

@@ -94,7 +94,7 @@ inserts, because the row being replaced holds the key until the update takes it 
 | `attempts` | `int NOT NULL DEFAULT 0` | Lifetime tally, never a control variable |
 | `supplement_of` | `uuid` FK → `register_batch(batch_id)` | The batch this one follows for the same key; NULL on a day's first batch |
 | `supplement_index` | `int NOT NULL DEFAULT 0` | 0 on a day's first batch, counting up from 1 on each supplementary one; the file name is built from it |
-| `notifying_since`, `notifier_token` | `timestamptz`, `uuid` | The notifying leg's claim (below). Written and cleared together - `register_batch_notifier_claim_chk` requires that - and **not** components of the `RegisterBatch` domain record: what a batch is does not include who is currently telling its recipients, and a claim on the record would be a field every caller of the whole-row compare-and-set could overwrite |
+| `notifying_since`, `notifier_token` | `timestamptz`, `uuid` | The notifying leg's claim (below). `notifying_since` is the instant the lease currently runs from - the moment of the claim, then of each renewal - and `notifier_token` is what every renewal, release and settlement is fenced on. Written and cleared together - `register_batch_notifier_claim_chk` requires that - and **not** components of the `RegisterBatch` domain record: what a batch is does not include who is currently telling its recipients, and a claim on the record would be a field every caller of the whole-row compare-and-set could overwrite |
 
 Constraint: `UNIQUE (court_centre_id, register_date) WHERE status IN ('PENDING','GENERATING',
 'GENERATED')` (partial unique) - one **in-flight** batch per key, those being the three states in
@@ -139,17 +139,54 @@ it. That is rejected: the cycle POSTs to notificationnotify once per recipient a
 connection and a row lock for as long as another service takes to answer a whole batch's e-mails.
 The claim is the same shape the intake half's `RunClaim` has, for the same reason, and the lease
 answers the same question: a pod that died mid-notification leaves the claim behind, and a claim
-nothing can ever take is a batch no resend and no reconciliation could pick up. The lease is the
-reconciler's own `courtregister.generation.grace-period`, because the two answer the same question -
-how long a notifier is given to finish before something else may pick the batch up is how long the
-safety net waits before it looks - and expiry is decided by the database comparing its own `now()`
-against the stored instant, never by a JVM clock reading. The loser of the claim posts nothing and
-answers `NotificationDisposition.ALREADY_NOTIFYING` with the rows as they stood, which is the
-winner's work part-done: a caller branches on the disposition, never on those counts. Pinned by
-`RegisterBatchRepositoryIT.Claiming` (the store's half, including the takeover past the lease) and
-`RegisterNotifierServiceTest.TwoNotifiersOnOneBatch` (the service's half). The claim is **not**
-defence enough on its own, which is why the row-level fences below exist too: a lease that ran out
-under the run holding it leaves two notifiers in the cycle at once.
+nothing can ever take is a batch no resend and no reconciliation could pick up. Expiry is decided by
+the database comparing its own `now()` against the stored instant, never by a JVM clock reading. The
+loser of the claim posts nothing and answers `NotificationDisposition.ALREADY_NOTIFYING` with the
+rows as they stood, which is the winner's work part-done: a caller branches on the disposition, never
+on those counts.
+
+**The lease is the notifying leg's own, and it is renewed (revised 2026-09-07).** It was
+`courtregister.generation.grace-period` - ten minutes, on the argument that how long a notifier is
+given to finish is how long the safety net waits before it looks. That is wrong twice over. The two
+questions are different: how long a batch may hold a document before the reconciler looks is no bound
+at all on telling that batch's recipients, whose cost is the number of Youth Offending Teams the
+batch is addressed to times whatever notificationnotify makes of each of them - a batch with twelve
+subscribers, each costing up to `courtregister.endpoints.max-attempts` POSTs with a read timeout and a
+back-off wait apiece, can outlast ten minutes without anything having gone wrong. And ownership was
+never rechecked: once the lease lapsed a second notifier could take the claim while the first was
+still posting and settling under a token the row no longer carried, which is the state the claim
+exists to prevent.
+
+So the lease is **`courtregister.notification.claim-lease`** (default `15m`), and
+`RegisterBatchRepository.renewNotificationClaim(batchId, token)` -
+`UPDATE register_batch SET notifying_since = now() WHERE batch_id = :batchId AND notifier_token =
+:token` - is asked **before each recipient's POST, before each row's settlement and before the
+batch's own**. One statement, because the re-check and the extension are one question asked at one
+moment: is the batch still yours, and if so let the lease cover what you are about to do. Token-fenced
+for the reason the release is - a renewal keyed on the batch alone would let a notifier whose claim
+had been taken over extend the claim of the notifier that took it. The lease therefore bounds **one
+recipient's turn** rather than a whole batch of them, and startup refuses any value below
+`PropertiesValidator.NOTIFICATION_LEASE_MARGIN` (2) `x max-attempts x (read-timeout + max-backoff)`
+- 72s at the shipped transport - unconditionally, because the way this breaks in practice is a
+deployment lengthening `read-timeout` and leaving the lease where it was.
+
+A renewal that is refused means the batch has been taken over, and the notifier that lost it **stops
+and writes nothing further**: no further POST, because the notifier that now holds the batch derives
+the same owed set from the same records; no row settlement and no batch settlement, because either
+would be written over that notifier's work. It answers `NotificationDisposition.CLAIM_LOST` with the
+rows and the state as they stood, counted on
+`courtregister_notifications_ignored_total{reason=claim-lost}` - apart from `already-notifying`,
+which is a notifier that never started, whereas this one told some of the teams. The rows it left
+unsettled stay under the identities they hold and are re-requested by a later run, whose POST reaches
+notificationnotify's own aggregate rather than asking for a second e-mail.
+
+Pinned by `RegisterBatchRepositoryIT.Claiming` (the store's half: the advisory lock and
+compare-and-set, the second notifier's refusal, the token-fenced release, the takeover past the lease,
+`…renewing_the_claim_should_extend_it_only_for_the_notifier_that_holds_it` and
+`…a_renewal_after_a_takeover_should_change_nothing_for_the_old_token`),
+`RegisterNotifierServiceTest.TwoNotifiersOnOneBatch` and `…TheClaimTakenOverMidCycle` (the service's
+half), and `ConfigurationValidationTest.NotificationLeaseAgainstOnePostCycle` (the startup rule). The
+claim is **not** defence enough on its own, which is why the row-level fences below exist too.
 
 **Supplementary batches for late re-shares (design Q27, decided 2026-09-06).** A same-day re-share
 recorded after its (court centre, register date) batch has been **sent** becomes a **supplementary

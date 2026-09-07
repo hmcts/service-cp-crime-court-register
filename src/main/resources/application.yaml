@@ -297,6 +297,32 @@ courtregister:
     fileservice-mode: LIVE
     flag-mode: LIVE
 
+  notification:
+    # How long the notifying leg's claim on a batch stays live, measured from its LAST RENEWAL. One
+    # notifier tells one batch's recipients at a time - the outcome sink on a delivered
+    # document-available and an operator's resend both derive the same owed set from the same
+    # records - and this is how long a notifier that has stopped renewing is given before something
+    # else may take the batch over.
+    #
+    # Its own setting rather than the reconciler's grace-period above, which answers a different
+    # question: how long a batch may hold a document before the safety net looks is no bound at all
+    # on telling that batch's recipients, whose cost is the number of Youth Offending Teams the
+    # batch is addressed to times whatever notificationnotify makes of each of them.
+    #
+    # The claim is renewed before each recipient's POST, before each row's settlement and before
+    # the batch's own, so what this has to cover is ONE RECIPIENT'S TURN and not a whole batch of
+    # them. Startup refuses any value below
+    #
+    #     2 x courtregister.endpoints.max-attempts
+    #           x (courtregister.endpoints.read-timeout + courtregister.endpoints.max-backoff)
+    #
+    # - the longest a single POST cycle can take, doubled as margin (PropertiesValidator
+    # .NOTIFICATION_LEASE_MARGIN). At the shipped transport that is 2 x 3 x (10s + 2s) = 72s, so
+    # fifteen minutes is generous; lengthening read-timeout or max-attempts without lengthening this
+    # is refused at startup rather than discovered as a Youth Offending Team sent one register
+    # twice.
+    claim-lease: 15m
+
   feature:
     # The App Configuration store this service reads the cutover flag from - the THIRD reader of one
     # flag, after the producer and the legacy. The job reads it once per run, with no cache, and

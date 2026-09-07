@@ -25,10 +25,11 @@ import org.springframework.stereotype.Component;
  *
  * <p>The downstream half is held to the same standard, and its failures are quieter still: a
  * schedule read in the wrong zone, a lock that expires before the run it locks is allowed to end, a
- * run with no payload store, no flag, no renderer or no notifier, an event-driven completion with
- * no broker to hear from, a stub reachable where registers are really produced, and a blank or
- * malformed e-mail template id (fix P9). None of them is discovered before 18:00, and by then the
- * night's registers are already not going out (research §11).
+ * notification claim whose lease cannot cover one recipient's POST cycle, a run with no payload
+ * store, no flag, no renderer or no notifier, an event-driven completion with no broker to hear
+ * from, a stub reachable where registers are really produced, and a blank or malformed e-mail
+ * template id (fix P9). None of them is discovered before 18:00, and by then the night's registers
+ * are already not going out (research §11).
  */
 @Component
 // The properties records are registered here, explicitly, rather than left to a scan: without them
@@ -86,6 +87,13 @@ public class PropertiesValidator implements InitializingBean {
      */
     private static final int CACHE_READS_PER_FETCH = 2;
 
+    /** The clients read the same keys, so each suffix is named once. */
+    private static final String INITIAL_BACKOFF_SUFFIX = ".initial-backoff";
+    private static final String MAX_BACKOFF_SUFFIX = ".max-backoff";
+    private static final String MAX_ATTEMPTS_SUFFIX = ".max-attempts";
+    private static final String READ_TIMEOUT_SUFFIX = ".read-timeout";
+    private static final String CONNECT_TIMEOUT_SUFFIX = ".connect-timeout";
+
     private static final String LEASE = "courtregister.claim.lease";
     private static final String PROCESSING_DEADLINE = "courtregister.claim.processing-deadline";
     private static final String RENEW_DURATION =
@@ -96,22 +104,18 @@ public class PropertiesValidator implements InitializingBean {
     private static final String PAYLOAD_MODE = PAYLOAD + ".mode";
     private static final String SYSTEM_USER_ID = "courtregister.results.system-user-id";
     private static final String FALLBACK = PAYLOAD + ".fallback";
-    private static final String FALLBACK_MAX_ATTEMPTS = FALLBACK + ".max-attempts";
+    private static final String FALLBACK_MAX_ATTEMPTS = FALLBACK + MAX_ATTEMPTS_SUFFIX;
     private static final String REDIS = PAYLOAD + ".redis";
-    private static final String CONNECT_TIMEOUT_SUFFIX = ".connect-timeout";
     private static final String REFDATA = "courtregister.referencedata";
     private static final String SUBSCRIPTIONS_MODE = REFDATA + ".mode";
     private static final String REFDATA_BASE_URL = REFDATA + ".base-url";
     private static final String REFDATA_SYSTEM_USER_ID = REFDATA + ".system-user-id";
-    private static final String REFDATA_MAX_ATTEMPTS = REFDATA + ".max-attempts";
+    private static final String REFDATA_MAX_ATTEMPTS = REFDATA + MAX_ATTEMPTS_SUFFIX;
     private static final String PROGRESSION = "courtregister.progression";
     private static final String PROGRESSION_BASE_URL = PROGRESSION + ".base-url";
     private static final String PROGRESSION_SYSTEM_USER_ID = PROGRESSION + ".system-user-id";
-    private static final String PROGRESSION_MAX_ATTEMPTS = PROGRESSION + ".max-attempts";
+    private static final String PROGRESSION_MAX_ATTEMPTS = PROGRESSION + MAX_ATTEMPTS_SUFFIX;
 
-    /** The three clients read the same two keys, so the two suffixes are named once. */
-    private static final String INITIAL_BACKOFF_SUFFIX = ".initial-backoff";
-    private static final String MAX_BACKOFF_SUFFIX = ".max-backoff";
     private static final String VALIDATE_OUTBOUND = "courtregister.submission.validate-outbound";
 
     private static final String GENERATION = "courtregister.generation";
@@ -123,6 +127,11 @@ public class PropertiesValidator implements InitializingBean {
     private static final String FILESERVICE_URL = "courtregister.fileservice.url";
     private static final String FEATURE_ENDPOINT = "courtregister.feature.endpoint";
     private static final String FEATURE_LABEL = "courtregister.feature.label";
+    private static final String ENDPOINTS = "courtregister.endpoints";
+    private static final String ENDPOINTS_MAX_ATTEMPTS = ENDPOINTS + MAX_ATTEMPTS_SUFFIX;
+    private static final String ENDPOINTS_READ_TIMEOUT = ENDPOINTS + READ_TIMEOUT_SUFFIX;
+    private static final String NOTIFICATION_CLAIM_LEASE =
+            "courtregister.notification.claim-lease";
     private static final String SDG_ENDPOINT = "courtregister.endpoints.systemdocgenerator";
     private static final String NN_ENDPOINT = "courtregister.endpoints.notificationnotify";
     private static final String EMAIL_TEMPLATE = "courtregister.email.templates.cr_standard";
@@ -217,6 +226,7 @@ public class PropertiesValidator implements InitializingBean {
         validate(properties);
         generation.validate();
         validateTheSchedulerLockOutlivesTheRun(generation);
+        validateTheNotificationClaimOutlastsOnePostCycle(properties);
         feature.validate();
         validateTheStubsAreNotWhereRegistersAreProduced(properties, generation);
         validateGenerationHasTheDownstreamsItNeeds(properties, generation, feature);
@@ -353,7 +363,7 @@ public class PropertiesValidator implements InitializingBean {
         }
         validateTheBackOffIsUsable(FALLBACK, fallback.initialBackoff(), fallback.maxBackoff());
         requirePositive(fallback.connectTimeout(), FALLBACK + CONNECT_TIMEOUT_SUFFIX);
-        requirePositive(fallback.readTimeout(), FALLBACK + ".read-timeout");
+        requirePositive(fallback.readTimeout(), FALLBACK + READ_TIMEOUT_SUFFIX);
     }
 
     /**
@@ -501,7 +511,7 @@ public class PropertiesValidator implements InitializingBean {
         validateTheBackOffIsUsable(
                 REFDATA, referencedata.initialBackoff(), referencedata.maxBackoff());
         requirePositive(referencedata.connectTimeout(), REFDATA + CONNECT_TIMEOUT_SUFFIX);
-        requirePositive(referencedata.readTimeout(), REFDATA + ".read-timeout");
+        requirePositive(referencedata.readTimeout(), REFDATA + READ_TIMEOUT_SUFFIX);
     }
 
     /**
@@ -591,7 +601,7 @@ public class PropertiesValidator implements InitializingBean {
         validateTheBackOffIsUsable(
                 PROGRESSION, progression.initialBackoff(), progression.maxBackoff());
         requirePositive(progression.connectTimeout(), PROGRESSION + CONNECT_TIMEOUT_SUFFIX);
-        requirePositive(progression.readTimeout(), PROGRESSION + ".read-timeout");
+        requirePositive(progression.readTimeout(), PROGRESSION + READ_TIMEOUT_SUFFIX);
     }
 
     /**
@@ -787,6 +797,56 @@ public class PropertiesValidator implements InitializingBean {
                             + SCHEDULER_LOCK_MARGIN + " margin (" + required + "), so a run still"
                             + " inside its hour cannot be joined by the replica that took the lock"
                             + " it had already lost");
+        }
+    }
+
+    /**
+     * The notifying leg's claim has to outlast one recipient's POST cycle, twice over.
+     *
+     * <p>The notification claim's lease bounds work whose length it cannot know from itself: a batch
+     * is addressed to as many Youth Offending Teams as subscribed to its court centre, and each of
+     * them costs up to {@code max-attempts} POSTs with a read timeout and a back-off wait apiece.
+     * The claim is renewed before every POST and before every write, so what the lease has to cover
+     * is one recipient's turn - and a lease shorter than that expires under a notifier still waiting
+     * on a socket, after which a second notifier takes the batch over, derives the same owed set
+     * from the same records, and a Youth Offending Team is sent a register about children twice.
+     *
+     * <p>The formula is therefore the transport's own worst case for one recipient,
+     * {@code max-attempts x (read-timeout + max-backoff)}, times
+     * {@link #NOTIFICATION_LEASE_MARGIN} as margin. {@code max-backoff} rather than the doubling
+     * schedule, for the reason {@link #backOffWorstCase} gives: a {@code Retry-After} is honoured on
+     * every retryable answer and the ceiling is the only thing bounding what the other side can ask
+     * for.
+     *
+     * <p>Unconditional, like the zone and scheduler-lock rules: a job that happens to be disabled in
+     * this deployment is not a reason to accept a lease that cannot cover a POST cycle in the next
+     * one. And in practice the rule is broken from the other side - nobody sets a short lease
+     * deliberately, but a deployment that gives notificationnotify five minutes to answer has
+     * quietly made the shipped lease too short.
+     *
+     * @param properties the bound settings, for the lease and the transport it is measured against
+     * @throws IllegalStateException if the lease cannot cover one POST cycle twice over
+     */
+    private static void validateTheNotificationClaimOutlastsOnePostCycle(
+            final CourtRegisterProperties properties) {
+
+        final CourtRegisterProperties.Endpoints endpoints = properties.endpoints();
+        final Duration onePostCycle = endpoints.readTimeout()
+                .plus(endpoints.maxBackoff())
+                .multipliedBy(endpoints.maxAttempts());
+        final Duration required = onePostCycle.multipliedBy(NOTIFICATION_LEASE_MARGIN);
+        final Duration lease = properties.notification().claimLease();
+        if (lease.compareTo(required) < 0) {
+            throw new IllegalStateException(
+                    NOTIFICATION_CLAIM_LEASE + " (" + lease + MUST_BE_AT_LEAST
+                            + NOTIFICATION_LEASE_MARGIN + " x " + ENDPOINTS_MAX_ATTEMPTS + " ("
+                            + endpoints.maxAttempts() + ") x (" + ENDPOINTS_READ_TIMEOUT + " ("
+                            + endpoints.readTimeout() + ") plus " + ENDPOINTS + MAX_BACKOFF_SUFFIX
+                            + " (" + endpoints.maxBackoff() + ")) - the longest a single POST cycle"
+                            + " can take (" + onePostCycle + "), doubled as margin (" + required
+                            + "). A shorter lease expires under a notifier still waiting on one"
+                            + " recipient's POST, and the notifier that then takes the batch over"
+                            + " sends that court centre's register a second time");
         }
     }
 

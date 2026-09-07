@@ -229,7 +229,31 @@ public class RegisterBatchRepository {
                     OR notifying_since < now() - CAST(:lease AS interval))
             """;
 
-    /** Statement 9 - the claim given back, by the notifier whose token it was taken under. */
+    /**
+     * Statement 9 - the claim kept alive, by the notifier whose token it was taken under.
+     *
+     * <p>The ownership re-check and the lease extension are one statement because they are one
+     * question asked at one moment: a notifier about to POST for a recipient, or about to write what
+     * a POST answered, needs to know the claim is still its own and needs the lease to cover what it
+     * is about to do. Two statements would leave a window between the answer and the work, which is
+     * the window the whole claim exists to close.
+     *
+     * <p>Fenced on the token for the reason the release is: a renewal keyed on the batch alone would
+     * let a notifier whose claim had already been taken over extend the claim of the notifier that
+     * took it, and carry on posting believing the batch was still its own.
+     *
+     * <p>{@code now()} rather than an interval added to what the row holds, so the lease is dated by
+     * the database exactly as the claim is - a JVM clock that had drifted would otherwise decide how
+     * long a claim lives.
+     */
+    private static final String RENEW_NOTIFICATION_CLAIM = """
+            UPDATE register_batch
+               SET notifying_since = now()
+             WHERE batch_id = :batchId
+               AND notifier_token = :token
+            """;
+
+    /** Statement 10 - the claim given back, by the notifier whose token it was taken under. */
     private static final String RELEASE_NOTIFICATION_CLAIM = """
             UPDATE register_batch
                SET notifying_since = NULL,
@@ -252,7 +276,10 @@ public class RegisterBatchRepository {
      */
     private final TransactionOperations transactions;
 
-    /** How long a notification claim stays live before another notifier may take it over. */
+    /**
+     * How long a notification claim stays live, measured from the last renewal, before another
+     * notifier may take it over.
+     */
     private final Duration notifierLease;
 
     /**
@@ -260,11 +287,15 @@ public class RegisterBatchRepository {
      *
      * @param jdbcClient    the register store's connection
      * @param transactionOperations the transaction the claim's two statements are taken in together
-     * @param notificationClaimLease how long a notification claim stays live. The grace period the
-     *                      reconciler already waits before it treats a GENERATED batch as parked,
-     *                      because the two answer the same question: this is how long a notifier is
-     *                      given to finish before something else may pick the batch up, and that is
-     *                      how long the safety net waits before it looks
+     * @param notificationClaimLease how long a notification claim stays live, measured from the
+     *                      last renewal: {@code courtregister.notification.claim-lease}, the
+     *                      notifying leg's own setting. Not the reconciler's grace period, which
+     *                      answers a different question - how long a batch may hold a document
+     *                      before the safety net looks is no bound at all on telling a batch's
+     *                      recipients, whose cost is the number of Youth Offending Teams it is
+     *                      addressed to times what notificationnotify makes of each of them. What
+     *                      this has to cover is one recipient's turn, because
+     *                      {@link #renewNotificationClaim(UUID, UUID)} is asked before every one
      */
     public RegisterBatchRepository(final JdbcClient jdbcClient,
             final TransactionOperations transactionOperations,
@@ -429,7 +460,8 @@ public class RegisterBatchRepository {
     }
 
     /**
-     * Keeps this notifier's claim alive, and says whether it is still this notifier's.
+     * Statement 9 - keeps this notifier's claim alive, and says whether it is still this
+     * notifier's.
      *
      * <p>Asked before every POST the cycle makes and before every write it makes about one, because
      * the two things it answers are wanted at exactly those moments: that the batch is still this
@@ -445,14 +477,15 @@ public class RegisterBatchRepository {
      * @return whether the claim is still this notifier's
      */
     public boolean renewNotificationClaim(final UUID batchId, final UUID token) {
-        // The statement above is what answers this, and it arrives with the notification lease it
-        // extends. Until then the honest seam is the fail-safe answer - a notifier told the claim is
-        // not its own stops - so the cases waiting on it record a failing assertion.
-        return StoreOutage.translating("renew a batch's notification claim", () -> false);
+        return StoreOutage.translating("renew a batch's notification claim",
+                () -> jdbcClient.sql(RENEW_NOTIFICATION_CLAIM)
+                        .param(BATCH_ID, batchId)
+                        .param(TOKEN, token)
+                        .update() > 0);
     }
 
     /**
-     * Statement 9 - releases a notification claim this notifier holds.
+     * Statement 10 - releases a notification claim this notifier holds.
      *
      * <p>Fenced on the token, so a notifier whose claim was reclaimed while it was working releases
      * nothing: the claim it would be giving back is the one the notifier that took it over is

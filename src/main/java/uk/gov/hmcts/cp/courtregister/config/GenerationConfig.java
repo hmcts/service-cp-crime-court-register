@@ -66,18 +66,26 @@ public class GenerationConfig {
      * connection this client already joins. It is the only thing here that needs a transaction at
      * all; every other statement is one statement.
      *
+     * <p>The lease is {@code courtregister.notification.claim-lease} and not the reconciler's grace
+     * period. The two answer different questions: how long a batch may hold a document before the
+     * safety net looks is no bound at all on telling that batch's recipients, whose cost is the
+     * number of Youth Offending Teams it is addressed to times whatever notificationnotify makes of
+     * each of them. Startup refuses a lease that cannot cover one recipient's POST cycle twice over
+     * ({@link PropertiesValidator#NOTIFICATION_LEASE_MARGIN}).
+     *
      * @param jdbcClient         the processed log's client, which is the register store's
      * @param transactionManager the register store's transaction manager, for the claim's two
      *                           statements
-     * @param generation         the nightly job's settings, for the claim lease
+     * @param properties         the bound settings, for the notification claim's lease
      * @return the repository
      */
     @Bean
     public RegisterBatchRepository registerBatchRepository(final JdbcClient jdbcClient,
             final PlatformTransactionManager transactionManager,
-            final GenerationProperties generation) {
+            final CourtRegisterProperties properties) {
         return new RegisterBatchRepository(jdbcClient,
-                new TransactionTemplate(transactionManager), generation.gracePeriod());
+                new TransactionTemplate(transactionManager),
+                properties.notification().claimLease());
     }
 
     /**
