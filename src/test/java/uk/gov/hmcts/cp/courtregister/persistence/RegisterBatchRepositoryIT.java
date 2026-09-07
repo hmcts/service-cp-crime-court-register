@@ -70,6 +70,30 @@ class RegisterBatchRepositoryIT {
     private static final String OU_CODE = "B01LY00";
     private static final String COURT_HOUSE = "Lavender Hill Youth Court";
 
+    /**
+     * A second court house of the same date, sorting after the first.
+     *
+     * <p>A person reading a national date reads it a court house at a time, so what the listing is
+     * ordered by has to be visible: two names that sort the other way round from the order the rows
+     * are written in.
+     */
+    private static final String OTHER_COURT_HOUSE = "Wimbledon Youth Court";
+
+    /**
+     * Two batches of one court house, minted rather than random, so the tie-break is knowable.
+     *
+     * <p>The identity breaks the tie a date's several batches for one court house would otherwise
+     * leave to the planner, and a case whose identities were random could not say which of them
+     * should come first.
+     */
+    private static final UUID EARLIER_IDENTITY =
+            UUID.fromString("0a1c4e73-2b58-4d96-8f20-6c7b3d915e48");
+    private static final UUID LATER_IDENTITY =
+            UUID.fromString("f0b62d84-51ae-4c37-9b18-2e5d7a4c0f19");
+
+    /** A date this suite writes no batch for, so a listing of it is a listing of nothing. */
+    private static final LocalDate WEDNESDAY = LocalDate.of(2026, 8, 26);
+
     /** systemdocgenerator's own words, kept for support and never logged at INFO. */
     private static final String SDG_REASON = "template OEE_Layout5 rendered no pages";
 
@@ -732,6 +756,112 @@ class RegisterBatchRepositoryIT {
                             + "wrong and not a claim it lost")
                     .isEqualTo(NotificationClaim.ABSENT);
         }
+    }
+
+    /**
+     * The listing behind {@code list-batches --date D}, which is the one read here asked by a date.
+     *
+     * <p>A support call is about a date, and the identities of that date's batches are exactly what
+     * the caller is asking to be told - so this is the only read in this class not asked by the
+     * identity every outcome is attributed by, and the only one whose <em>order</em> is part of what
+     * it answers.
+     *
+     * <p>Court house then identity, and the order is the statement's rather than the listing's:
+     * output a person compares between two runs has to be stable, and a planner free to choose would
+     * reorder a date's several batches for one court house between one run and the next.
+     */
+    @Nested
+    @DisplayName("the batches of one register date")
+    class DateListing {
+
+        @Test
+        void a_dates_batches_should_come_back_court_house_then_identity() {
+            // Written in none of the orders the read must answer in: the later court house first,
+            // and the later identity of the earlier court house before it.
+            final RegisterBatch otherHouse = failed(UUID.randomUUID(), OTHER_COURT_HOUSE);
+            final RegisterBatch later = failed(LATER_IDENTITY, COURT_HOUSE);
+            final RegisterBatch earlier = listed(EARLIER_IDENTITY, COURT_HOUSE);
+
+            assertThat(findByRegisterDate(MONDAY))
+                    .as("a person reads a national date a court house at a time, and the identity "
+                            + "breaks the tie a date's several batches for one court house would "
+                            + "otherwise leave to the planner")
+                    .containsExactly(earlier, later, otherHouse);
+        }
+
+        @Test
+        void another_dates_batches_should_not_be_among_them() {
+            final RegisterBatch monday = listed(UUID.randomUUID(), COURT_HOUSE);
+            repository.insert(assembled(TUESDAY));
+
+            assertThat(findByRegisterDate(MONDAY))
+                    .as("the operator asked about one date; the next day's batch listed beside it "
+                            + "is a state they would act on for a register nobody was asking about")
+                    .containsExactly(monday);
+        }
+
+        @Test
+        void a_date_this_service_assembled_nothing_for_should_be_listed_as_holding_nothing() {
+            listed(UUID.randomUUID(), COURT_HOUSE);
+
+            assertThat(findByRegisterDate(WEDNESDAY))
+                    .as("a date nothing was assembled for holds nothing to list, and the command "
+                            + "says so rather than falling back to whatever the table does hold")
+                    .isEmpty();
+        }
+    }
+
+    /**
+     * One batch of this case's court centre for the Monday, inserted and left at PENDING.
+     *
+     * @param batchId    the identity the listing's tie-break is decided on
+     * @param courtHouse the court house the listing is ordered by
+     * @return the batch as the listing should return it
+     */
+    private RegisterBatch listed(final UUID batchId, final String courtHouse) {
+        final RegisterBatch pending = new RegisterBatch(batchId, courtCentre, OU_CODE, courtHouse,
+                MONDAY, fileName(MONDAY), null, null, BatchStatus.PENDING, null, null, true, null,
+                ASSEMBLED_AT, null, null, null, null, 0, null, 0);
+        repository.insert(pending);
+        return pending;
+    }
+
+    /**
+     * The same batch failed under a reason nobody outside this service reported.
+     *
+     * <p>Terminal, so the date may hold more than one of them: {@code idx_register_batch_live_key}
+     * admits a single PENDING, GENERATING or GENERATED batch per court centre and date, and a
+     * listing of one batch could not say what it is ordered by.
+     *
+     * @param batchId    the identity the listing's tie-break is decided on
+     * @param courtHouse the court house the listing is ordered by
+     * @return the batch as the listing should return it
+     */
+    private RegisterBatch failed(final UUID batchId, final String courtHouse) {
+        final RegisterBatch pending = listed(batchId, courtHouse);
+        final RegisterBatch failed = new RegisterBatch(batchId, courtCentre, OU_CODE, courtHouse,
+                MONDAY, pending.fileName(), null, null, BatchStatus.FAILED,
+                BatchFailureReason.RENDER_REQUEST_REJECTED, null, true, null, ASSEMBLED_AT, null,
+                null, null, FAILED_AT, 0, null, 0);
+        repository.compareAndSet(failed, BatchStatus.PENDING);
+        return failed;
+    }
+
+    /**
+     * The date listing, narrowed to the case that asked.
+     *
+     * <p>Made through {@code assertThatCode} for the reason {@link #pendingSince(Instant)} is: a
+     * seam's refusal is recorded as a failing assertion rather than as the exception it is.
+     *
+     * @param registerDate the register date whose batches are wanted
+     * @return this case's batches for that date, in the order the statement answered
+     */
+    private List<RegisterBatch> findByRegisterDate(final LocalDate registerDate) {
+        final AtomicReference<List<RegisterBatch>> answered = new AtomicReference<>(List.of());
+        assertThatCode(() -> answered.set(repository.findByRegisterDate(registerDate)))
+                .as("the operations CLI's listing implements this read; this is its red run")
+                .doesNotThrowAnyException();
+        return mine(answered.get());
     }
 
     /** A batch inserted and left at PENDING, for the cases that then walk it forward. */
