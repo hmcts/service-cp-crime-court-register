@@ -159,9 +159,30 @@ attributable, and leaves the nightly job able to send them without being asked.
 | `status` | `text NOT NULL` | `PENDING` → `ACCEPTED` \| `FAILED` |
 | `response_code` | `int` | |
 | `sent_at` | `timestamptz` | |
-| `attempts` | `int NOT NULL DEFAULT 0` | |
+| `attempts` | `int NOT NULL DEFAULT 0` | Accumulates the POSTs made for the row, not the runs that made them: a transient refusal retried inside one call adds each attempt |
 
 Constraint: `UNIQUE (batch_id, email_address)`.
+
+**PENDING is unsettled, not untouched.** The row is minted PENDING before the POST and settled
+after it, so a run that stopped in between - the pod died, the store blipped on the update, the
+listener's session rolled the JMS delivery back after the JDBC mark had already committed - leaves a
+row that cannot say whether the e-mail was asked for. Both entry points therefore treat it as owed:
+`RegisterNotifierService.resendFailed` and the `notify-register` CLI re-request every row whose
+`status <> 'ACCEPTED'` (`RegisterNotificationRepository.findUnsettledByBatchId`), and `notify` mints
+only for the addresses the batch holds no row for, so it can be run again at all - minting for every
+recipient a second time is what `UNIQUE (batch_id, email_address)` refuses. An ambiguous downstream
+outcome is retried, and the retry is safe because it goes out under the `notification_id` the row
+already holds: NN keys its aggregate on it, so the second POST reaches the attempt it is retrying
+(§10). Pinned by `RegisterNotifierServiceTest.RecoveringAnUnsettledRow` and
+`RegisterNotificationRepositoryIT
+.reading_the_resendable_recipients_should_answer_with_every_row_never_accepted`.
+
+**A transient refusal is retried before the row is settled.** A 408, 429 or 5xx, or a transport
+failure, is asked again up to `courtregister.endpoints.max-attempts` under the same
+`notification_id` with the shared `RetryPolicy`'s back-off, and only then FAILED with the last
+status; a NON_TRANSIENT refusal is settled on the first attempt (research §11,
+`RegisterNotifierServiceTest.RetryingWhatMayAnswerDifferently`). No deadline bounds it: the
+notifying leg holds no claim, so the attempt budget and `max-backoff` are what do.
 
 ## `shedlock`
 
@@ -207,9 +228,22 @@ PENDING ──payload stored + 202──▶ GENERATING ──document-available�
                                                     | FAILED(GENERATION_FAILED
                                                             | GENERATION_TIMED_OUT
                                                             | RENDER_REQUEST_FAILED)
-PARTIALLY_NOTIFIED ──notify-register --batch (resend FAILED only)──▶ NOTIFIED
+PARTIALLY_NOTIFIED ──notify-register --batch (resend the rows never ACCEPTED)──▶ NOTIFIED
+GENERATED ──grace period, rows unsettled──▶ (reported on courtregister_oldest_generated_age)
+          ──notify-register --batch | notify(batchId) again──▶ NOTIFIED | PARTIALLY_NOTIFIED
 FAILED ──generate-register --batch (new batch_id)──▶ PENDING
 ```
+
+**The batch parked at GENERATED, and why it has a reading of its own.** Notification follows
+`markGenerated` in one step of one code path, so a store that went away in between - or a listener
+session that rolled the delivery back after that mark had committed - leaves the batch holding its
+document with rows nothing settled. `generatingSince` reads GENERATING and `pendingSince` reads
+PENDING, so until `courtregister_oldest_generated_age` existed the one state that leaves a Youth
+Offending Team untold was the one state no gauge moved for - P1's failure mode by another route. The
+reconciler takes that reading from a third read (`RegisterBatchRepository.generatedSince`, statement
+5) and settles nothing there: the document exists, so the batch is owed its e-mails and both
+`resendFailed` and `notify` are re-entrant and send exactly those, while failing it would throw the
+document away.
 
 **The last arrow out of PENDING, and why it is drawn.** `RegisterGenerationService.storeAndRequest`
 mints the payload id, writes it down (`markPayloadMinted`), stores the payload, POSTs, and only then
@@ -229,7 +263,8 @@ the request did reach the renderer and the renderer is what has not come back: F
 with the same empty answer is failed. No record of the payload at all is the only shape that shows
 the request never arrived: FAILED **`RENDER_REQUEST_FAILED`** with `completed_by` NULL - this
 service's own verdict about a request it cannot show was ever accepted. Their age is published on
-`courtregister_oldest_pending_age`, the fifth gauge.
+`courtregister_oldest_pending_age`, the fifth gauge; the batch parked at GENERATED is on
+`courtregister_oldest_generated_age`, the seventh.
 
 `PENDING → GENERATED` is therefore a drawn arrow rather than a batch skipping GENERATING: the render
 really was accepted and the mark that says so is what was lost, and refusing the move would throw
