@@ -216,7 +216,6 @@ class RegisterNotifierServiceTest {
         doAnswer(this::mint).when(notifications).insert(any());
         doAnswer(this::settle).when(notifications).update(any());
         doAnswer(this::rowsOf).when(notifications).findByBatchId(any());
-        doAnswer(this::failedRowsOf).when(notifications).findFailedByBatchId(any());
         doAnswer(this::unsettledRowsOf).when(notifications).findUnsettledByBatchId(any());
         doAnswer(this::recordSettlement).when(store).markNotified(any(), any());
         doAnswer(this::acceptThePost).when(notifier).send(any(), any(), any());
@@ -397,12 +396,6 @@ class RegisterNotifierServiceTest {
 
     private Object rowsOf(final InvocationOnMock invocation) {
         return rows(invocation.getArgument(0)).toList();
-    }
-
-    private Object failedRowsOf(final InvocationOnMock invocation) {
-        return rows(invocation.getArgument(0))
-                .filter(row -> row.status() == NotificationStatus.FAILED)
-                .toList();
     }
 
     private Object unsettledRowsOf(final InvocationOnMock invocation) {

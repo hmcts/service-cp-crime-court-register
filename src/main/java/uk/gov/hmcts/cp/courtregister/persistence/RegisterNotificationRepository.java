@@ -58,9 +58,25 @@ public class RegisterNotificationRepository {
              ORDER BY email_address
             """;
 
-    /** Statement 3 - the recipient rows a resend attempts, which are only the failed ones. */
-    private static final String FIND_FAILED_BY_BATCH_ID = SELECT_NOTIFICATION + """
-             WHERE batch_id = :batchId AND status = 'FAILED'
+    /**
+     * Statement 3 - the recipient rows a resend attempts, which are the ones never accepted.
+     *
+     * <p>PENDING as well as FAILED, because the two are the same debt. A row is minted PENDING
+     * before its POST and settled after it, so a run that stopped in between - the pod died, the
+     * store blipped on the settlement, the listener's session rolled the delivery back after the
+     * mark had committed - leaves a row that cannot say whether the e-mail was asked for. Reading
+     * only the refusals left such a row untouched for ever: nothing re-requests it, the batch is
+     * settled PARTIALLY_NOTIFIED against a team that can never be told, and {@code notify} cannot
+     * be run again because it would mint a second row for every address
+     * {@code UNIQUE (batch_id, email_address)} refuses. An ambiguous outcome is retried
+     * (constitution's Idempotency bullet), and it is safe to retry because the retry goes out under
+     * the identity the row already holds.
+     *
+     * <p>ACCEPTED is the only state left out, and it is the whole selection: a team that was told
+     * is not told twice.
+     */
+    private static final String FIND_UNSETTLED_BY_BATCH_ID = SELECT_NOTIFICATION + """
+             WHERE batch_id = :batchId AND status <> 'ACCEPTED'
              ORDER BY email_address
             """;
 
@@ -120,30 +136,20 @@ public class RegisterNotificationRepository {
     }
 
     /**
-     * Statement 3 - the recipient rows of a batch that ended FAILED.
+     * Statement 3 - the recipient rows of a batch that notificationnotify never accepted.
      *
-     * @param batchId the batch
-     * @return its failed notification rows, each under the identity it was first attempted with
-     */
-    public List<RegisterNotification> findFailedByBatchId(final UUID batchId) {
-        return jdbcClient.sql(FIND_FAILED_BY_BATCH_ID)
-                .param(BATCH_ID, batchId)
-                .query((rs, rowNumber) -> notification(rs))
-                .list();
-    }
-
-    /**
-     * The recipient rows of a batch that were never accepted, whichever way they were left.
-     *
-     * <p>A compile-safe seam over {@link #findFailedByBatchId(UUID)} so that the cases guarding the
-     * widening read fail on their assertions rather than on a missing method. The paired fix gives
-     * it a statement of its own that also answers the PENDING rows.
+     * <p>FAILED and PENDING alike: a refusal and an attempt that reached no verdict are the same
+     * debt to the same team, and only the row's own identity makes re-requesting either of them
+     * safe.
      *
      * @param batchId the batch
      * @return its unsettled notification rows, each under the identity it was first attempted with
      */
     public List<RegisterNotification> findUnsettledByBatchId(final UUID batchId) {
-        return findFailedByBatchId(batchId);
+        return jdbcClient.sql(FIND_UNSETTLED_BY_BATCH_ID)
+                .param(BATCH_ID, batchId)
+                .query((rs, rowNumber) -> notification(rs))
+                .list();
     }
 
     /**

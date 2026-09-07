@@ -1,7 +1,10 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
 import java.time.Clock;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.OptionalInt;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -45,9 +48,20 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * would have reported had everybody been e-mailed.
  *
  * <p>{@link #resendFailed} is the second half of that honesty: a PARTIALLY_NOTIFIED batch keeps its
- * FAILED rows under the identities they were first attempted with, so a resend re-requests those
+ * unsettled rows under the identities they were first attempted with, so a resend re-requests those
  * rows and no others - the teams that were told are not told twice - and the batch reaches NOTIFIED
  * when the last of them is accepted.
+ *
+ * <p><strong>Unsettled means FAILED or PENDING, and both halves of this class are re-entrant.</strong>
+ * A run that stopped between the 202 and the settlement - the pod died, the store blipped on the
+ * update, the listener's session rolled the delivery back after the mark had already committed -
+ * leaves a row that cannot say whether the e-mail was asked for. An ambiguous downstream outcome is
+ * retried (constitution's Idempotency bullet), and it is safe to retry because the retry goes out
+ * under the id the row already holds. So {@link #resendFailed} re-requests the PENDING rows beside
+ * the FAILED ones, and {@link #notify} mints only for the addresses this batch holds no row for,
+ * which is what makes a second notify possible at all: {@code UNIQUE (batch_id, email_address)}
+ * refuses a second row per address, so a notify that minted for every recipient could be run
+ * exactly once - and the run it was run in is the one that may have stopped half way.
  *
  * <p><strong>The tally is read off the table rather than counted in flight</strong>, and the same
  * read serves both methods: a resend's verdict is about the batch as it now stands, in which the
@@ -60,7 +74,10 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * be made at all - the store went away mid-run - is left standing at GENERATED with the failure
  * reported by whoever drove the outcome, which is what {@code notify-register --batch} exists for:
  * a redelivered {@code document-available} is recognised rather than re-applied, so it is not a
- * second chance to send.
+ * second chance to send. That batch is visible while it stands there -
+ * {@code courtregister_oldest_generated_age} is the reading that says a batch has held its document
+ * since before anybody was worried - and either entry point recovers it, because both are
+ * re-entrant.
  *
  * <p>Every line this service writes carries ids, counts and bounded codes. A recipient's address and
  * name never reach a log at INFO or above and never a metric label (constitution Principle VII);
@@ -168,25 +185,30 @@ public class RegisterNotifierService {
             final UUID documentFileId = documentOf(batch);
             LOG.info("Batch {} is addressed to {} recipients, each with a row minted before "
                     + "anything is asked of notificationnotify.", batchId, recipients.size());
-            tell(mint(batchId, recipients), documentFileId);
+            tell(owedRows(batchId, recipients), documentFileId);
         }
         return settle(batch);
     }
 
     /**
-     * Re-requests only the recipients whose e-mail ended FAILED, under the identities they already
-     * hold.
+     * Re-requests the recipients whose e-mail was never accepted, under the identities they hold.
+     *
+     * <p>FAILED and PENDING alike, because the two are the same debt to the same team: a row minted
+     * by a run that stopped before it could settle cannot say whether the e-mail was asked for, and
+     * an ambiguous outcome is retried rather than left standing. The retry is safe for the reason
+     * every retry here is safe - it goes out under the notification id the row already holds, so it
+     * reaches notificationnotify's own aggregate instead of asking for a second e-mail.
      *
      * @param batchId the batch to resend for
      * @return the tally over the whole batch as it now stands, and the terminal state that produces
      */
     public NotificationSummary resendFailed(final UUID batchId) {
         final RegisterBatch batch = batchOf(batchId);
-        final List<RegisterNotification> owed = notifications.findFailedByBatchId(batchId);
+        final List<RegisterNotification> owed = notifications.findUnsettledByBatchId(batchId);
 
         if (owed.isEmpty()) {
-            LOG.info("Batch {} has no failed recipient to re-request, so nothing is sent and the "
-                    + "batch is settled on the rows it already holds.", batchId);
+            LOG.info("Batch {} has no unsettled recipient to re-request, so nothing is sent and "
+                    + "the batch is settled on the rows it already holds.", batchId);
         } else {
             LOG.info("Batch {} is owed {} e-mails, each re-requested under the identity its row "
                     + "was minted with so that it reaches the attempt it is retrying.",
@@ -197,27 +219,63 @@ public class RegisterNotifierService {
     }
 
     /**
-     * Mints one PENDING row per recipient, before anything is asked of notificationnotify.
+     * The rows this run has to post for: one per recipient, minted where the batch holds none yet.
      *
      * <p>The identity is minted here and persisted here, and it is the whole reason this happens
-     * first: it is the path parameter of {@code POST /notifications/{notificationId}} and the key of
-     * notificationnotify's own aggregate, so a row written after the call would be evidence of an
-     * e-mail this service could no longer name.
+     * before any POST: it is the path parameter of {@code POST /notifications/{notificationId}} and
+     * the key of notificationnotify's own aggregate, so a row written after the call would be
+     * evidence of an e-mail this service could no longer name.
+     *
+     * <p><strong>And it is minted only where there is no row already</strong>, which is what makes
+     * a second {@code notify} over the same batch possible at all. {@code UNIQUE (batch_id,
+     * email_address)} refuses a second row for an address, so a notify that minted for every
+     * recipient could be run exactly once - and the run it was run in is the one that may have
+     * stopped half way, leaving rows PENDING that nothing would ever ask about again. A recipient
+     * that already has a row keeps it: what was sent, and to whom, was decided when that row was
+     * written.
+     *
+     * <p>A row already ACCEPTED is not returned. The team it belongs to has been told, and telling
+     * it again would be a second register about the same children.
      *
      * @param batchId    the batch these recipients are being told about
      * @param recipients the batch's recipients, de-duplicated by address
-     * @return the rows as they were written, in the order the addresses were first seen
+     * @return the rows still owed an e-mail, in the order the addresses were first seen
      */
-    private List<RegisterNotification> mint(final UUID batchId,
+    private List<RegisterNotification> owedRows(final UUID batchId,
             final List<CourtRegisterRecipient> recipients) {
 
-        final List<RegisterNotification> rows = recipients.stream()
-                .map(recipient -> new RegisterNotification(UUID.randomUUID(), batchId,
-                        recipient.emailAddress1(), recipient.recipientName(), TEMPLATE_NAME,
-                        templateId, NotificationStatus.PENDING, null, null, NO_ATTEMPTS_YET))
-                .toList();
-        rows.forEach(notifications::insert);
-        return rows;
+        final Map<String, RegisterNotification> held = new LinkedHashMap<>();
+        for (final RegisterNotification row : notifications.findByBatchId(batchId)) {
+            held.put(row.emailAddress(), row);
+        }
+        final List<RegisterNotification> owed = new ArrayList<>(recipients.size());
+
+        for (final CourtRegisterRecipient recipient : recipients) {
+            final RegisterNotification row = held.computeIfAbsent(recipient.emailAddress1(),
+                    address -> mint(batchId, address, recipient.recipientName()));
+            if (row.status() != NotificationStatus.ACCEPTED) {
+                owed.add(row);
+            }
+        }
+        return owed;
+    }
+
+    /**
+     * Mints one recipient's PENDING row and writes it down, before anything is asked for it.
+     *
+     * @param batchId       the batch this recipient is being told about
+     * @param emailAddress  the address the e-mail goes to
+     * @param recipientName the name the template greets, where the subscription named one
+     * @return the row as it was written, carrying the identity its POST will be made under
+     */
+    private RegisterNotification mint(final UUID batchId, final String emailAddress,
+            final String recipientName) {
+
+        final RegisterNotification row = new RegisterNotification(UUID.randomUUID(), batchId,
+                emailAddress, recipientName, TEMPLATE_NAME, templateId, NotificationStatus.PENDING,
+                null, null, NO_ATTEMPTS_YET);
+        notifications.insert(row);
+        return row;
     }
 
     /**
