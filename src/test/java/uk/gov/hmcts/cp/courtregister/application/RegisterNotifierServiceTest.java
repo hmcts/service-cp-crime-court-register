@@ -1593,7 +1593,8 @@ class RegisterNotifierServiceTest {
      * second register about the same children.
      *
      * <p>Counted on its own bounded reason, and not on the loser-of-the-claim's: that reading is a
-     * notifier that never started, and this is one that told some of the teams. It is the number
+     * notifier that never got the claim, and this is one that held it and began the cycle, having
+     * posted for zero or more of the teams. It is the number
      * {@code courtregister.notification.claim-lease} is raised on.
      */
     @Nested
@@ -1934,8 +1935,9 @@ class RegisterNotifierServiceTest {
      *
      * <p>So an absent settlement row is a cycle that cannot be finished: it stops, gives the claim
      * back and settles nothing, and the batch stays GENERATED with whatever rows are settled -
-     * which is a state {@code notify-register --batch} and the reconciler both recover, and which
-     * {@code courtregister_oldest_generated_age} makes visible while it stands there.
+     * which is a state the next notification asked of the batch recovers (an operator's
+     * {@code notify-register --batch}, or the next notify call); the reconciler only reports and
+     * ages it, and {@code courtregister_oldest_generated_age} makes it visible while it stands.
      */
     @Nested
     @DisplayName("the settlement row the store has lost")
