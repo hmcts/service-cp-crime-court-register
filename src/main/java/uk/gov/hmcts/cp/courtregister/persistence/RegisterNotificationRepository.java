@@ -11,6 +11,7 @@ import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
+import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
 
 /**
  * The {@code register_notification} table: one row per distinct recipient of a batch.
@@ -20,7 +21,9 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
  * {@code processed_output.request_digest}, and for the same reason.
  *
  * <p>Written in the same idiom as {@link ProcessedOutputRepository}: hand-written SQL, one method
- * per statement, and the affected-row count is the decision.
+ * per statement, the affected-row count as the decision, and every statement made through
+ * {@code StoreOutage} so that what reaches the application core is a domain signal and never a
+ * {@code org.springframework.dao} type (constitution Principle V) carrying a driver's words.
  *
  * <p>{@code notification_id} is the caller's, minted before the insert and never reissued: it is
  * what notificationnotify keys its aggregate on, so a retry under a fresh identity would send a
@@ -116,17 +119,31 @@ public class RegisterNotificationRepository {
     /**
      * Statement 1 - mints one recipient's row before its POST is made.
      *
+     * <p>Made through {@code StoreOutage} like every other statement in this package, in the form
+     * for a write the store may refuse: a lost {@code UNIQUE (batch_id, email_address)} reaches the
+     * caller as {@link StoreRefusedRowException} carrying this repository's own words. Postgres
+     * reports that violation with a detail line quoting the key it refused, and this key is an
+     * e-mail address - a component that may never reach a log index (constitution Principle VII) -
+     * so neither the driver's message nor the cause travels with it. The refusal itself has to
+     * travel: the operator's resend and the outcome sink can derive the same row for one batch at
+     * the same moment, and the one that loses the key reads back the row that won.
+     *
      * @param notification the row, carrying the identity the POST goes out under
+     * @throws StoreRefusedRowException where the batch already holds a row for this address
      */
     public void insert(final RegisterNotification notification) {
-        settlement(jdbcClient.sql(INSERT_NOTIFICATION)
-                .param("notificationId", notification.notificationId())
-                .param(BATCH_ID, notification.batchId())
-                .param("emailAddress", notification.emailAddress())
-                .param("recipientName", notification.recipientName(), Types.VARCHAR)
-                .param("templateName", notification.templateName())
-                .param("templateId", notification.templateId()), notification)
-                .update();
+        StoreOutage.translatingWrite("mint a recipient's notification row",
+                "the store refused a notification row for one recipient of batch "
+                        + notification.batchId() + ", which "
+                        + "register_notification_unique_recipient does when the row is already held",
+                () -> settlement(jdbcClient.sql(INSERT_NOTIFICATION)
+                        .param("notificationId", notification.notificationId())
+                        .param(BATCH_ID, notification.batchId())
+                        .param("emailAddress", notification.emailAddress())
+                        .param("recipientName", notification.recipientName(), Types.VARCHAR)
+                        .param("templateName", notification.templateName())
+                        .param("templateId", notification.templateId()), notification)
+                        .update());
     }
 
     /**
@@ -136,10 +153,11 @@ public class RegisterNotificationRepository {
      * @return its notification rows
      */
     public List<RegisterNotification> findByBatchId(final UUID batchId) {
-        return jdbcClient.sql(FIND_BY_BATCH_ID)
-                .param(BATCH_ID, batchId)
-                .query((rs, rowNumber) -> notification(rs))
-                .list();
+        return StoreOutage.translating("read a batch's notification rows",
+                () -> jdbcClient.sql(FIND_BY_BATCH_ID)
+                        .param(BATCH_ID, batchId)
+                        .query((rs, rowNumber) -> notification(rs))
+                        .list());
     }
 
     /**
@@ -155,10 +173,11 @@ public class RegisterNotificationRepository {
      * @return its unsettled notification rows, each under the identity it was first attempted with
      */
     public List<RegisterNotification> findUnsettledByBatchId(final UUID batchId) {
-        return jdbcClient.sql(FIND_UNSETTLED_BY_BATCH_ID)
-                .param(BATCH_ID, batchId)
-                .query((rs, rowNumber) -> notification(rs))
-                .list();
+        return StoreOutage.translating("read a batch's outstanding notification rows",
+                () -> jdbcClient.sql(FIND_UNSETTLED_BY_BATCH_ID)
+                        .param(BATCH_ID, batchId)
+                        .query((rs, rowNumber) -> notification(rs))
+                        .list());
     }
 
     /**
@@ -168,9 +187,10 @@ public class RegisterNotificationRepository {
      * @return how many rows the statement changed, which is the decision and never a read-back
      */
     public int update(final RegisterNotification notification) {
-        return settlement(jdbcClient.sql(UPDATE_NOTIFICATION)
-                .param("notificationId", notification.notificationId()), notification)
-                .update();
+        return StoreOutage.translating("settle a recipient's notification row",
+                () -> settlement(jdbcClient.sql(UPDATE_NOTIFICATION)
+                        .param("notificationId", notification.notificationId()), notification)
+                        .update());
     }
 
     /**

@@ -3,8 +3,10 @@ package uk.gov.hmcts.cp.courtregister.persistence;
 import java.util.function.Supplier;
 import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.dao.TransientDataAccessException;
+import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 
 /**
@@ -32,10 +34,19 @@ import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
  * outage: it is the store answering, and it clears itself on the next delivery. Suspending the whole
  * queue for one contended row would stall every message behind it.
  *
+ * <p><strong>A row the store refused is translated too, and for the other reason.</strong> It is
+ * still the store answering and it still may not stop the queue, but unlike a deadlock it arrives
+ * quoting the row it would not take - and on {@code register_notification} the refused key carries a
+ * recipient's e-mail address. {@link #translatingWrite(String, String, Runnable)} is the form for
+ * those writes: the refusal reaches the caller as {@link StoreRefusedRowException} with this
+ * repository's own words, so the caller that knows what to do about a lost key still gets it and the
+ * driver's detail line reaches no log index.
+ *
  * <p>The phrase each call site passes is written here in this repository and names the statement,
  * never the driver's message and never a parameter: it reaches an ERROR line about a flow whose
- * every defendant is a child (constitution Principle VII). The cause is attached, so the stack trace
- * still says which statement failed.
+ * every defendant is a child (constitution Principle VII). For an outage the cause is attached, so
+ * the stack trace still says which statement failed; for a refused row it is deliberately not,
+ * because the cause is where the row's values are.
  */
 final class StoreOutage {
 
@@ -82,6 +93,41 @@ final class StoreOutage {
         translating(statement, () -> {
             call.run();
             return null;
+        });
+    }
+
+    /**
+     * The same, for a write whose row the store may refuse on a rule of its own.
+     *
+     * <p><strong>Why a refusal needs translating at all, when contention does not.</strong> A
+     * constraint violation is the store answering, so it is not an outage and nothing above may
+     * treat it as one - but unlike a deadlock it arrives <em>quoting the row</em>: Postgres reports
+     * a unique violation with a detail line naming the columns and their values, and on
+     * {@code register_notification} one of those values is a recipient's e-mail address. An
+     * exception nobody translated reaches an ERROR line and a stack trace in the estate's log index,
+     * which is the one place that address may never appear (constitution Principle VII). So the
+     * driver's words are dropped here, with the cause, and the caller is handed the phrase this
+     * repository wrote.
+     *
+     * <p>The refusal stays distinguishable, because it has a caller that acts on it: two mechanisms
+     * can derive the same row for one batch at the same moment, and the one that loses the key reads
+     * back the row that won rather than sending a second e-mail under a second identity.
+     *
+     * @param statement a bounded phrase naming what was being done, for an outage's message
+     * @param refusal   a bounded phrase naming the write and the rule that refuses it - never the
+     *                  driver's words, and never a value from the row
+     * @param call      the statement
+     * @throws StoreUnavailableException if the store could not be reached at all
+     * @throws StoreRefusedRowException  if the store took the connection and refused the row
+     */
+    /* default */ static void translatingWrite(final String statement, final String refusal,
+            final Runnable call) {
+        translatingUpdate(statement, () -> {
+            try {
+                call.run();
+            } catch (DataIntegrityViolationException refused) {
+                throw new StoreRefusedRowException(refusal);
+            }
         });
     }
 }

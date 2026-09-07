@@ -23,6 +23,7 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
+import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 
@@ -348,10 +349,20 @@ public class RegisterNotifierService {
     /**
      * Mints one recipient's PENDING row and writes it down, before anything is asked for it.
      *
+     * <p><strong>Or reads back the row that beat it there.</strong> Two mechanisms can reach one
+     * batch at the same moment - the outcome sink on a delivered {@code document-available} and an
+     * operator's resend - and both derive the same owed set from the same records, so whichever gets
+     * to the insert second loses {@code UNIQUE (batch_id, email_address)}. That is two runs doing
+     * the same work rather than a fault: the row the other one wrote is the row notificationnotify's
+     * aggregate is keyed by, so this run posts under <em>that</em> identity. Letting the refusal out
+     * instead would leave the team untold with the rest of the batch's recipients behind it, and
+     * minting a second identity for the address is the one thing the key exists to prevent - it
+     * would be a second register about the same children.
+     *
      * @param batchId       the batch this recipient is being told about
      * @param emailAddress  the address the e-mail goes to
      * @param recipientName the name the template greets, where the subscription named one
-     * @return the row as it was written, carrying the identity its POST will be made under
+     * @return the row the POST will be made under: this run's, or the one that won the key
      */
     private RegisterNotification mint(final UUID batchId, final String emailAddress,
             final String recipientName) {
@@ -359,8 +370,44 @@ public class RegisterNotifierService {
         final RegisterNotification row = new RegisterNotification(UUID.randomUUID(), batchId,
                 emailAddress, recipientName, TEMPLATE_NAME, templateId, NotificationStatus.PENDING,
                 null, null, NO_ATTEMPTS_YET);
-        notifications.insert(row);
-        return row;
+        RegisterNotification minted;
+        try {
+            notifications.insert(row);
+            minted = row;
+        } catch (StoreRefusedRowException lost) {
+            minted = rowThatWon(batchId, emailAddress, lost);
+        }
+        return minted;
+    }
+
+    /**
+     * The row another mechanism minted for this address a moment before this run tried to.
+     *
+     * <p>Read back rather than assumed: what was sent, and under which identity, was decided when
+     * that row was written, and this run's job is to finish it. The line carries the batch and a
+     * count and nothing about a person, and the refusal itself carries no address either - the
+     * persistence layer bounded it where it was raised (constitution Principle VII).
+     *
+     * @param batchId      the batch the row belongs to
+     * @param emailAddress the address the key was lost on
+     * @param lost         the store's bounded refusal, kept as the cause of a failure to find it
+     * @return the row the winner wrote
+     * @throws IllegalStateException where the batch holds no row for the address after all, which is
+     *     a store that refused a row on a rule this service does not know about rather than a race
+     */
+    private RegisterNotification rowThatWon(final UUID batchId, final String emailAddress,
+            final StoreRefusedRowException lost) {
+
+        LOG.info("Batch {} already held a notification row for one of its recipients, so this run "
+                + "lost the (batch, address) key to another mechanism; the row that won is read "
+                + "back and the e-mail asked for under its identity rather than a second one.",
+                batchId);
+        return notifications.findByBatchId(batchId).stream()
+                .filter(row -> emailAddress.equals(row.emailAddress()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("register batch " + batchId
+                        + " refused a notification row for a recipient it then holds none for",
+                        lost));
     }
 
     /**
