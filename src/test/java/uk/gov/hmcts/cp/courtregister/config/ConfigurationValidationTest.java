@@ -1864,6 +1864,74 @@ class ConfigurationValidationTest {
                     .run(context -> assertThat(context).hasNotFailed());
         }
 
+        /**
+         * <strong>[A] characterisation.</strong> {@code PropertiesValidator} already refuses every
+         * shape below and admits the two beneath them; these cases state the discriminations the
+         * rule is written in terms of rather than driving them. Until now one canonical endpoint
+         * stood for all of it, so the trimming, the lower-casing and the authority-only matching
+         * were each held down by nothing: a real store named with its port, its trailing slash, its
+         * own query or in upper case is what an operator actually pastes out of the portal, and any
+         * of them read as "not a store" is a pod that starts on a published identity and skips
+         * every run at 18:00 with ACCESS_DENIED. Green on introduction; non-vacuity is the mutation
+         * quoted in this commit - except for the padded value, whose trimming the binder does
+         * before the validator sees it, so that case states the behaviour end to end rather than
+         * the validator's own {@code trim}.
+         */
+        @ParameterizedTest
+        @ValueSource(strings = {
+            "https://courtregister-ste86.azconfig.io:443",
+            "https://courtregister-ste86.azconfig.io/",
+            "https://courtregister-ste86.azconfig.io/kv?api-version=2023-11-01",
+            "HTTPS://COURTREGISTER-STE86.AZCONFIG.IO",
+            "  https://courtregister-ste86.azconfig.io  ",
+        })
+        void a_real_store_however_it_is_written_should_fail_startup(final String endpoint) {
+            generating.withPropertyValues("courtregister.feature.endpoint=" + endpoint,
+                    LOCAL_TEST_PROPERTY).run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.feature.credential")
+                                .hasMessageContaining("courtregister.feature.endpoint");
+                    });
+        }
+
+        /**
+         * <strong>[A] characterisation.</strong> The rule is about the host and says so: the
+         * compose stub is reached by a name of the estate's own, and a path or a query that happens
+         * to mention the store's domain is not a store. A validator that searched the whole string
+         * would refuse the local loop this credential exists for.
+         */
+        @ParameterizedTest
+        @ValueSource(strings = {
+            "http://wiremock:8080/x.azconfig.io",
+            "http://wiremock:8080?store=x.azconfig.io",
+        })
+        void a_stub_whose_path_or_query_mentions_the_domain_should_still_start(
+                final String endpoint) {
+
+            generating.withPropertyValues("courtregister.feature.endpoint=" + endpoint,
+                    LOCAL_TEST_PROPERTY)
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /**
+         * <strong>[A] characterisation.</strong> Both discriminators are unconditional on the
+         * master switch, and until now only the namespace one was asserted with generation off. A
+         * job that happens to be disabled in this deployment is no reason to accept a credential
+         * that cannot read the flag in the next one - and an intake-only pod is exactly where a
+         * credential nobody exercises is left behind to be found at cutover.
+         */
+        @Test
+        void the_local_test_credential_against_a_real_store_should_fail_with_generation_off() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, REAL_STORE, LOCAL_TEST_PROPERTY)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.feature.credential")
+                                .hasMessageContaining("courtregister.feature.endpoint");
+                    });
+        }
+
         @Test
         void the_deployed_credential_against_a_real_store_should_start() {
             generating.withPropertyValues(REAL_STORE).run(context -> {
