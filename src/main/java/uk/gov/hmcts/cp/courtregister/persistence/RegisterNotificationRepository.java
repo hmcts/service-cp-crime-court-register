@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
@@ -91,36 +92,65 @@ public class RegisterNotificationRepository {
             """;
 
     /**
-     * Statement 4 - one recipient's row settled on what notificationnotify answered.
+     * Statement 4 - one recipient's row settled on what notificationnotify answered, and its
+     * lifetime attempt total moved by the POSTs this call made whatever state the row is in.
      *
      * <p>The address, the batch and the template are not among the columns set. What was sent, and
      * to whom, is decided when the row is minted; a settlement may only say how that attempt ended.
      *
-     * <p><strong>ACCEPTED is terminal at the row level, and this predicate is what makes it
-     * so.</strong> Two mechanisms can reach one generated batch at the same moment, so a run can
-     * read a row as unsettled, POST for it, and only then find that the other run's POST was
-     * accepted in between. An unconditional settlement would write FAILED over that ACCEPTED row:
-     * the team that has been told reads as untold, the batch goes back to PARTIALLY_NOTIFIED, and
-     * the resend that follows sends a register about children to a team that already has it. Nought
-     * rows changed is the answer instead, and the caller counts it rather than believing the write
-     * landed. An ACCEPTED write onto an ACCEPTED row is refused by the same predicate and is not a
-     * loss: the row already says what that write was going to say.
+     * <p><strong>ACCEPTED is terminal at the row level, and the three {@code CASE} expressions are
+     * what make it so.</strong> Two mechanisms can reach one generated batch at the same moment, so
+     * a run can read a row as unsettled, POST for it, and only then find that the other run's POST
+     * was accepted in between. An unconditional settlement would write FAILED over that ACCEPTED
+     * row: the team that has been told reads as untold, the batch goes back to PARTIALLY_NOTIFIED,
+     * and the resend that follows sends a register about children to a team that already has it. So
+     * the status, the status line and the settlement instant keep the values the acceptance wrote,
+     * and the caller is told what happened rather than left to read a row count. An ACCEPTED write
+     * onto an ACCEPTED row is held off by the same expressions and is not a loss: the row already
+     * says what that write was going to say, and re-stamping it would make it describe whichever
+     * sender wrote last.
      *
-     * <p><strong>And the attempt total is computed here rather than by the caller.</strong> Two
-     * runs that each read the row at nought and each write an absolute total both write the same
-     * number, so one run's attempts are simply lost - a row POSTed for four times reads as two, and
-     * the count support tells an exhausted budget from a broken route by is wrong in the direction
-     * that hides work. What arrives is how many POSTs the call made; what is written is that added
-     * to whatever the row holds at the moment of the write.
+     * <p><strong>The attempt tally is not conditional, and that is the whole difference from the
+     * predicate this statement used to carry.</strong> {@code WHERE ... AND status <> 'ACCEPTED'}
+     * fenced the tally along with the settlement, so a POST made in the very window the fence
+     * exists for was left off the total - a row two notifiers POSTed for read as one notifier's
+     * work, in the one situation where knowing otherwise matters. The POST was really made, and
+     * what the column accumulates is the POSTs made for the row, so it is added whatever state the
+     * row is in.
+     *
+     * <p><strong>And the total is computed here rather than by the caller.</strong> Two runs that
+     * each read the row at nought and each write an absolute total both write the same number, so
+     * one run's attempts are simply lost - a row POSTed for four times reads as two, and the count
+     * support tells an exhausted budget from a broken route by is wrong in the direction that hides
+     * work. What arrives is how many POSTs the call made; what is written is that added to whatever
+     * the row holds at the moment of the write.
+     *
+     * <p><strong>The row is read under a lock in the same statement, and that read is the
+     * answer.</strong> {@code RETURNING} sees the values a statement wrote, so the state the row was
+     * in before it cannot be read off the update itself; the {@code held} term reads it, and
+     * {@code FOR UPDATE} is what makes that reading the current one - a second settlement of the
+     * same row waits there and then reads the version the first one committed, rather than
+     * evaluating against a snapshot taken before it. So one round trip decides the fence, does the
+     * arithmetic and says which of the three things it did.
      */
     private static final String UPDATE_NOTIFICATION = """
-            UPDATE register_notification
-               SET status = :status,
-                   response_code = :responseCode,
-                   sent_at = :sentAt,
-                   attempts = attempts + :posts
-             WHERE notification_id = :notificationId
-               AND status <> 'ACCEPTED'
+            WITH held AS (
+                SELECT notification_id, status
+                  FROM register_notification
+                 WHERE notification_id = :notificationId
+                   FOR UPDATE
+            )
+            UPDATE register_notification n
+               SET status = CASE WHEN held.status = 'ACCEPTED'
+                                 THEN n.status ELSE :status END,
+                   response_code = CASE WHEN held.status = 'ACCEPTED'
+                                        THEN n.response_code ELSE :responseCode END,
+                   sent_at = CASE WHEN held.status = 'ACCEPTED'
+                                  THEN n.sent_at ELSE :sentAt END,
+                   attempts = n.attempts + :posts
+              FROM held
+             WHERE n.notification_id = held.notification_id
+            RETURNING held.status <> 'ACCEPTED' AS applied
             """;
 
     private final JdbcClient jdbcClient;
@@ -200,12 +230,19 @@ public class RegisterNotificationRepository {
     }
 
     /**
-     * Statement 4 - settles one recipient's row on what notificationnotify answered.
+     * Statement 4 - settles one recipient's row on what notificationnotify answered, and tallies
+     * the POSTs this call made either way.
      *
      * <p>The attempts this call made are handed over as a count rather than as a total, and the
      * total the row reaches is the statement's business. What the column accumulates is the POSTs
      * made for the row and not the runs that made them, so what a caller knows is how many it
      * made; the number it should be added to is whatever the row says at the moment of the write.
+     *
+     * <p>The answer is what the statement did and never a read-back. An empty result is a row this
+     * store does not hold, which the changed-row count this used to return could not tell from a
+     * row another sender had already accepted - both changed nothing, and one of them means a POST
+     * was tallied onto a team that has been told while the other means a row this service wrote has
+     * gone.
      *
      * @param notification the row as it should now stand, carrying the identity it was minted under
      * @param posts        how many POSTs this call made for the row
@@ -214,16 +251,27 @@ public class RegisterNotificationRepository {
      */
     public NotificationSettlement update(
             final RegisterNotification notification, final int posts) {
-        // The three-way answer is the statement's to give, and the statement that gives it arrives
-        // with the unconditional tally. Until then the changed-row count is translated here so the
-        // cases waiting on it record a failing assertion rather than a compile error.
         return StoreOutage.translating("settle a recipient's notification row",
-                () -> settlement(jdbcClient.sql(UPDATE_NOTIFICATION)
+                () -> settlementOf(settlement(jdbcClient.sql(UPDATE_NOTIFICATION)
                         .param("notificationId", notification.notificationId()), notification)
                         .param("posts", posts)
-                        .update() > 0
+                        .query(Boolean.class)
+                        .optional()));
+    }
+
+    /**
+     * The statement's own account of what it did, as the three answers a caller acts on.
+     *
+     * @param applied what the statement returned: whether the row was still unsettled when it ran,
+     *                or nothing at all where this store holds no such row
+     * @return the settlement, the tally alone, or no such row
+     */
+    private static NotificationSettlement settlementOf(final Optional<Boolean> applied) {
+        return applied
+                .map(settled -> settled
                         ? NotificationSettlement.APPLIED
-                        : NotificationSettlement.ATTEMPTS_ONLY);
+                        : NotificationSettlement.ATTEMPTS_ONLY)
+                .orElse(NotificationSettlement.ABSENT);
     }
 
     /**

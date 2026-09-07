@@ -109,9 +109,12 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * holds a {@code RunClaim}: the cycle POSTs to notificationnotify once per recipient and waits
  * between its own retries, and a database transaction open across that would hold a connection and
  * a row lock for as long as another service takes to answer. The row-level writes are fenced
- * independently of the claim as well - a settlement is refused where the row is already ACCEPTED,
+ * independently of the claim as well - a settlement is held off where the row is already ACCEPTED,
  * and the attempt total is computed in SQL - because defence at the row is what survives a claim
- * whose lease ran out under the run that held it.
+ * whose lease ran out under the run that held it. <strong>The attempt tally is the one part of that
+ * write which is not fenced</strong>, and deliberately: a POST made in the very window the fence
+ * exists for is still a POST, and leaving it off the total made a row two notifiers posted for read
+ * as one notifier's work.
  *
  * <p><strong>Notification is asked once per batch, because the mark that precedes it is.</strong>
  * {@code markGenerated} is a compare-and-set, so of two mechanisms racing to move one batch to
@@ -525,13 +528,19 @@ public class RegisterNotifierService {
      * got, and a transient refusal that cleared on the next attempt is not an e-mail that failed -
      * how many attempts it took is on the row's {@code attempts}.
      *
-     * <p><strong>A settlement the store refused is not taken for one that landed.</strong>
+     * <p><strong>A settlement the store held off is not taken for one that landed.</strong>
      * ACCEPTED is terminal at the row level, so a row another mechanism accepted between this run's
-     * read and its own write changes nothing: the write is refused where the row is rather than by
-     * this loop remembering to check, and what it means is that the team has been told. It is
-     * counted on its own bounded reason so that something which changed nothing is still visible -
-     * the alternative reading is a row that looks untouched - and nothing else is done about it,
-     * because the tally taken at settlement reads the row as it now stands.
+     * read and its own write keeps that acceptance: the settlement is held off where the row is
+     * rather than by this loop remembering to check, and what it means is that the team has been
+     * told. The POST is on the row's attempt total either way, because it was really made.
+     *
+     * <p>What is <em>not</em> the same in the two cases is what it says about the night, so the two
+     * are counted apart. A late refusal is an attempt that would have demoted a team's row; a late
+     * acceptance is two notifiers that each got a 202 for one recipient, which is a Youth Offending
+     * Team holding two copies of a register about children. Filing the second under the first's
+     * reason would hide the worse reading inside the milder one, and the number that says a claim is
+     * not holding would stop meaning what it says. Nothing else is done about either, because the
+     * tally taken at settlement reads the row as it now stands.
      *
      * @param rows           the rows to post for, each already persisted under its own identity
      * @param documentFileId the rendered document's file-service id, attached by reference
@@ -541,15 +550,46 @@ public class RegisterNotifierService {
             final Attempted attempted = attempt(row, documentFileId);
             final NotificationOutcome outcome = attempted.outcome();
             metrics.notificationSettled(outcome.status(), outcome.responseCode());
+            recordWhatTheStoreDid(
+                    notifications.update(settledAs(row, outcome), attempted.posts()), row, outcome);
+        }
+    }
 
-            if (notifications.update(settledAs(row, outcome), attempted.posts())
-                    != NotificationSettlement.APPLIED) {
+    /**
+     * Reports the two answers that are not an applied settlement, each under its own reason.
+     *
+     * <p>Both are things that changed no settlement, and something that changes nothing has to be
+     * visible or the only trace is a row that looks untouched. The line carries the batch, the
+     * notification id and a bounded code, and none of the three is about a person.
+     *
+     * @param did     what the settlement statement did
+     * @param row     the row it was asked about
+     * @param outcome how this run's own attempt ended, which is what tells a late acceptance from a
+     *                late refusal
+     */
+    private void recordWhatTheStoreDid(final NotificationSettlement did,
+            final RegisterNotification row, final NotificationOutcome outcome) {
+
+        if (did == NotificationSettlement.ATTEMPTS_ONLY) {
+            if (outcome.status() == NotificationStatus.ACCEPTED) {
+                metrics.lateAcceptanceIgnored();
+                LOG.info("A recipient of batch {} was accepted by another notifier as well as by "
+                        + "this run, so its row keeps the settlement this service can evidence and "
+                        + "the team has been sent the register twice: the claim did not hold. "
+                        + "notificationId={}", row.batchId(), row.notificationId());
+            } else {
                 metrics.lateFailureIgnored();
                 LOG.info("A recipient of batch {} was already accepted by the time this run "
-                        + "settled it, so the settlement changed nothing and the row keeps the "
+                        + "settled it, so the settlement was held off and the row keeps the "
                         + "acceptance: the team has been told. notificationId={}",
                         row.batchId(), row.notificationId());
             }
+        } else if (did == NotificationSettlement.ABSENT) {
+            metrics.settlementRowAbsent();
+            LOG.error("Batch {} holds no notification row under the identity this run posted "
+                    + "under, so the attempt is recorded nowhere: the row was read back or minted "
+                    + "by this run, and the store no longer has it. notificationId={}",
+                    row.batchId(), row.notificationId());
         }
     }
 

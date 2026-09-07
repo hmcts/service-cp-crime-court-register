@@ -196,27 +196,45 @@ attributable, and leaves the nightly job able to send them without being asked.
 | `status` | `text NOT NULL` | `PENDING` → `ACCEPTED` \| `FAILED` |
 | `response_code` | `int` | |
 | `sent_at` | `timestamptz` | **The settlement instant of every terminal attempt**, an acceptance and a refusal alike: what it records is when this service decided how the attempt ended, not when NN accepted anything. So a FAILED row carries it too, and a connect failure that reached no verdict is settled at the instant the run gave up on it. Empty on one row shape only - a minted row, written PENDING before its POST, which has nothing to stamp yet |
-| `attempts` | `int NOT NULL DEFAULT 0` | Accumulates the POSTs made for the row, not the runs that made them: a transient refusal retried inside one call adds each attempt |
+| `attempts` | `int NOT NULL DEFAULT 0` | Accumulates the POSTs made for the row, not the runs that made them: a transient refusal retried inside one call adds each attempt, and so does an attempt whose settlement the row's own ACCEPTED held off (below) - a POST that happened is on the total whatever state the row is in |
 
 Constraint: `UNIQUE (batch_id, email_address)`.
 
-**ACCEPTED is terminal at the row level, and the attempt total is computed in SQL.** The batch claim
-above serialises the ordinary case; this is what holds when it does not - a claim whose lease ran out
-under the run holding it leaves two notifiers in the cycle at once. So the settlement statement is
-`SET status = :status, response_code = :responseCode, sent_at = :sentAt, attempts = attempts + :posts
-WHERE notification_id = :notificationId AND status <> 'ACCEPTED'`. A run can read a row as unsettled,
-POST for it, and only then find the other run's POST was accepted in between: an unconditional write
-would demote that row to FAILED, so the team that has been told reads as untold, the batch goes back
-to PARTIALLY_NOTIFIED, and the resend that follows sends the register again. Nought rows changed is
-the answer instead, and `RegisterNotifierService` counts it on
-`courtregister_notifications_ignored_total{reason=late-failure-ignored}` rather than believing the
-write landed - something that changed nothing has to be visible, or the only trace is a row that
-looks untouched. `{reason=already-notifying}` on the same counter is the notifier that lost the
-claim. The `attempts` arithmetic is the statement's for the same reason: two runs that each read the
-row at nought and each write an absolute total both write the same number, so one run's POSTs are
-simply lost. Pinned by `RegisterNotificationRepositoryIT
-.settling_a_recipient_already_accepted_should_change_nothing_and_say_so` and
-`…two_settlements_computed_from_one_read_should_each_add_their_own_attempts`.
+**ACCEPTED is terminal at the row level, the attempt tally is not, and both are computed in SQL.**
+The batch claim above serialises the ordinary case; this is what holds when it does not - a claim
+whose lease ran out under the run holding it leaves two notifiers in the cycle at once. So the
+settlement statement reads the row under `FOR UPDATE` in a `held` term, sets each of `status`,
+`response_code` and `sent_at` through a `CASE WHEN held.status = 'ACCEPTED' THEN <the column> ELSE
+<the parameter> END`, always sets `attempts = attempts + :posts`, and answers
+`RETURNING held.status <> 'ACCEPTED'`.
+
+A run can read a row as unsettled, POST for it, and only then find the other run's POST was accepted
+in between: an unconditional settlement would demote that row to FAILED, so the team that has been
+told reads as untold, the batch goes back to PARTIALLY_NOTIFIED, and the resend that follows sends
+the register again. The settlement columns therefore keep what the acceptance wrote. **The tally is
+outside that fence deliberately**: the POST was really made, and fencing it - which
+`WHERE ... AND status <> 'ACCEPTED'` did - left off the lifetime total exactly the attempts made in
+the window the fence exists for, so a row two notifiers posted for read as one notifier's work in
+the one situation where knowing otherwise matters. The `attempts` arithmetic is the statement's for
+the neighbouring reason: two runs that each read the row at nought and each write an absolute total
+both write the same number, so one run's POSTs are simply lost.
+
+`RegisterNotificationRepository.update` therefore answers `NotificationSettlement` - `APPLIED`,
+`ATTEMPTS_ONLY`, or `ABSENT` for a row the store does not hold - rather than a changed-row count,
+which could not tell the last two apart because both changed nothing.
+`RegisterNotifierService` counts each on `courtregister_notifications_ignored_total`:
+`{reason=late-failure-ignored}` where this run's own attempt failed against an accepted row,
+`{reason=late-acceptance-ignored}` where it was accepted against one - two 202s for one recipient is
+a Youth Offending Team holding two copies of a register about children, and filing it under the
+milder reason would hide it - and `{reason=settlement-row-absent}`, whose only honest reading is a
+row this service wrote and the store has lost. `{reason=already-notifying}` on the same counter is
+the notifier that lost the claim. Something that changed nothing has to be visible, or the only
+trace is a row that looks untouched. Pinned by `RegisterNotificationRepositoryIT
+.a_late_failure_against_an_accepted_row_should_be_tallied_and_not_settled`,
+`…a_late_acceptance_against_an_accepted_row_should_be_tallied_and_not_re_settled`,
+`…settling_a_recipient_this_service_never_minted_should_say_there_is_no_such_row` and
+`…two_settlements_computed_from_one_read_should_each_add_their_own_attempts`, and at service level by
+`RegisterNotifierServiceTest.AnAcceptedRowIsTerminal`.
 
 **The batch is re-read before it is settled**, inside the same claim. The row a run started from is
 minutes old by the time the last recipient has been posted for, and `markNotified` is a
