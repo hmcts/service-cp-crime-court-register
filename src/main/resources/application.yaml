@@ -61,6 +61,16 @@ courtregister:
   # (constitution Principle III), and nothing here may become a second one.
   output: record
 
+  # Whether this JVM was started to run ONE operations command and exit. False everywhere except the
+  # invocations docker/startup.sh dispatches to CliMain, which set it themselves. It turns off the
+  # three things that must not come up with a command - the Service Bus consumer, the nightly
+  # scheduler and the public-event listener container - and NOTHING else: a command runs the deployed
+  # configuration with the generation adapters live, because a regeneration against a stub would be a
+  # night's registers nobody sent. It is not a second cutover switch and must never become one; the
+  # one lever that decides which implementation generates is the App Configuration flag
+  # `CourtRegisterService` (constitution Cutover Rule).
+  cli: false
+
   consumer:
     # The master switch for intake. Off in the `test` profile, so context-load tests need no broker.
     enabled: true
