@@ -116,8 +116,16 @@ class DocumentOutcomeSinkTest {
     private final RegisterBatchRepository batches = mock(RegisterBatchRepository.class);
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final GenerationMetrics metrics = new GenerationMetrics(registry);
+
+    /**
+     * The leg the sink hands a generated batch on to, doubled because it is not this suite's
+     * subject: what the recipients of a batch are told is {@code RegisterNotifierServiceTest}'s
+     * question, and the join asserted here is which batch an outcome is applied to.
+     */
+    private final RegisterNotifierService notifier = mock(RegisterNotifierService.class);
+
     private final DocumentOutcomeSinkImpl sink =
-            new DocumentOutcomeSinkImpl(store, batches, metrics);
+            new DocumentOutcomeSinkImpl(store, batches, metrics, notifier);
 
     @InjectSoftAssertions
     private SoftAssertions softly;

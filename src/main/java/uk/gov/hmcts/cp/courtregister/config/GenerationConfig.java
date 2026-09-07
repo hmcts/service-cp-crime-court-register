@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
 import java.time.Clock;
+import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,11 +16,14 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
+import uk.gov.hmcts.cp.courtregister.application.RegisterNotifier;
+import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
+import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 import uk.gov.hmcts.cp.courtregister.pipeline.PdfPayloadMapper;
 
 /**
@@ -46,6 +50,9 @@ import uk.gov.hmcts.cp.courtregister.pipeline.PdfPayloadMapper;
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
 public class GenerationConfig {
 
+    /** The setting the register e-mail's template id arrives on, named by its own refusal. */
+    private static final String EMAIL_TEMPLATE = "courtregister.email.templates.cr_standard";
+
     /**
      * The {@code register_batch} table.
      *
@@ -58,6 +65,22 @@ public class GenerationConfig {
     @Bean
     public RegisterBatchRepository registerBatchRepository(final JdbcClient jdbcClient) {
         return new RegisterBatchRepository(jdbcClient);
+    }
+
+    /**
+     * The {@code register_notification} table.
+     *
+     * <p>Over the same client, and beside {@link #registerBatchRepository} rather than inside the
+     * store, for the reason that read is: one recipient's row is a single-table read and write that
+     * the register store has no business owning, and the notifier is the only thing that touches it.
+     *
+     * @param jdbcClient the processed log's client, which is the register store's
+     * @return the repository
+     */
+    @Bean
+    public RegisterNotificationRepository registerNotificationRepository(
+            final JdbcClient jdbcClient) {
+        return new RegisterNotificationRepository(jdbcClient);
     }
 
     /**
@@ -104,18 +127,56 @@ public class GenerationConfig {
     }
 
     /**
+     * The last leg of a batch: its recipients, their rows and their e-mails.
+     *
+     * <p>Contributed here rather than beside the adapter it sends through, because what a batch owes
+     * its Youth Offending Teams does not change with the transport: {@link LiveNotificationConfig}
+     * and {@link StubGenerationConfig} choose which {@code RegisterNotifier} answers, and this is
+     * the object that mints the rows, keeps the tally and settles the batch either way.
+     *
+     * <p><strong>The template id is resolved here, once.</strong> That is the whole of defect fix
+     * P9: the legacy resolved it per recipient and, finding it blank, logged one line and moved on.
+     * {@link PropertiesValidator} has already refused a blank or malformed value in LIVE mode, and
+     * LIVE is the only mode this configuration can be reached under - STUB is refused outright
+     * wherever {@code courtregister.generation.enabled} is true - so the parse below is a second
+     * statement of a rule that has already been enforced, kept because a bean is not entitled to
+     * assume the order beans are built in.
+     *
+     * @param store         where the batch's registers are read and the batch is settled
+     * @param batches       the {@code register_batch} read that gives the generated document's id
+     * @param notifications the {@code register_notification} rows
+     * @param notifier      notificationnotify, LIVE or STUB as the mode chose
+     * @param metrics       where each recipient and each terminal batch state is counted
+     * @param properties    the bound settings, for the {@code cr_standard} template id
+     * @param clock         the run's own reading of now, which is what {@code sent_at} records
+     * @return the notifying leg
+     */
+    @Bean
+    public RegisterNotifierService registerNotifierService(final RegisterStore store,
+            final RegisterBatchRepository batches,
+            final RegisterNotificationRepository notifications, final RegisterNotifier notifier,
+            final GenerationMetrics metrics, final CourtRegisterProperties properties,
+            final Clock clock) {
+
+        return new RegisterNotifierService(store, batches, notifications, notifier, metrics,
+                crStandardTemplate(properties), clock);
+    }
+
+    /**
      * The one code path a rendering outcome takes, whether the topic delivered it or the reconciler
      * fetched it.
      *
-     * @param store   where the batch and its rows are moved
-     * @param batches the {@code register_batch} table, read to correlate an outcome to a batch
-     * @param metrics where an outcome no batch takes is counted, by the reason it was not taken
+     * @param store    where the batch and its rows are moved
+     * @param batches  the {@code register_batch} table, read to correlate an outcome to a batch
+     * @param metrics  where an outcome no batch takes is counted, by the reason it was not taken
+     * @param notifier the notifying leg, asked immediately after the mark that records the document
      * @return the port
      */
     @Bean
     public DocumentOutcomeSink documentOutcomeSink(final RegisterStore store,
-            final RegisterBatchRepository batches, final GenerationMetrics metrics) {
-        return new DocumentOutcomeSinkImpl(store, batches, metrics);
+            final RegisterBatchRepository batches, final GenerationMetrics metrics,
+            final RegisterNotifierService notifier) {
+        return new DocumentOutcomeSinkImpl(store, batches, metrics, notifier);
     }
 
     /**
@@ -174,5 +235,29 @@ public class GenerationConfig {
                         endpoints.maxBackoff(),
                         endpoints.connectTimeout().plus(endpoints.readTimeout())),
                 (RetryPause) Thread::sleep, metrics, clock);
+    }
+
+    /**
+     * The {@code cr_standard} template id as the environment configured it.
+     *
+     * <p>A refusal rather than a default, and it names the setting: a register e-mail sent under no
+     * template is the silent non-delivery defect fix P9 catalogues, and a service that invented an
+     * id would turn it into a refusal from notificationnotify for every recipient of every batch
+     * instead.
+     *
+     * @param properties the bound settings
+     * @return the template every register is sent under
+     */
+    private static UUID crStandardTemplate(final CourtRegisterProperties properties) {
+        final String configured = properties.email().templates().crStandard();
+        if (configured == null || configured.isBlank()) {
+            throw new IllegalStateException(EMAIL_TEMPLATE
+                    + " must be the notificationnotify template the register is sent under (P9)");
+        }
+        try {
+            return UUID.fromString(configured);
+        } catch (IllegalArgumentException notAnIdentity) {
+            throw new IllegalStateException(EMAIL_TEMPLATE + " must be a UUID (P9)", notAnIdentity);
+        }
     }
 }

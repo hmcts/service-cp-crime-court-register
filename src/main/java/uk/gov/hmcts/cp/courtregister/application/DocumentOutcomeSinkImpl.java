@@ -65,6 +65,15 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * what settles that, refusing the second of two marks rather than letting both believe they moved
  * the batch. What this class does with the same question beforehand is keep the ordinary duplicate -
  * the one a durable subscription is for - from being reported as a refusal every night.
+ *
+ * <p><strong>Notification follows generation here, on the thread that learned of it.</strong> A
+ * document that exists and has been sent to nobody is the state defect fix P1 is about, and the
+ * moment the batch has one is the moment its Youth Offending Teams can be told; so the GENERATED
+ * mark and {@link RegisterNotifierService#notify} are one step of one code path, which is what makes
+ * the reconciler's fetched document reach the same e-mails the topic's delivered one does. It
+ * follows the mark rather than replacing it, so the compare-and-set is what decides that exactly one
+ * of two racing mechanisms goes on to send: a batch already standing at GENERATED is recognised
+ * above and never notified twice.
  */
 public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
 
@@ -79,18 +88,25 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
     /** Where an outcome that is applied to nothing is counted, under its own bounded reason. */
     private final GenerationMetrics metrics;
 
+    /** Who tells the batch's Youth Offending Teams, once the document is recorded as existing. */
+    private final RegisterNotifierService notifier;
+
     /**
      * Creates the sink over the store it writes through and the batches it correlates against.
      *
-     * @param store   where a batch's outcome is written, one batch at a time
-     * @param batches the {@code register_batch} reads that say which batch an outcome is about
-     * @param metrics where an outcome no batch takes is counted, by the reason it was not taken
+     * @param store    where a batch's outcome is written, one batch at a time
+     * @param batches  the {@code register_batch} reads that say which batch an outcome is about
+     * @param metrics  where an outcome no batch takes is counted, by the reason it was not taken
+     * @param notifier who tells the batch's recipients, on the same thread and immediately after
+     *                 the mark that says the document exists
      */
     public DocumentOutcomeSinkImpl(final RegisterStore store,
-            final RegisterBatchRepository batches, final GenerationMetrics metrics) {
+            final RegisterBatchRepository batches, final GenerationMetrics metrics,
+            final RegisterNotifierService notifier) {
         this.store = store;
         this.batches = batches;
         this.metrics = metrics;
+        this.notifier = notifier;
     }
 
     /**
@@ -100,14 +116,20 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      * way of knowing until now, and the mechanism that learned them travels with the same mark: the
      * store writes {@code completed_by} in the statement that moves the batch, so there is no second
      * moment to write it in.
+     *
+     * <p>And then the recipients are told, in the same step and on this thread. The mark is what
+     * decides whether the notification happens at all - it refuses where another mechanism has
+     * already moved the batch, and this never runs - so exactly one of two racing announcements
+     * sends the e-mails.
      */
     @Override
     public void documentAvailable(final UUID correlationId, final UUID payloadFileId,
             final UUID documentFileId, final Instant generatedAt, final CompletedBy completedBy) {
 
-        apply(correlationId, payloadFileId, BatchStatus.GENERATED,
-                batch -> store.markGenerated(batch.batchId(), documentFileId, generatedAt,
-                        completedBy));
+        apply(correlationId, payloadFileId, BatchStatus.GENERATED, batch -> {
+            store.markGenerated(batch.batchId(), documentFileId, generatedAt, completedBy);
+            notifier.notify(batch.batchId());
+        });
     }
 
     /**
