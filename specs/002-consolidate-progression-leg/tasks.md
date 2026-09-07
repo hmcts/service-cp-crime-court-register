@@ -767,15 +767,33 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       `./gradlew build --dry-run` schedules `:bootJar` at position 12 ahead of `:test` at 26, so no
       cycle is introduced.)
 
-**Checkpoint**: quickstart steps 2-4 run as written - **the host-side loop is pending the Build
-stage**, which is what will verify steps 2 and 3 (`docker compose exec app ./startup.sh
-generate-register --date D`, then `list-batches --date D` through PENDING to NOTIFIED) and the
-flag-off gate of step 4 against the compose stack. No stage has run those three: the five store
-statements they reach only landed at `e43cca3`, and the one host-side `bootRun` correction at
-`15c1ae2` was reasoned from a recorded refusal rather than re-run, because 5432 was occupied. What
-**is** verified: `check-flag` through the entrypoint against the compose WireMock on the `local-test`
-credential (`./scripts/container-smoke.sh`, both PASS lines, `441d653`), and `check-flag` plus
-`generate-register --help` inside the built image (`CliDispatchIT`, `84ac9cc`). Codex review 7.
+**Checkpoint**: the compose block of quickstart.md **has now been run**, and running it is what
+rewrote it (`782b1e6`, which renumbered its steps and is the last commit of the phase). What that
+run recorded, against the stack the block brings up:
+
+- `docker compose exec app ./startup.sh generate-register --date 2026-09-07` prints
+  `date=2026-09-07 released=0 registers=0 batches=0 requested=0 deferred=0` and exits 0; the
+  observed line is carried beside the step as a comment.
+- `list-batches --date D` on an empty day prints no batch line and still exits 0, "which is what
+  it did".
+- the flag-off gate ran verbatim: `PUT /flag/off` 200, then
+  `command=generate-register outcome=refused reason=flag-off` with the usage line and exit 1,
+  `check-flag` `flag=OFF` exit 0, `--ignore-flag`
+  `command=generate-register reason=overridden` and the summary line, exit 0; then `PUT /flag/on`
+  200 and `check-flag` `flag=ON` exit 0.
+
+**"through PENDING to NOTIFIED" is dropped, because that block cannot reach it in principle.** The
+compose `app` sets `COURTREGISTER_PAYLOAD_MODE=STUB` and the stub payload source fetches nothing,
+so a command published to `courtregister.requests` completes `no-defendants` and writes no
+`processed_output` row - verified rather than reasoned, `select count(*)` on `processed_output` and
+`register_batch` both 0 after a valid `Hearing_Resulted`. The RECORDED-to-NOTIFIED sequence is
+proved by `e2e/RecordEndToEndIT` and `e2e/GenerationEndToEndIT` under `./gradlew test`, which is
+what quickstart.md now says. Also verified: `check-flag` through the entrypoint against the compose
+WireMock on the `local-test` credential (`./scripts/container-smoke.sh`, both PASS lines,
+`441d653`), and `check-flag` plus `generate-register --help` inside the built image
+(`CliDispatchIT`, `84ac9cc`). Still not re-run: the **host-side** `bootRun` block, whose correction
+at `15c1ae2` was reasoned from a recorded refusal because 5432 was occupied - it is the one thing
+of this phase the Build stage still owes. Codex review 7.
 
 ### Approved TDD exceptions (Phase 7)
 
