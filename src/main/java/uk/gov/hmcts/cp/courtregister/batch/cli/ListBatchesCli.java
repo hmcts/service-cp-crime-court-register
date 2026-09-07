@@ -1,6 +1,10 @@
 package uk.gov.hmcts.cp.courtregister.batch.cli;
 
 import java.util.List;
+import java.util.function.Consumer;
+import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
+import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 
 /**
  * {@code list-batches --date D | --recorded-while-off}.
@@ -24,10 +28,47 @@ import java.util.List;
  * lines are read by {@code diff} and by eye as often as by a person scrolling: a listing whose rows
  * moved between two runs would make a re-run look like a change.
  *
- * <p>Collaborators - the store and the batch and notification repositories - arrive with T065; this
- * is the seam T063 is written against.
+ * <p>The store, the two repositories and the stream are held here and read by T065; this is the
+ * seam T063 is written against.
  */
+// PMD.UnusedPrivateField: the collaborators the body T065 lands reads. They are constructor
+// arguments now rather than then so that T063's cases can put a date's batches, their recipients
+// and a stream in front of the command and assert exactly what an operator would see.
+@SuppressWarnings("PMD.UnusedPrivateField")
 public class ListBatchesCli {
+
+    /** The date's batches, read in the order the statement puts them in. */
+    private final RegisterBatchRepository batches;
+
+    /** Each batch's recipient rows, which is where an outcome per team comes from. */
+    private final RegisterNotificationRepository notifications;
+
+    /**
+     * The register rows: how many a batch holds, and which of them were recorded while the flag was
+     * off.
+     */
+    private final RegisterStore store;
+
+    /** Where the listing is written, one line per call. */
+    private final Consumer<String> output;
+
+    /**
+     * Creates the command over the two reads a listing is built from and the operator's own stream.
+     *
+     * @param batchRepository        the date's batches
+     * @param notificationRepository each batch's recipient rows
+     * @param registerStore          the register rows behind a batch's count and the
+     *                               recorded-while-off listing
+     * @param lines                  where the listing is written, one line per call
+     */
+    public ListBatchesCli(final RegisterBatchRepository batchRepository,
+            final RegisterNotificationRepository notificationRepository,
+            final RegisterStore registerStore, final Consumer<String> lines) {
+        this.batches = batchRepository;
+        this.notifications = notificationRepository;
+        this.store = registerStore;
+        this.output = lines;
+    }
 
     /**
      * Lists the date's batches, or the records recorded while the flag was off.

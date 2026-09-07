@@ -287,4 +287,52 @@ public interface RegisterStore {
      * @param summary the tally and the terminal state it produces
      */
     void markNotified(UUID batchId, NotificationSummary summary);
+
+    /**
+     * The registers automatic batching passed over, because the flag did not say ON when they
+     * arrived.
+     *
+     * <p>{@link #activeUnbatched} and this read are the two halves of one predicate: RECORDED,
+     * unsuperseded and unbatched in both, and the flag state as recorded is what separates them -
+     * ON there, anything else here (research §12). A register recorded while the legacy was
+     * generating may already have been sent by the legacy, so it is deliberately left out of every
+     * automatic run; without a read that names those rows a rollback would leave every one of them
+     * waiting for somebody to notice it, which is what {@code list-batches --recorded-while-off}
+     * exists to prevent (FR-016).
+     *
+     * <p>UNKNOWN is here as well as OFF, and for the same reason the batching excludes it: a row
+     * labelled from a reading that had not come back yet is a row nobody can say the legacy did not
+     * also send.
+     *
+     * @return every RECORDED, unsuperseded, unbatched register whose recorded flag state is not ON,
+     *         oldest first
+     */
+    List<RegisterRecord> recordedWhileOff();
+
+    /**
+     * Supersedes the registers shared before an instant, so no run will batch them again.
+     *
+     * <p>The rollback lever's other half, and the write behind {@code supersede-before
+     * --shared-before T}. The bound is read against the register's own shared instant - the
+     * {@code registerTime} the document was recorded under - because that is the moment the estate
+     * agrees on: the period the legacy has taken back over is a period of hearings, not a period of
+     * this pod's writes.
+     *
+     * <p><strong>Only rows that are still this service's to claim.</strong> RECORDED, unsuperseded
+     * and unbatched, exactly as {@link #activeUnbatched} reads active - so a row already stamped
+     * into a batch is left alone (the renderer has been asked about it, and unstamping it is not
+     * something the schema offers), a row already superseded is not superseded twice, and a
+     * GENERATED or NOTIFIED row is not rewritten to say a register that was sent was never claimed.
+     * Whether the flag was on when a row arrived is not part of the predicate: a rollback supersedes
+     * the period, and a row recorded while the flag was off is in that period too.
+     *
+     * <p>Supersession rather than deletion: the rows stay, carrying what was recorded and when,
+     * because the register store is the audit of what this service decided and a rollback is
+     * exactly when that audit is read.
+     *
+     * @param sharedBefore the exclusive upper bound on the registers' shared instant, which the
+     *                     caller states and this port never defaults
+     * @return how many registers were superseded, which is zero where the period held none
+     */
+    int supersedeSharedBefore(Instant sharedBefore);
 }

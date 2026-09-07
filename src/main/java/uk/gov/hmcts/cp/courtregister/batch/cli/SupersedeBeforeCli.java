@@ -1,6 +1,8 @@
 package uk.gov.hmcts.cp.courtregister.batch.cli;
 
 import java.util.List;
+import java.util.function.Consumer;
+import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 
 /**
  * {@code supersede-before --shared-before T}.
@@ -20,9 +22,38 @@ import java.util.List;
  * recorded before the cutover was rolled back" and got "everything recorded up to this second" has
  * superseded the hearings that arrived while they were typing.
  *
- * <p>Collaborators - the store - arrive with T065; this is the seam T063 is written against.
+ * <p>The store and the stream are held here and read by T065; this is the seam T063 is written
+ * against.
  */
+// PMD.UnusedPrivateField: the collaborators the body T065 lands reads. They are constructor
+// arguments now rather than then so that T063's cases can put a store and a stream in front of the
+// command and assert both the bound it asks for and what an operator would see.
+@SuppressWarnings("PMD.UnusedPrivateField")
 public class SupersedeBeforeCli {
+
+    /**
+     * The register store, whose {@code supersedeSharedBefore} is the whole of what this command
+     * does.
+     *
+     * <p>Which rows a period holds - RECORDED, unsuperseded, unbatched - is the port's predicate
+     * and not this command's. All the command decides is the bound, and it decides it from what was
+     * typed.
+     */
+    private final RegisterStore store;
+
+    /** Where the count is written, one line per call. */
+    private final Consumer<String> output;
+
+    /**
+     * Creates the command over the register store and the operator's own stream.
+     *
+     * @param registerStore the store whose {@code supersedeSharedBefore} this command asks
+     * @param lines         where the count is written, one line per call
+     */
+    public SupersedeBeforeCli(final RegisterStore registerStore, final Consumer<String> lines) {
+        this.store = registerStore;
+        this.output = lines;
+    }
 
     /**
      * Supersedes the records recorded before the instant the arguments name.

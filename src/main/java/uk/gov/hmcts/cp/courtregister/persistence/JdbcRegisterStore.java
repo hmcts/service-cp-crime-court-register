@@ -1138,6 +1138,28 @@ public class JdbcRegisterStore implements RegisterStore {
     }
 
     /**
+     * The rows automatic batching passed over, which the operations CLI is the only reader of.
+     *
+     * <p>The statement is {@code ACTIVE_UNBATCHED}'s predicate with the flag-state test turned
+     * round, and it lands with T065 beside the command that asks it.
+     */
+    @Override
+    public List<RegisterRecord> recordedWhileOff() {
+        throw new UnsupportedOperationException("T065");
+    }
+
+    /**
+     * The rollback's write, which the operations CLI is the only caller of.
+     *
+     * <p>One statement over the active predicate bounded by {@code register_time}, and it lands
+     * with T065 beside the command that asks it.
+     */
+    @Override
+    public int supersedeSharedBefore(final Instant sharedBefore) {
+        throw new UnsupportedOperationException("T065");
+    }
+
+    /**
      * The state machine asked once, where the move is attempted.
      *
      * <p>The status that answered is handed back so the update can carry it as a predicate: a batch

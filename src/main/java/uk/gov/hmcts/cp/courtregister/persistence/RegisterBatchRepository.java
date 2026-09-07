@@ -559,6 +559,26 @@ public class RegisterBatchRepository {
     }
 
     /**
+     * Statement 12 - every batch of one register date, in the order a listing reads them.
+     *
+     * <p>The read behind {@code list-batches --date D}, and the one read here not asked by the
+     * identity a batch is correlated on: a support call is about a date, and the identities of that
+     * date's batches are what the caller is asking to be told.
+     *
+     * <p>The order is the statement's rather than the listing's, which is what makes the output
+     * stable across two runs. Court house then identity: a person reading a national date reads it
+     * a court house at a time, and the identity breaks the tie a date's supplementary batches would
+     * otherwise leave to the planner. It lands with T065, beside the command that asks it.
+     *
+     * @param registerDate the register date whose batches are wanted
+     * @return every batch recorded for that date, court house then identity; empty where the date
+     *         has none
+     */
+    public List<RegisterBatch> findByRegisterDate(final LocalDate registerDate) {
+        throw new UnsupportedOperationException("T065");
+    }
+
+    /**
      * A batch that has not finished has been completed by nothing, refused before either write.
      *
      * <p>Both statements here bind {@code completed_by} from the batch they are handed - the insert

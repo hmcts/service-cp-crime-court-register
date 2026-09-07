@@ -1,6 +1,8 @@
 package uk.gov.hmcts.cp.courtregister.batch.cli;
 
 import java.util.List;
+import java.util.function.Consumer;
+import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 
 /**
  * {@code check-flag}.
@@ -24,9 +26,34 @@ import java.util.List;
  * bounded code is what is printed, so the store's words about itself cannot reach an operator's
  * terminal by interpolation any more than they can reach the log (constitution Principle VII).
  *
- * <p>Collaborators - the flag reader - arrive with T065; this is the seam T063 is written against.
+ * <p>The reader and the stream are held here and read by T065; this is the seam T063 is written
+ * against.
  */
+// PMD.UnusedPrivateField: the collaborators the body T065 lands reads. They are constructor
+// arguments now rather than then so that T063's cases can put a reading and a stream in front of
+// the command and assert what an operator would see.
+@SuppressWarnings("PMD.UnusedPrivateField")
 public class CheckFlagCli {
+
+    /** The one lever's reader, asked once and never remembered. */
+    private final FeatureFlagReader reader;
+
+    /** Where the answer is written, one line per call. */
+    private final Consumer<String> output;
+
+    /**
+     * Creates the command over the reader the nightly run uses and the operator's own stream.
+     *
+     * <p>The same reader, deliberately: the question this command answers is what this pod would
+     * get at 18:00, and a second reader configured differently would answer a different one.
+     *
+     * @param flagReader the one lever's reader, which never throws
+     * @param lines      where the answer is written, one line per call
+     */
+    public CheckFlagCli(final FeatureFlagReader flagReader, final Consumer<String> lines) {
+        this.reader = flagReader;
+        this.output = lines;
+    }
 
     /**
      * Reads the flag and prints what it said.
