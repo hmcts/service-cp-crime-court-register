@@ -129,6 +129,7 @@ public class PropertiesValidator implements InitializingBean {
     private static final String FEATURE_LABEL = "courtregister.feature.label";
     private static final String ENDPOINTS = "courtregister.endpoints";
     private static final String ENDPOINTS_MAX_ATTEMPTS = ENDPOINTS + MAX_ATTEMPTS_SUFFIX;
+    private static final String ENDPOINTS_CONNECT_TIMEOUT = ENDPOINTS + CONNECT_TIMEOUT_SUFFIX;
     private static final String ENDPOINTS_READ_TIMEOUT = ENDPOINTS + READ_TIMEOUT_SUFFIX;
     private static final String NOTIFICATION_CLAIM_LEASE =
             "courtregister.notification.claim-lease";
@@ -805,18 +806,34 @@ public class PropertiesValidator implements InitializingBean {
      *
      * <p>The notification claim's lease bounds work whose length it cannot know from itself: a batch
      * is addressed to as many Youth Offending Teams as subscribed to its court centre, and each of
-     * them costs up to {@code max-attempts} POSTs with a read timeout and a back-off wait apiece.
-     * The claim is renewed before every POST and before every write, so what the lease has to cover
-     * is one recipient's turn - and a lease shorter than that expires under a notifier still waiting
-     * on a socket, after which a second notifier takes the batch over, derives the same owed set
-     * from the same records, and a Youth Offending Team is sent a register about children twice.
+     * them costs up to {@code max-attempts} POSTs with a connect timeout, a read timeout and a
+     * back-off wait apiece. The claim is renewed before every POST and before every write, so what
+     * the lease has to cover is the retry cycle one recipient's turn can become - and a lease
+     * shorter than that expires under a notifier still waiting on a socket, after which a second
+     * notifier takes the batch over, derives the same owed set from the same records, and a Youth
+     * Offending Team is sent a register about children twice.
      *
-     * <p>The formula is therefore the transport's own worst case for one recipient,
-     * {@code max-attempts x (read-timeout + max-backoff)}, times
-     * {@link #NOTIFICATION_LEASE_MARGIN} as margin. {@code max-backoff} rather than the doubling
-     * schedule, for the reason {@link #backOffWorstCase} gives: a {@code Retry-After} is honoured on
-     * every retryable answer and the ceiling is the only thing bounding what the other side can ask
-     * for.
+     * <p>The formula is therefore the transport's own worst case for one recipient - which is the
+     * arithmetic the run's per-step budgets are computed from, {@link #attemptsWorstCase} plus
+     * {@link #backOffWorstCase} over the shared endpoints settings - times
+     * {@link #NOTIFICATION_LEASE_MARGIN} as margin:
+     *
+     * <pre>
+     *   max-attempts x (connect-timeout + read-timeout) + (max-attempts - 1) x max-backoff
+     * </pre>
+     *
+     * <p><strong>The connect timeout is charged</strong>, because an attempt that hangs on the
+     * connect and then on the read is the longest single thing an outbound call does and it is the
+     * shape a claim is really lost inside - a notifier waiting on a socket is a notifier not
+     * renewing. A bound that counted the read alone said a five-minute connect timeout cost nothing,
+     * so a deployment could lengthen the setting that decides how long a POST to a mesh host that is
+     * not answering takes to fail and keep a lease the first attempt of the night outlives.
+     *
+     * <p><strong>And the waits are the gaps between attempts</strong>, of which there is one fewer
+     * than there are attempts: nothing is waited after the last one, because there is nothing left
+     * to wait for. {@code max-backoff} rather than the doubling schedule, for the reason
+     * {@link #backOffWorstCase} gives: a {@code Retry-After} is honoured on every retryable answer
+     * and the ceiling is the only thing bounding what the other side can ask for.
      *
      * <p>Unconditional, like the zone and scheduler-lock rules: a job that happens to be disabled in
      * this deployment is not a reason to accept a lease that cannot cover a POST cycle in the next
@@ -831,19 +848,23 @@ public class PropertiesValidator implements InitializingBean {
             final CourtRegisterProperties properties) {
 
         final CourtRegisterProperties.Endpoints endpoints = properties.endpoints();
-        final Duration onePostCycle = endpoints.readTimeout()
-                .plus(endpoints.maxBackoff())
-                .multipliedBy(endpoints.maxAttempts());
+        final Duration attempts = attemptsWorstCase(endpoints.connectTimeout(),
+                endpoints.readTimeout(), endpoints.maxAttempts());
+        final Duration waits = backOffWorstCase(endpoints.maxBackoff(), endpoints.maxAttempts());
+        final Duration onePostCycle = attempts.plus(waits);
         final Duration required = onePostCycle.multipliedBy(NOTIFICATION_LEASE_MARGIN);
         final Duration lease = properties.notification().claimLease();
         if (lease.compareTo(required) < 0) {
             throw new IllegalStateException(
                     NOTIFICATION_CLAIM_LEASE + " (" + lease + MUST_BE_AT_LEAST
                             + NOTIFICATION_LEASE_MARGIN + " x " + ENDPOINTS_MAX_ATTEMPTS + " ("
-                            + endpoints.maxAttempts() + ") x (" + ENDPOINTS_READ_TIMEOUT + " ("
-                            + endpoints.readTimeout() + ") plus " + ENDPOINTS + MAX_BACKOFF_SUFFIX
-                            + " (" + endpoints.maxBackoff() + ")) - the longest a single POST cycle"
-                            + " can take (" + onePostCycle + "), doubled as margin (" + required
+                            + endpoints.maxAttempts() + ") attempts of "
+                            + ENDPOINTS_CONNECT_TIMEOUT + " (" + endpoints.connectTimeout()
+                            + ") plus " + ENDPOINTS_READ_TIMEOUT + " (" + endpoints.readTimeout()
+                            + ") - " + attempts + " - and the " + ENDPOINTS + MAX_BACKOFF_SUFFIX
+                            + " (" + endpoints.maxBackoff() + ") waits between them - " + waits
+                            + " - which is the longest a single POST cycle can take ("
+                            + onePostCycle + "), doubled as margin (" + required
                             + "). A shorter lease expires under a notifier still waiting on one"
                             + " recipient's POST, and the notifier that then takes the batch over"
                             + " sends that court centre's register a second time");

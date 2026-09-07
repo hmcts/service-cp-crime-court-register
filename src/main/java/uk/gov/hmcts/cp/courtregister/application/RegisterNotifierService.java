@@ -125,10 +125,11 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * answers a different question: how long a batch may hold a document before the safety net looks is
  * no bound at all on telling that batch's recipients, whose cost is the number of Youth Offending
  * Teams the batch is addressed to times whatever notificationnotify makes of each of them. So what
- * the lease is asked to cover is one recipient's turn, and
- * {@code renewNotificationClaim(batchId, token)} - one token-fenced statement that re-checks
- * ownership and extends the lease together - is asked before each recipient's POST, before each
- * row's settlement and before the batch's own. A notifier whose renewal is refused has been taken
+ * the lease is asked to cover is the retry cycle one recipient's turn can become - every attempt's
+ * connect and read timeout with the bounded waits between them, which is what startup holds it to -
+ * and {@code renewNotificationClaim(batchId, token)} - one token-fenced statement that re-checks
+ * ownership and extends the lease together - is asked before every one of those POSTs, retries
+ * included, before each row's settlement and before the batch's own. A notifier whose renewal is refused has been taken
  * over: it stops, settles nothing further and answers
  * {@link NotificationDisposition#CLAIM_LOST}, counted apart from the notifier that never started,
  * because the rows it left unsettled are re-requested by a later run under the identities they
@@ -683,14 +684,14 @@ public class RegisterNotifierService {
      * not holding would stop meaning what it says. Nothing else is done about either, because the
      * tally taken at settlement reads the row as it now stands.
      *
-     * <p><strong>The claim is renewed before each recipient, and the loop ends where a renewal is
+     * <p><strong>The claim is renewed before every POST, and the loop ends where a renewal is
      * refused.</strong> The lease cannot know how long this loop takes - a batch is addressed to as
      * many Youth Offending Teams as subscribed to its court centre, and each of them costs up to
-     * {@code max-attempts} POSTs with a read timeout and a wait apiece - so what it is asked to
-     * cover is one recipient's turn, renewed each time round. A refusal means the batch has been
-     * taken over, and the notifier that took it is deriving the same owed set from the same records:
-     * every POST from here is a second register about the same children to a team that one is
-     * telling.
+     * {@code max-attempts} POSTs with a connect timeout, a read timeout and a wait apiece - so what
+     * it is asked to cover is one recipient's retry cycle, renewed in front of each of that cycle's
+     * attempts. A refusal means the batch has been taken over, and the notifier that took it is
+     * deriving the same owed set from the same records: every POST from here is a second register
+     * about the same children to a team that one is telling.
      *
      * <p><strong>And it ends where a row this run posted under turns out not to be there.</strong>
      * That is not a recipient's answer at all, it is this service's own store having lost a row it
@@ -720,13 +721,15 @@ public class RegisterNotifierService {
     /**
      * One recipient's turn: the claim renewed, the POST made, and the row settled on the answer.
      *
-     * <p>Renewed twice, and the second one is the point of the first. The POST is where a run spends
-     * its time, so a notifier waiting on notificationnotify for one recipient is a notifier not
-     * renewing - which is exactly when a lease runs out under it. So ownership is asked again before
-     * the write: a settlement made after the batch has been taken over is written over the work of
-     * the notifier that now holds it, and the row is better left unsettled under the identity it
-     * already holds, because that is the state a later run re-requests and the re-request reaches
-     * notificationnotify's own aggregate rather than asking for a second e-mail.
+     * <p>Renewed in front of every call made under the claim, and the reason is the POST itself: it
+     * is where a run spends its time, so a notifier waiting on notificationnotify for one recipient
+     * is a notifier not renewing - which is exactly when a lease runs out under it. So this asks
+     * before the recipient's first POST, {@link #attempt} asks before each of its retries, and
+     * ownership is asked again before the write: a settlement made after the batch has been taken
+     * over is written over the work of the notifier that now holds it, and the row is better left
+     * unsettled under the identity it already holds, because that is the state a later run
+     * re-requests and the re-request reaches notificationnotify's own aggregate rather than asking
+     * for a second e-mail.
      *
      * <p><strong>The POSTs are tallied either way.</strong> A renewal refused before the settlement
      * leaves this run unable to say how the attempt ended and no less certain that it was made, so
@@ -734,9 +737,12 @@ public class RegisterNotifierService {
      * alternative was a row that says one notifier posted for it where two did, in the one
      * situation where knowing otherwise matters.
      *
-     * <p>The e-mail counter moves once the POST has been made, whether or not the settlement that
-     * follows is this run's to write. What {@code courtregister_notifications_total} answers is how
-     * many e-mails a night asked for and got, and an attempt made is an attempt made.
+     * <p>The e-mail counter moves once the POST has been made and an outcome reached, whether or
+     * not the settlement that follows is this run's to write. What
+     * {@code courtregister_notifications_total} answers is how many e-mails a night asked for and
+     * got, which is a question about recipients: a cycle abandoned between two attempts reached no
+     * verdict about this one, so there is nothing to count under - what it has to say is on the
+     * row's attempt total.
      *
      * @param row            the row to post for, already persisted under its own identity
      * @param documentFileId the rendered document's file-service id, attached by reference
@@ -749,10 +755,13 @@ public class RegisterNotifierService {
         Turn turn = Turn.CLAIM_LOST;
 
         if (batches.renewNotificationClaim(row.batchId(), token)) {
-            final Attempted attempted = attempt(row, documentFileId);
+            final Attempted attempted = attempt(row, documentFileId, token);
             final NotificationOutcome outcome = attempted.outcome();
-            metrics.notificationSettled(outcome.status(), outcome.responseCode());
-            if (batches.renewNotificationClaim(row.batchId(), token)) {
+
+            if (attempted.stillOurs()) {
+                metrics.notificationSettled(outcome.status(), outcome.responseCode());
+            }
+            if (attempted.stillOurs() && batches.renewNotificationClaim(row.batchId(), token)) {
                 final NotificationSettlement did =
                         notifications.update(settledAs(row, outcome), attempted.posts());
                 recordWhatTheStoreDid(did, row, outcome);
@@ -885,17 +894,31 @@ public class RegisterNotifierService {
      * operator's resend, and holds no claim at all. What bounds it is therefore the attempt budget
      * and {@code max-backoff}, which is what bounds every wait this policy hands out.
      *
+     * <p><strong>But the claim is asked about again before every retry, because a retry is a POST
+     * like any other.</strong> The caller renews before the first attempt and this loop renews
+     * before each of the rest, so no POST is made by a notifier that has not just asked whether the
+     * batch is still its own. Renewing once for the recipient and spending it across the cycle
+     * fenced the first attempt and none of the others - and the others are the ones made after a
+     * read timeout and a back-off wait, which is precisely how long a lease has been left
+     * unrenewed. A notifier that has been taken over would spend the rest of its budget POSTing for
+     * a team the notifier that now holds the batch is telling, which is a second register about the
+     * same children.
+     *
      * @param row            the persisted row the POST is made under
      * @param documentFileId the rendered document's file-service id
+     * @param token          the token this run holds the batch's notification claim under
      * @return ACCEPTED with the status notificationnotify answered, or FAILED with what the last
      *     attempt answered instead - which is nothing at all where it reached no verdict - and how
-     *     many POSTs this call made either way
+     *     many POSTs this call made either way; or no outcome, where the claim was taken over
+     *     between two of them
      */
-    // PMD.OnlyOneReturn: the accepted attempt answers where it happened. A single exit would mean
-    // carrying an outcome past the branch that decides whether to ask again, and the whole subject
-    // of the loop is that an accepted POST stops it.
+    // PMD.OnlyOneReturn: the accepted attempt answers where it happened, and so does the renewal
+    // that is refused. A single exit would mean carrying an outcome past the branch that decides
+    // whether to ask again, and the whole subject of the loop is that either of those stops it.
     @SuppressWarnings("PMD.OnlyOneReturn")
-    private Attempted attempt(final RegisterNotification row, final UUID documentFileId) {
+    private Attempted attempt(final RegisterNotification row, final UUID documentFileId,
+            final UUID token) {
+
         final int maxAttempts = retryPolicy.maxAttempts();
         OptionalInt lastAnswer = OptionalInt.empty();
         int posts = 0;
@@ -915,6 +938,9 @@ public class RegisterNotifierService {
                         || posts == maxAttempts
                         || !waitFor(row, retryPolicy.waitAfter(posts, refused.retryAfter()))) {
                     break;
+                }
+                if (!batches.renewNotificationClaim(row.batchId(), token)) {
+                    return new Attempted(null, posts);
                 }
             }
         }
@@ -1095,11 +1121,26 @@ public class RegisterNotifierService {
      * What one recipient's attempts came to, and how many of them there were.
      *
      * @param outcome ACCEPTED with the status notificationnotify answered, or FAILED with what the
-     *                last attempt answered instead
+     *                last attempt answered instead - or nothing at all, where the claim was taken
+     *                over between two attempts and this run has no verdict to offer about the
+     *                e-mail
      * @param posts   how many POSTs this call made for the row, which is what its {@code attempts}
      *                accumulates
      */
     private record Attempted(NotificationOutcome outcome, int posts) {
+
+        /**
+         * Whether the claim was still this run's throughout the attempts it made.
+         *
+         * <p>An outcome is a verdict about the e-mail, and a run that was taken over mid-cycle
+         * reached none: it stopped asking rather than deciding anything, and the POSTs it had
+         * already made are the only thing it has to say.
+         *
+         * @return whether these attempts ended in an outcome rather than in a refused renewal
+         */
+        /* default */ boolean stillOurs() {
+            return outcome != null;
+        }
     }
 
     /**

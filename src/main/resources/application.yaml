@@ -309,18 +309,23 @@ courtregister:
     # on telling that batch's recipients, whose cost is the number of Youth Offending Teams the
     # batch is addressed to times whatever notificationnotify makes of each of them.
     #
-    # The claim is renewed before each recipient's POST, before each row's settlement and before
-    # the batch's own, so what this has to cover is ONE RECIPIENT'S TURN and not a whole batch of
-    # them. Startup refuses any value below
+    # The claim is renewed before EVERY POST - the retries of one recipient included - before each
+    # row's settlement and before the batch's own, so what this has to cover is ONE RECIPIENT'S
+    # RETRY CYCLE and not a whole batch of them. Startup refuses any value below
     #
-    #     2 x courtregister.endpoints.max-attempts
-    #           x (courtregister.endpoints.read-timeout + courtregister.endpoints.max-backoff)
+    #     2 x (courtregister.endpoints.max-attempts
+    #             x (courtregister.endpoints.connect-timeout
+    #                   + courtregister.endpoints.read-timeout)
+    #          + (courtregister.endpoints.max-attempts - 1)
+    #             x courtregister.endpoints.max-backoff)
     #
     # - the longest a single POST cycle can take, doubled as margin (PropertiesValidator
-    # .NOTIFICATION_LEASE_MARGIN). At the shipped transport that is 2 x 3 x (10s + 2s) = 72s, so
-    # fifteen minutes is generous; lengthening read-timeout or max-attempts without lengthening this
-    # is refused at startup rather than discovered as a Youth Offending Team sent one register
-    # twice.
+    # .NOTIFICATION_LEASE_MARGIN). The connect timeout is charged because an attempt that hangs on
+    # the connect and then on the read is the longest single thing this leg does, and the waits are
+    # the gaps BETWEEN attempts, of which there is one fewer than there are attempts. At the shipped
+    # transport that is 2 x (3 x (5s + 10s) + 2 x 2s) = 98s, so fifteen minutes is generous;
+    # lengthening either timeout or max-attempts without lengthening this is refused at startup
+    # rather than discovered as a Youth Offending Team sent one register twice.
     claim-lease: 15m
 
   feature:
