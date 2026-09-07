@@ -1,10 +1,12 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -16,6 +18,7 @@ import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
@@ -38,6 +41,17 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * says nothing about another team's e-mail. The batch is then settled from the tally alone - all
  * accepted is NOTIFIED, some not is PARTIALLY_NOTIFIED, and no recipients at all is
  * NOTIFIED_NOBODY.
+ *
+ * <p><strong>A refusal that may answer differently is asked again first.</strong> A 503, a 429 or a
+ * read timeout is a moment in notificationnotify's night and not a verdict about the e-mail, so the
+ * POST is repeated up to {@code courtregister.endpoints.max-attempts} with the shared
+ * {@link RetryPolicy}'s back-off between attempts, under the same notification id, and the row is
+ * settled FAILED with the last status only once that budget is spent. A NON_TRANSIENT refusal is
+ * not repeated at all: the same command under the same identity will be declined again, and waiting
+ * to prove it costs the teams after this one. The loop is here rather than in the client for the
+ * reason the generation leg's is - the client classifies one attempt and knows nothing about the
+ * budget - and it is the same policy object both legs are given, so the taxonomy is stated once
+ * (defect fix C3).
  *
  * <p><strong>Defect fix P1: no recipients is a terminal state, not a wait.</strong> The progression
  * leg leaves a batch nobody subscribes to sitting generated for ever, waiting on an event nobody
@@ -133,15 +147,12 @@ public class RegisterNotifierService {
     /**
      * The shared retry policy: the attempt budget and the back-off between two of them.
      *
-     * <p>Compile-safe seam: the loop that spends it is written by the paired fix, so the cases
-     * guarding the retry fail on their assertions rather than on a constructor that cannot be
-     * called.
+     * <p>The same object the generation leg spends, from the same five settings (defect fix C3):
+     * one taxonomy, one back-off, and the loop belonging to whoever holds the budget.
      */
-    @SuppressWarnings("PMD.UnusedPrivateField")
     private final RetryPolicy retryPolicy;
 
-    /** How a wait between two attempts is taken; the seam's other half. */
-    @SuppressWarnings("PMD.UnusedPrivateField")
+    /** How a wait between two attempts at one recipient is taken. */
     private final RetryPause pause;
 
     /** This pod's reading of now, which is what {@code sent_at} records. */
@@ -307,46 +318,116 @@ public class RegisterNotifierService {
      * <p>One row at a time, and the next row is asked whichever way this one went: an exception that
      * ended the batch would turn one bad address into a night's silence for a whole court centre.
      *
+     * <p>The counter moves once per row and not once per POST. What
+     * {@code courtregister_notifications_total} answers is how many e-mails a night asked for and
+     * got, and a transient refusal that cleared on the next attempt is not an e-mail that failed -
+     * how many attempts it took is on the row's {@code attempts}.
+     *
      * @param rows           the rows to post for, each already persisted under its own identity
      * @param documentFileId the rendered document's file-service id, attached by reference
      */
     private void tell(final List<RegisterNotification> rows, final UUID documentFileId) {
         for (final RegisterNotification row : rows) {
-            final NotificationOutcome outcome = attempt(row, documentFileId);
+            final Attempted attempted = attempt(row, documentFileId);
+            final NotificationOutcome outcome = attempted.outcome();
             metrics.notificationSettled(outcome.status(), outcome.responseCode());
-            notifications.update(settledAs(row, outcome));
+            notifications.update(settledAs(row, outcome, attempted.posts()));
         }
     }
 
     /**
-     * One recipient's POST, and what it is recorded as.
+     * One recipient's POST, asked again for as long as the answer may change and the budget holds.
      *
      * <p>The refusal is caught here rather than left to end the batch, and it is not absorbed: the
-     * status that made it one becomes the row's {@code response_code} and its own series on
-     * {@code courtregister_notifications_total}, and the transport detail was already reported by
-     * the client that saw it. The line here carries the notification id, the batch id, the status
-     * and the bounded classification, and none of those is about a person.
+     * status that made the last attempt one becomes the row's {@code response_code} and its own
+     * series on {@code courtregister_notifications_total}, and the transport detail was already
+     * reported by the client that saw it. The line here carries the notification id, the batch id,
+     * the status and the bounded classification, and none of those is about a person.
+     *
+     * <p><strong>The loop is here rather than in the client</strong>, which is exactly where the
+     * generation leg puts it and for the same reason: the client classifies one attempt through the
+     * shared {@link RetryPolicy} and is told nothing about what is left of the budget, so a loop
+     * inside it would spend one it cannot see. The branch is on the classification and never on the
+     * type of what was thrown - NON_TRANSIENT means the same command under the same identity will
+     * be declined again, and waiting to prove it costs the teams after this one.
+     *
+     * <p><strong>And the retry is the same POST.</strong> The row arrives persisted, so the second
+     * attempt goes out under the notification id the first did: notificationnotify keys its
+     * aggregate on that id, so the retry reaches the attempt it is retrying instead of asking for a
+     * second register about the same children (research §10).
+     *
+     * <p>No deadline is checked, and that is the one place this differs from the generation leg.
+     * That leg runs inside a claim the nightly run holds and measures each attempt against what is
+     * left of it; a notification is driven by the outcome sink on a public-event delivery or by an
+     * operator's resend, and holds no claim at all. What bounds it is therefore the attempt budget
+     * and {@code max-backoff}, which is what bounds every wait this policy hands out.
      *
      * @param row            the persisted row the POST is made under
      * @param documentFileId the rendered document's file-service id
-     * @return ACCEPTED with the status notificationnotify answered, or FAILED with what it answered
-     *     instead, which is nothing at all where the attempt reached no verdict
+     * @return ACCEPTED with the status notificationnotify answered, or FAILED with what the last
+     *     attempt answered instead - which is nothing at all where it reached no verdict - and how
+     *     many POSTs this call made either way
      */
-    private NotificationOutcome attempt(final RegisterNotification row, final UUID documentFileId) {
-        NotificationOutcome outcome;
-        try {
-            outcome = notifier.send(row, documentFileId, CallerIdentity.SYSTEM);
-        } catch (NotificationFailedException refused) {
-            final OptionalInt answered = refused.responseCode();
-            final Integer responseCode = answered.isPresent() ? answered.getAsInt() : null;
-            LOG.warn("notificationnotify did not accept a register e-mail, so the row records the "
-                    + "attempt and the batch carries on to the recipients after it. "
-                    + "notificationId={} batchId={} responseCode={} classification={}",
-                    row.notificationId(), row.batchId(), responseCode, refused.classification(),
-                    refused);
-            outcome = new NotificationOutcome(NotificationStatus.FAILED, responseCode);
+    // PMD.OnlyOneReturn: the accepted attempt answers where it happened. A single exit would mean
+    // carrying an outcome past the branch that decides whether to ask again, and the whole subject
+    // of the loop is that an accepted POST stops it.
+    @SuppressWarnings("PMD.OnlyOneReturn")
+    private Attempted attempt(final RegisterNotification row, final UUID documentFileId) {
+        final int maxAttempts = retryPolicy.maxAttempts();
+        Integer responseCode = null;
+        int posts = 0;
+
+        while (posts < maxAttempts) {
+            posts++;
+            try {
+                return new Attempted(
+                        notifier.send(row, documentFileId, CallerIdentity.SYSTEM), posts);
+            } catch (NotificationFailedException refused) {
+                final OptionalInt answered = refused.responseCode();
+                responseCode = answered.isPresent() ? answered.getAsInt() : null;
+                LOG.warn("notificationnotify did not accept a register e-mail on attempt {} of {}. "
+                        + "notificationId={} batchId={} responseCode={} classification={}",
+                        posts, maxAttempts, row.notificationId(), row.batchId(), responseCode,
+                        refused.classification(), refused);
+                if (refused.classification() != FailureClassification.TRANSIENT
+                        || posts == maxAttempts
+                        || !waitFor(row, retryPolicy.waitAfter(posts, Optional.empty()))) {
+                    break;
+                }
+            }
         }
-        return outcome;
+        LOG.warn("The register e-mail for one recipient of batch {} was not accepted, so its row "
+                + "records the attempts and the batch carries on to the recipients after it. "
+                + "notificationId={} attempts={} responseCode={}", row.batchId(),
+                row.notificationId(), posts, responseCode);
+        return new Attempted(new NotificationOutcome(NotificationStatus.FAILED, responseCode),
+                posts);
+    }
+
+    /**
+     * Takes the wait between two attempts at one recipient.
+     *
+     * <p>An interrupt is restored and the recipient given up on rather than swallowed: the thread
+     * has been asked to stop, and a notification that carried on asking would outlive the shutdown
+     * that ended it. The row stays unsettled-or-FAILED under its own identity, so the resend that
+     * follows reaches the same attempt.
+     *
+     * @param row  the row being asked about
+     * @param wait how long the shared policy said to wait
+     * @return whether the wait completed and another attempt may be made
+     */
+    private boolean waitFor(final RegisterNotification row, final Duration wait) {
+        boolean waited = true;
+        try {
+            pause.pause(wait);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            LOG.warn("Interrupted while waiting to ask for a register e-mail again, so no further "
+                    + "attempt is made. notificationId={} batchId={}", row.notificationId(),
+                    row.batchId());
+            waited = false;
+        }
+        return waited;
     }
 
     /**
@@ -359,14 +440,17 @@ public class RegisterNotifierService {
      *
      * @param row     the row as it stood before this attempt
      * @param outcome what notificationnotify answered, or did not
+     * @param posts   how many POSTs this call made for the row, which is what {@code attempts}
+     *                accumulates: the column counts the times an e-mail was asked for and not the
+     *                times a run asked
      * @return the row as it should now stand
      */
-    private RegisterNotification settledAs(
-            final RegisterNotification row, final NotificationOutcome outcome) {
+    private RegisterNotification settledAs(final RegisterNotification row,
+            final NotificationOutcome outcome, final int posts) {
 
         return new RegisterNotification(row.notificationId(), row.batchId(), row.emailAddress(),
                 row.recipientName(), row.templateName(), row.templateId(), outcome.status(),
-                outcome.responseCode(), clock.instant(), row.attempts() + 1);
+                outcome.responseCode(), clock.instant(), row.attempts() + posts);
     }
 
     /**
@@ -440,6 +524,17 @@ public class RegisterNotifierService {
             outcome = BatchStatus.PARTIALLY_NOTIFIED;
         }
         return outcome;
+    }
+
+    /**
+     * What one recipient's attempts came to, and how many of them there were.
+     *
+     * @param outcome ACCEPTED with the status notificationnotify answered, or FAILED with what the
+     *                last attempt answered instead
+     * @param posts   how many POSTs this call made for the row, which is what its {@code attempts}
+     *                accumulates
+     */
+    private record Attempted(NotificationOutcome outcome, int posts) {
     }
 
     /**
