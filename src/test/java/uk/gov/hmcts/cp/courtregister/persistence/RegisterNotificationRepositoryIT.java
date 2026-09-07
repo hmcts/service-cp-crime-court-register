@@ -73,6 +73,9 @@ class RegisterNotificationRepositoryIT {
     private static final String WANDSWORTH = "wandsworth.yot@example.gov.uk";
     private static final String LAMBETH = "lambeth.yot@example.gov.uk";
 
+    /** The team whose row was minted and never settled, which a resend is also owed. */
+    private static final String MERTON = "merton.yot@example.gov.uk";
+
     private static final int ACCEPTED = 202;
 
     private final UUID courtCentre = UUID.randomUUID();
@@ -155,21 +158,26 @@ class RegisterNotificationRepositoryIT {
         }
 
         @Test
-        void reading_the_resendable_recipients_should_answer_with_only_the_failed_ones() {
+        void reading_the_resendable_recipients_should_answer_with_every_row_never_accepted() {
             seededBatch();
             final RegisterNotification accepted = pending(WANDSWORTH, "Wandsworth YOT");
             final RegisterNotification refused = pending(LAMBETH, "Lambeth YOT");
+            final RegisterNotification abandoned = pending(MERTON, "Merton YOT");
             repository.insert(accepted);
             repository.insert(refused);
+            repository.insert(abandoned);
             repository.update(settled(accepted, NotificationStatus.ACCEPTED, ACCEPTED, SENT_AT));
             final RegisterNotification failed =
                     settled(refused, NotificationStatus.FAILED, null, null);
             repository.update(failed);
 
-            assertThat(repository.findFailedByBatchId(batchId))
-                    .as("a resend attempts the recipients that were not told and nobody else; "
-                            + "re-sending an accepted one would deliver the register twice")
-                    .containsExactly(failed);
+            assertThat(repository.findUnsettledByBatchId(batchId))
+                    .as("a resend attempts the recipients that were not told and nobody else, and "
+                            + "a row still PENDING is one of those: the run that minted it stopped "
+                            + "between the POST and the settlement, so the team is owed its e-mail "
+                            + "exactly as a refused one is, while re-sending an accepted row would "
+                            + "deliver the register twice")
+                    .containsExactly(failed, abandoned);
         }
 
         @Test

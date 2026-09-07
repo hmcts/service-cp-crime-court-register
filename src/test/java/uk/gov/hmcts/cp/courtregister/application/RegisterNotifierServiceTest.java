@@ -166,6 +166,9 @@ class RegisterNotifierServiceTest {
     /** The one status the contract calls success. */
     private static final int ACCEPTED = 202;
 
+    /** The attempt count of a row nothing has been posted for yet, which is the column's default. */
+    private static final int MINTED_NEVER_SETTLED = 0;
+
     /** notificationnotify refused the command outright; another attempt answers the same. */
     private static final int REFUSED = 400;
 
@@ -214,6 +217,7 @@ class RegisterNotifierServiceTest {
         doAnswer(this::settle).when(notifications).update(any());
         doAnswer(this::rowsOf).when(notifications).findByBatchId(any());
         doAnswer(this::failedRowsOf).when(notifications).findFailedByBatchId(any());
+        doAnswer(this::unsettledRowsOf).when(notifications).findUnsettledByBatchId(any());
         doAnswer(this::recordSettlement).when(store).markNotified(any(), any());
         doAnswer(this::acceptThePost).when(notifier).send(any(), any(), any());
     }
@@ -278,6 +282,24 @@ class RegisterNotifierServiceTest {
         final RegisterNotification row = new RegisterNotification(UUID.randomUUID(), BATCH_ID,
                 address, name, RegisterNotifierService.TEMPLATE_NAME, TEMPLATE_ID, status, code,
                 SETTLED_AT, 1);
+        ledger.put(row.notificationId(), row);
+        return row;
+    }
+
+    /**
+     * A row a run minted and never settled, which is the shape a crash leaves behind.
+     *
+     * <p>No status, no {@code sent_at} and no attempt: whether the POST was ever made is exactly
+     * what this row cannot say, which is why it is owed a re-request rather than left alone.
+     *
+     * @param name    the team's name
+     * @param address the team's address
+     * @return the row, which is also put on the ledger the repository answers from
+     */
+    private RegisterNotification abandoned(final String name, final String address) {
+        final RegisterNotification row = new RegisterNotification(UUID.randomUUID(), BATCH_ID,
+                address, name, RegisterNotifierService.TEMPLATE_NAME, TEMPLATE_ID,
+                NotificationStatus.PENDING, null, null, MINTED_NEVER_SETTLED);
         ledger.put(row.notificationId(), row);
         return row;
     }
@@ -380,6 +402,12 @@ class RegisterNotifierServiceTest {
     private Object failedRowsOf(final InvocationOnMock invocation) {
         return rows(invocation.getArgument(0))
                 .filter(row -> row.status() == NotificationStatus.FAILED)
+                .toList();
+    }
+
+    private Object unsettledRowsOf(final InvocationOnMock invocation) {
+        return rows(invocation.getArgument(0))
+                .filter(row -> row.status() != NotificationStatus.ACCEPTED)
                 .toList();
     }
 
@@ -775,6 +803,72 @@ class RegisterNotifierServiceTest {
                             + "resendable under its own identity and the batch stays "
                             + "PARTIALLY_NOTIFIED")
                     .isEqualTo(new NotificationSummary(1, 1, BatchStatus.PARTIALLY_NOTIFIED));
+        }
+    }
+
+    /**
+     * The row an interrupted run left behind, and how it is recovered.
+     *
+     * <p>A run that stopped between the 202 and the ACCEPTED write - or anywhere after the mint -
+     * leaves a row PENDING. The redelivered {@code document-available} is refused by
+     * {@code markGenerated}'s compare-and-set, so no duplicate e-mail is sent, but that refusal
+     * recovers nothing either: unless PENDING counts as unsettled the team is never re-requested, the
+     * batch is settled PARTIALLY_NOTIFIED against a team that can never be told, and a second
+     * {@code notify} would insert a second row for every address the {@code (batch_id,
+     * email_address)} key refuses.
+     *
+     * <p>So both halves are held down here: a PENDING row is re-requested under the identity it
+     * already holds, and {@code notify} over a batch that already holds rows mints only the addresses
+     * that have none.
+     */
+    @Nested
+    @DisplayName("the row an interrupted run left PENDING")
+    class RecoveringAnUnsettledRow {
+
+        @Test
+        void a_row_left_pending_should_be_re_requested_under_the_identity_it_was_minted_with() {
+            seeded(YOT_A, ADDRESS_A, NotificationStatus.ACCEPTED, ACCEPTED);
+            final RegisterNotification owed = abandoned(YOT_B, ADDRESS_B);
+
+            final NotificationSummary summary = resend();
+
+            softly.assertThat(posted)
+                    .as("a row that reached no verdict is owed its e-mail exactly as a refused one "
+                            + "is, and it is asked for under the identity it was minted with, "
+                            + "because that identity is what makes the second POST reach the "
+                            + "attempt it is retrying rather than send a second e-mail")
+                    .extracting(RegisterNotification::notificationId)
+                    .containsExactly(owed.notificationId());
+            softly.assertThat(rowsAsTheyStand())
+                    .as("and the row it already holds is where that attempt is settled")
+                    .contains(tuple(ADDRESS_B, NotificationStatus.ACCEPTED, ACCEPTED));
+            softly.assertThat(summary)
+                    .as("so a batch parked with an unsettled row can still reach NOTIFIED, rather "
+                            + "than standing at a state no re-request would ever revisit")
+                    .isEqualTo(new NotificationSummary(2, 0, BatchStatus.NOTIFIED));
+        }
+
+        @Test
+        void a_notify_over_a_batch_that_already_holds_rows_should_not_mint_a_second_row() {
+            seeded(YOT_A, ADDRESS_A, NotificationStatus.ACCEPTED, ACCEPTED);
+            abandoned(YOT_B, ADDRESS_B);
+
+            final NotificationSummary summary = notifyBatch();
+
+            softly.assertThat(mintedAddresses())
+                    .as("UNIQUE (batch_id, email_address) refuses a second row for an address this "
+                            + "batch already holds, so a notify that minted for every recipient "
+                            + "could never be re-run; only the address with no row of its own is "
+                            + "minted")
+                    .containsExactly(ADDRESS_C);
+            softly.assertThat(postedAddresses())
+                    .as("the team that was told is not told twice, and the two that were not are "
+                            + "asked for")
+                    .containsExactly(ADDRESS_B, ADDRESS_C);
+            softly.assertThat(summary)
+                    .as("one row per distinct address either way, so the tally is over three "
+                            + "recipients and not five")
+                    .isEqualTo(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
         }
     }
 

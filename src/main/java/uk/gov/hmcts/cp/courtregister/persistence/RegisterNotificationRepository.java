@@ -133,6 +133,20 @@ public class RegisterNotificationRepository {
     }
 
     /**
+     * The recipient rows of a batch that were never accepted, whichever way they were left.
+     *
+     * <p>A compile-safe seam over {@link #findFailedByBatchId(UUID)} so that the cases guarding the
+     * widening read fail on their assertions rather than on a missing method. The paired fix gives
+     * it a statement of its own that also answers the PENDING rows.
+     *
+     * @param batchId the batch
+     * @return its unsettled notification rows, each under the identity it was first attempted with
+     */
+    public List<RegisterNotification> findUnsettledByBatchId(final UUID batchId) {
+        return findFailedByBatchId(batchId);
+    }
+
+    /**
      * Statement 4 - settles one recipient's row on what notificationnotify answered.
      *
      * @param notification the row as it should now stand
