@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.jms.ConnectionFactoryUnwrapper;
 import org.springframework.boot.jms.autoconfigure.JmsProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DeliveryObserver;
@@ -63,9 +64,17 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
  * <p><strong>One consumer, deliberately.</strong> A non-shared durable subscription admits exactly
  * one, and a second would be refused by the broker rather than double the throughput. Outcomes
  * arrive at the rate court centres are rendered at, which is tens a night.
+ *
+ * <p><strong>And none of it on a JVM started to run one operations command.</strong> That one
+ * consumer is the whole reason: a command that subscribed would take the topic away from the pod
+ * waiting for the outcomes and give it to a process about to exit. The whole configuration goes
+ * rather than the listener alone, because the container factory is here too and a factory with no
+ * {@code @JmsListener} to create a container from is a half-absence to reason about
+ * ({@link CliModeConfig}).
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
+@Conditional(CliModeConfig.NotCliMode.class)
 public class PublicEventsConfig {
 
     /**

@@ -1,7 +1,12 @@
 package uk.gov.hmcts.cp.courtregister.batch.cli;
 
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 
 /**
@@ -22,14 +27,20 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
  * recorded before the cutover was rolled back" and got "everything recorded up to this second" has
  * superseded the hearings that arrived while they were typing.
  *
- * <p>The store and the stream are held here and read by T065; this is the seam T063 is written
- * against.
+ * <p>The bound printed back is the instant this command parsed rather than the text it was handed,
+ * so an operator can see which period they actually superseded and no string from outside this
+ * service reaches the terminal on the way.
  */
-// PMD.UnusedPrivateField: the collaborators the body T065 lands reads. They are constructor
-// arguments now rather than then so that T063's cases can put a store and a stream in front of the
-// command and assert both the bound it asks for and what an operator would see.
-@SuppressWarnings("PMD.UnusedPrivateField")
 public class SupersedeBeforeCli {
+
+    /** What the command takes, printed under a refusal and on request. */
+    private static final String USAGE = "usage: " + CliMain.SUPERSEDE_BEFORE + " --"
+            + Args.SHARED_BEFORE + " T (an ISO instant with a zone, e.g. 2026-09-04T17:00:00Z)";
+
+    private static final Logger LOG = LoggerFactory.getLogger(SupersedeBeforeCli.class);
+
+    /** What this command could not finish, as the bounded reason the line carries. */
+    private static final String NOT_SUPERSEDED = "supersession-failed";
 
     /**
      * The register store, whose {@code supersedeSharedBefore} is the whole of what this command
@@ -62,7 +73,72 @@ public class SupersedeBeforeCli {
      * @return {@link CliMain#SUCCESS}, {@link CliMain#REFUSED} where the instant was missing or
      *         unusable, or {@link CliMain#FAILED}
      */
+    // PMD.OnlyOneReturn: the four exits are the four things that can happen to an invocation, each
+    // said where it is decided; one exit would carry a verdict past the write that must not be
+    // asked for once the bound has been refused.
+    @SuppressWarnings("PMD.OnlyOneReturn")
     public int run(final List<String> args) {
-        throw new UnsupportedOperationException("T065");
+        final Args parsed;
+        try {
+            parsed = Args.parse(args);
+        } catch (IllegalArgumentException notUsable) {
+            return CliMain.unreadable(CliMain.SUPERSEDE_BEFORE, USAGE, notUsable, output);
+        }
+        if (parsed.askedForHelp()) {
+            output.accept(USAGE);
+            return CliMain.SUCCESS;
+        }
+        if (!parsed.permits(Set.of(Args.SHARED_BEFORE), Set.of())) {
+            return refuse(CliMain.UNEXPECTED_ARGUMENT);
+        }
+        final String typed = parsed.options().get(Args.SHARED_BEFORE);
+        if (typed == null) {
+            return refuse(CliMain.MISSING_ARGUMENT);
+        }
+        final Instant sharedBefore;
+        try {
+            sharedBefore = Instant.parse(typed);
+        } catch (DateTimeParseException notAnInstant) {
+            return CliMain.unreadable(CliMain.SUPERSEDE_BEFORE, USAGE, notAnInstant, output);
+        }
+        return supersede(sharedBefore);
+    }
+
+    /**
+     * Supersedes the period and reports the count, or says the write could not be made.
+     *
+     * <p>A period that held nothing is a success said as a count: a rollback with nothing to do is
+     * a rollback that is already complete, and a runbook step that failed on it would stop one.
+     *
+     * @param sharedBefore the exclusive bound the operator typed, as this command read it
+     * @return {@link CliMain#SUCCESS} where the write was made, {@link CliMain#FAILED} where it was
+     *         not
+     */
+    // PMD.AvoidCatchingGenericException: the store translates an outage into its own unchecked type
+    // and a refused statement arrives as another; both mean the same thing here - the period was
+    // not superseded - and a count printed over either would be a rollback reported as done.
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
+    private int supersede(final Instant sharedBefore) {
+        try {
+            final int superseded = store.supersedeSharedBefore(sharedBefore);
+            output.accept("superseded=" + superseded + " shared-before=" + sharedBefore);
+            return CliMain.SUCCESS;
+        } catch (RuntimeException notSuperseded) {
+            LOG.error("The registers shared before {} could not be superseded, so this service "
+                    + "still claims them. cause={}", sharedBefore,
+                    notSuperseded.getClass().getName(), notSuperseded);
+            return CliMain.failure(CliMain.SUPERSEDE_BEFORE, "shared-before=" + sharedBefore,
+                    NOT_SUPERSEDED, output);
+        }
+    }
+
+    /**
+     * Declines, under the bounded reason and this command's own usage.
+     *
+     * @param reason one of {@link CliMain}'s three argument reasons
+     * @return {@link CliMain#REFUSED}
+     */
+    private int refuse(final String reason) {
+        return CliMain.refusal(CliMain.SUPERSEDE_BEFORE, USAGE, reason, output);
     }
 }

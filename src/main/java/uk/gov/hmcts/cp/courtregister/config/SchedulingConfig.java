@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -50,10 +51,19 @@ import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
  * scheduler and fires nothing; the job itself is contributed only where the collaborators it asks in
  * order are on the context, for the reason {@link PublicEventsConfig} gives about the listener - a
  * schedule with nothing to run is a fire alarm nobody wired to anything.
+ *
+ * <p><strong>And not on a JVM started to run one operations command.</strong> The lock makes the
+ * 18:00 run one run, so a CLI process holding a scheduler would be a second replica of it, and a
+ * command running long enough to reach 18:00 London would generate the night twice. The whole
+ * configuration goes rather than the job alone, because {@code @EnableScheduling} is here too and
+ * {@code GenerationReconciler} carries a schedule of its own: without the annotation nothing
+ * processes {@code @Scheduled} at all, which is what makes "a command schedules nothing" a claim
+ * about both ({@link CliModeConfig}).
  */
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
+@Conditional(CliModeConfig.NotCliMode.class)
 @EnableScheduling
 @EnableSchedulerLock(defaultLockAtMostFor = RegisterGenerationJob.LOCK_AT_MOST_FOR)
 public class SchedulingConfig {

@@ -18,9 +18,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import uk.gov.hmcts.cp.courtregister.application.DistributionPipeline;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
+import uk.gov.hmcts.cp.courtregister.config.CliModeConfig;
 import uk.gov.hmcts.cp.courtregister.config.CourtRegisterProperties;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.config.ServiceBusHealthIndicator;
@@ -41,11 +43,19 @@ import uk.gov.hmcts.cp.courtregister.persistence.ProcessedLogProbe;
  * processed log has answered a probe and the deferred migration has run — because a service that
  * consumes without a store abandons a queue's worth of deliveries, and one that consumes against an
  * unmigrated schema loses them.
+ *
+ * <p><strong>None of it on a JVM started to run one operations command.</strong> A command that
+ * consumed a delivery would record a register as a side effect of listing one, and it would take
+ * that delivery from the pod whose job it is: {@code max-concurrent-calls} is shared by every
+ * consumer on the queue. The whole configuration goes rather than the client alone, because the
+ * client and the one component permitted to start it are both here and a client nothing can start
+ * is still a client something later could ({@link CliModeConfig}).
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(
         prefix = "courtregister.consumer", name = "enabled",
         havingValue = "true", matchIfMissing = true)
+@Conditional(CliModeConfig.NotCliMode.class)
 public class ServiceBusConsumerConfig {
 
     private static final Logger LOG = LoggerFactory.getLogger(ServiceBusConsumerConfig.class);

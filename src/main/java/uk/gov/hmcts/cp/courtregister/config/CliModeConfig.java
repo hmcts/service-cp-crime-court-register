@@ -1,7 +1,8 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Condition;
+import org.springframework.context.annotation.ConditionContext;
+import org.springframework.core.type.AnnotatedTypeMetadata;
 
 /**
  * The one place {@code courtregister.cli} is read, and what it turns off.
@@ -33,10 +34,21 @@ import org.springframework.context.annotation.Configuration;
  * existing; {@code docker/startup.sh} sets it only on the invocations it dispatches to
  * {@link uk.gov.hmcts.cp.courtregister.batch.cli.CliMain}.
  *
- * <p>The property is wired here; the three conditionals it drives arrive with T065.
+ * <p><strong>The three conditionals are on the configurations rather than on the beans.</strong>
+ * {@code ServiceBusConsumerConfig} owns both the processor client and the one component permitted
+ * to start it, {@code SchedulingConfig} owns {@code @EnableScheduling} as well as the job, and
+ * {@code PublicEventsConfig} owns the container factory as well as the listener - so switching the
+ * configuration off is what makes the absence complete. A bean-level condition would leave a client
+ * nothing can start, a scheduler with nothing on it, or a container factory with no listener to
+ * create one from: three half-absences to reason about instead of three plain ones.
+ *
+ * <p>Readiness is unaffected by all three. {@code intakeStartup} is contributed by
+ * {@link IntakeStartupHealth}, which is deliberately outside the consumer's own configuration and
+ * asks for the lifecycle controller rather than requiring one - so a CLI JVM answers UP with
+ * {@code no-consumer-configured}, exactly as an intake-only pod does, and the readiness group's
+ * membership check still finds every name {@code application.yaml} lists.
  */
-@Configuration(proxyBeanMethods = false)
-public class CliModeConfig {
+public final class CliModeConfig {
 
     /**
      * The property, named here because three configurations condition on it and a name that only
@@ -47,23 +59,31 @@ public class CliModeConfig {
     /** What the three conditionals require of it, which is that it is not on. */
     public static final String NOT_CLI = "false";
 
-    private final boolean cli;
-
-    /**
-     * Reads the property once.
-     *
-     * @param cli whether this JVM was started to run one operations command and exit
-     */
-    public CliModeConfig(@Value("${" + CLI_PROPERTY + ":" + NOT_CLI + "}") final boolean cli) {
-        this.cli = cli;
+    private CliModeConfig() {
+        // The property's name, its default, and the one condition that reads it.
     }
 
     /**
-     * Whether this JVM was started to run one operations command and exit.
+     * Matches every context except a JVM started to run one operations command and exit.
      *
-     * @return true where {@code courtregister.cli} is on
+     * <p>A {@link Condition} rather than {@code @ConditionalOnProperty}, because the two
+     * configurations it goes on beside {@code SchedulingConfig} already carry one of those and the
+     * annotation is not repeatable: an intake-only pod and a CLI JVM are two different reasons for
+     * the same class to be absent, and both have to be able to say so. It reads the environment
+     * directly, which is all a condition can do - conditions are evaluated before any bean exists.
+     *
+     * <p>Absent means not in CLI mode, so an ordinary pod is unaffected by the property existing at
+     * all, and anything other than {@code true} is read the same way: this switch decides who
+     * starts, and an unparseable value must not be able to stop a pod consuming.
      */
-    public boolean cliMode() {
-        return cli;
+    public static final class NotCliMode implements Condition {
+
+        @Override
+        public boolean matches(final ConditionContext context,
+                final AnnotatedTypeMetadata metadata) {
+
+            return !Boolean.parseBoolean(
+                    context.getEnvironment().getProperty(CLI_PROPERTY, NOT_CLI));
+        }
     }
 }

@@ -1,7 +1,12 @@
 package uk.gov.hmcts.cp.courtregister.batch.cli;
 
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 
 /**
@@ -21,14 +26,19 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
  * rather than in the exit code: there is nothing wrong with asking, and an operator working down a
  * list of batches should not have to tell a refusal from a batch that was already fine.
  *
- * <p>The notifier service and the stream are held here and read by T065; this is the seam T063 is
- * written against.
+ * <p>The batch is the one argument, and it is required: there is no default batch to resend and
+ * there must not be one, because a command that guessed would e-mail a court centre nobody named.
  */
-// PMD.UnusedPrivateField: the collaborators the body T065 lands reads. They are constructor
-// arguments now rather than then so that T063's cases can put a tally and a stream in front of the
-// command and assert what an operator would see.
-@SuppressWarnings("PMD.UnusedPrivateField")
 public class NotifyRegisterCli {
+
+    /** What the command takes, printed under a refusal and on request. */
+    private static final String USAGE = "usage: " + CliMain.NOTIFY_REGISTER + " --" + Args.BATCH
+            + " B (re-requests the FAILED recipients of one batch, and only those)";
+
+    private static final Logger LOG = LoggerFactory.getLogger(NotifyRegisterCli.class);
+
+    /** What this command could not finish, as the bounded reason the line carries. */
+    private static final String NOT_RESENT = "resend-failed";
 
     /**
      * The resend, which is the notifier's own {@code resendFailed} and nothing this command
@@ -64,7 +74,76 @@ public class NotifyRegisterCli {
      * @return {@link CliMain#SUCCESS}, {@link CliMain#REFUSED} where the arguments were not usable,
      *         or {@link CliMain#FAILED}
      */
+    // PMD.OnlyOneReturn: the four exits are the four things that can happen to an invocation, each
+    // said where it is decided; one exit would carry a verdict past the resend that must not be
+    // asked for once the arguments have been refused.
+    @SuppressWarnings("PMD.OnlyOneReturn")
     public int run(final List<String> args) {
-        throw new UnsupportedOperationException("T065");
+        final Args parsed;
+        try {
+            parsed = Args.parse(args);
+        } catch (IllegalArgumentException notUsable) {
+            return CliMain.unreadable(CliMain.NOTIFY_REGISTER, USAGE, notUsable, output);
+        }
+        if (parsed.askedForHelp()) {
+            output.accept(USAGE);
+            return CliMain.SUCCESS;
+        }
+        if (!parsed.permits(Set.of(Args.BATCH), Set.of())) {
+            return refuse(CliMain.UNEXPECTED_ARGUMENT);
+        }
+        final String typed = parsed.options().get(Args.BATCH);
+        if (typed == null) {
+            return refuse(CliMain.MISSING_ARGUMENT);
+        }
+        final UUID batchId;
+        try {
+            batchId = UUID.fromString(typed);
+        } catch (IllegalArgumentException notAnIdentity) {
+            return CliMain.unreadable(CliMain.NOTIFY_REGISTER, USAGE, notAnIdentity, output);
+        }
+        return resend(batchId);
+    }
+
+    /**
+     * Asks the notifier for this batch's owed recipients and reports the tally it answered.
+     *
+     * <p>A batch this service never assembled, and a store that went away while the resend was
+     * being attempted, are the same answer from here: the attempt reached no tally, which is
+     * {@link CliMain#FAILED} and not a refusal. The batch is named so an operator working down a
+     * ticket's list knows which one to come back to, and the far end's own sentence about it is on
+     * the log line rather than on their terminal.
+     *
+     * @param batchId the batch an operator carried in from a support ticket
+     * @return {@link CliMain#SUCCESS} where a tally was taken, {@link CliMain#FAILED} where none
+     *         was
+     */
+    // PMD.AvoidCatchingGenericException: the notifier refuses an unknown batch through
+    // IllegalStateException and the store translates an outage into its own unchecked type; both
+    // mean the same thing here - no tally was taken - and a narrower catch would leave one of them
+    // reaching an operator as a stack trace.
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
+    private int resend(final UUID batchId) {
+        try {
+            final NotificationSummary settled = notifier.resendFailed(batchId);
+            output.accept("batch=" + batchId + " accepted=" + settled.accepted()
+                    + " failed=" + settled.failed() + " state=" + settled.outcome());
+            return CliMain.SUCCESS;
+        } catch (RuntimeException notResent) {
+            LOG.error("The recipients owed by batch {} could not be re-requested, so the batch is "
+                    + "left as it stands. cause={}", batchId, notResent.getClass().getName(),
+                    notResent);
+            return CliMain.failure(CliMain.NOTIFY_REGISTER, "batch=" + batchId, NOT_RESENT, output);
+        }
+    }
+
+    /**
+     * Declines, under the bounded reason and this command's own usage.
+     *
+     * @param reason one of {@link CliMain}'s three argument reasons
+     * @return {@link CliMain#REFUSED}
+     */
+    private int refuse(final String reason) {
+        return CliMain.refusal(CliMain.NOTIFY_REGISTER, USAGE, reason, output);
     }
 }
