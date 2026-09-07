@@ -16,6 +16,7 @@ import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.classic.spi.ThrowableProxyUtil;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -25,6 +26,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 import org.assertj.core.api.SoftAssertions;
@@ -38,6 +40,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentMatcher;
 import org.mockito.invocation.InvocationOnMock;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPause;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
@@ -172,6 +176,15 @@ class RegisterNotifierServiceTest {
     /** notificationnotify refused the command outright; another attempt answers the same. */
     private static final int REFUSED = 400;
 
+    /** notificationnotify could not take the command now; another attempt may answer 202. */
+    private static final int UNAVAILABLE = 503;
+
+    /** The shared transport's own defaults, which are what the run's budget is made of. */
+    private static final int MAX_ATTEMPTS = 3;
+    private static final Duration INITIAL_BACKOFF = Duration.ofSeconds(1);
+    private static final Duration MAX_BACKOFF = Duration.ofSeconds(2);
+    private static final Duration ATTEMPT_WORST_CASE = Duration.ofSeconds(15);
+
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final GenerationMetrics metrics = new GenerationMetrics(registry);
     private final AdjustableClock clock = AdjustableClock.startingAt(SETTLED_AT);
@@ -180,6 +193,20 @@ class RegisterNotifierServiceTest {
     private final RegisterNotificationRepository notifications =
             mock(RegisterNotificationRepository.class);
     private final RegisterNotifier notifier = mock(RegisterNotifier.class);
+
+    /**
+     * The one policy all this service's clients hold, built from the settings they share.
+     *
+     * <p>The same object the generation leg is given (defect fix C3): the taxonomy is stated once
+     * and only the loop belongs to whoever holds the budget an attempt is spent out of.
+     */
+    private final RetryPolicy retryPolicy = new RetryPolicy(MAX_ATTEMPTS, INITIAL_BACKOFF,
+            MAX_BACKOFF, ATTEMPT_WORST_CASE);
+
+    /** What would have been waited, rather than what was: a suite is not paid for in seconds. */
+    private final List<Duration> waited = new ArrayList<>();
+
+    private final RetryPause pause = waited::add;
 
     /** The {@code register_notification} table, keyed on the identity a row was minted with. */
     private final Map<UUID, RegisterNotification> ledger = new LinkedHashMap<>();
@@ -201,7 +228,8 @@ class RegisterNotifierServiceTest {
     private final List<BatchSettlement> settlements = new ArrayList<>();
 
     private final RegisterNotifierService service = new RegisterNotifierService(
-            store, batches, notifications, notifier, metrics, TEMPLATE_ID, clock);
+            store, batches, notifications, notifier, metrics, TEMPLATE_ID, retryPolicy, pause,
+            clock);
 
     @InjectSoftAssertions
     private SoftAssertions softly;
@@ -366,6 +394,39 @@ class RegisterNotifierServiceTest {
         doAnswer(invocation -> {
             recordPost(invocation);
             throw new NotificationFailedException(FailureClassification.TRANSIENT);
+        }).when(notifier).send(argThat(sentTo(address)), any(), any());
+    }
+
+    /**
+     * One address notificationnotify cannot take the command for now, and then can.
+     *
+     * <p>The shape the whole retry exists for: a 503, a 429 or a read timeout says nothing about
+     * whether the same command under the same identity would be accepted a moment later.
+     *
+     * @param address the address whose first attempt is refused transiently
+     * @param code    the status that first attempt is refused with
+     */
+    private void refusesOnceThenAccepts(final String address, final int code) {
+        final AtomicInteger attempts = new AtomicInteger();
+        doAnswer(invocation -> {
+            recordPost(invocation);
+            if (attempts.incrementAndGet() == 1) {
+                throw new NotificationFailedException(FailureClassification.TRANSIENT, code);
+            }
+            return new NotificationOutcome(NotificationStatus.ACCEPTED, ACCEPTED);
+        }).when(notifier).send(argThat(sentTo(address)), any(), any());
+    }
+
+    /**
+     * One address notificationnotify never manages to take the command for.
+     *
+     * @param address the address every attempt is refused for
+     * @param code    the status each of them is refused with
+     */
+    private void refusesTransiently(final String address, final int code) {
+        doAnswer(invocation -> {
+            recordPost(invocation);
+            throw new NotificationFailedException(FailureClassification.TRANSIENT, code);
         }).when(notifier).send(argThat(sentTo(address)), any(), any());
     }
 
@@ -796,6 +857,127 @@ class RegisterNotifierServiceTest {
                             + "resendable under its own identity and the batch stays "
                             + "PARTIALLY_NOTIFIED")
                     .isEqualTo(new NotificationSummary(1, 1, BatchStatus.PARTIALLY_NOTIFIED));
+        }
+    }
+
+    /**
+     * The refusal that may answer differently, asked again inside the run's own budget.
+     *
+     * <p>The taxonomy is the shared {@code adapter/http/RetryPolicy}'s and the counting is this
+     * service's, exactly as the generation leg splits them: the client classifies one attempt and
+     * knows nothing about what is left of the budget, and the object that holds the budget decides
+     * whether there is room for another. A 503, a 429 or a read timeout for one recipient is a
+     * moment in notificationnotify's night and not a verdict about the e-mail, and settling the row
+     * FAILED on the first of them turns it into one - a whole batch PARTIALLY_NOTIFIED and an
+     * operator resend, for something that would have been accepted a second later.
+     *
+     * <p>The retry is safe because it is the same POST: the notification id is the row's own, so
+     * notificationnotify's aggregate is reached rather than a second e-mail asked for (research
+     * §10).
+     */
+    @Nested
+    @DisplayName("the transient refusal, asked again")
+    class RetryingWhatMayAnswerDifferently {
+
+        @Test
+        void a_transient_refusal_should_be_asked_again_under_the_same_identity_and_be_accepted() {
+            refusesOnceThenAccepts(ADDRESS_B, UNAVAILABLE);
+
+            final NotificationSummary summary = notifyBatch();
+
+            softly.assertThat(postedAddresses())
+                    .as("a 503 says notificationnotify could not take the command now, not that "
+                            + "this team is not to be told; the second POST is the same command "
+                            + "under the same identity")
+                    .containsExactly(ADDRESS_A, ADDRESS_B, ADDRESS_B, ADDRESS_C);
+            softly.assertThat(posted.stream()
+                            .filter(row -> ADDRESS_B.equals(row.emailAddress()))
+                            .map(RegisterNotification::notificationId)
+                            .distinct())
+                    .as("and it is one identity across both attempts, because a fresh one would "
+                            + "reach a fresh aggregate and send a second register")
+                    .hasSize(1);
+            softly.assertThat(settled)
+                    .as("the row records the attempt that was accepted and how many it took")
+                    .extracting(RegisterNotification::emailAddress, RegisterNotification::status,
+                            RegisterNotification::responseCode, RegisterNotification::attempts)
+                    .contains(tuple(ADDRESS_B, NotificationStatus.ACCEPTED, ACCEPTED, 2));
+            softly.assertThat(summary)
+                    .as("so one unlucky moment does not cost a court centre its PARTIALLY_NOTIFIED "
+                            + "night and an operator resend")
+                    .isEqualTo(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
+        }
+
+        @Test
+        void a_non_transient_refusal_should_not_be_asked_again() {
+            refuses(ADDRESS_B, REFUSED);
+
+            notifyBatch();
+
+            softly.assertThat(postedAddresses())
+                    .as("the command was understood and declined, and the same command under the "
+                            + "same identity will be declined again; waiting to prove it would cost "
+                            + "the run its budget for the teams after it")
+                    .containsExactly(ADDRESS_A, ADDRESS_B, ADDRESS_C);
+            softly.assertThat(waited)
+                    .as("and nothing is waited for a refusal no wait can change")
+                    .isEmpty();
+        }
+
+        @Test
+        void a_transient_refusal_that_never_clears_should_be_failed_with_the_last_status() {
+            refusesTransiently(ADDRESS_B, UNAVAILABLE);
+
+            final NotificationSummary summary = notifyBatch();
+
+            softly.assertThat(postedAddresses())
+                    .as("the attempt budget is the shared one, and it is spent per recipient: "
+                            + "three attempts for the team that could not be told and one each for "
+                            + "the teams that could")
+                    .containsExactly(ADDRESS_A, ADDRESS_B, ADDRESS_B, ADDRESS_B, ADDRESS_C);
+            softly.assertThat(settled)
+                    .as("and the row carries the status that made the last attempt a refusal, so "
+                            + "an exhausted budget is told from a route that has stopped reaching "
+                            + "the command endpoint")
+                    .extracting(RegisterNotification::emailAddress, RegisterNotification::status,
+                            RegisterNotification::responseCode, RegisterNotification::attempts)
+                    .contains(tuple(ADDRESS_B, NotificationStatus.FAILED, UNAVAILABLE, 3));
+            softly.assertThat(summary)
+                    .as("a team that could not be told in three attempts is a team that was not "
+                            + "told, which is what PARTIALLY_NOTIFIED says")
+                    .isEqualTo(new NotificationSummary(2, 1, BatchStatus.PARTIALLY_NOTIFIED));
+        }
+
+        @Test
+        void the_wait_between_two_attempts_should_be_the_shared_back_off() {
+            refusesTransiently(ADDRESS_B, UNAVAILABLE);
+
+            notifyBatch();
+
+            softly.assertThat(waited)
+                    .as("initial-backoff doubling per attempt and bounded by max-backoff, from the "
+                            + "one policy every client of this service holds: a client with a "
+                            + "back-off of its own is what defect fix C3 removed")
+                    .containsExactly(INITIAL_BACKOFF, MAX_BACKOFF);
+        }
+
+        @Test
+        void a_resend_should_spend_the_same_budget_as_a_first_notification() {
+            when(batches.findById(BATCH_ID)).thenReturn(Optional.of(partiallyNotified()));
+            seeded(YOT_A, ADDRESS_A, NotificationStatus.ACCEPTED, ACCEPTED);
+            seeded(YOT_B, ADDRESS_B, NotificationStatus.FAILED, REFUSED);
+            refusesOnceThenAccepts(ADDRESS_B, UNAVAILABLE);
+
+            final NotificationSummary summary = resend();
+
+            softly.assertThat(postedAddresses())
+                    .as("a resend is the same POST made again, so it is asked again on the same "
+                            + "terms rather than getting one attempt where a notification gets "
+                            + "three")
+                    .containsExactly(ADDRESS_B, ADDRESS_B);
+            softly.assertThat(summary)
+                    .as("and the batch reaches NOTIFIED on the attempt that was accepted")
+                    .isEqualTo(new NotificationSummary(2, 0, BatchStatus.NOTIFIED));
         }
     }
 

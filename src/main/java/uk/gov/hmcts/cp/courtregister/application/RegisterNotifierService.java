@@ -9,6 +9,8 @@ import java.util.OptionalInt;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPause;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
 import uk.gov.hmcts.cp.courtregister.batch.RecipientSet;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
@@ -128,6 +130,20 @@ public class RegisterNotifierService {
      */
     private final UUID templateId;
 
+    /**
+     * The shared retry policy: the attempt budget and the back-off between two of them.
+     *
+     * <p>Compile-safe seam: the loop that spends it is written by the paired fix, so the cases
+     * guarding the retry fail on their assertions rather than on a constructor that cannot be
+     * called.
+     */
+    @SuppressWarnings("PMD.UnusedPrivateField")
+    private final RetryPolicy retryPolicy;
+
+    /** How a wait between two attempts is taken; the seam's other half. */
+    @SuppressWarnings("PMD.UnusedPrivateField")
+    private final RetryPause pause;
+
     /** This pod's reading of now, which is what {@code sent_at} records. */
     private final Clock clock;
 
@@ -143,6 +159,9 @@ public class RegisterNotifierService {
      * @param registerNotifier      notificationnotify, behind the port
      * @param generationMetrics     where each recipient and each terminal batch state is counted
      * @param crStandardTemplateId  the {@code cr_standard} template id, resolved once at wiring
+     * @param policy                the shared retry policy: attempts, back-off, and what one
+     *                              attempt is worth asking again for
+     * @param retryPause            how a wait between two attempts at one recipient is taken
      * @param runClock              this pod's reading of now, which is what {@code sent_at} records
      */
     public RegisterNotifierService(final RegisterStore registerStore,
@@ -151,6 +170,8 @@ public class RegisterNotifierService {
             final RegisterNotifier registerNotifier,
             final GenerationMetrics generationMetrics,
             final UUID crStandardTemplateId,
+            final RetryPolicy policy,
+            final RetryPause retryPause,
             final Clock runClock) {
         this.store = registerStore;
         this.batches = registerBatches;
@@ -158,6 +179,8 @@ public class RegisterNotifierService {
         this.notifier = registerNotifier;
         this.metrics = generationMetrics;
         this.templateId = crStandardTemplateId;
+        this.retryPolicy = policy;
+        this.pause = retryPause;
         this.clock = runClock;
     }
 

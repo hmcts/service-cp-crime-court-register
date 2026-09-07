@@ -146,8 +146,15 @@ public class GenerationConfig {
      * @param batches       the {@code register_batch} read that gives the generated document's id
      * @param notifications the {@code register_notification} rows
      * @param notifier      notificationnotify, LIVE or STUB as the mode chose
+     * <p><strong>The retry policy is the same object the generation leg is given</strong>, built
+     * from the same five settings: {@code courtregister.endpoints.max-attempts} and the two
+     * back-off bounds are the transport the systemdocgenerator and notificationnotify clients share,
+     * so the taxonomy is stated once (defect fix C3) and only the loop belongs to whoever holds the
+     * budget an attempt is spent out of.
+     *
      * @param metrics       where each recipient and each terminal batch state is counted
-     * @param properties    the bound settings, for the {@code cr_standard} template id
+     * @param properties    the bound settings, for the {@code cr_standard} template id and the
+     *                      shared transport
      * @param clock         the run's own reading of now, which is what {@code sent_at} records
      * @return the notifying leg
      */
@@ -159,7 +166,8 @@ public class GenerationConfig {
             final Clock clock) {
 
         return new RegisterNotifierService(store, batches, notifications, notifier, metrics,
-                crStandardTemplate(properties), clock);
+                crStandardTemplate(properties), sharedRetryPolicy(properties),
+                (RetryPause) Thread::sleep, clock);
     }
 
     /**
@@ -229,12 +237,26 @@ public class GenerationConfig {
             final CourtRegisterProperties properties, final GenerationMetrics metrics,
             final Clock clock) {
 
-        final CourtRegisterProperties.Endpoints endpoints = properties.endpoints();
         return new RegisterGenerationService(store, mapper, fileStore, renderer, objectMapper,
-                new RetryPolicy(endpoints.maxAttempts(), endpoints.initialBackoff(),
-                        endpoints.maxBackoff(),
-                        endpoints.connectTimeout().plus(endpoints.readTimeout())),
-                (RetryPause) Thread::sleep, metrics, clock);
+                sharedRetryPolicy(properties), (RetryPause) Thread::sleep, metrics, clock);
+    }
+
+    /**
+     * The one retry policy, built from the five settings the two downstream clients share.
+     *
+     * <p>Built here for both legs rather than once per leg, which is what defect fix C3 asks of it:
+     * the statuses worth asking again, the back-off between two attempts and what one attempt can
+     * cost are one opinion, and two constructions of the same record are two places that opinion
+     * can drift.
+     *
+     * @param properties the bound settings, for the endpoints' shared transport
+     * @return the policy both legs spend their attempts against
+     */
+    private static RetryPolicy sharedRetryPolicy(final CourtRegisterProperties properties) {
+        final CourtRegisterProperties.Endpoints endpoints = properties.endpoints();
+        return new RetryPolicy(endpoints.maxAttempts(), endpoints.initialBackoff(),
+                endpoints.maxBackoff(),
+                endpoints.connectTimeout().plus(endpoints.readTimeout()));
     }
 
     /**
