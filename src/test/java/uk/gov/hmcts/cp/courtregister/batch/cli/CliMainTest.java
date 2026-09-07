@@ -56,6 +56,13 @@ import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
  * becomes, and the two ways a report line may be written. Those are the parts a runbook step
  * actually depends on, and until now a change to any of them would have gone red nowhere.
  *
+ * <p><strong>Two cases are not characterisations, and they are the two about a dispatch with no
+ * command name at all.</strong> Stating the rest of this turned up a defect in {@code dispatch}: it
+ * asked an immutable list whether it held a null name, which such a list refuses with an exception
+ * of its own, so an invocation whose argument was never set threw rather than answering. Those two
+ * were written red against that and are followed by the fix, in the ordinary way; everything else
+ * here passed as written.
+ *
  * <p><strong>The exit code is the whole interface between a command and the step that ran
  * it.</strong> 0 did it, 1 declined and changed nothing, 2 tried and could not, and the three are
  * asserted as those numbers rather than as the constants alone: the script exits 2 of its own
