@@ -105,7 +105,11 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * the call that does not get it posts nothing and answers
  * {@link NotificationDisposition#ALREADY_NOTIFYING}, which is not a failure but a batch somebody
  * else is telling. The claim carries a lease, because a pod that died mid-notification would
- * otherwise leave a batch nothing could ever pick up.
+ * otherwise leave a batch nothing could ever pick up. <strong>The claim answers three things and
+ * not two</strong> ({@link NotificationClaim}): a batch nothing was ever assembled under is the
+ * caller's own correlation being wrong and surfaces as this service's existing not-found failure,
+ * not as contention, because a lost correlation counted as contention makes the reading a stuck
+ * claim is chased by mean nothing.
  *
  * <p><strong>The lease is the notifying leg's own and is renewed before every write.</strong>
  * {@code courtregister.notification.claim-lease} rather than the reconciler's grace period, which
@@ -309,6 +313,14 @@ public class RegisterNotifierService {
      * the rows as they stood - which is the winner's work part-done, and why a caller branches on
      * {@link NotificationDisposition} and not on the counts.
      *
+     * <p><strong>And a claim nothing could be taken on is not a loser at all.</strong> The claim
+     * answers {@link NotificationClaim#ABSENT} where this store holds no batch under the identity
+     * the caller named, which is that caller's own correlation being wrong: no notifier is telling
+     * this batch's recipients, because there are no recipients and no batch. It is the not-found
+     * failure this method already raised a step later, raised here instead, and it is deliberately
+     * not counted as contention - a lost correlation in the reading a stuck claim is chased by makes
+     * that reading mean nothing.
+     *
      * <p><strong>The claim is released in a finally, and released by token.</strong> A claim held
      * past the run that took it is a batch no resend and no reconciliation could pick up, which is
      * defect fix P1's state wearing a different hat; the lease is the second answer to that, for
@@ -326,8 +338,12 @@ public class RegisterNotifierService {
     @SuppressWarnings("PMD.OnlyOneReturn")
     private NotificationSummary underTheClaim(final UUID batchId) {
         final UUID token = UUID.randomUUID();
+        final NotificationClaim claim = batches.claimForNotification(batchId, token);
 
-        if (batches.claimForNotification(batchId, token) != NotificationClaim.CLAIMED) {
+        if (claim == NotificationClaim.ABSENT) {
+            throw noSuchBatch(batchId);
+        }
+        if (claim == NotificationClaim.ALREADY_CLAIMED) {
             metrics.alreadyNotifying();
             LOG.info("Batch {} is already being notified by another mechanism, so this run posts "
                     + "nothing for it: two runs telling one batch's recipients is a second e-mail "
@@ -939,8 +955,23 @@ public class RegisterNotifierService {
      *     an identity nothing was ever assembled under rather than a batch with nothing to send
      */
     private RegisterBatch batchOf(final UUID batchId) {
-        return batches.findById(batchId).orElseThrow(() -> new IllegalStateException(
-                "no register batch " + batchId + " to tell the recipients of"));
+        return batches.findById(batchId).orElseThrow(() -> noSuchBatch(batchId));
+    }
+
+    /**
+     * The failure a caller naming an identity nothing was ever assembled under gets.
+     *
+     * <p>Named once because two things reach it: a read that came back empty, and a claim attempt
+     * that found no batch to claim. The second used to be reported as contention, which is a batch
+     * somebody else is telling - a different night from a batch that does not exist, and the wrong
+     * one to tell an operator about.
+     *
+     * @param batchId the identity the caller named
+     * @return the failure to raise; the message carries the identity and nothing else
+     */
+    private static IllegalStateException noSuchBatch(final UUID batchId) {
+        return new IllegalStateException(
+                "no register batch " + batchId + " to tell the recipients of");
     }
 
     /**

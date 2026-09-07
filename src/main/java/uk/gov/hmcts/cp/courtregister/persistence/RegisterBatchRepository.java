@@ -230,7 +230,22 @@ public class RegisterBatchRepository {
             """;
 
     /**
-     * Statement 9 - the claim kept alive, by the notifier whose token it was taken under.
+     * Statement 9 - whether this store holds the batch at all, asked when the claim was not taken.
+     *
+     * <p>The compare-and-set above changes no row for two unrelated reasons: another notifier holds
+     * a live claim, or there is no such batch. Read inside the claim's own transaction and under its
+     * own advisory lock, so the two readings are of one moment rather than of two - a batch
+     * assembled between a failed claim and a later existence read would otherwise be answered
+     * absent when it is merely somebody else's.
+     *
+     * <p>Asked only where the claim was refused, because that is the only answer it can change.
+     */
+    private static final String BATCH_EXISTS = """
+            SELECT EXISTS (SELECT 1 FROM register_batch WHERE batch_id = :batchId) AS held
+            """;
+
+    /**
+     * Statement 10 - the claim kept alive, by the notifier whose token it was taken under.
      *
      * <p>The ownership re-check and the lease extension are one statement because they are one
      * question asked at one moment: a notifier about to POST for a recipient, or about to write what
@@ -253,7 +268,7 @@ public class RegisterBatchRepository {
                AND notifier_token = :token
             """;
 
-    /** Statement 10 - the claim given back, by the notifier whose token it was taken under. */
+    /** Statement 11 - the claim given back, by the notifier whose token it was taken under. */
     private static final String RELEASE_NOTIFICATION_CLAIM = """
             UPDATE register_batch
                SET notifying_since = NULL,
@@ -414,10 +429,10 @@ public class RegisterBatchRepository {
     }
 
     /**
-     * Statements 7 and 8 - claims the batch for notification, or answers that another notifier
-     * holds it.
+     * Statements 7, 8 and 9 - claims the batch for notification, or answers why it could not.
      *
-     * <p><strong>Two statements in one short transaction, and the transaction is the point.</strong>
+     * <p><strong>Up to three statements in one short transaction, and the transaction is the
+     * point.</strong>
      * The advisory lock serialises every claim attempt for one batch, so the compare-and-set that
      * follows it is the only one running: two notifiers that arrived together are two attempts one
      * after the other rather than two reads of the same row, and the second of them sees the first
@@ -437,6 +452,16 @@ public class RegisterBatchRepository {
      * ever take is a batch no resend and no reconciliation could pick up - the state defect fix P1
      * is about, wearing a different hat.
      *
+     * <p><strong>And a compare-and-set that changed nothing is asked why.</strong> Nought rows means
+     * another notifier holds a live claim, or it means this store holds no such batch, and the two
+     * are not the same night: the first is an ordinary evening with the outcome sink and an
+     * operator's resend both reaching one generated batch, and the second is a caller acting on a
+     * correlation nothing was ever assembled under. Answering the first for the second put a lost
+     * correlation into the reading a claim nobody can take is chased by. The existence read is made
+     * inside this transaction, under this advisory lock, so the two answers are two readings of one
+     * moment - a batch assembled between a failed claim and a later read would otherwise be answered
+     * absent when it is merely somebody else's.
+     *
      * @param batchId the batch to claim
      * @param token   the token this notifier claims under, minted fresh for the attempt
      * @return whether this notifier took the claim, another notifier holds one, or this store holds
@@ -449,24 +474,35 @@ public class RegisterBatchRepository {
                         .param(BATCH_KEY, batchId.toString())
                         .query(Boolean.class)
                         .single();
-                // The two answers a failed compare-and-set carries apart from each other are the
-                // statement's to distinguish, and the statement that does it arrives with the
-                // existence read. Until then a failure reads as contention, as it always did, so
-                // the cases waiting on it record a failing assertion.
                 return jdbcClient.sql(CLAIM_FOR_NOTIFICATION)
                         .param(BATCH_ID, batchId)
                         .param(TOKEN, token)
                         .param(LEASE_PARAM, lease())
                         .update() > 0
                         ? NotificationClaim.CLAIMED
-                        : NotificationClaim.ALREADY_CLAIMED;
+                        : whyNot(batchId);
             });
             return claim == null ? NotificationClaim.ALREADY_CLAIMED : claim;
         });
     }
 
     /**
-     * Statement 9 - keeps this notifier's claim alive, and says whether it is still this
+     * Statement 9 - why a claim's compare-and-set changed nothing, asked where it did not.
+     *
+     * @param batchId the batch the claim was refused for
+     * @return contention where this store holds the batch, and no such batch where it does not
+     */
+    private NotificationClaim whyNot(final UUID batchId) {
+        return Boolean.TRUE.equals(jdbcClient.sql(BATCH_EXISTS)
+                .param(BATCH_ID, batchId)
+                .query(Boolean.class)
+                .single())
+                ? NotificationClaim.ALREADY_CLAIMED
+                : NotificationClaim.ABSENT;
+    }
+
+    /**
+     * Statement 10 - keeps this notifier's claim alive, and says whether it is still this
      * notifier's.
      *
      * <p>Asked before every POST the cycle makes and before every write it makes about one, because
@@ -491,7 +527,7 @@ public class RegisterBatchRepository {
     }
 
     /**
-     * Statement 10 - releases a notification claim this notifier holds.
+     * Statement 11 - releases a notification claim this notifier holds.
      *
      * <p>Fenced on the token, so a notifier whose claim was reclaimed while it was working releases
      * nothing: the claim it would be giving back is the one the notifier that took it over is

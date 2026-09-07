@@ -165,11 +165,14 @@ src/main/java/uk/gov/hmcts/cp/courtregister/
 │   └── stub/ Stub{PayloadFileStore,DocumentRenderer,RegisterNotifier,FeatureFlagReader}.java
 ├── persistence/
 │   ├── ProcessedOutputRepository.java     # CHANGED: document, batch_id, supersession, flag state, mark*
-│   ├── RegisterBatchRepository.java       # + the notification claim: claimForNotification,
-│   │                                      #   renewNotificationClaim and releaseNotificationClaim,
-│   │                                      #   the last two token-fenced
+│   ├── RegisterBatchRepository.java       # + the notification claim: claimForNotification answers
+│   │                                      #   NotificationClaim (CLAIMED | ALREADY_CLAIMED
+│   │                                      #   | ABSENT), plus token-fenced renewNotificationClaim
+│   │                                      #   and releaseNotificationClaim
 │   ├── RegisterNotificationRepository.java # update answers NotificationSettlement (APPLIED
 │   │                                      #   | ATTEMPTS_ONLY | ABSENT); the tally is unconditional
+│   ├── NotificationClaim.java, NotificationSettlement.java   # the two statements' own answers,
+│   │                                      #   bounded: a row count could not carry either
 └── config/
     ├── GenerationProperties.java, FeatureFlagProperties.java, FileServiceDataSourceConfig.java,
     ├── SchedulingConfig.java (ShedLock), PublicEventsConfig.java (JMS listener container),

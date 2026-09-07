@@ -132,6 +132,24 @@ fenced on the token, in a `finally`. The advisory lock serialises the claim atte
 compare-and-set that follows is the only one running; being transaction-scoped, it is given back
 when that short transaction commits, which is before the first POST.
 
+**The claim answers three things and not two (revised 2026-09-07).** A compare-and-set that changed
+no row means another notifier holds a live claim, or it means this store holds no batch under that
+identity, and the two are not the same night: the first is an ordinary evening with the outcome sink
+and an operator's resend both reaching one generated batch, and the second is a caller acting on a
+correlation nothing was ever assembled under. Answering the first for the second put a lost
+correlation into the reading a claim nobody can take is chased by, and reported a batch that does not
+exist as a batch somebody is busy telling. So the method answers
+`NotificationClaim` - `CLAIMED` | `ALREADY_CLAIMED` | `ABSENT` - with the existence read
+(`SELECT EXISTS (SELECT 1 FROM register_batch WHERE batch_id = :batchId)`) made only where the claim
+was refused, inside the same transaction and under the same advisory lock, so the two answers are two
+readings of one moment: a batch assembled between a failed claim and a later read would otherwise be
+answered absent when it is merely somebody else's. `RegisterNotifierService` counts and logs
+`already-notifying` for `ALREADY_CLAIMED` alone; `ABSENT` raises the not-found failure the service
+already had (`no register batch <id> to tell the recipients of`), a step earlier than before. Pinned
+by `RegisterBatchRepositoryIT
+.claiming_a_batch_this_store_never_assembled_should_say_there_is_no_such_batch` and
+`RegisterNotifierServiceTest.AnAbsentBatchIsNotContention`.
+
 **Why a claim and not one transaction round the cycle.** The alternative considered was a single
 transaction from the read through the POSTs to the settlement, with the advisory lock held across
 it. That is rejected: the cycle POSTs to notificationnotify once per recipient and waits
