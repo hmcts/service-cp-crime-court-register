@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.context.support.GenericApplicationContext;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
@@ -644,6 +645,85 @@ class CliMainTest {
 
             verifyNoInteractions(gate, store, assembler, generation, notifier, batches,
                     notifications, reader);
+        }
+    }
+
+    /**
+     * The same question asked on a deployment that holds none of the command's collaborators.
+     *
+     * <p>{@code courtregister.generation.enabled=false} is the pre-cutover shape and an intake-only
+     * pod builds no {@code GenerationConfig} at all, so the registry's own lambdas cannot resolve
+     * the beans they are written over. The registry resolves them as the command is <em>built</em>,
+     * which is before {@code run} has looked at what was typed - so on such a pod
+     * {@code kubectl exec ... -- ./startup.sh generate-register --help} answered
+     * {@code outcome=failed reason=command-not-wired} and exit 2 rather than the usage text, and the
+     * property {@link AskingForHelp} states held at the command classes and nowhere an operator
+     * reaches.
+     *
+     * <p>The context is a real empty one rather than a double: what an intake-only pod does to
+     * {@code getBean} is Spring's answer and not this suite's to invent.
+     *
+     * <p><strong>The second case is an [A] characterisation.</strong> A command actually being run
+     * on such a context already answered {@code command-not-wired}, which is the honest answer -
+     * the downstream half is not deployed there - and it is stated here so that answering
+     * {@code --help} cannot come to mean answering everything.
+     */
+    @Nested
+    @DisplayName("asking a command what it takes where it is not wired")
+    class AskingForHelpWhereNothingIsWired {
+
+        /** A deployment that holds none of the five commands' beans: refreshed, and empty. */
+        private GenericApplicationContext intakeOnly;
+
+        @BeforeEach
+        void aPodWithTheDownstreamHalfSwitchedOff() {
+            intakeOnly = new GenericApplicationContext();
+            intakeOnly.refresh();
+        }
+
+        @AfterEach
+        void closeIt() {
+            intakeOnly.close();
+        }
+
+        @Test
+        void every_command_should_answer_help_where_this_context_holds_none_of_its_beans() {
+            final Map<String, CliMain.Command> registry = CliMain.registryOf(intakeOnly, output);
+
+            CliMain.COMMANDS.forEach(name -> {
+                printed.clear();
+                final int code = cli.run(new String[] {name, "--help"}, registry, output);
+
+                softly.assertThat(code)
+                        .as("asking what a command takes reads nothing, sends nothing and needs "
+                                + "none of the downstream half, so it is answered on the pod an "
+                                + "operator is standing on rather than refused by it")
+                        .isEqualTo(CliMain.SUCCESS);
+                softly.assertThat(printed)
+                        .as("and the answer is this command's own usage, which is what the "
+                                + "operator asked for")
+                        .anyMatch(line -> line.startsWith("usage: " + name));
+            });
+        }
+
+        @Test
+        void running_a_command_on_such_a_context_should_still_say_it_is_not_wired() {
+            final Map<String, CliMain.Command> registry = CliMain.registryOf(intakeOnly, output);
+
+            final int code = cli.run(
+                    new String[] {CliMain.GENERATE_REGISTER, "--date", TYPED_DATE}, registry,
+                    output);
+
+            softly.assertThat(code)
+                    .as("a regeneration asked of a pod that has no generation half is the one "
+                            + "thing exit 2 is for: not a refusal, which would say the arguments "
+                            + "were wrong, and not a stack trace about a bean definition")
+                    .isEqualTo(CliMain.FAILED);
+            softly.assertThat(printed)
+                    .as("under the bounded reason, so answering --help cannot come to mean "
+                            + "answering everything")
+                    .contains("command=" + CliMain.GENERATE_REGISTER
+                            + " outcome=failed reason=command-not-wired");
         }
     }
 

@@ -330,11 +330,14 @@ public class CliMain {
      * registry that had required the generation beans to exist would have refused it on the very
      * stack it is asked about.
      *
+     * <p>Package-visible so that {@code CliMainTest} can build the same registry over a context
+     * that holds none of the beans, which is the shape an intake-only pod is.
+     *
      * @param context the CLI-mode context
      * @param output  where every command's lines are written
      * @return the five commands, by name
      */
-    private static Map<String, Command> registryOf(final ConfigurableApplicationContext context,
+    static Map<String, Command> registryOf(final ConfigurableApplicationContext context,
             final Consumer<String> output) {
 
         return Map.of(
