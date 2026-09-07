@@ -73,6 +73,49 @@ cannot act on, and it is raised as a classified non-transient `RegisterNotRecord
 than retried (`RegisterStoreIT.a_unique_violation_that_is_not_the_active_row_race_is_propagated_not_retried`). The recording statement supersedes **before** it
 inserts, because the row being replaced holds the key until the update takes it out of the index.
 
+**The five statements a person's own command reaches (Phase 7).** Nothing but the operations CLI
+asks for these, so they are recorded here with the invariants they keep; three read or write
+`processed_output` and two read `register_batch`.
+
+- `JdbcRegisterStore` statement **4b**, `batchesOn(registerDate)` - every batch recorded for one
+  register day, whatever state it reached. The read a regeneration starts from, and the one thing
+  statement 4a cannot answer: a support call is about a day rather than a set of keys, and the day's
+  FAILED batches are precisely the ones whose rows still carry a stamp and are therefore outside
+  `ACTIVE_UNBATCHED`. Every state, for the reason 4a reads every state (design Q27): a FAILED batch
+  may be released and re-assembled, a notified one is what a supplementary index is counted over,
+  and one still in flight is why a key is left alone.
+- Statement **9a**, `releaseFailed(batchId)` - a FAILED batch's registers given back, so the day may
+  be rendered again. The other half of statement 9: two of the six failure reasons release the stamp
+  as they fail and the other four leave it, because systemdocgenerator was asked and a document may
+  yet exist, so no later run will ever pick those rows up. Re-rendering is a decision a person
+  makes, and this is that decision written as a statement. Fenced on the batch's own FAILED in the
+  statement as well as before it, because a count of nought otherwise means two different things,
+  and it answers the rows it released rather than leaving them to be read back.
+- Statement **11**, `recordedWhileOff()` - the registers automatic batching passed over. Statement
+  2's predicate with its fourth test turned round, and deliberately one predicate with it: RECORDED,
+  unsuperseded and unbatched in both, `recorded_flag_state <> 'ON'` the only difference (research
+  §12), oldest first by the register instant as statement 2 is. `<> 'ON'` and not `IN ('OFF',
+  'UNKNOWN')`, because the column is NOT NULL over a vocabulary the schema bounds and a state added
+  later is one this read must answer with by default.
+- Statement **12**, `supersedeSharedBefore(instant)` - the rollback lever's other half. Bounded
+  strictly before the instant on `register_time`, the register's own shared instant, because the
+  period the legacy has taken back over is a period of hearings and not of this pod's writes. It
+  takes statement 2's first three predicates and not its fourth: a stamped row has been handed to
+  the renderer and unstamping it is not something the schema offers, a superseded row is not
+  superseded twice, and a GENERATED or NOTIFIED row is not rewritten to say a register that was sent
+  was never claimed. Whether the flag was on when a row arrived is outside the predicate: a rollback
+  supersedes the period, and a row recorded while the flag was off is in that period too.
+- `RegisterBatchRepository` statement **12**, `findByRegisterDate(registerDate)` - the read behind
+  `list-batches --date D`, ordered court house then identity, which is what makes the output stable
+  across two runs; a court house the hearing venue never named sorts last.
+
+All five are pinned against a real Postgres rather than through a doubled store: `RegisterStoreIT`'s
+`DayBatches`, `Releasing`, `RecordedWhileOff` and `Rollback` and `RegisterBatchRepositoryIT`'s
+`DateListing`, sixteen cases red at `903d33b` and green at `e43cca3`. `Rollback` works in a register
+day of its own (2019-01-07), earlier than every register any container-backed suite records, because
+`supersedeSharedBefore` is the one write in that suite not scoped to a court centre: it takes back a
+period, so it reads the whole shared table and its answer counts the whole table.
+
 ## `register_batch`
 
 | Column | Type | Notes |

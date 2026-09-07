@@ -653,25 +653,280 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
 
 ### Tests first ⚠️
 
-- [ ] T062 [P] [US5] `batch/cli/GenerateRegisterCliTest` — `--date` re-assembles FAILED and unbatched
+- [x] T062 [P] [US5] `batch/cli/GenerateRegisterCliTest` — `--date` re-assembles FAILED and unbatched
       rows for the date (optionally `--court-house`, `--batch`, `--recorded-before`); refuses on flag OFF
       without `--ignore-flag`; with it proceeds and prints the override; `system_generated=false`.
-- [ ] T063 [P] [US5] `batch/cli/NotifyRegisterCliTest`, `ListBatchesCliTest`, `SupersedeBeforeCliTest`,
+      (red at `8749f83`, over the compile-safe seams `62aa056`: 26 tests completed, 26 failed, every
+      one an `AssertJMultipleFailuresError` and none a compile error, a null dereference or an
+      unverified interaction. `the_days_failed_batches_should_be_released_and_re_assembled` on
+      "Expecting code not to raise a throwable but caught java.lang.UnsupportedOperationException:
+      T065" and then "expected: [d65c68fe-1b79-4899-a206-43841a1fce9b] but was: []";
+      `a_flag_that_says_off_should_refuse_with_its_own_code_and_change_nothing` on "expected: 1 but
+      was: -1" and on Expecting actual "" to contain "flag-off". Green at `98c8a10`:
+      generate-register 26 tests, 0 failures, 0 errors.)
+- [x] T063 [P] [US5] `batch/cli/NotifyRegisterCliTest`, `ListBatchesCliTest`, `SupersedeBeforeCliTest`,
       `CheckFlagCliTest` — behaviours per spec US5 and FR-016; outputs are stable, line-oriented, PII-free
       (addresses masked in `list-batches`).
-- [ ] T064 [P] [US5] `config/HttpSurfaceTest` (extend) — still zero controllers with generation enabled.
+      (red at `964da97`: 64 tests completed, 64 failed over the four suites.
+      `CheckFlagCliTest.a_flag_read_as_on_should_exit_zero_and_say_so` on "expected: 0 but was: -1"
+      and Expecting actual [] to contain exactly ["flag=ON"];
+      `ListBatchesCliTest.each_batch_should_be_listed_with_its_state_its_records_and_its_recipients`
+      on Expecting actual [] to contain exactly the batch line and the two masked recipient lines;
+      `NotifyRegisterCliTest.a_resend_should_ask_for_the_failed_recipients_and_never_the_whole_batch`
+      and `SupersedeBeforeCliTest.the_period_asked_for_should_be_exactly_the_one_that_was_typed` on
+      "Wanted but not invoked: registerNotifierService.resendFailed(6f1d0c62-...)" and
+      "registerStore.supersedeSharedBefore(2026-09-04T17:00:00Z)". Green at `98c8a10`:
+      notify-register 13, list-batches 25, supersede-before 13, check-flag 13, each 0 failures and
+      0 errors.)
+- [x] T064 [P] [US5] `config/HttpSurfaceTest` (extend) — still zero controllers with generation enabled.
+      (`config/CliModeConfigTest` lands with it, because "zero controllers" and "no consumer, no
+      schedule, no listener" are one property's job, and it is the suite that boots the same
+      generating pod twice differing by `courtregister.cli` alone. Red at `c3d8ff7`: 14 tests, 3
+      failed, all three failing assertions - `holds no Service Bus consumer` on "Expecting empty but
+      was: [courtRegisterProcessorClient]", `schedules nothing` on "Expecting empty but was:
+      [uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob.run, ...]" and `runs no listener
+      container` on "Expecting empty but was: [org.springframework.jms.listener
+      .DefaultMessageListenerContainer@61cd3317]". Green at `98c8a10`: CliModeConfigTest 8 tests,
+      HttpSurfaceTest 6 tests, 0 failures. The other ten cases of the two suites were green on
+      introduction and the commit body says so: they state a property the service already had and
+      that Phase 7 must not take away, so no implementation follows them.)
 
 ### Implementation
 
-- [ ] T065 [US5] `batch/cli/CliMain` (+ the five commands) running the context with
+- [x] T065 [US5] `batch/cli/CliMain` (+ the five commands) running the context with
       `courtregister.cli=true` (no listener, no scheduler, generation adapters LIVE). Green: T062, T063.
-- [ ] T066 [US5] `docker/startup.sh` dispatch: a recognised first argument runs `CliMain` with the
+      (`98c8a10`, green as quoted under T062 to T064. What `courtregister.cli` turns off is three
+      configurations rather than three beans, through one `Condition` beside the property's own name:
+      `ServiceBusConsumerConfig` owns the processor and the only component permitted to start it,
+      `SchedulingConfig` owns `@EnableScheduling` as well as the job, `PublicEventsConfig` owns the
+      container factory as well as the listener, so switching the configuration off is what makes
+      each absence complete. It deliberately left five persistence statements as
+      `UnsupportedOperationException("T065")` seams rather than land them untested -
+      `JdbcRegisterStore.batchesOn` / `releaseFailed` / `recordedWhileOff` / `supersedeSharedBefore`
+      (statements 4b, 9a, 11, 12) and `RegisterBatchRepository.findByRegisterDate` (statement 12) -
+      and they were closed against a real Postgres afterwards: red at `903d33b` (88 tests completed,
+      16 failed, each a failing assertion quoting "java.lang.UnsupportedOperationException: T065" at
+      the seam's own line, the other 72 cases of the two suites passing unchanged), green at
+      `e43cca3` (classes=22 tests=88 failures=0 errors=0), which also cleared the branch's one open
+      `pmdMain` violation, the four repeated `"T065"` literals. Until they landed,
+      `generate-register`, `list-batches --date` and `supersede-before` refused at the store rather
+      than at the argument. What this commit landed uncharacterised is exception 2 below.)
+- [x] T066 [US5] `docker/startup.sh` dispatch: a recognised first argument runs `CliMain` with the
       remaining args; otherwise unchanged `exec java -jar`. Green: T064; `scripts/container-smoke.sh`
       gains `startup.sh check-flag` (exit 0 against the compose WireMock).
-- [ ] T067 [A] [US5] `CliDispatchIT` (container) — `generate-register --help` and `check-flag` exit 0
-      inside the built image. Record.
+      (`ce238a5`: the five names are `CliMain.COMMANDS` and the two lists are one list; a recognised
+      first argument is dispatched out of the fat jar through `PropertiesLauncher` and
+      `-Dloader.main`, because a Boot 4 manifest names `JarLauncher` and `java -jar` cannot run a
+      second main class out of the same archive; `exec`, so the container exits on the command's own
+      code and an operator's Ctrl-C reaches the JVM; the one line the script prints goes to stderr,
+      alone among its lines, so a runbook's grep of stdout is unaffected; any other first argument
+      falls through to the unchanged `exec java -jar`. That commit records no run of its own -
+      exception 3 below - so the verification is the smoke script's and T067's.
+      `./scripts/container-smoke.sh` exit 0 at `441d653`, printing "PASS: readiness reported UP
+      within the 60s budget" and "PASS: startup.sh check-flag printed flag=ON and exited 0"; that is
+      also the commit that dropped the smoke's `COURTREGISTER_GENERATION_FLAG_MODE=STUB` override, so
+      the reading is taken through the deployed reader. **The recorded smoke run was made with a
+      local, uncommitted `docker-compose.override.yml`** dropping the four host port publications
+      (5432, 5433, 8161, 61616) unrelated long-running containers on that machine already hold; it is
+      named in that commit body and was deleted before it, and nothing in the script reaches a
+      dependency from the host. `9cb7303` / `d7c4319` are what let the container read the flag at
+      all: `courtregister.feature.credential`, `workload-identity` by default and `local-test` for
+      the local loop, refused by `PropertiesValidator` wherever the endpoint's host ends
+      `.azconfig.io` or a Service Bus namespace says the pod is deployed. `441d653` runs the compose
+      `app` service generation-enabled against the committed stubs, and `15c1ae2` corrects the
+      quickstart's generation-enabled `bootRun` block, which could never have started as written -
+      the `workload-identity` default with none of the three projected variables present.)
+- [x] T067 [A] [US5] `CliDispatchIT` (container) — `generate-register --help` and `check-flag` exit 0
+      inside the built image. Record. (**first observed run: GREEN**, both cases, at `84ac9cc`:
+      "check-flag reads the one lever through the deployed reader and exits 0 PASSED" and
+      "generate-register --help prints what the command takes and exits 0 PASSED", BUILD SUCCESSFUL
+      in 28s, over an image Testcontainers builds from the repo's own Dockerfile and starts with no
+      arguments, so `docker/startup.sh` falls through to the application as a deployed pod does.
+      `./startup.sh check-flag` exit 0, stdout `flag=ON`; `./startup.sh generate-register --help`
+      exit 0, stdout "usage: generate-register --date D [--court-house H] [--batch B]
+      [--ignore-flag] [--recorded-before T]"; both also assert the script's stderr notice "Running
+      the <command> command from /app/", which is what tells a dispatch out of the fat jar apart
+      from a second application having been started. The extra stack is one WireMock serving the
+      committed App Configuration `kv` mapping, on the `local-test` credential and **not**
+      `COURTREGISTER_GENERATION_FLAG_MODE=STUB`, which the task offered: STUB is unavailable, and
+      empirically rather than by assumption - with generation disabled the image answers
+      `generate-register --help` "outcome=failed reason=command-not-wired" exit 2, because
+      `CliMain.registryOf` resolves the generation beans as the command is built, and with
+      generation enabled `PropertiesValidator` refuses STUB outright. Non-vacuity, two mutations
+      applied together and reverted before the commit: `CheckFlagCli.FLAG` "flag=" to "flagging="
+      and `GenerateRegisterCli.USAGE` "usage: " to "takes: ", each failing its own assertion
+      ("could not find the following element(s): [\"flag=ON\"]" and the usage line) with both exit
+      codes still 0, so the failure is on the printed line rather than on the dispatch. `eb4b411`
+      adds `test.dependsOn(bootJar)` so the suite has the jar the image copies under a plain
+      `./gradlew test` rather than skipping on an assumption - exception 5 below - and
+      `./gradlew build --dry-run` schedules `:bootJar` at position 12 ahead of `:test` at 26, so no
+      cycle is introduced.)
 
-**Checkpoint**: quickstart steps 2–4 run as written. Codex review 7.
+**Checkpoint**: quickstart steps 2-4 run as written - **the host-side loop is pending the Build
+stage**, which is what will verify steps 2 and 3 (`docker compose exec app ./startup.sh
+generate-register --date D`, then `list-batches --date D` through PENDING to NOTIFIED) and the
+flag-off gate of step 4 against the compose stack. No stage has run those three: the five store
+statements they reach only landed at `e43cca3`, and the one host-side `bootRun` correction at
+`15c1ae2` was reasoned from a recorded refusal rather than re-run, because 5432 was occupied. What
+**is** verified: `check-flag` through the entrypoint against the compose WireMock on the `local-test`
+credential (`./scripts/container-smoke.sh`, both PASS lines, `441d653`), and `check-flag` plus
+`generate-register --help` inside the built image (`CliDispatchIT`, `84ac9cc`). Codex review 7.
+
+### Approved TDD exceptions (Phase 7)
+
+Five, and they are recorded here rather than argued for in a commit body. Approver: **design owner,
+2026-09-07**. Anything else in Phase 7 that arrived test-after is a defect, not a precedent.
+
+Two things in the phase were judged against this list and are deliberately not on it. `c3d8ff7`
+(T064) is a test task with a recorded red run, and the ten cases of it that were green on
+introduction characterise a property the service already had, with no implementation following them.
+`84ac9cc` (T067) is an **[A]** acceptance task, which the preamble already exempts from a red run;
+its observed run and its two reverted mutations are recorded in its tick line above rather than here.
+
+1. **`62aa056` "test: compile-safe seams for the operations CLI" landed `config/CliModeConfig`
+   finished.** Seven of the eight classes in it are what a seams commit is for - `CliMain.main` and
+   `.run`, `Args.parse` and the five command bodies, each throwing
+   `UnsupportedOperationException("T065")`. `CliModeConfig` is not: it arrived complete, a
+   `@Configuration` reading `courtregister.cli` through `@Value` and answering `cliMode()`, with
+   `application.yaml` shipping the key false beside it. No red run preceded either, and nothing in
+   that commit could have held them down, because what the property does is turn three
+   configurations off and the three conditionals arrived with T065.
+   **Why no red run was recorded**: the property had to be named and read before three
+   configurations could condition on it, and the name is the thing all three agree on - a throwing
+   seam for a property read is not available. The behaviour it carries was then driven red-first
+   where it is observable: `c3d8ff7`'s three failing assertions are a context started with
+   `courtregister.cli=true` still holding the consumer, the schedule and the listener, and `98c8a10`
+   is the green. In that commit `CliModeConfig` stopped being a bean at all - its reading was the
+   condition all along - so the finished class this one carried no longer exists in that shape; the
+   property's name, its default and the one condition that reads it do.
+   **Non-vacuity was shown by mutation instead**: with `CliModeConfig.CLI_PROPERTY` changed to
+   `courtregister.cli-mode`, so the condition reads a name nothing sets, `./gradlew test --tests
+   '...config.CliModeConfigTest' -Dtest.noFailFast=true` gives "8 tests completed, 3 failed" -
+   `holds no Service Bus consumer, so a command takes no delivery` on "Expecting empty but was:
+   [courtRegisterProcessorClient]", `schedules nothing, so a command cannot generate the night
+   twice` on "Expecting empty but was: [uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob
+   .run, ...]", and `runs no listener container, so the durable subscription is left alone` on
+   "Expecting empty but was: [org.springframework.jms.listener.DefaultMessageListenerContainer]".
+   Mutation reverted before this documentation commit.
+   **The same exercise found that the shipped default is pinned nowhere**: with `NOT_CLI` flipped
+   from `"false"` to `"true"`, so an unset property means CLI mode, `CliModeConfigTest` and
+   `HttpSurfaceTest` are both still green (BUILD SUCCESSFUL in 49s) - each context sets the property
+   explicitly, so neither asks what an ordinary pod gets when nothing sets it at all. That half of
+   what this commit landed is still uncharacterised; it is carried as a follow-up rather than
+   approved, and a case for it belongs with T075 or Phase 8.
+   **Approved: design owner, 2026-09-07.**
+2. **`98c8a10` "feat(cli): the operations commands, run inside the service's own context" landed
+   `CliMain`'s own dispatch half and `Args`' grammar uncovered.** The five commands and the three
+   conditionals were driven red-first (`8749f83`, `964da97`, `c3d8ff7`), and they are most of the
+   commit. What no case held down is the entry point itself and the parser: `main`, `run`,
+   `dispatch`, the `COMMANDS` list, the exit-code propagation, `usage()` and the three report
+   helpers, and `Args`' own refusals - a name given twice, a value where a name was expected, `--`
+   on its own. The five command suites reach the parser only through the invocations they make of
+   it and none of them asserts a rule of the grammar, and `generate-register --help` was uncovered
+   as well.
+   **Why no red run was recorded**: the dispatch was written as the plumbing under the five commands
+   T062 and T063 drive rather than as behaviour of its own, and by the time the gap was seen it
+   already existed - so the cases that closed it are **[A]** characterisations, which is the shape
+   the Phase 3, Phase 5 and Phase 6 blocks record for the same thing.
+   **Behaviour is now characterised** by `batch/cli/CliMainTest` and `batch/cli/ArgsTest`
+   (`025ec21` "test(cli): characterise the entry point and the one argument parser", 49 cases green
+   on introduction, labelled **[A]** in both class javadocs).
+   **Non-vacuity was shown by mutation instead**, three of them, each run and reverted before that
+   commit and quoted in its body: `CliMain.run` answering `FAILED` where it refuses an unknown or a
+   missing name - "no_command_name_at_all_should_be_refused_with_the_five_names FAILED / expected: 1
+   / but was: 2", 25 tests completed, 3 failed; `usage()` without `COMMANDS.forEach`, so the refusal
+   lists no names - "could not find the following elements: [the five names]", 25 tests completed,
+   4 failed; `Args.parse` without its duplicate check - "a_name_given_twice_should_be_refused_
+   whichever_value_it_carried FAILED / Expecting code to raise a throwable.", 24 tests completed,
+   6 failed.
+   **The characterisation found one real defect, and that one was driven red-first**: `dispatch`
+   asked the immutable `COMMANDS` list whether it contained a null name, so an invocation with no
+   command name left `main` on a `NullPointerException` and exit 1 - the code that means declined -
+   with none of the five names printed. Red at `3420ce3` ("Expecting code not to raise a throwable
+   but caught java.lang.NullPointerException at ...ImmutableCollections$ListN.indexOf ... at
+   uk.gov.hmcts.cp.courtregister.batch.cli.CliMain.dispatch(CliMain.java:196)", then "expected: 1
+   but was: -1", 27 tests completed, 2 failed), green at `7ff5592` (51 tests, then 141 over
+   `batch.cli.*`, 0 failures, 0 errors). It is a defect in 002's own code rather than a progression
+   one, so no `doc/DEFECT-FIXES.md` row moves for it. `2c6d7bb` is a javadoc-only follow-up to the
+   same suite, narrowing `CliMainTest`'s **[A]** label so it does not claim those two dispatch cases
+   were green on introduction; no test and no behaviour moved in it.
+   **Approved: design owner, 2026-09-07.**
+3. **`ce238a5` "build(image): dispatch the operations commands from the entrypoint" carries no
+   narrative at all.** The convention this file states twice is that a test commit quotes the red
+   assertion and an implementation commit the green run; that commit's body is its subject line and
+   nothing else, so the 46 lines it adds to `docker/startup.sh` and the 46 it adds to
+   `scripts/container-smoke.sh` went in with nothing recorded about how either was verified.
+   **Why no red run was recorded**: both halves are shell. The dispatch is in the entrypoint rather
+   than in the application - which is the point of FR-016, since `kubectl exec ... -- ./startup.sh
+   <command>` reaches it with the pod's own identity and needs no data-plane credential of its own -
+   and no JUnit suite can reach it; `scripts/container-smoke.sh` is the thing that runs it. A shell
+   change is the mechanical exemption the preamble grants Phase 1 infrastructure, but that exemption
+   is "records verification evidence instead of a red assertion", and this commit recorded none.
+   **Verification is recorded here instead, out of runs two later commits made**:
+   `./scripts/container-smoke.sh` exit 0 at `441d653`, printing "PASS: readiness reported UP within
+   the 60s budget" and "PASS: startup.sh check-flag printed flag=ON and exited 0" - the second
+   through the deployed reader, that commit having dropped the smoke's STUB override - and
+   `e2e/CliDispatchIT` at `84ac9cc`, which asks the built image for `check-flag` and
+   `generate-register --help` by exec and asserts the stderr notice "Running the <command> command
+   from /app/". Its two reverted mutations (quoted under T067) fail on the printed lines with both
+   exit codes still 0, which is the dispatch being exercised and not the exit code alone.
+   **Approved: design owner, 2026-09-07.**
+4. **`9cb7303` / `d7c4319` "read the flag under a second identity, and refuse it where it matters"
+   carried three things no red run preceded.** The pair itself is red-first, and its discriminating
+   cases are the two refusals: `the_local_test_credential_against_a_real_store_should_fail_startup`
+   and `the_local_test_credential_on_a_deployed_pod_should_fail_startup` were red at `9cb7303`
+   ("Expecting: <Started application [AnnotationConfigApplicationContext@1964ef9 ...]> to have
+   failed but context started successfully") and green at `d7c4319`. What arrived without one is
+   (a) two cases of that test commit that were green on introduction -
+   `the_local_test_credential_against_the_compose_stub_should_start`, which is the accepted case the
+   task asked for and where green before and after is what "accepted" means, and
+   `the_deployed_credential_against_a_real_store_should_start`, which asserts the `@DefaultValue`
+   that landed as the compile-safe seam in the same commit; (b) two **[A]** characterisations of the
+   credential that already worked, labelled as such in their javadoc; and (c) a production message
+   change - `LiveFeatureFlagConfig`'s missing-variable refusal now names
+   `courtregister.feature.credential=local-test` before `courtregister.generation.flag-mode=STUB`,
+   and no case asserted the old wording.
+   **Why no red run was recorded**: (a) and (b) state behaviour that already held, and (c) is the
+   wording of a refusal whose only assertion is that it names the missing variable.
+   **Non-vacuity of the two characterisations was shown by mutation instead**, both reverted before
+   the commit and quoted in its body: authorising the `workload-identity` branch with a connection
+   string instead kills `the_workload_identity_credential_should_not_reach_a_plain_http_store` -
+   "Expecting actual: Enabled[] to be an instance of uk.gov.hmcts.cp.courtregister.domain
+   .FlagDecision.Unreadable but was instance of ...FlagDecision.Enabled"; disabling the
+   missing-variable throw in `LiveFeatureFlagConfig.workloadIdentity` kills
+   `the_workload_identity_credential_should_still_refuse_an_incomplete_pod` - "workload-identity
+   still refuses to start on a pod missing a projected variable FAILED / Expecting code to raise a
+   throwable."
+   **Two deviations from the task's wording go on the record with it.** The refusals live in
+   `config/ConfigurationValidationTest` as a new `@Nested LocalTestCredential` and the credential
+   characterisations in `GenerationWiringContextTest` as a new `@Nested FlagCredential`, because
+   neither `PropertiesValidatorTest` nor `config/LiveFeatureFlagConfigTest` exists in this
+   repository and every `PropertiesValidator` refusal already lives in the former. And `local-test`
+   yields a fixed HMAC connection-string `ConfigurationClient` rather than the `TokenCredential` the
+   wording asked for: azure-core's `BearerTokenAuthenticationPolicy` refuses any request whose URL
+   is not https before a socket is opened ("token credentials require a URL using the HTTPS protocol
+   scheme", read out of its bytecode and confirmed by a throwaway spike whose real reader answered
+   `Unreadable[reason=CALL_FAILED]` over http with a fixed `AccessToken`), so a token credential
+   cannot read the compose stub at all. The connection-string shape is the one
+   `support/GenerationStackConfiguration` and `AppConfigurationFlagReaderTest` already replace the
+   credential with, so only the parameter type differs from the wording.
+   **Approved: design owner, 2026-09-07.**
+5. **`eb4b411` "build(gradle): package the application before the test task runs" has no test
+   pair.** It adds `test.dependsOn(bootJar)`, so `e2e/CliDispatchIT` has the fat jar the image
+   copies under a plain `./gradlew test` rather than skipping on an assumption.
+   **Why no red run was recorded**: task ordering is not behaviour a test can pin - a case asserting
+   the jar is there would be asserting the thing the dependency arranges - so the commit records
+   verification evidence in its place: `./gradlew build --dry-run` schedules `:bootJar` at position
+   12, ahead of `:test` at 26, `:check` at 30 and `:build` at 31, so no cycle is introduced, and the
+   six gates are green. That is the shape the preamble grants Phase 1 infrastructure; the grant does
+   not reach Phase 7, which is why it is written down here.
+   **Approved: design owner, 2026-09-07.**
+
+**The five store statements T065 held back are the Phase 6 rule working rather than an exception to
+it**: `batchesOn`, `releaseFailed`, `recordedWhileOff`, `supersedeSharedBefore` and
+`findByRegisterDate` were left as seams instead of landing untested, and each got its integration
+red run against a real Postgres (`RegisterStoreIT`, `RegisterBatchRepositoryIT`, `903d33b`) before
+`e43cca3` implemented it.
 
 ---
 

@@ -93,7 +93,9 @@ while the flag was off) are a CLI baked into the image and run with `kubectl exe
 ./gradlew pmdMain               # PMD on main sources; `check` runs pmdMain and pmdTest as well
 ./gradlew jacocoTestReport      # coverage report → build/reports/jacoco
 ./gradlew bootRun               # local run against docker-compose dependencies (see below)
-./scripts/container-smoke.sh    # packaged-artefact smoke: compose up + readiness gate
+./scripts/container-smoke.sh    # packaged-artefact smoke: compose up, readiness gate, then
+                                # `startup.sh check-flag` through the entrypoint that dispatches
+                                # the operations commands
 ```
 
 Local dependencies:
