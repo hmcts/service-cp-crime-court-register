@@ -1,12 +1,22 @@
 package uk.gov.hmcts.cp.courtregister.adapter.notificationnotify;
 
+import java.io.IOException;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.ClientHttpResponse;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
 import uk.gov.hmcts.cp.courtregister.application.NotificationOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifier;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationFailedException;
+import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
 
 /**
@@ -48,17 +58,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
  * <p>Nothing that identifies a recipient is logged. The address and the recipient name are the two
  * components that never reach a line at INFO or above (constitution Principle VII), so a line here
  * carries the notification id, the batch id and a status.
- *
- * <p><strong>Seam only.</strong> The client lands with T058; until then {@code send} throws, so that
- * {@code NotificationNotifyClientTest} records a failing assertion rather than a compile error. The
- * constructor is the real one from the start, because it is the surface the WireMock suite builds
- * the client on and the surface {@code config/LiveNotificationConfig} wires the endpoint and the
- * identity through.
  */
-// PMD.UnusedPrivateField: the three collaborators are held from the seam onwards so that the test
-// and the configuration are written against the constructor they will keep, and `send` is what
-// reads them - which is T058. The suppression goes with the throw.
-@SuppressWarnings("PMD.UnusedPrivateField")
 public class NotificationNotifyClient implements RegisterNotifier {
 
     /**
@@ -82,6 +82,8 @@ public class NotificationNotifyClient implements RegisterNotifier {
 
     /** The one status the contract calls success. */
     public static final int ACCEPTED = 202;
+
+    private static final Logger LOG = LoggerFactory.getLogger(NotificationNotifyClient.class);
 
     /** The client, carrying the notificationnotify base URL and its timeouts. */
     private final RestClient restClient;
@@ -112,6 +114,121 @@ public class NotificationNotifyClient implements RegisterNotifier {
     public NotificationOutcome send(final RegisterNotification notification,
             final UUID documentFileId, final CallerIdentity caller)
             throws NotificationFailedException {
-        throw new UnsupportedOperationException("T058");
+        // Resolved once, exactly as the clients 001 built and the renderer's client resolve it: the
+        // run's user where the message named one, and the configured identity otherwise.
+        final String identity = caller.orSystem(systemUserId);
+        final byte[] body = objectMapper.writeValueAsBytes(new SendEmail(
+                notification.templateId(),
+                notification.emailAddress(),
+                documentFileId,
+                new Personalisation(notification.recipientName())));
+        final int status;
+        try {
+            status = restClient.post()
+                    // The row's own identity, and the client has none of its own to put here: the
+                    // row arrives persisted, so a resend is this call again with the same row and
+                    // therefore the same path (research section 10).
+                    .uri(COMMAND_PATH, notification.notificationId())
+                    .headers(headers -> {
+                        headers.setContentType(MediaType.parseMediaType(EMAIL_MEDIA_TYPE));
+                        headers.set(IDENTITY_HEADER, identity);
+                    })
+                    .body(body)
+                    .exchange((sent, answer) -> classify(answer, notification));
+        } catch (ResourceAccessException unreachable) {
+            // Connect failure, read timeout, connection dropped: the request may or may not have
+            // reached notificationnotify, and the e-mail may already be on its way. Unknown is not
+            // refused, so it is handed back for the run to ask again - which is safe because the
+            // resend reuses this row's id and so reaches the same aggregate - and it carries no
+            // status, because an invented one would say an attempt was answered when nothing
+            // answered.
+            //
+            // The exception travels with the line rather than only its type. What the run acts on is
+            // the classification; what a human acts on is what it *was*. It is safe to keep: a
+            // transport exception is raised instead of a response, so it names the endpoint and the
+            // socket error - and the endpoint carries the notification id, never the address.
+            LOG.warn("The send-email-notification command reached no verdict, so whether the e-mail "
+                    + "was asked for is unknown. notificationId={} batchId={}",
+                    notification.notificationId(), notification.batchId(), unreachable);
+            throw new NotificationFailedException(FailureClassification.TRANSIENT);
+        }
+        return new NotificationOutcome(NotificationStatus.ACCEPTED, status);
+    }
+
+    /**
+     * What notificationnotify's answer to the command means.
+     *
+     * <p>Nothing it wrote is read. The body of a refusal is about an e-mail addressed to a Youth
+     * Offending Team about children, and the row this decision settles has {@code status} and
+     * {@code response_code} and nowhere to put another system's prose.
+     */
+    private static int classify(
+            final ClientHttpResponse response, final RegisterNotification notification)
+            throws IOException {
+        final HttpStatusCode statusCode = response.getStatusCode();
+        final int status = statusCode.value();
+        if (status != ACCEPTED) {
+            if (statusCode.is2xxSuccessful()) {
+                // The contract declares one success. A 200 or a 204 means something other than the
+                // command endpoint answered - a proxy, or a route that no longer reaches it - and
+                // settling the row ACCEPTED on it would record a Youth Offending Team as told about
+                // a register nobody was asked to send, which no resend would ever revisit.
+                LOG.error("notificationnotify answered a success this contract does not define, so "
+                        + "no e-mail can be assumed. notificationId={} batchId={} status={}",
+                        notification.notificationId(), notification.batchId(), status);
+                throw refused(status);
+            }
+            if (RetryPolicy.retryable(status)) {
+                // 408, 429 and every server error, from the one policy all this service's clients
+                // hold (C3). The asking again is the run's: this client is told nothing about what
+                // is left of the budget, so a loop here would spend one it cannot see.
+                LOG.warn("notificationnotify could not take the e-mail command, so the run may ask "
+                        + "again under the same identity. notificationId={} batchId={} status={}",
+                        notification.notificationId(), notification.batchId(), status);
+                throw new NotificationFailedException(FailureClassification.TRANSIENT, status);
+            }
+            // Any other 4xx: the command was understood and declined, and the same command under the
+            // same identity will be declined again.
+            LOG.error("notificationnotify refused the e-mail command, and asking again cannot "
+                    + "change that. notificationId={} batchId={} status={}",
+                    notification.notificationId(), notification.batchId(), status);
+            throw refused(status);
+        }
+        return status;
+    }
+
+    /** A refusal no further attempt can change, carrying the status that made it one. */
+    private static NotificationFailedException refused(final int status) {
+        return new NotificationFailedException(FailureClassification.NON_TRANSIENT, status);
+    }
+
+    /**
+     * The command body: the four fields this service sends, and no fifth.
+     *
+     * <p>The identity is not among them. The API-side schema is
+     * {@code additionalProperties: false} and declares no {@code notificationId}, so a body carrying
+     * one would be a 400 rather than a field notificationnotify ignored; the framework lifts it off
+     * the path instead.
+     *
+     * @param templateId      the template's UUID, as the row records it
+     * @param sendToAddress   the recipient's own address
+     * @param fileId          the rendered document's file-service id, which is how the register is
+     *                        attached - by reference, so a document about children never travels
+     *                        through this service twice
+     * @param personalisation what the template greets the recipient by
+     */
+    private record SendEmail(
+            UUID templateId,
+            String sendToAddress,
+            UUID fileId,
+            Personalisation personalisation) {
+    }
+
+    /**
+     * The one personalisation the {@code cr_standard} template takes.
+     *
+     * @param yotsName the recipient's name, or {@code null} where the record carried none
+     */
+    private record Personalisation(String yotsName) {
     }
 }
