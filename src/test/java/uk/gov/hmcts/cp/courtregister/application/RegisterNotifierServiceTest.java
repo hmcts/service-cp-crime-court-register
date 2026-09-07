@@ -787,12 +787,22 @@ class RegisterNotifierServiceTest {
 
         private RegisterNotification told;
         private RegisterNotification owed;
+        private RegisterNotification alsoTold;
 
+        /**
+         * The batch as a night that told two of its three teams left it.
+         *
+         * <p>One row per recipient of the union, because that is the shape a resend is about: the
+         * question it answers is which of the teams this batch is addressed to are still owed an
+         * e-mail, and a batch holding fewer rows than it has recipients is the separate question
+         * {@code RecoveringAnUnsettledRow} asks.
+         */
         @BeforeEach
         void seedOneToldTeamAndOneOwedTeam() {
             when(batches.findById(BATCH_ID)).thenReturn(Optional.of(partiallyNotified()));
             told = seeded(YOT_A, ADDRESS_A, NotificationStatus.ACCEPTED, ACCEPTED);
             owed = seeded(YOT_B, ADDRESS_B, NotificationStatus.FAILED, REFUSED);
+            alsoTold = seeded(YOT_C, ADDRESS_C, NotificationStatus.ACCEPTED, ACCEPTED);
         }
 
         @Test
@@ -829,8 +839,9 @@ class RegisterNotifierServiceTest {
                             + "same team - which the (batch, address) key refuses anyway")
                     .contains(tuple(ADDRESS_B, NotificationStatus.ACCEPTED, ACCEPTED));
             softly.assertThat(ledger.keySet())
-                    .as("and the table still holds the two rows it held, one per distinct address")
-                    .containsExactly(told.notificationId(), owed.notificationId());
+                    .as("and the table still holds the three rows it held, one per distinct address")
+                    .containsExactly(told.notificationId(), owed.notificationId(),
+                            alsoTold.notificationId());
             verify(notifications, never()).insert(any());
         }
 
@@ -840,13 +851,13 @@ class RegisterNotifierServiceTest {
 
             softly.assertThat(summary)
                     .as("the tally is over the whole batch as it now stands and not over the "
-                            + "resend: the team that was already told still counts as told, so the "
-                            + "batch reaches NOTIFIED when the last failure is accepted")
-                    .isEqualTo(new NotificationSummary(2, 0, BatchStatus.NOTIFIED));
+                            + "resend: the teams that were already told still count as told, so "
+                            + "the batch reaches NOTIFIED when the last failure is accepted")
+                    .isEqualTo(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
             softly.assertThat(settlements)
                     .as("and that is what the batch row is settled on")
                     .containsExactly(new BatchSettlement(BATCH_ID,
-                            new NotificationSummary(2, 0, BatchStatus.NOTIFIED)));
+                            new NotificationSummary(3, 0, BatchStatus.NOTIFIED)));
         }
 
         @Test
@@ -859,7 +870,7 @@ class RegisterNotifierServiceTest {
                     .as("a second refusal is not a worse state, it is the same one: the row stays "
                             + "resendable under its own identity and the batch stays "
                             + "PARTIALLY_NOTIFIED")
-                    .isEqualTo(new NotificationSummary(1, 1, BatchStatus.PARTIALLY_NOTIFIED));
+                    .isEqualTo(new NotificationSummary(2, 1, BatchStatus.PARTIALLY_NOTIFIED));
         }
     }
 
@@ -969,6 +980,7 @@ class RegisterNotifierServiceTest {
             when(batches.findById(BATCH_ID)).thenReturn(Optional.of(partiallyNotified()));
             seeded(YOT_A, ADDRESS_A, NotificationStatus.ACCEPTED, ACCEPTED);
             seeded(YOT_B, ADDRESS_B, NotificationStatus.FAILED, REFUSED);
+            seeded(YOT_C, ADDRESS_C, NotificationStatus.ACCEPTED, ACCEPTED);
             refusesOnceThenAccepts(ADDRESS_B, UNAVAILABLE);
 
             final NotificationSummary summary = resend();
@@ -980,7 +992,7 @@ class RegisterNotifierServiceTest {
                     .containsExactly(ADDRESS_B, ADDRESS_B);
             softly.assertThat(summary)
                     .as("and the batch reaches NOTIFIED on the attempt that was accepted")
-                    .isEqualTo(new NotificationSummary(2, 0, BatchStatus.NOTIFIED));
+                    .isEqualTo(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
         }
     }
 
@@ -998,6 +1010,17 @@ class RegisterNotifierServiceTest {
      * <p>So both halves are held down here: a PENDING row is re-requested under the identity it
      * already holds, and {@code notify} over a batch that already holds rows mints only the addresses
      * that have none.
+     *
+     * <p><strong>And the row an interrupted run never wrote at all is the third half.</strong> A run
+     * can stop before the mint as easily as after it - between {@code markGenerated} and the first
+     * insert, or between the second insert and the third - so a GENERATED batch can hold no rows or
+     * only some of them while its records union to teams nobody has been told about. A resend that
+     * read only the rows found nothing to re-request and settled the batch NOTIFIED_NOBODY, a
+     * terminal state that says the document was rendered and there was nobody to send it to: the
+     * P1 fix's own words, applied to a batch that had somebody all along, and terminal, so no
+     * later resend could revisit it. The owed set is therefore derived from the recipients first
+     * and the missing rows are minted before anything is settled, which leaves NOTIFIED_NOBODY
+     * reachable only where the union itself is empty.
      */
     @Nested
     @DisplayName("the row an interrupted run left PENDING")
@@ -1007,6 +1030,7 @@ class RegisterNotifierServiceTest {
         void a_row_left_pending_should_be_re_requested_under_the_identity_it_was_minted_with() {
             seeded(YOT_A, ADDRESS_A, NotificationStatus.ACCEPTED, ACCEPTED);
             final RegisterNotification owed = abandoned(YOT_B, ADDRESS_B);
+            seeded(YOT_C, ADDRESS_C, NotificationStatus.ACCEPTED, ACCEPTED);
 
             final NotificationSummary summary = resend();
 
@@ -1023,7 +1047,7 @@ class RegisterNotifierServiceTest {
             softly.assertThat(summary)
                     .as("so a batch parked with an unsettled row can still reach NOTIFIED, rather "
                             + "than standing at a state no re-request would ever revisit")
-                    .isEqualTo(new NotificationSummary(2, 0, BatchStatus.NOTIFIED));
+                    .isEqualTo(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
         }
 
         @Test
@@ -1046,6 +1070,55 @@ class RegisterNotifierServiceTest {
             softly.assertThat(summary)
                     .as("one row per distinct address either way, so the tally is over three "
                             + "recipients and not five")
+                    .isEqualTo(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
+        }
+
+        @Test
+        void a_resend_for_a_batch_that_holds_no_rows_should_mint_them_rather_than_tell_nobody() {
+            final NotificationSummary summary = resend();
+
+            softly.assertThat(mintedAddresses())
+                    .as("the batch's records union to three Youth Offending Teams and the run that "
+                            + "was supposed to mint their rows stopped before it wrote any, so the "
+                            + "resend owes all three an e-mail and mints the rows that say so "
+                            + "before anything is asked of notificationnotify")
+                    .containsExactly(ADDRESS_A, ADDRESS_B, ADDRESS_C);
+            softly.assertThat(postedAddresses())
+                    .as("and each of them is then asked for under the identity its own row "
+                            + "was just minted with")
+                    .containsExactly(ADDRESS_A, ADDRESS_B, ADDRESS_C);
+            softly.assertThat(summary)
+                    .as("NOTIFIED_NOBODY says the document was rendered and there was nobody to "
+                            + "send it to, and it is terminal; settling a batch whose records "
+                            + "union to three teams in it would end the night claiming there was "
+                            + "nobody to tell, where no later resend could revisit it")
+                    .isEqualTo(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
+            softly.assertThat(settlements)
+                    .as("so the only state the batch row is settled in is the one its recipients "
+                            + "produce")
+                    .containsExactly(new BatchSettlement(BATCH_ID,
+                            new NotificationSummary(3, 0, BatchStatus.NOTIFIED)));
+        }
+
+        @Test
+        void a_resend_for_a_batch_that_holds_some_of_its_rows_should_mint_the_missing_ones() {
+            seeded(YOT_A, ADDRESS_A, NotificationStatus.ACCEPTED, ACCEPTED);
+
+            final NotificationSummary summary = resend();
+
+            softly.assertThat(mintedAddresses())
+                    .as("a run that stopped between two inserts leaves a batch whose rows are "
+                            + "fewer than its recipients, and the teams with no row of their own "
+                            + "are owed an e-mail exactly as a refused team is: their rows are "
+                            + "minted here, and the team that has one keeps it")
+                    .containsExactly(ADDRESS_B, ADDRESS_C);
+            softly.assertThat(postedAddresses())
+                    .as("the team that was told is not told twice, and the two whose rows were "
+                            + "never written are asked for")
+                    .containsExactly(ADDRESS_B, ADDRESS_C);
+            softly.assertThat(summary)
+                    .as("and the batch reaches NOTIFIED over all three of its recipients rather "
+                            + "than over the one row it happened to hold")
                     .isEqualTo(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
         }
     }
