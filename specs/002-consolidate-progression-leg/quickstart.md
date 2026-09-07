@@ -35,16 +35,30 @@ FILESERVICE_DATASOURCE_URL=jdbc:postgresql://localhost:5433/fileservice \
 FILESERVICE_DATASOURCE_USERNAME=fileservice FILESERVICE_DATASOURCE_PASSWORD=fileservice \
 SYSTEMDOCGENERATOR_BASE_URL=http://localhost:8089 NOTIFICATIONNOTIFY_BASE_URL=http://localhost:8089 \
 APPCONFIG_ENDPOINT=http://localhost:8089 STACK_LABEL=LOCAL \
+COURTREGISTER_FEATURE_CREDENTIAL=local-test \
 CR_EMAIL_TEMPLATE_ID=11111111-1111-1111-1111-111111111111 \
 ARTEMIS_BROKER_URL=tcp://localhost:61616 ARTEMIS_USER=admin ARTEMIS_PASSWORD=admin \
 ./gradlew bootRun
 ```
+
+`COURTREGISTER_FEATURE_CREDENTIAL=local-test` is what lets the **real** flag reader read the
+WireMock `kv` stub, and without it a generation-enabled run refuses to start on a laptop:
+`workload-identity`, the default, builds the credential from `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`
+and `AZURE_FEDERATED_TOKEN_FILE`, which only the AKS webhook projects - and a credential's token is
+sent by the SDK over TLS alone, so pointing that one at a plain-HTTP stub would not have worked
+either. Everything else about the read stays deployed: the reader, the SDK client, the key, the
+label, the budget and the fail-closed parsing. Startup refuses `local-test` wherever the endpoint
+names a real `.azconfig.io` store or a Service Bus namespace says the pod is deployed.
 
 Startup refuses if generation is enabled and any of the file-service datasource, the flag
 configuration, the SDG/NN endpoints or the template id is missing, or if the zone is not
 `Europe/London`.
 
 ## Drive the flow end to end
+
+The `app` service in `docker-compose.yml` carries the same settings, so the commands below run
+inside the container with generation enabled against the stubs above - and `check-flag` reads the
+one lever through the real reader on the `local-test` credential.
 
 ```bash
 # 1. publish a command (the 001 helper) — the service records a RECORDED row
@@ -81,7 +95,9 @@ scenario admin endpoint, which is what the shorthand drives.
 ./gradlew test --tests '*FileServicePayloadStoreIT' '*DocumentEventListenerIT'
 ./gradlew test --tests '*GenerationEndToEndIT' '*FlagGateEndToEndIT' '*GenerationFailureEndToEndIT'
 ./gradlew build            # everything, including PMD/Checkstyle/JaCoCo gates
-./scripts/container-smoke.sh   # image ready < 60 s with generation enabled against compose stubs
+./scripts/container-smoke.sh   # image ready < 60 s with generation enabled against the compose
+                               # stubs, then `startup.sh check-flag` prints flag=ON through the
+                               # real reader
 ```
 
 ## Recording the progression goldens (one-off, outside this repo)

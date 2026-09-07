@@ -108,8 +108,14 @@ Both adapter modes default to `LIVE` — a service that has to be told to fetch 
 will be deployed not fetching them — so a bare `bootRun` refuses to start: startup demands upstream
 endpoints and a `CJSCPPUID`, and compose has neither results nor reference data to call. The `app`
 service in `docker-compose.yml` sets the same three variables for the same reason. Generation is
-disabled by default in local runs; enabling it demands the file-service datasource, the broker and
-the systemdocgenerator and notificationnotify endpoints, for the same reason.
+disabled by default in a bare `bootRun`; enabling it demands the file-service datasource, the
+broker and the systemdocgenerator and notificationnotify endpoints, for the same reason. The `app`
+service does enable it, against the committed stubs - `wiremock` for systemdocgenerator,
+notificationnotify and Azure App Configuration, `fileservice-postgres` for the payload store,
+`artemis` for `public.event` - with `courtregister.feature.credential=local-test`, which is what
+lets the real flag reader read a plain-HTTP stub at all; startup refuses that credential wherever
+the endpoint names a real store or the pod is deployed. See
+`specs/002-consolidate-progression-leg/quickstart.md` for the whole local loop.
 
 The emulator's queue definition lives in `docker/servicebus-emulator/config.json`; the `*IT` test
 fixtures mount the same file, so local, CI and deployed queue properties cannot drift. Compose is
