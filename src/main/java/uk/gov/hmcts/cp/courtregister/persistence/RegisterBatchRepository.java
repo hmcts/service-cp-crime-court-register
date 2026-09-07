@@ -244,6 +244,20 @@ public class RegisterBatchRepository {
     }
 
     /**
+     * The batches that have held a document since before the given instant without being notified.
+     *
+     * <p>Compile-safe seam: the statement behind it is written by the paired fix, so the cases
+     * guarding the reading it feeds fail on their assertions rather than on a missing method.
+     *
+     * @param generatedBefore the far edge of the grace period, measured from the document
+     * @return every batch parked at GENERATED, oldest first
+     */
+    public List<RegisterBatch> generatedSince(final Instant generatedBefore) {
+        // The read the paired fix gives a statement of its own.
+        return List.of();
+    }
+
+    /**
      * Statement 5 - moves a batch from the state the caller read it in to the state it decided on.
      *
      * <p>The move is asked of {@link BatchStatus} before it is attempted, so the state machine is

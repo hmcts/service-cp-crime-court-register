@@ -62,6 +62,7 @@ public class GenerationMetrics {
             "courtregister_oldest_recorded_unbatched_age";
     public static final String OLDEST_GENERATING_AGE = "courtregister_oldest_generating_age";
     public static final String OLDEST_PENDING_AGE = "courtregister_oldest_pending_age";
+    public static final String OLDEST_GENERATED_AGE = "courtregister_oldest_generated_age";
     public static final String PENDING_AFTER_DEADLINE = "courtregister_pending_after_deadline";
     public static final String DEFERRED_KEYS = "courtregister_deferred_keys";
     public static final String FLAG_READ_OK = "courtregister_flag_read_ok";
@@ -326,6 +327,19 @@ public class GenerationMetrics {
      */
     public void oldestPendingAge(final Duration age) {
         oldestPendingSeconds.set(age.toSeconds());
+    }
+
+    /**
+     * Reports how long the oldest batch that holds a document nobody was told about has waited.
+     *
+     * <p>Compile-safe seam: the gauge behind it is registered by the paired fix, so the cases
+     * guarding this reading fail on their assertions rather than on a missing method.
+     *
+     * @param age the age of the oldest batch parked at GENERATED, or {@link Duration#ZERO} where
+     *            there is none
+     */
+    public void oldestGeneratedAge(final Duration age) {
+        // The gauge the paired fix registers and sets from this.
     }
 
     /**

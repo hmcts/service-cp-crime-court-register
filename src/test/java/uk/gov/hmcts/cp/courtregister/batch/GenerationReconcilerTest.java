@@ -189,6 +189,19 @@ class GenerationReconcilerTest {
         return generating(UUID.randomUUID(), REQUESTED_AT);
     }
 
+    /**
+     * A batch holding a document nobody was told about: GENERATED, and never notified.
+     *
+     * @param generatedAt when its document arrived, which is all the age can be measured from
+     * @return the batch as the parked read returns it
+     */
+    private static RegisterBatch parked(final Instant generatedAt) {
+        return new RegisterBatch(UUID.randomUUID(), UUID.randomUUID(), "B01OU", "Court House",
+                REGISTER_DATE, "CourtRegister_B01OU_2026-03-02.pdf", UUID.randomUUID(),
+                DOCUMENT_FILE_ID, BatchStatus.GENERATED, null, null, true, CompletedBy.EVENT,
+                ASSEMBLED_AT, REQUESTED_AT, generatedAt, null, null, 1, null, 0);
+    }
+
     /** What the repository's overdue read answers this time. */
     private void generatingSince(final RegisterBatch... overdue) {
         when(batches.generatingSince(any())).thenReturn(List.of(overdue));
@@ -197,6 +210,11 @@ class GenerationReconcilerTest {
     /** What the repository's stale-PENDING read answers this time. */
     private void pendingSince(final RegisterBatch... stale) {
         when(batches.pendingSince(any())).thenReturn(List.of(stale));
+    }
+
+    /** What the repository's parked-at-GENERATED read answers this time. */
+    private void generatedSince(final RegisterBatch... parked) {
+        when(batches.generatedSince(any())).thenReturn(List.of(parked));
     }
 
     /** What systemdocgenerator says about one batch's payload. */
@@ -901,6 +919,51 @@ class GenerationReconcilerTest {
                             + "could come down again")
                     .isZero();
         }
+
+        @Test
+        void the_oldest_generated_age_should_be_gauged_from_the_parked_generated_read() {
+            generatingSince();
+            generatedSince(parked(NOW.minus(Duration.ofMinutes(70))), parked(GENERATED_AT));
+
+            reconcile();
+
+            softly.assertThat(oldestGeneratedAge())
+                    .as("the batch that holds its document and told nobody is the one state no "
+                            + "other reading moves for: the generating gauge reads GENERATING and "
+                            + "the pending gauge reads PENDING, so a notification that never "
+                            + "happened would otherwise be invisible - which is defect fix P1's "
+                            + "failure mode by another route")
+                    .isEqualTo(Duration.ofMinutes(70).toSeconds());
+        }
+
+        @Test
+        void a_pass_with_nothing_parked_at_generated_should_bring_that_gauge_back_down() {
+            generatingSince();
+
+            reconcile();
+
+            softly.assertThat(oldestGeneratedAge())
+                    .as("a batch that was notified the moment its document arrived leaves the read "
+                            + "empty, and the reading has to come back down with it")
+                    .isZero();
+        }
+
+        @Test
+        void a_parked_batch_should_be_reported_and_not_settled_here() {
+            generatingSince();
+            generatedSince(parked(NOW.minus(Duration.ofMinutes(70))));
+
+            final int completed = reconcile();
+
+            verifyNoInteractions(sink);
+            verify(store, never()).markFailed(any(), any(), any(), any());
+            softly.assertThat(completed)
+                    .as("this read is a reading and not an ending: the batch holds a document that "
+                            + "exists, so it is the notifier's to finish - through resendFailed or "
+                            + "notify-register - and failing it here would throw that document "
+                            + "away")
+                    .isZero();
+        }
     }
 
     private double oldestGeneratingAge() {
@@ -910,6 +973,11 @@ class GenerationReconcilerTest {
 
     private double oldestPendingAge() {
         final Gauge gauge = registry.find(GenerationMetrics.OLDEST_PENDING_AGE).gauge();
+        return gauge == null ? ABSENT : gauge.value();
+    }
+
+    private double oldestGeneratedAge() {
+        final Gauge gauge = registry.find(GenerationMetrics.OLDEST_GENERATED_AGE).gauge();
         return gauge == null ? ABSENT : gauge.value();
     }
 }

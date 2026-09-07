@@ -227,6 +227,57 @@ class RegisterBatchRepositoryIT {
         }
     }
 
+    /**
+     * The batches holding a document nobody was told about, which neither read above can see.
+     *
+     * <p>Notification follows the mark that records the document, in one step of one code path. A
+     * store that went away in between, or a listener session that rolled the delivery back after
+     * that mark had committed, leaves the batch at GENERATED with rows that were never settled - and
+     * {@code generatingSince} reads GENERATING while {@code pendingSince} reads PENDING, so nothing
+     * moves for it. This read is what publishes its age.
+     */
+    @Nested
+    @DisplayName("the batches holding a document nobody was told about")
+    class Parked {
+
+        @Test
+        void generated_since_should_answer_with_the_parked_batches_oldest_first() {
+            final RegisterBatch first = parked(MONDAY, payloadFileId, GENERATED_AT);
+            final RegisterBatch second =
+                    parked(TUESDAY, secondPayloadFileId, GENERATED_AT.plusSeconds(90));
+
+            assertThat(generatedSince(GRACE_EDGE))
+                    .as("oldest first, for the same reason the other two reads are: the ones that "
+                            + "have held a document longest are the registers already missing")
+                    .containsExactly(first, second);
+        }
+
+        @Test
+        void generated_since_should_exclude_a_batch_generated_inside_the_grace_period() {
+            parked(MONDAY, payloadFileId, GRACE_EDGE.plusSeconds(1));
+
+            assertThat(generatedSince(GRACE_EDGE))
+                    .as("a batch whose document arrived a moment ago is a batch the notifying leg "
+                            + "is still working through, not one it left behind")
+                    .isEmpty();
+        }
+
+        @Test
+        void generated_since_should_exclude_a_batch_whose_recipients_were_told() {
+            final RegisterBatch told = parked(MONDAY, payloadFileId, GENERATED_AT);
+            repository.compareAndSet(new RegisterBatch(told.batchId(), courtCentre, OU_CODE,
+                    COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, DOCUMENT_FILE_ID,
+                    BatchStatus.NOTIFIED, null, null, true, CompletedBy.EVENT, ASSEMBLED_AT,
+                    REQUESTED_AT, GENERATED_AT, NOTIFIED_AT, null, 1, null, 0),
+                    BatchStatus.GENERATED);
+
+            assertThat(generatedSince(GRACE_EDGE))
+                    .as("a batch that reached a notified state is a batch nothing is owed about, "
+                            + "and a reading that kept it would never come back down")
+                    .isEmpty();
+        }
+    }
+
     @Nested
     @DisplayName("moving a batch from the state it was read in")
     class Moving {
@@ -512,6 +563,46 @@ class RegisterBatchRepositoryIT {
         final AtomicReference<List<RegisterBatch>> answered = new AtomicReference<>(List.of());
         assertThatCode(() -> answered.set(repository.pendingSince(cutoff)))
                 .as("the stale-PENDING sweep implements this read; this is its red run")
+                .doesNotThrowAnyException();
+        return mine(answered.get());
+    }
+
+    /**
+     * An inserted batch walked to GENERATED and left there, which is the parked shape.
+     *
+     * <p>Walked rather than written, exactly as the notification suite's fixture is: a batch enters
+     * this table at PENDING and is moved by compare-and-set through the state machine, and a fixture
+     * that wrote GENERATED directly would be the one caller for which those rules did not hold.
+     *
+     * @param registerDate the day the batch is for, which with the court centre is its key
+     * @param payload      the payload the render was asked for
+     * @param generatedAt  when its document arrived, which is what the age is measured from
+     * @return the batch as the parked read should return it
+     */
+    private RegisterBatch parked(final LocalDate registerDate, final UUID payload,
+            final Instant generatedAt) {
+        final RegisterBatch requested = requested(registerDate, payload, REQUESTED_AT);
+        final RegisterBatch parked = new RegisterBatch(requested.batchId(), courtCentre, OU_CODE,
+                COURT_HOUSE, registerDate, requested.fileName(), payload, DOCUMENT_FILE_ID,
+                BatchStatus.GENERATED, null, null, true, CompletedBy.EVENT, ASSEMBLED_AT,
+                REQUESTED_AT, generatedAt, null, null, 1, null, 0);
+        repository.compareAndSet(parked, BatchStatus.GENERATING);
+        return parked;
+    }
+
+    /**
+     * The parked read, narrowed to the case that asked.
+     *
+     * <p>Made through {@code assertThatCode} for the reason {@link #pendingSince(Instant)} is: a
+     * seam's refusal is recorded as a failing assertion rather than as the exception it is.
+     *
+     * @param cutoff the far edge of the grace period
+     * @return this case's parked batches, oldest first
+     */
+    private List<RegisterBatch> generatedSince(final Instant cutoff) {
+        final AtomicReference<List<RegisterBatch>> answered = new AtomicReference<>(List.of());
+        assertThatCode(() -> answered.set(repository.generatedSince(cutoff)))
+                .as("the parked-at-GENERATED reading implements this read; this is its red run")
                 .doesNotThrowAnyException();
         return mine(answered.get());
     }

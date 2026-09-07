@@ -373,17 +373,42 @@ class GenerationMetricsTest {
      * counters at all.
      */
     @Nested
-    @DisplayName("the six gauges")
+    @DisplayName("the seven gauges")
     class Gauges {
 
         @Test
-        void all_six_should_be_registered_before_a_run_has_happened() {
+        void all_seven_should_be_registered_before_a_run_has_happened() {
             assertThat(gauge(GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE)).isZero();
             assertThat(gauge(GenerationMetrics.OLDEST_GENERATING_AGE)).isZero();
             assertThat(gauge(GenerationMetrics.OLDEST_PENDING_AGE)).isZero();
+            assertThat(gauge(GenerationMetrics.OLDEST_GENERATED_AGE)).isZero();
             assertThat(gauge(GenerationMetrics.PENDING_AFTER_DEADLINE)).isZero();
             assertThat(gauge(GenerationMetrics.DEFERRED_KEYS)).isZero();
             assertThat(gauge(GenerationMetrics.FLAG_READ_OK)).isEqualTo(1);
+        }
+
+        /**
+         * The other batch nothing else can see. A batch whose document arrived and whose
+         * notification never happened - the store went away between the mark and the rows, or the
+         * listener's session rolled the delivery back after the mark had committed - stands at
+         * GENERATED, and {@code oldest_generating_age} reads GENERATING while
+         * {@code oldest_pending_age} reads PENDING. Without this reading, the state that leaves a
+         * Youth Offending Team untold is the one state no gauge moves for, which is defect fix P1's
+         * failure mode by another route.
+         */
+        @Test
+        void the_oldest_batch_holding_a_document_nobody_was_told_about_should_be_reported() {
+            metrics.oldestGeneratedAge(Duration.ofMinutes(70));
+
+            assertThat(gauge(GenerationMetrics.OLDEST_GENERATED_AGE)).isEqualTo(4_200);
+        }
+
+        @Test
+        void a_sweep_with_nothing_parked_at_generated_should_bring_that_gauge_back_down() {
+            metrics.oldestGeneratedAge(Duration.ofMinutes(70));
+            metrics.oldestGeneratedAge(Duration.ZERO);
+
+            assertThat(gauge(GenerationMetrics.OLDEST_GENERATED_AGE)).isZero();
         }
 
         /**
@@ -466,6 +491,7 @@ class GenerationMetricsTest {
             assertThat(tagKeysOf(GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE)).isEmpty();
             assertThat(tagKeysOf(GenerationMetrics.OLDEST_GENERATING_AGE)).isEmpty();
             assertThat(tagKeysOf(GenerationMetrics.OLDEST_PENDING_AGE)).isEmpty();
+            assertThat(tagKeysOf(GenerationMetrics.OLDEST_GENERATED_AGE)).isEmpty();
             assertThat(tagKeysOf(GenerationMetrics.PENDING_AFTER_DEADLINE)).isEmpty();
             assertThat(tagKeysOf(GenerationMetrics.FLAG_READ_OK)).isEmpty();
         }
@@ -484,6 +510,7 @@ class GenerationMetricsTest {
                             GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE,
                             GenerationMetrics.OLDEST_GENERATING_AGE,
                             GenerationMetrics.OLDEST_PENDING_AGE,
+                            GenerationMetrics.OLDEST_GENERATED_AGE,
                             GenerationMetrics.PENDING_AFTER_DEADLINE,
                             GenerationMetrics.DEFERRED_KEYS,
                             GenerationMetrics.FLAG_READ_OK);
@@ -507,6 +534,7 @@ class GenerationMetricsTest {
                             GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE,
                             GenerationMetrics.OLDEST_GENERATING_AGE,
                             GenerationMetrics.OLDEST_PENDING_AGE,
+                            GenerationMetrics.OLDEST_GENERATED_AGE,
                             GenerationMetrics.PENDING_AFTER_DEADLINE,
                             GenerationMetrics.DEFERRED_KEYS,
                             GenerationMetrics.FLAG_READ_OK);
@@ -564,6 +592,7 @@ class GenerationMetricsTest {
             metrics.oldestRecordedUnbatchedAge(Duration.ofHours(1));
             metrics.oldestGeneratingAge(Duration.ofMinutes(20));
             metrics.oldestPendingAge(Duration.ofMinutes(45));
+            metrics.oldestGeneratedAge(Duration.ofMinutes(70));
             metrics.pendingAfterDeadline(1);
             metrics.deferredKeys(1);
             metrics.flagRead(FlagDecision.OFF);
@@ -649,7 +678,7 @@ class GenerationMetricsTest {
         }
 
         @Test
-        @DisplayName("all six gauges scrape from a pod that has not run a night")
+        @DisplayName("all seven gauges scrape from a pod that has not run a night")
         void the_gauges_should_scrape_before_any_run_has_happened() {
             assertThat(samplesOf(GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE))
                     .containsExactly(GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE);
@@ -657,6 +686,8 @@ class GenerationMetricsTest {
                     .containsExactly(GenerationMetrics.OLDEST_GENERATING_AGE);
             assertThat(samplesOf(GenerationMetrics.OLDEST_PENDING_AGE))
                     .containsExactly(GenerationMetrics.OLDEST_PENDING_AGE);
+            assertThat(samplesOf(GenerationMetrics.OLDEST_GENERATED_AGE))
+                    .containsExactly(GenerationMetrics.OLDEST_GENERATED_AGE);
             assertThat(samplesOf(GenerationMetrics.PENDING_AFTER_DEADLINE))
                     .containsExactly(GenerationMetrics.PENDING_AFTER_DEADLINE);
             assertThat(samplesOf(GenerationMetrics.DEFERRED_KEYS))
