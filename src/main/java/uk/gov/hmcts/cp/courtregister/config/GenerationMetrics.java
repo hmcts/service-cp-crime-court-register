@@ -98,6 +98,17 @@ public class GenerationMetrics {
     public static final String UNKNOWN_CORRELATION = "unknown-correlation";
 
     /**
+     * The {@code reason} label of an outcome of ours that names its batch and not its payload.
+     *
+     * <p>Separate from {@link #UNKNOWN_CORRELATION} because the two absences are different faults
+     * and are read differently: that one is an announcement this service cannot attribute to any
+     * batch at all, and this one names its batch perfectly well and leaves out the identifier the
+     * correlation is cross-checked against. Counting it as an unknown correlation would put an
+     * event whose correlation was never in doubt into the reading a lost correlation is chased by.
+     */
+    public static final String MISSING_PAYLOAD_ID = "missing-payload-id";
+
+    /**
      * The {@code reason} label of an outcome whose two identifiers disagree.
      *
      * <p>The correlation names a batch this service does hold and the payload the event was

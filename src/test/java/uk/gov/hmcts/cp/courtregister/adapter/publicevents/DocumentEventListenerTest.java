@@ -395,6 +395,39 @@ class DocumentEventListenerTest {
         }
 
         /**
+         * The other absence, and it is not the same one. An event that names its batch and leaves
+         * out {@code payloadFileServiceId} has nothing to cross-check the correlation against, so
+         * it is applied nowhere either - but its correlation was never in doubt, and counting it
+         * as an unknown correlation would put it in the reading a correlation lost between the
+         * render request and the topic is chased by. It gets a bounded reason of its own on the
+         * same counter, so the two are added together when the question is "how many
+         * announcements went nowhere" and told apart when the question is which fault.
+         *
+         * <p>The fixture leaves out a member the schema requires, which is deliberate and is why
+         * it is not among the contract-legal ones above: a document-available that satisfies
+         * systemdocgenerator's schema always carries a payload id. This is the message a broker
+         * hands over anyway - the same reason the selector case above exists - and the guard is
+         * only worth having if its reading is honest about which half was missing.
+         */
+        @Test
+        void an_outcome_naming_a_batch_but_no_payload_should_be_counted_under_its_own_reason()
+                throws JMSException {
+            listener.onPublicEvent(message(DocumentEventListener.DOCUMENT_AVAILABLE,
+                    documentAvailableWithoutPayloadId()));
+
+            verifyNoInteractions(sink);
+            assertThat(ignored(GenerationMetrics.MISSING_PAYLOAD_ID))
+                    .as("the absent payload id is the fault that happened, so it is the reason the "
+                            + "event is counted under")
+                    .isEqualTo(1);
+            assertThat(ignored(GenerationMetrics.UNKNOWN_CORRELATION))
+                    .as("and the unknown-correlation series is not touched: this event named its "
+                            + "batch, and a reading that says otherwise sends support after a "
+                            + "correlation that was never lost")
+                    .isEqualTo(ABSENT);
+        }
+
+        /**
          * The header and the envelope have to agree. {@code CPPNAME} is what the broker selected on
          * and the envelope is what the message says it is; where they differ the message is not what
          * the header claimed, and routing it on the header alone would apply a failure as a
@@ -702,6 +735,21 @@ class DocumentEventListenerTest {
     private static String documentAvailableWithoutCorrelation() {
         return documentAvailableEnvelope("",
                 "  \"originatingSource\": \"" + DocumentEventListener.ORIGINATING_SOURCE + "\"\n");
+    }
+
+    /**
+     * The same envelope with {@code payloadFileServiceId} taken out, which is an outcome that names
+     * its batch and nothing to cross-check it against.
+     *
+     * <p>The schema requires the member, so this is not a message systemdocgenerator publishes; it
+     * is one the guard in the listener exists for, and what the guard has to get right is which of
+     * the two identifiers was missing.
+     *
+     * @return the envelope as text
+     */
+    private static String documentAvailableWithoutPayloadId() {
+        return ourDocumentAvailable()
+                .replace("  \"payloadFileServiceId\": \"" + PAYLOAD_FILE_ID + "\",\n", "");
     }
 
     /**
