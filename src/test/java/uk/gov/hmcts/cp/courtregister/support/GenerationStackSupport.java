@@ -11,6 +11,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.stubbing.StubMapping;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -21,6 +22,7 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -124,6 +126,9 @@ public final class GenerationStackSupport implements AutoCloseable {
     private final WireMockServer contexts;
 
     private final JdbcClient fileService;
+
+    /** The per-recipient answers this stack holds, kept so they can be withdrawn again. */
+    private final List<StubMapping> recipientAnswers = new ArrayList<>();
 
     private GenerationStackSupport(final WireMockServer contexts, final JdbcClient fileService) {
         this.contexts = contexts;
@@ -339,10 +344,22 @@ public final class GenerationStackSupport implements AutoCloseable {
      * @param status       what notificationnotify answers that recipient with
      */
     public void nnAnswers(final String emailAddress, final int status) {
-        contexts.stubFor(post(urlPathMatching(ANY_NOTIFICATION_PATH))
+        recipientAnswers.add(contexts.stubFor(post(urlPathMatching(ANY_NOTIFICATION_PATH))
                 .atPriority(ONE_RECIPIENT)
                 .withRequestBody(matchingJsonPath("$.sendToAddress", equalTo(emailAddress)))
-                .willReturn(aResponse().withStatus(status)));
+                .willReturn(aResponse().withStatus(status))));
+    }
+
+    /**
+     * notificationnotify stops answering any one recipient specially and accepts every e-mail.
+     *
+     * <p>The stubs are withdrawn by identity rather than by resetting the server, because what a
+     * resend has to be asserted on is the requests already received: a reset that forgot them would
+     * take with it the evidence that the second POST went to the same path as the first.
+     */
+    public void nnRecovers() {
+        recipientAnswers.forEach(contexts::removeStub);
+        recipientAnswers.clear();
     }
 
     /**
@@ -432,6 +449,7 @@ public final class GenerationStackSupport implements AutoCloseable {
      */
     public void reset() {
         contexts.resetAll();
+        recipientAnswers.clear();
         sdgAcceptsEveryRequest();
         nnAcceptsEveryEmail();
     }
