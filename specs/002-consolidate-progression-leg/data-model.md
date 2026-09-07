@@ -90,7 +90,12 @@ asks for these, so they are recorded here with the invariants they keep; three r
   yet exist, so no later run will ever pick those rows up. Re-rendering is a decision a person
   makes, and this is that decision written as a statement. Fenced on the batch's own FAILED in the
   statement as well as before it, because a count of nought otherwise means two different things,
-  and it answers the rows it released rather than leaving them to be read back.
+  and it answers the rows it released rather than leaving them to be read back. A row the hearing
+  has since been re-shared for is superseded against the re-share as its stamp is cleared, and is
+  left out of the answer: a recording supersedes an incumbent that is unbatched, so a re-share that
+  arrived while the row was stamped left the key holding two rows, and unstamping the older one is
+  what would make both active - the invariant is kept by this statement rather than defended by
+  `idx_output_active_register_key`.
 - Statement **11**, `recordedWhileOff()` - the registers automatic batching passed over. Statement
   2's predicate with its fourth test turned round, and deliberately one predicate with it: RECORDED,
   unsuperseded and unbatched in both, `recorded_flag_state <> 'ON'` the only difference (research

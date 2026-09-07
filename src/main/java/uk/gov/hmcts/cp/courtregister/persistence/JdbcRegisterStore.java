@@ -564,24 +564,66 @@ public class JdbcRegisterStore implements RegisterStore {
      *
      * <p>The assembly order, because it is the order the batch held them in and the first of them
      * names the file the day is rendered under.
+     *
+     * <p><strong>A register a re-share has replaced is superseded as its stamp is cleared, and is
+     * not answered with.</strong> Statement 1's {@code incumbent} predicate supersedes a row that is
+     * active and <em>unbatched</em>, so a hearing re-shared while its first register was stamped
+     * into this batch left two RECORDED rows for one key rather than one - and clearing the stamp
+     * off the older of them is what would make both active. That is not a case the caller can be
+     * left to handle: with the re-share still active the write collides with
+     * {@code idx_output_active_register_key} and the whole regeneration fails on a key nothing said
+     * was wrong, and once the re-share has been batched in its turn the write succeeds and hands
+     * back a register the estate has already replaced, for a document a Youth Offending Team would
+     * read after the current one. So the successor is looked for row by row, the stale row is
+     * superseded against it in the same statement that unstamps it - which is what keeps the index
+     * satisfied rather than defended - and the final {@code SELECT} answers with the rows that are
+     * still this day's to render.
+     *
+     * <p>The successor is any other row of the key that is unsuperseded and not itself SUPERSEDED,
+     * whatever batch it has reached: what makes the older row unassemblable is that another row
+     * holds the key, and the newest of them is the one named as the replacement. {@code superseded_by}
+     * therefore names a register rather than being left null, which is what tells this apart from a
+     * rollback's supersession (statement 12).
      */
     private static final String RELEASE_FAILED = """
-            WITH released AS (
-                UPDATE processed_output recorded
-                   SET batch_id = NULL, updated_at = now()
-                  FROM register_batch failed
-                 WHERE recorded.batch_id = failed.batch_id
-                   AND failed.batch_id = :batchId
+            WITH stamped AS (
+                SELECT recorded.output_id,
+                       (SELECT successor.output_id
+                          FROM processed_output successor
+                         WHERE successor.hearing_id = recorded.hearing_id
+                           AND successor.court_centre_id = recorded.court_centre_id
+                           AND successor.register_date = recorded.register_date
+                           AND successor.output_id <> recorded.output_id
+                           AND successor.superseded_at IS NULL
+                           AND successor.status <> 'SUPERSEDED'
+                         ORDER BY successor.register_time DESC, successor.output_id DESC
+                         LIMIT 1) AS successor_id
+                  FROM processed_output recorded
+                  JOIN register_batch failed ON failed.batch_id = recorded.batch_id
+                 WHERE failed.batch_id = :batchId
                    AND failed.status = 'FAILED'
                    AND recorded.status = 'RECORDED'
+            ), released AS (
+                UPDATE processed_output recorded
+                   SET batch_id = NULL,
+                       status = CASE WHEN stamped.successor_id IS NULL
+                                     THEN 'RECORDED' ELSE 'SUPERSEDED' END,
+                       superseded_at = CASE WHEN stamped.successor_id IS NULL
+                                            THEN NULL ELSE now() END,
+                       superseded_by = stamped.successor_id,
+                       updated_at = now()
+                  FROM stamped
+                 WHERE recorded.output_id = stamped.output_id
                 RETURNING recorded.output_id, recorded.hearing_id, recorded.hearing_date,
                           recorded.court_centre_id, recorded.register_date,
                           recorded.register_time, recorded.file_name, recorded.defendant_type,
-                          recorded.recorded_flag_state, recorded.document
+                          recorded.recorded_flag_state, recorded.document,
+                          recorded.superseded_at
             )
             SELECT output_id, hearing_id, hearing_date, court_centre_id, register_date,
                    register_time, file_name, defendant_type, recorded_flag_state, document
               FROM released
+             WHERE superseded_at IS NULL
              ORDER BY register_time, output_id
             """;
 

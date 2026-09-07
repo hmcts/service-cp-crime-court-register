@@ -274,9 +274,21 @@ public interface RegisterStore {
      * re-share can supersede a row, and a caller re-assembling what it read a moment earlier would
      * be stamping a register the store no longer calls active.
      *
+     * <p><strong>A register the hearing has since been re-shared for is superseded rather than given
+     * back.</strong> A recording only supersedes an incumbent that is active and <em>unbatched</em>,
+     * so a re-share that arrives while the first register is stamped into this batch leaves the key
+     * holding two rows rather than one - and giving the older of them its stamp back is what would
+     * make both active. Where the key holds another unsuperseded row, this call therefore writes the
+     * stale one SUPERSEDED against it as it clears the stamp, and leaves it out of the answer: it is
+     * not a register this day is owed a document from, and re-assembling it would send a Youth
+     * Offending Team the register the estate has already replaced. A re-share that arrives
+     * <em>after</em> the release supersedes the released row in the ordinary way, this call having
+     * left it active and unbatched.
+     *
      * @param batchId the FAILED batch whose registers are to be released
-     * @return the registers whose stamp was cleared, in the order the batch held them; empty where
-     *         the batch's own failure had already released them
+     * @return the registers whose stamp was cleared and that are still this day's to render, in the
+     *         order the batch held them; empty where the batch's own failure had already released
+     *         them, or where every register it held has since been replaced
      */
     List<RegisterRecord> releaseFailed(UUID batchId);
 
