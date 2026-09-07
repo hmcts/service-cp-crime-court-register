@@ -93,6 +93,25 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * team that was told last night still counts as told, and a fresh notify's rows are exactly the
  * rows it has just settled. One rule instead of two that could disagree about the same batch.
  *
+ * <p><strong>One notifier per batch at a time, under a claim.</strong> Both entry points are
+ * reachable at the same moment - the outcome sink on a delivered {@code document-available} and an
+ * operator's resend - and they derive the same owed set from the same records, so without a claim
+ * both POST for every recipient and both then settle the rows and the batch. Every call therefore
+ * claims the batch first ({@code register_batch.notifying_since} / {@code notifier_token}, taken
+ * under an advisory lock in a short transaction of its own) and gives the claim back at the end;
+ * the call that does not get it posts nothing and answers
+ * {@link NotificationDisposition#ALREADY_NOTIFYING}, which is not a failure but a batch somebody
+ * else is telling. The claim carries a lease, because a pod that died mid-notification would
+ * otherwise leave a batch nothing could ever pick up.
+ *
+ * <p>A claim rather than one transaction around the cycle, and for the same reason the intake half
+ * holds a {@code RunClaim}: the cycle POSTs to notificationnotify once per recipient and waits
+ * between its own retries, and a database transaction open across that would hold a connection and
+ * a row lock for as long as another service takes to answer. The row-level writes are fenced
+ * independently of the claim as well - a settlement is refused where the row is already ACCEPTED,
+ * and the attempt total is computed in SQL - because defence at the row is what survives a claim
+ * whose lease ran out under the run that held it.
+ *
  * <p><strong>Notification is asked once per batch, because the mark that precedes it is.</strong>
  * {@code markGenerated} is a compare-and-set, so of two mechanisms racing to move one batch to
  * GENERATED only one wins and only that one goes on to notify. A batch whose notification could not
@@ -127,6 +146,14 @@ public class RegisterNotifierService {
 
     /** A minted row has been posted for nothing yet, which is what the column's default says. */
     private static final int NO_ATTEMPTS_YET = 0;
+
+    /**
+     * What the settlement statement answers where it changed nothing.
+     *
+     * <p>Which is one thing only: the row was already ACCEPTED, because the identity is this row's
+     * own and the statement's only other predicate is that.
+     */
+    private static final int NOT_SETTLED = 0;
 
     private static final Logger LOG = LoggerFactory.getLogger(RegisterNotifierService.class);
 
@@ -221,7 +248,7 @@ public class RegisterNotifierService {
      *     is settled in
      */
     public NotificationSummary notify(final UUID batchId) {
-        return tellWhoeverIsOwed(batchOf(batchId));
+        return underTheClaim(batchId);
     }
 
     /**
@@ -243,7 +270,84 @@ public class RegisterNotifierService {
      * @return the tally over the whole batch as it now stands, and the terminal state that produces
      */
     public NotificationSummary resendFailed(final UUID batchId) {
-        return tellWhoeverIsOwed(batchOf(batchId));
+        return underTheClaim(batchId);
+    }
+
+    /**
+     * The whole cycle for one batch, run by whichever notifier holds that batch's claim.
+     *
+     * <p><strong>Both entry points are reachable at the same moment, and only one may post.</strong>
+     * The outcome sink on a delivered {@code document-available} and an operator's resend derive the
+     * same owed set from the same records, so without a claim both POST for every recipient and both
+     * then settle the rows and the batch: a Youth Offending Team gets a register about children
+     * twice, an absolute settlement can write FAILED over the ACCEPTED row the other run had just
+     * written, the two runs' attempt counts are lost against each other, and the second tally is
+     * taken while the first run is still writing.
+     *
+     * <p><strong>A claim rather than one transaction around the cycle.</strong> The cycle POSTs to
+     * notificationnotify once per recipient, and a database transaction open across those calls
+     * would hold a connection and a row lock for as long as another service takes to answer - and
+     * for as long as this leg's own retries wait. So the claim is taken in a short transaction of
+     * its own (an advisory lock on the batch id and a compare-and-set on the claim columns), the
+     * POSTs are made outside any transaction, and the claim is given back at the end. It is the
+     * same shape the intake half's {@code RunClaim} has, for the same reason.
+     *
+     * <p><strong>The loser answers rather than throwing.</strong> A batch being told by somebody
+     * else is not a failure and leaves this call nothing to do, so it reports the disposition and
+     * the rows as they stood - which is the winner's work part-done, and why a caller branches on
+     * {@link NotificationDisposition} and not on the counts.
+     *
+     * <p><strong>The claim is released in a finally, and released by token.</strong> A claim held
+     * past the run that took it is a batch no resend and no reconciliation could pick up, which is
+     * defect fix P1's state wearing a different hat; the lease is the second answer to that, for
+     * the pod that dies before any {@code finally} runs. Releasing by token means a notifier whose
+     * claim was reclaimed while it was working releases nothing, because what it would be giving
+     * back is the claim the notifier that took over is relying on.
+     *
+     * @param batchId the batch to tell the recipients of
+     * @return the tally and what this call did about it
+     */
+    // PMD.OnlyOneReturn: the two answers are two different things - what this run did to the batch,
+    // and what another run is doing to it - and only one of them may be produced inside the
+    // try/finally that holds the claim. A single exit would mean carrying a summary out of a branch
+    // that never took a claim past the block whose whole job is to give one back.
+    @SuppressWarnings("PMD.OnlyOneReturn")
+    private NotificationSummary underTheClaim(final UUID batchId) {
+        final UUID token = UUID.randomUUID();
+
+        if (!batches.claimForNotification(batchId, token)) {
+            metrics.alreadyNotifying();
+            LOG.info("Batch {} is already being notified by another mechanism, so this run posts "
+                    + "nothing for it: two runs telling one batch's recipients is a second e-mail "
+                    + "about the same children to every team on it.", batchId);
+            final RegisterBatch standing = batchOf(batchId);
+            final NotificationSummary seen = tally(notifications.findByBatchId(batchId));
+            return NotificationSummary.alreadyNotifying(
+                    seen.accepted(), seen.failed(), standing.status());
+        }
+        try {
+            return tellWhoeverIsOwed(batchOf(batchId));
+        } finally {
+            release(batchId, token);
+        }
+    }
+
+    /**
+     * Gives the claim back, so a later run can pick the batch up where this one left it.
+     *
+     * <p>A release that changed nothing is reported and not raised: the claim was reclaimed while
+     * this run was working, which means the lease expired under it, and the run it has to tell
+     * about that is the one whose result it just wrote - not this one, which is finishing.
+     *
+     * @param batchId the batch to release
+     * @param token   the token this run claimed under
+     */
+    private void release(final UUID batchId, final UUID token) {
+        if (!batches.releaseNotificationClaim(batchId, token)) {
+            LOG.warn("Batch {}'s notification claim was not this run's to release, so its lease "
+                    + "ran out while this run was still telling the recipients and another "
+                    + "mechanism has taken the batch over.", batchId);
+        }
     }
 
     /**
@@ -267,6 +371,14 @@ public class RegisterNotifierService {
      * the one case that reads no document at all, because there is nothing to attach and nobody to
      * attach it for.
      *
+     * <p><strong>The batch is re-read before it is settled.</strong> The row this run started from
+     * is minutes old by the time the last recipient has been posted for, and the mark that settles
+     * a batch is a compare-and-set against the state the caller read: a stale state is either a
+     * write the store refuses, or - where the state machine happens to draw the move - a second
+     * settlement of a batch something else has already finished. The tally is likewise taken off
+     * the table at that moment rather than counted in flight, so the two halves of the verdict are
+     * read at the same instant and inside the same claim.
+     *
      * @param batch the batch as this run read it
      * @return how many recipients were accepted, how many failed, and the terminal state the batch
      *     is settled in
@@ -289,7 +401,7 @@ public class RegisterNotifierService {
                     + "asked of notificationnotify.", batchId, recipients.size(), owed.size());
             tell(owed, documentFileId);
         }
-        return settle(batch);
+        return settle(batchOf(batchId));
     }
 
     /**
@@ -420,6 +532,14 @@ public class RegisterNotifierService {
      * got, and a transient refusal that cleared on the next attempt is not an e-mail that failed -
      * how many attempts it took is on the row's {@code attempts}.
      *
+     * <p><strong>A settlement the store refused is not taken for one that landed.</strong>
+     * ACCEPTED is terminal at the row level, so a row another mechanism accepted between this run's
+     * read and its own write changes nothing: the write is refused where the row is rather than by
+     * this loop remembering to check, and what it means is that the team has been told. It is
+     * counted on its own bounded reason so that something which changed nothing is still visible -
+     * the alternative reading is a row that looks untouched - and nothing else is done about it,
+     * because the tally taken at settlement reads the row as it now stands.
+     *
      * @param rows           the rows to post for, each already persisted under its own identity
      * @param documentFileId the rendered document's file-service id, attached by reference
      */
@@ -428,7 +548,14 @@ public class RegisterNotifierService {
             final Attempted attempted = attempt(row, documentFileId);
             final NotificationOutcome outcome = attempted.outcome();
             metrics.notificationSettled(outcome.status(), outcome.responseCode());
-            notifications.update(settledAs(row, outcome), attempted.posts());
+
+            if (notifications.update(settledAs(row, outcome), attempted.posts()) == NOT_SETTLED) {
+                metrics.lateFailureIgnored();
+                LOG.info("A recipient of batch {} was already accepted by the time this run "
+                        + "settled it, so the settlement changed nothing and the row keeps the "
+                        + "acceptance: the team has been told. notificationId={}",
+                        row.batchId(), row.notificationId());
+            }
         }
     }
 

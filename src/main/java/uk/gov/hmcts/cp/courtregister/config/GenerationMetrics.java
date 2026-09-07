@@ -319,6 +319,28 @@ public class GenerationMetrics {
     }
 
     /**
+     * Counts a settlement the store refused because the recipient had already been told.
+     *
+     * <p>The one reading that says two notifiers raced over one batch and the row-level
+     * compare-and-set caught it. Something that changed nothing has to be visible, or the only
+     * trace is a row that looks untouched.
+     */
+    public void lateFailureIgnored() {
+        counter(NOTIFICATIONS_IGNORED, REASON_TAG, LATE_FAILURE_IGNORED).increment();
+    }
+
+    /**
+     * Counts a notifier that found the batch already claimed by another and posted nothing.
+     *
+     * <p>Not a failure - the batch is being told by somebody else - and counted so that a batch
+     * nobody can ever claim, its claim left behind by a pod that died, reads as a series rather
+     * than as silence.
+     */
+    public void alreadyNotifying() {
+        counter(NOTIFICATIONS_IGNORED, REASON_TAG, ALREADY_NOTIFYING).increment();
+    }
+
+    /**
      * Reports how old the oldest record still waiting to be batched is.
      *
      * <p>The reading that says a night was missed. A record that is never batched is invisible in

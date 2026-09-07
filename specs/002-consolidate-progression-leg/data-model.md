@@ -94,6 +94,7 @@ inserts, because the row being replaced holds the key until the update takes it 
 | `attempts` | `int NOT NULL DEFAULT 0` | Lifetime tally, never a control variable |
 | `supplement_of` | `uuid` FK → `register_batch(batch_id)` | The batch this one follows for the same key; NULL on a day's first batch |
 | `supplement_index` | `int NOT NULL DEFAULT 0` | 0 on a day's first batch, counting up from 1 on each supplementary one; the file name is built from it |
+| `notifying_since`, `notifier_token` | `timestamptz`, `uuid` | The notifying leg's claim (below). Written and cleared together - `register_batch_notifier_claim_chk` requires that - and **not** components of the `RegisterBatch` domain record: what a batch is does not include who is currently telling its recipients, and a claim on the record would be a field every caller of the whole-row compare-and-set could overwrite |
 
 Constraint: `UNIQUE (court_centre_id, register_date) WHERE status IN ('PENDING','GENERATING',
 'GENERATED')` (partial unique) - one **in-flight** batch per key, those being the three states in
@@ -113,6 +114,42 @@ covered and none is covered by omission; a status outside the vocabulary is
 contradictory `markGenerated` or `markFailed` before it issues a statement and
 `RegisterBatchRepository` refuses an attribution on a batch that has not finished, so the same rule
 is enforced twice and stated once (`BatchFailureReason.isGeneratorAttributed()`).
+
+**The notifying leg is single-runner, under a claim on the batch (decided 2026-09-07).** Two
+mechanisms reach one generated batch - the outcome sink on a delivered `document-available`, and an
+operator's `notify-register --batch` resend - and both derive the same owed set from the same
+records. Without a claim both POST for every recipient and both then settle the rows and the batch:
+a Youth Offending Team gets a register about children twice, an unconditional settlement can write
+FAILED over the ACCEPTED row the other run has just written, the two runs' attempt counts are lost
+against each other, and the second tally is taken while the first run is still writing.
+
+`RegisterNotifierService.notify` and `.resendFailed` therefore both claim the batch first.
+`RegisterBatchRepository.claimForNotification(batchId, token)` takes
+`pg_advisory_xact_lock(hashtext(batch_id::text))` and then compare-and-sets `notifying_since = now()`
+and `notifier_token = :token` **where the batch is unclaimed or its claim is past the lease**, both
+statements in one short transaction; `releaseNotificationClaim(batchId, token)` clears the pair,
+fenced on the token, in a `finally`. The advisory lock serialises the claim attempts so the
+compare-and-set that follows is the only one running; being transaction-scoped, it is given back
+when that short transaction commits, which is before the first POST.
+
+**Why a claim and not one transaction round the cycle.** The alternative considered was a single
+transaction from the read through the POSTs to the settlement, with the advisory lock held across
+it. That is rejected: the cycle POSTs to notificationnotify once per recipient and waits
+`initial-backoff`-to-`max-backoff` between its own retries, so the transaction would hold a
+connection and a row lock for as long as another service takes to answer a whole batch's e-mails.
+The claim is the same shape the intake half's `RunClaim` has, for the same reason, and the lease
+answers the same question: a pod that died mid-notification leaves the claim behind, and a claim
+nothing can ever take is a batch no resend and no reconciliation could pick up. The lease is the
+reconciler's own `courtregister.generation.grace-period`, because the two answer the same question -
+how long a notifier is given to finish before something else may pick the batch up is how long the
+safety net waits before it looks - and expiry is decided by the database comparing its own `now()`
+against the stored instant, never by a JVM clock reading. The loser of the claim posts nothing and
+answers `NotificationDisposition.ALREADY_NOTIFYING` with the rows as they stood, which is the
+winner's work part-done: a caller branches on the disposition, never on those counts. Pinned by
+`RegisterBatchRepositoryIT.Claiming` (the store's half, including the takeover past the lease) and
+`RegisterNotifierServiceTest.TwoNotifiersOnOneBatch` (the service's half). The claim is **not**
+defence enough on its own, which is why the row-level fences below exist too: a lease that ran out
+under the run holding it leaves two notifiers in the cycle at once.
 
 **Supplementary batches for late re-shares (design Q27, decided 2026-09-06).** A same-day re-share
 recorded after its (court centre, register date) batch has been **sent** becomes a **supplementary
@@ -162,6 +199,32 @@ attributable, and leaves the nightly job able to send them without being asked.
 | `attempts` | `int NOT NULL DEFAULT 0` | Accumulates the POSTs made for the row, not the runs that made them: a transient refusal retried inside one call adds each attempt |
 
 Constraint: `UNIQUE (batch_id, email_address)`.
+
+**ACCEPTED is terminal at the row level, and the attempt total is computed in SQL.** The batch claim
+above serialises the ordinary case; this is what holds when it does not - a claim whose lease ran out
+under the run holding it leaves two notifiers in the cycle at once. So the settlement statement is
+`SET status = :status, response_code = :responseCode, sent_at = :sentAt, attempts = attempts + :posts
+WHERE notification_id = :notificationId AND status <> 'ACCEPTED'`. A run can read a row as unsettled,
+POST for it, and only then find the other run's POST was accepted in between: an unconditional write
+would demote that row to FAILED, so the team that has been told reads as untold, the batch goes back
+to PARTIALLY_NOTIFIED, and the resend that follows sends the register again. Nought rows changed is
+the answer instead, and `RegisterNotifierService` counts it on
+`courtregister_notifications_ignored_total{reason=late-failure-ignored}` rather than believing the
+write landed - something that changed nothing has to be visible, or the only trace is a row that
+looks untouched. `{reason=already-notifying}` on the same counter is the notifier that lost the
+claim. The `attempts` arithmetic is the statement's for the same reason: two runs that each read the
+row at nought and each write an absolute total both write the same number, so one run's POSTs are
+simply lost. Pinned by `RegisterNotificationRepositoryIT
+.settling_a_recipient_already_accepted_should_change_nothing_and_say_so` and
+`…two_settlements_computed_from_one_read_should_each_add_their_own_attempts`.
+
+**The batch is re-read before it is settled**, inside the same claim. The row a run started from is
+minutes old by the time the last recipient has been posted for, and `markNotified` is a
+compare-and-set against the state the caller read: a stale state is either a write the store refuses
+or - where the machine happens to draw the move - a second settlement of a batch something else has
+already finished. The tally is taken off the table at that same moment, so both halves of the verdict
+are read at one instant (`RegisterNotifierServiceTest
+.a_batch_another_mechanism_moved_should_be_recognised_rather_than_re_settled`).
 
 **PENDING is unsettled, not untouched.** The row is minted PENDING before the POST and settled
 after it, so a run that stopped in between - the pod died, the store blipped on the update, the

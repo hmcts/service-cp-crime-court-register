@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -78,6 +79,15 @@ class RegisterBatchRepositoryIT {
     private final UUID courtCentre = UUID.randomUUID();
 
     /**
+     * How long a notification claim stays live in these cases.
+     *
+     * <p>The deployed value is the reconciler's grace period; a suite that waited ten minutes to
+     * see a claim expire would be a suite nobody runs, so the lease is short and the expiry case
+     * waits it out.
+     */
+    private static final Duration NOTIFIER_LEASE = Duration.ofMillis(250);
+
+    /**
      * This case's payload ids, minted per test for the same reason as the court centre.
      *
      * <p>The overdue reads below answer for the whole table, so a payload id shared between cases -
@@ -88,7 +98,8 @@ class RegisterBatchRepositoryIT {
     private final UUID secondPayloadFileId = UUID.randomUUID();
 
     private final RegisterBatchRepository repository =
-            new RegisterBatchRepository(ProcessedLogTestSupport.jdbcClient());
+            new RegisterBatchRepository(ProcessedLogTestSupport.jdbcClient(),
+                    ProcessedLogTestSupport.transactions(), NOTIFIER_LEASE);
 
     @BeforeAll
     static void migrate() {
@@ -495,6 +506,170 @@ class RegisterBatchRepositoryIT {
                     .as("and nothing is written")
                     .isEmpty();
         }
+    }
+
+    /**
+     * The notification claim, which is what makes the notifying leg single-runner.
+     *
+     * <p>Notification is reachable by two mechanisms over one batch - the outcome sink on a
+     * delivered {@code document-available} and an operator's resend - and both derive the same owed
+     * set from the same records, so without a claim both POST for every recipient and both then
+     * settle the rows and the batch. The serialisation is Postgres's and is asserted here: an
+     * advisory lock on the batch id and a compare-and-set on the two claim columns, taken together
+     * in one short transaction so that two attempts that arrived together are two attempts one
+     * after the other rather than two reads of the same row.
+     *
+     * <p>The claim is not part of {@link RegisterBatch}, so these cases read the columns directly.
+     * That is the point rather than an inconvenience: what a batch <em>is</em> does not include who
+     * is currently telling its recipients, and a claim on the domain record would be a component
+     * every caller of the whole-row compare-and-set could overwrite.
+     */
+    @Nested
+    @DisplayName("the notification claim")
+    class Claiming {
+
+        @Test
+        void the_first_notifier_to_ask_should_take_the_claim() {
+            final RegisterBatch generated = walkedToGenerated(inserted(MONDAY));
+            final UUID token = UUID.randomUUID();
+
+            assertThat(repository.claimForNotification(generated.batchId(), token))
+                    .as("the batch is unclaimed, so the notifier that asked may tell its "
+                            + "recipients")
+                    .isTrue();
+            assertThat(claimHolderOf(generated.batchId()))
+                    .as("and the claim is on the row under this notifier's own token, which is "
+                            + "what a release and a takeover are both fenced on")
+                    .isEqualTo(token);
+        }
+
+        @Test
+        void a_second_notifier_should_be_refused_while_the_first_one_holds_the_claim() {
+            final RegisterBatch generated = walkedToGenerated(inserted(MONDAY));
+            final UUID first = UUID.randomUUID();
+            final UUID second = UUID.randomUUID();
+            repository.claimForNotification(generated.batchId(), first);
+
+            assertThat(repository.claimForNotification(generated.batchId(), second))
+                    .as("one notifier per batch at a time: the second POST under a row's own "
+                            + "identity is a second e-mail about the same children to the same "
+                            + "team")
+                    .isFalse();
+            assertThat(claimHolderOf(generated.batchId()))
+                    .as("and the refusal changed nothing, so the claim is still the first "
+                            + "notifier's to release")
+                    .isEqualTo(first);
+        }
+
+        @Test
+        void releasing_the_claim_should_let_a_later_notifier_take_the_batch_up() {
+            final RegisterBatch generated = walkedToGenerated(inserted(MONDAY));
+            final UUID first = UUID.randomUUID();
+            repository.claimForNotification(generated.batchId(), first);
+
+            assertThat(repository.releaseNotificationClaim(generated.batchId(), first))
+                    .as("the notifier that finished gives the claim back")
+                    .isTrue();
+            assertThat(claimHolderOf(generated.batchId()))
+                    .as("and the row holds neither half of it, because the two are one fact")
+                    .isNull();
+            assertThat(repository.claimForNotification(generated.batchId(), UUID.randomUUID()))
+                    .as("so an operator's resend of a PARTIALLY_NOTIFIED batch can have it")
+                    .isTrue();
+        }
+
+        /**
+         * A notifier whose claim was reclaimed under it releases nothing.
+         *
+         * <p>What it would be giving back is the claim the notifier that took over is relying on,
+         * and the run that has to be told the lease expired is the one whose result was just
+         * written - not the one that has finished.
+         */
+        @Test
+        void releasing_under_a_token_that_is_not_the_holders_should_change_nothing() {
+            final RegisterBatch generated = walkedToGenerated(inserted(MONDAY));
+            final UUID holder = UUID.randomUUID();
+            repository.claimForNotification(generated.batchId(), holder);
+
+            assertThat(repository.releaseNotificationClaim(
+                    generated.batchId(), UUID.randomUUID()))
+                    .isFalse();
+            assertThat(claimHolderOf(generated.batchId()))
+                    .as("the holder's claim is untouched by somebody else's release")
+                    .isEqualTo(holder);
+        }
+
+        /**
+         * And the lease, which is the answer to a pod that died holding a claim.
+         *
+         * <p>A claim nothing can ever take is a batch no resend and no reconciliation could pick
+         * up. The expiry is decided by the database comparing its own {@code now()} against the
+         * stored instant, never by a JVM clock reading, which is why this case waits rather than
+         * writing an old timestamp: what it exercises is the statement's own predicate.
+         */
+        @Test
+        void a_claim_past_its_lease_should_be_taken_over() throws InterruptedException {
+            final RegisterBatch generated = walkedToGenerated(inserted(MONDAY));
+            final UUID died = UUID.randomUUID();
+            final UUID recovering = UUID.randomUUID();
+            repository.claimForNotification(generated.batchId(), died);
+
+            Thread.sleep(NOTIFIER_LEASE.plusMillis(150).toMillis());
+
+            assertThat(repository.claimForNotification(generated.batchId(), recovering))
+                    .as("the pod that held this claim is gone, and the batch still has Youth "
+                            + "Offending Teams it owes a register")
+                    .isTrue();
+            assertThat(claimHolderOf(generated.batchId()))
+                    .as("and the claim is now the recovering notifier's, so the dead one's "
+                            + "release would change nothing")
+                    .isEqualTo(recovering);
+        }
+
+        @Test
+        void claiming_a_batch_this_store_never_assembled_should_be_refused() {
+            assertThat(repository.claimForNotification(UUID.randomUUID(), UUID.randomUUID()))
+                    .as("nought rows changed is a caller naming an identity nothing was ever "
+                            + "assembled under, which is not a batch whose recipients are owed "
+                            + "anything")
+                    .isFalse();
+        }
+    }
+
+    /** A batch inserted and left at PENDING, for the cases that then walk it forward. */
+    private RegisterBatch inserted(final LocalDate registerDate) {
+        final RegisterBatch assembled = assembled(registerDate);
+        repository.insert(assembled);
+        return assembled;
+    }
+
+    /**
+     * The same batch walked to GENERATED through the state machine, which is where it is notified
+     * from.
+     *
+     * <p>Walked rather than written there: a fixture that inserted the end state would be the one
+     * caller for which the compare-and-set rules did not hold.
+     */
+    private RegisterBatch walkedToGenerated(final RegisterBatch assembled) {
+        final RegisterBatch generating = generating(assembled, payloadFileId, REQUESTED_AT);
+        repository.compareAndSet(generating, BatchStatus.PENDING);
+        final RegisterBatch document = generated(generating);
+        repository.compareAndSet(document, BatchStatus.GENERATING);
+        return document;
+    }
+
+    /** Who holds the batch's notification claim, read off the two columns the domain has not got. */
+    private static UUID claimHolderOf(final UUID batchId) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT notifier_token
+                          FROM register_batch
+                         WHERE batch_id = :batchId AND notifying_since IS NOT NULL
+                        """)
+                .param("batchId", batchId)
+                .query(UUID.class)
+                .optional()
+                .orElse(null);
     }
 
     /** A batch in the state assembly leaves it in: a key, a file name, and ten empty columns. */

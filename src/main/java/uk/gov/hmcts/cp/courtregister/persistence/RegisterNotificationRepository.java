@@ -95,14 +95,32 @@ public class RegisterNotificationRepository {
      *
      * <p>The address, the batch and the template are not among the columns set. What was sent, and
      * to whom, is decided when the row is minted; a settlement may only say how that attempt ended.
+     *
+     * <p><strong>ACCEPTED is terminal at the row level, and this predicate is what makes it
+     * so.</strong> Two mechanisms can reach one generated batch at the same moment, so a run can
+     * read a row as unsettled, POST for it, and only then find that the other run's POST was
+     * accepted in between. An unconditional settlement would write FAILED over that ACCEPTED row:
+     * the team that has been told reads as untold, the batch goes back to PARTIALLY_NOTIFIED, and
+     * the resend that follows sends a register about children to a team that already has it. Nought
+     * rows changed is the answer instead, and the caller counts it rather than believing the write
+     * landed. An ACCEPTED write onto an ACCEPTED row is refused by the same predicate and is not a
+     * loss: the row already says what that write was going to say.
+     *
+     * <p><strong>And the attempt total is computed here rather than by the caller.</strong> Two
+     * runs that each read the row at nought and each write an absolute total both write the same
+     * number, so one run's attempts are simply lost - a row POSTed for four times reads as two, and
+     * the count support tells an exhausted budget from a broken route by is wrong in the direction
+     * that hides work. What arrives is how many POSTs the call made; what is written is that added
+     * to whatever the row holds at the moment of the write.
      */
     private static final String UPDATE_NOTIFICATION = """
             UPDATE register_notification
                SET status = :status,
                    response_code = :responseCode,
                    sent_at = :sentAt,
-                   attempts = :attempts
+                   attempts = attempts + :posts
              WHERE notification_id = :notificationId
+               AND status <> 'ACCEPTED'
             """;
 
     private final JdbcClient jdbcClient;
@@ -191,13 +209,14 @@ public class RegisterNotificationRepository {
      *
      * @param notification the row as it should now stand, carrying the identity it was minted under
      * @param posts        how many POSTs this call made for the row
-     * @return how many rows the statement changed, which is the decision and never a read-back
+     * @return how many rows the statement changed, which is the decision and never a read-back;
+     *     nought is a row an acceptance has already made terminal
      */
     public int update(final RegisterNotification notification, final int posts) {
         return StoreOutage.translating("settle a recipient's notification row",
                 () -> settlement(jdbcClient.sql(UPDATE_NOTIFICATION)
                         .param("notificationId", notification.notificationId()), notification)
-                        .param("attempts", notification.attempts() + posts)
+                        .param("posts", posts)
                         .update());
     }
 

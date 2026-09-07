@@ -103,8 +103,34 @@ CREATE TABLE register_batch (
     supplement_of         uuid,
     supplement_index      integer     NOT NULL DEFAULT 0,
 
+    -- The notifying leg's claim. Notification is reachable by two mechanisms over one batch - the
+    -- outcome sink on a delivered `document-available`, and an operator's resend - and both derive
+    -- the same owed set from the same records, so without a claim both POST for every recipient and
+    -- both then settle the rows and the batch. A Youth Offending Team gets a register about children
+    -- twice, and the second settlement is a tally taken while the other run was still writing.
+    --
+    -- A claim rather than one transaction around the whole cycle, which is the same choice the
+    -- intake half's `processed_request` claim makes: the cycle POSTs to notificationnotify once per
+    -- recipient, and holding a database transaction open across those calls would park a connection
+    -- and a row lock for as long as another service takes to answer. So the claim is taken in a
+    -- short transaction of its own, the POSTs are made outside any transaction, and the claim is
+    -- released at the end.
+    --
+    -- `notifying_since` is what makes the claim recoverable: a pod that died mid-notification left
+    -- the claim behind, and a claim nothing can ever take is a batch no resend and no reconciliation
+    -- could pick up. The lease is compared inside the claiming statement, by the database against
+    -- its own now(), never by a JVM clock against a stored timestamp.
+    notifying_since       timestamptz,
+    notifier_token        uuid,
+
     CONSTRAINT register_batch_pkey
         PRIMARY KEY (batch_id),
+    -- The two claim columns are one fact and are written and cleared together, so a row holding one
+    -- of them is a claim that cannot be released (no token to release it under) or one no reader can
+    -- date. Written as an equality between the two null-nesses rather than as two implications,
+    -- because that is exactly the claim: it is held, or it is not.
+    CONSTRAINT register_batch_notifier_claim_chk
+        CHECK ((notifying_since IS NULL) = (notifier_token IS NULL)),
     CONSTRAINT register_batch_supplement_of_fk
         FOREIGN KEY (supplement_of) REFERENCES register_batch (batch_id),
     CONSTRAINT register_batch_status_chk

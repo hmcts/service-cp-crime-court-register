@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.persistence;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -93,10 +94,14 @@ class RegisterNotificationRepositoryIT {
     /** A second settlement instant, later than the first, so an overwrite would be visible. */
     private static final Instant LATER = Instant.parse("2026-08-24T17:09:38Z");
 
+    /** The claim lease this suite's batch repository is built with; no case here takes a claim. */
+    private static final Duration NOTIFIER_LEASE = Duration.ofMinutes(10);
+
     private final UUID courtCentre = UUID.randomUUID();
 
     private final RegisterBatchRepository batches =
-            new RegisterBatchRepository(ProcessedLogTestSupport.jdbcClient());
+            new RegisterBatchRepository(ProcessedLogTestSupport.jdbcClient(),
+                    ProcessedLogTestSupport.transactions(), NOTIFIER_LEASE);
 
     private final RegisterNotificationRepository repository =
             new RegisterNotificationRepository(ProcessedLogTestSupport.jdbcClient());

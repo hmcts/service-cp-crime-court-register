@@ -7,6 +7,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPause;
 import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
@@ -59,12 +61,23 @@ public class GenerationConfig {
      * <p>Over the register store's own client, because a batch is the store's neighbour: the two
      * write the same database and the reconciler reads this one while the store writes the other.
      *
-     * @param jdbcClient the processed log's client, which is the register store's
+     * <p>The transaction manager is the register store's own, so the two statements the
+     * notification claim is taken in - the advisory lock and the compare-and-set - run on the
+     * connection this client already joins. It is the only thing here that needs a transaction at
+     * all; every other statement is one statement.
+     *
+     * @param jdbcClient         the processed log's client, which is the register store's
+     * @param transactionManager the register store's transaction manager, for the claim's two
+     *                           statements
+     * @param generation         the nightly job's settings, for the claim lease
      * @return the repository
      */
     @Bean
-    public RegisterBatchRepository registerBatchRepository(final JdbcClient jdbcClient) {
-        return new RegisterBatchRepository(jdbcClient);
+    public RegisterBatchRepository registerBatchRepository(final JdbcClient jdbcClient,
+            final PlatformTransactionManager transactionManager,
+            final GenerationProperties generation) {
+        return new RegisterBatchRepository(jdbcClient,
+                new TransactionTemplate(transactionManager), generation.gracePeriod());
     }
 
     /**

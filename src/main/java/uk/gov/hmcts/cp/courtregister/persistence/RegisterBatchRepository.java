@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.persistence;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -12,6 +13,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.support.TransactionOperations;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
@@ -48,6 +50,14 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
  * refuses the moves the data-model diagram does not draw, and the state read is the predicate the
  * update carries. Insertion is restricted to PENDING for the same reason, which is where the two
  * writers of {@link #insert} both begin.
+ *
+ * <p><strong>The notification claim is the one thing here that is not a state change and not part
+ * of the domain record.</strong> {@link #claimForNotification} and
+ * {@link #releaseNotificationClaim} write two columns {@link RegisterBatch} does not carry, because
+ * what a batch <em>is</em> does not include who is currently telling its recipients: a claim on the
+ * domain record would be a component every caller of {@link #compareAndSet}'s whole-row write could
+ * overwrite, which is the opposite of what a claim is for. It is also the one operation here that
+ * needs a transaction, and the only reason this class holds a {@link TransactionOperations}.
  */
 public class RegisterBatchRepository {
 
@@ -185,15 +195,83 @@ public class RegisterBatchRepository {
              WHERE batch_id = :batchId AND status = :expected
             """;
 
+    /**
+     * Statement 7 - every claim attempt for one batch, one at a time.
+     *
+     * <p>{@code hashtext} rather than the identity itself, because an advisory lock is keyed by a
+     * {@code bigint} and a batch is keyed by a UUID. A hash collision costs two unrelated batches
+     * one serialised claim attempt each, which is a moment of waiting and never a wrong answer: the
+     * decision is statement 8's compare-and-set, and this only decides who gets to make it first.
+     *
+     * <p>Transaction-scoped, so it is released when the claiming transaction commits - before the
+     * first POST. What survives that transaction is the claim on the row, which is the thing a
+     * second notifier reads.
+     */
+    private static final String SERIALISE_NOTIFIERS = """
+            SELECT true AS locked
+              FROM (SELECT pg_advisory_xact_lock(hashtext(CAST(:batchKey AS text)))) AS taken
+            """;
+
+    /**
+     * Statement 8 - the claim, taken where nobody holds one or the holder's lease has run out.
+     *
+     * <p>The status is not a predicate. A batch is notified out of GENERATED and re-notified out of
+     * PARTIALLY_NOTIFIED, and an operator's resend is the second of those; fencing the claim on one
+     * state would make the resend unable to take it, and the state machine is already the
+     * predicate of the mark that settles the batch.
+     */
+    private static final String CLAIM_FOR_NOTIFICATION = """
+            UPDATE register_batch
+               SET notifying_since = now(),
+                   notifier_token = :token
+             WHERE batch_id = :batchId
+               AND (notifying_since IS NULL
+                    OR notifying_since < now() - CAST(:lease AS interval))
+            """;
+
+    /** Statement 9 - the claim given back, by the notifier whose token it was taken under. */
+    private static final String RELEASE_NOTIFICATION_CLAIM = """
+            UPDATE register_batch
+               SET notifying_since = NULL,
+                   notifier_token = NULL
+             WHERE batch_id = :batchId
+               AND notifier_token = :token
+            """;
+
+    private static final String BATCH_KEY = "batchKey";
+    private static final String TOKEN = "token";
+    private static final String LEASE_PARAM = "lease";
+
     private final JdbcClient jdbcClient;
+
+    /**
+     * The transaction the advisory lock and the claim's compare-and-set are taken in together.
+     *
+     * <p>The only thing here that needs one: everything else is a single statement, whose implicit
+     * transaction is the whole of what it needs.
+     */
+    private final TransactionOperations transactions;
+
+    /** How long a notification claim stays live before another notifier may take it over. */
+    private final Duration notifierLease;
 
     /**
      * Creates the repository over the register store's connection.
      *
-     * @param jdbcClient the register store's connection
+     * @param jdbcClient    the register store's connection
+     * @param transactionOperations the transaction the claim's two statements are taken in together
+     * @param notificationClaimLease how long a notification claim stays live. The grace period the
+     *                      reconciler already waits before it treats a GENERATED batch as parked,
+     *                      because the two answer the same question: this is how long a notifier is
+     *                      given to finish before something else may pick the batch up, and that is
+     *                      how long the safety net waits before it looks
      */
-    public RegisterBatchRepository(final JdbcClient jdbcClient) {
+    public RegisterBatchRepository(final JdbcClient jdbcClient,
+            final TransactionOperations transactionOperations,
+            final Duration notificationClaimLease) {
         this.jdbcClient = jdbcClient;
+        this.transactions = transactionOperations;
+        this.notifierLease = notificationClaimLease;
     }
 
     /**
@@ -305,33 +383,81 @@ public class RegisterBatchRepository {
     }
 
     /**
-     * Statement 7 - claims the batch for notification, or answers that another notifier holds it.
+     * Statements 7 and 8 - claims the batch for notification, or answers that another notifier
+     * holds it.
      *
-     * <p>A compile-safe seam. Implemented by the fix that makes the notifying leg single-runner;
-     * the claim design is in {@code data-model.md} under {@code register_batch}.
+     * <p><strong>Two statements in one short transaction, and the transaction is the point.</strong>
+     * The advisory lock serialises every claim attempt for one batch, so the compare-and-set that
+     * follows it is the only one running: two notifiers that arrived together are two attempts one
+     * after the other rather than two reads of the same row, and the second of them sees the first
+     * one's claim. The lock is transaction-scoped, so it is given back when this transaction
+     * commits - which is before the first POST is made, and is why this is a claim rather than a
+     * lock held across the cycle. The POSTs go to notificationnotify once per recipient; a
+     * transaction open across those would hold a connection and a row lock for as long as another
+     * service takes to answer.
+     *
+     * <p>The claim itself is the two columns, exactly as {@code processed_request}'s is: a
+     * compare-and-set the database evaluates, admitting the batch that is unclaimed or whose claim
+     * is past its lease, and the lease compared by the database against its own {@code now()}
+     * rather than by this pod's clock against a stored timestamp.
+     *
+     * <p><strong>A claim that outlives its notifier is recoverable, which is what the lease is
+     * for.</strong> A pod that died mid-notification left the claim behind, and a claim nothing can
+     * ever take is a batch no resend and no reconciliation could pick up - the state defect fix P1
+     * is about, wearing a different hat.
      *
      * @param batchId the batch to claim
      * @param token   the token this notifier claims under, minted fresh for the attempt
-     * @return whether this notifier took the claim
+     * @return whether this notifier took the claim; false means another notifier holds it and is
+     *     telling this batch's recipients now
      */
     public boolean claimForNotification(final UUID batchId, final UUID token) {
-        throw new UnsupportedOperationException("the notification claim is taken by the fix that "
-                + "makes the notifying leg single-runner; batch " + batchId + " token " + token);
+        return StoreOutage.translating("claim a batch for notification", () -> {
+            final Boolean claimed = transactions.execute(oneTransaction -> {
+                jdbcClient.sql(SERIALISE_NOTIFIERS)
+                        .param(BATCH_KEY, batchId.toString())
+                        .query(Boolean.class)
+                        .single();
+                return jdbcClient.sql(CLAIM_FOR_NOTIFICATION)
+                        .param(BATCH_ID, batchId)
+                        .param(TOKEN, token)
+                        .param(LEASE_PARAM, lease())
+                        .update() > 0;
+            });
+            return Boolean.TRUE.equals(claimed);
+        });
     }
 
     /**
-     * Statement 8 - releases a notification claim this notifier holds.
+     * Statement 9 - releases a notification claim this notifier holds.
      *
-     * <p>A compile-safe seam, as {@link #claimForNotification} is.
+     * <p>Fenced on the token, so a notifier whose claim was reclaimed while it was working releases
+     * nothing: the claim it would be giving back is the one the notifier that took it over is
+     * relying on. No advisory lock is needed for this one - the token is the whole predicate, and
+     * only one token can be on the row.
      *
      * @param batchId the batch to release
      * @param token   the token the claim was taken under; a release under any other changes nothing
      * @return whether the claim was this notifier's to release
      */
     public boolean releaseNotificationClaim(final UUID batchId, final UUID token) {
-        throw new UnsupportedOperationException("the notification claim is released by the fix "
-                + "that makes the notifying leg single-runner; batch " + batchId + " token "
-                + token);
+        return StoreOutage.translating("release a batch's notification claim",
+                () -> jdbcClient.sql(RELEASE_NOTIFICATION_CLAIM)
+                        .param(BATCH_ID, batchId)
+                        .param(TOKEN, token)
+                        .update() > 0);
+    }
+
+    /**
+     * The lease as Postgres reads an interval, which is what the claiming statement compares.
+     *
+     * <p>In milliseconds rather than seconds. The deployed lease is minutes and would read the same
+     * either way, but a suite's lease is a fraction of a second and truncating that to whole
+     * seconds makes it nought - which is a lease that has always already expired, so every claim is
+     * granted and the statement appears to do nothing at all.
+     */
+    private String lease() {
+        return notifierLease.toMillis() + " milliseconds";
     }
 
     /**

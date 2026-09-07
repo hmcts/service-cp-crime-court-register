@@ -627,7 +627,50 @@ class SchemaMigrationV2IT {
                     "register_date", "file_name", "payload_file_id", "document_file_id", "status",
                     "failure_reason", "sdg_reason", "system_generated", "completed_by",
                     "assembled_at", "requested_at", "generated_at", "notified_at", "failed_at",
-                    "attempts", "supplement_of", "supplement_index");
+                    "attempts", "supplement_of", "supplement_index",
+                    "notifying_since", "notifier_token");
+        }
+
+        /**
+         * The notifying leg's claim, which is what makes it single-runner.
+         *
+         * <p>Notification is reachable by two mechanisms over one batch - the outcome sink on a
+         * delivered {@code document-available} and an operator's resend - and both derive the same
+         * owed set from the same records, so without a claim both POST for every recipient. Both
+         * columns are nullable because a batch is unclaimed for almost all of its life, and neither
+         * has a default: a claim is taken by a statement that says who took it and when.
+         */
+        @Test
+        void the_notification_claim_columns_should_be_nullable_and_undefaulted()
+                throws SQLException {
+            final Map<String, Column> columns = columnsOf(BATCH_TABLE);
+            assertThat(columns.get("notifying_since"))
+                    .isEqualTo(new Column("timestamp with time zone", true, null));
+            assertThat(columns.get("notifier_token")).isEqualTo(new Column("uuid", true, null));
+        }
+
+        /**
+         * And the two are one fact, so the row keeps them together.
+         *
+         * <p>A row holding the instant and no token is a claim nothing can release, because the
+         * release is fenced on the token; a row holding the token and no instant is a claim no lease
+         * can expire. Either half alone is a batch no resend and no reconciliation could ever pick
+         * up.
+         */
+        @Test
+        void a_batch_holding_half_a_notification_claim_should_be_refused() throws SQLException {
+            assertThat(constraintsOf(BATCH_TABLE).get("register_batch_notifier_claim_chk"))
+                    .isNotNull()
+                    .contains("notifying_since IS NULL");
+
+            final UUID batchId = UUID.randomUUID();
+
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    insertBatch(batchId, UUID.randomUUID(), "GENERATED"),
+                    "UPDATE " + BATCH_TABLE + " SET notifier_token = gen_random_uuid() "
+                            + "WHERE batch_id = '" + batchId + "'"))
+                    .as("a token with no instant is a claim no lease can expire")
+                    .hasMessageContaining("register_batch_notifier_claim_chk");
         }
 
         @Test
