@@ -165,6 +165,22 @@ public class AppConfigurationFlagReader implements FeatureFlagReader {
                 .buildClient();
     }
 
+    /**
+     * The HTTP client a flag read is made through, bounded on every leg by the configured budget.
+     *
+     * <p>Public and here rather than inline above, because there are two credentials and one client:
+     * {@code LiveFeatureFlagConfig} builds the {@code local-test} client from a connection string,
+     * since a token credential cannot be sent over the compose stub's plain HTTP at all, and
+     * everything else about that reader is meant to be the deployed one - the budget on all four
+     * legs included. One factory, so the two cannot drift apart.
+     *
+     * @param properties where the flag is read from, and under which budget
+     * @return the client, with connect, read, write and response all held to the budget
+     */
+    public static HttpClient httpClientFor(final FeatureFlagProperties properties) {
+        return HttpClient.createDefault();
+    }
+
     @Override
     public FlagDecision read() {
         if (client == null) {

@@ -11,6 +11,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static uk.gov.hmcts.cp.courtregister.config.FeatureFlagProperties.Credential.LOCAL_TEST;
 
+import com.azure.core.http.HttpClient;
 import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
 import com.azure.core.http.policy.FixedDelayOptions;
 import com.azure.core.http.policy.RetryOptions;
@@ -174,6 +175,23 @@ class AppConfigurationFlagReaderTest {
                 .httpClient(new NettyAsyncHttpClientBuilder()
                         .responseTimeout(properties.timeout())
                         .build())
+                .buildClient();
+    }
+
+    /**
+     * The same client over an HTTP client somebody else built, which is the one the adapter offers.
+     *
+     * @param httpClient the bounded client under test
+     * @param properties where the stub is
+     * @return the SDK client, signed with the fixed test pair
+     */
+    private static ConfigurationClient clientOn(
+            final HttpClient httpClient, final FeatureFlagProperties properties) {
+        return new ConfigurationClientBuilder()
+                .connectionString("Endpoint=" + properties.endpoint()
+                        + ";Id=" + FIXED_TEST_ID + ";Secret=" + FIXED_TEST_SECRET)
+                .retryOptions(new RetryOptions(new FixedDelayOptions(0, Duration.ZERO)))
+                .httpClient(httpClient)
                 .buildClient();
     }
 
@@ -431,6 +449,15 @@ class AppConfigurationFlagReaderTest {
         private static final Duration JITTER = Duration.ofMillis(150);
 
         /**
+         * An outer deadline the client's own legs are deliberately well inside of.
+         *
+         * <p>A deployed pod gives one value to both, so which of the two ended a read cannot be
+         * seen there at all; here they are separate properties, and the difference between them is
+         * what the case below reads.
+         */
+        private static final Duration PATIENT_BUDGET = Duration.ofSeconds(3);
+
+        /**
          * The nightly job asks this question first and does nothing until it is answered, so a read
          * that outlasts its budget is a run that has not started: at 18:00 the difference between a
          * skipped run and a stalled one is an alert nobody gets. The configured timeout is
@@ -460,6 +487,49 @@ class AppConfigurationFlagReaderTest {
                     .as("and it says so within the timeout the deployment configured, which is "
                             + "the deadline itself and not the first term of one")
                     .isLessThan(properties.timeout().plus(JITTER));
+        }
+
+        /**
+         * The other half of the same claim, and the half the client is answerable for.
+         *
+         * <p>The outer bound above catches a read whose legs nobody bounded, so it would catch this
+         * one too - eventually. What the client's own four timeouts are for is the leg the outer
+         * bound cannot see the shape of, and the cost of leaving them off is not a wrong decision
+         * but an abandoned read holding its thread and its connection until the SDK's own default
+         * gives up, which is a minute rather than the budget. So the two bounds are configured
+         * separately here and the case reads how long the answer took: at the client's budget it is
+         * the client that ended it, and the reader's own deadline was never reached.
+         *
+         * <p>Both credentials build their client through the factory this asserts on, which is what
+         * makes the {@code local-test} client the deployed one in this respect as well as in the
+         * key, the label, the fail-closed parsing and the outer deadline.
+         */
+        @Test
+        @DisplayName("the client the adapter builds ends a black-holed read at its own budget, not "
+                + "at the reader's outer deadline")
+        void the_adapters_client_ends_a_black_holed_read_at_the_budget_it_was_built_with() {
+            answeringAfter(BLACK_HOLED_MS, settingCarrying(flagValue(true)));
+            final FeatureFlagProperties legs = new FeatureFlagProperties(
+                    server.baseUrl(), KEY, LABEL, SHORT_BUDGET, LOCAL_TEST);
+            final FeatureFlagProperties patient = new FeatureFlagProperties(
+                    server.baseUrl(), KEY, LABEL, PATIENT_BUDGET, LOCAL_TEST);
+            final AppConfigurationFlagReader reader = new AppConfigurationFlagReader(patient,
+                    clientOn(AppConfigurationFlagReader.httpClientFor(legs), legs));
+
+            final Instant asked = Instant.now();
+            final FlagDecision decision = decisionOf(reader);
+            final Duration waited = Duration.between(asked, Instant.now());
+
+            assertThat(decision)
+                    .as("either bound answers the same thing, which is the point: a read that did "
+                            + "not answer in time is a skipped run with a cause on it")
+                    .isEqualTo(unreadable(UnreadableReason.TIMED_OUT));
+            assertThat(waited)
+                    .as("and it is the client that ended it, at the budget the client was built "
+                            + "with - a client with no legs of its own would have been ended by "
+                            + "the reader's outer deadline instead, having held the connection "
+                            + "for it")
+                    .isLessThan(SHORT_BUDGET.plus(JITTER).plus(JITTER));
         }
     }
 
