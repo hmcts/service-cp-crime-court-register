@@ -45,6 +45,15 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * accepted is NOTIFIED, some not is PARTIALLY_NOTIFIED, and no recipients at all is
  * NOTIFIED_NOBODY.
  *
+ * <p><strong>One answer does end the cycle, and it is not a recipient's.</strong> A settlement made
+ * for a row this run read back or minted, and that the store then does not hold, means the attempt
+ * is recorded nowhere: no tally taken afterwards is a complete account of what this batch's
+ * recipients were sent. So the cycle stops, the claim is given back, the batch is not settled and
+ * the call answers {@link NotificationDisposition#INCOMPLETE}. Settling anyway was the worse
+ * answer, and silently so where the vanished row was the only one - nought rows tallies to
+ * NOTIFIED_NOBODY, which is terminal, and a batch addressed to a Youth Offending Team all along
+ * would end the night claiming there had been nobody to tell.
+ *
  * <p><strong>A refusal that may answer differently is asked again first.</strong> A 503, a 429 or a
  * read timeout is a moment in notificationnotify's night and not a verdict about the e-mail, so the
  * POST is repeated up to {@code courtregister.endpoints.max-attempts} with the shared
@@ -468,7 +477,7 @@ public class RegisterNotifierService {
         final List<CourtRegisterRecipient> recipients =
                 RecipientSet.unionOf(store.batched(batchId));
         final List<RegisterNotification> held = notifications.findByBatchId(batchId);
-        boolean stillOurs = true;
+        Turn turn = Turn.SETTLED;
 
         if (recipients.isEmpty() && held.isEmpty()) {
             LOG.info("Batch {} has a document and no recipients at all, so there is nobody to tell "
@@ -480,11 +489,56 @@ public class RegisterNotifierService {
             LOG.info("Batch {} is addressed to {} recipients and owes {} of them an e-mail, each "
                     + "under the identity its own row holds and each minted before anything is "
                     + "asked of notificationnotify.", batchId, recipients.size(), owed.size());
-            stillOurs = tell(owed, documentFileId, token);
+            turn = tell(owed, documentFileId, token);
         }
-        return stillOurs && batches.renewNotificationClaim(batchId, token)
-                ? settle(batchOf(batchId))
-                : claimLost(batchId);
+        final NotificationSummary answer;
+        if (turn == Turn.ROW_ABSENT) {
+            answer = incomplete(batchId);
+        } else if (turn == Turn.SETTLED && batches.renewNotificationClaim(batchId, token)) {
+            answer = settle(batchOf(batchId));
+        } else {
+            answer = claimLost(batchId);
+        }
+        return answer;
+    }
+
+    /**
+     * The answer of a notifier that held the claim throughout and could not finish the cycle.
+     *
+     * <p>A settlement the store had no row for means one of this batch's recipients is unaccounted
+     * for: the POST was made under an identity this run read back or minted, and the row that would
+     * have recorded how it ended is not there. So the tally the batch would be settled from is a
+     * tally over rows that no longer describe what was sent, and the batch is left where it stands
+     * rather than settled on it.
+     *
+     * <p><strong>Which is a smaller loss than settling anyway, and a much smaller one where the
+     * vanished row was the only one.</strong> Nought rows tallies to NOTIFIED_NOBODY - defect fix
+     * P1's terminal state, saying the document was rendered and there was nobody to send it to -
+     * and writing that over a batch addressed to a Youth Offending Team all along ends the night
+     * claiming there was nobody to tell, terminally, where no later resend could revisit it.
+     * GENERATED is recoverable: either entry point re-derives the owed set from the records and
+     * mints the row the store has no record of, and
+     * {@code courtregister_oldest_generated_age} is the reading that says a batch has been standing
+     * there since before anybody was worried.
+     *
+     * <p>The fault itself was counted and logged at ERROR where the write met it
+     * ({@link #reportTheRowHasGone}); this line says what became of the batch, and carries the
+     * batch and nothing else.
+     *
+     * @param batchId the batch whose cycle could not be finished
+     * @return the rows and the state as they stand, carrying
+     *     {@link NotificationDisposition#INCOMPLETE}
+     */
+    private NotificationSummary incomplete(final UUID batchId) {
+        LOG.warn("Batch {}'s notification cycle could not account for one of its recipients - the "
+                + "store holds no row under an identity this run posted under - so the cycle stops "
+                + "and the batch is not settled: a tally over the rows that are left would settle "
+                + "it on an incomplete account of what was sent, and a batch of one vanished row "
+                + "would be settled as having had nobody to tell. It stays where it stands, which "
+                + "a resend and the reconciler both recover.", batchId);
+        final NotificationSummary seen = tally(notifications.findByBatchId(batchId));
+        return NotificationSummary.incomplete(
+                seen.accepted(), seen.failed(), batchOf(batchId).status());
     }
 
     /**
@@ -638,22 +692,29 @@ public class RegisterNotifierService {
      * every POST from here is a second register about the same children to a team that one is
      * telling.
      *
+     * <p><strong>And it ends where a row this run posted under turns out not to be there.</strong>
+     * That is not a recipient's answer at all, it is this service's own store having lost a row it
+     * wrote: the attempt is recorded nowhere, so nothing the tally says about the batch afterwards
+     * is a complete account of what was sent. The recipients after it are not asked - a batch that
+     * cannot be settled is not made more settleable by more POSTs - and the batch is left standing
+     * for a resend that can account for every row it posts under.
+     *
      * @param rows           the rows to post for, each already persisted under its own identity
      * @param documentFileId the rendered document's file-service id, attached by reference
      * @param token          the token this run holds the batch's notification claim under
-     * @return whether the claim was still this run's throughout, which is whether the batch may now
-     *     be settled on the rows this loop wrote
+     * @return how the last recipient's turn ended, which is whether the batch may now be settled on
+     *     the rows this loop wrote
      */
-    private boolean tell(final List<RegisterNotification> rows, final UUID documentFileId,
+    private Turn tell(final List<RegisterNotification> rows, final UUID documentFileId,
             final UUID token) {
 
         final Iterator<RegisterNotification> owed = rows.iterator();
-        boolean stillOurs = true;
+        Turn turn = Turn.SETTLED;
 
-        while (stillOurs && owed.hasNext()) {
-            stillOurs = tellOne(owed.next(), documentFileId, token);
+        while (turn == Turn.SETTLED && owed.hasNext()) {
+            turn = tellOne(owed.next(), documentFileId, token);
         }
-        return stillOurs;
+        return turn;
     }
 
     /**
@@ -680,26 +741,27 @@ public class RegisterNotifierService {
      * @param row            the row to post for, already persisted under its own identity
      * @param documentFileId the rendered document's file-service id, attached by reference
      * @param token          the token this run holds the batch's notification claim under
-     * @return whether the claim was still this run's when the row's settlement was written
+     * @return how this recipient's turn ended: settled, the claim lost, or the row gone
      */
-    private boolean tellOne(final RegisterNotification row, final UUID documentFileId,
+    private Turn tellOne(final RegisterNotification row, final UUID documentFileId,
             final UUID token) {
 
-        boolean stillOurs = batches.renewNotificationClaim(row.batchId(), token);
+        Turn turn = Turn.CLAIM_LOST;
 
-        if (stillOurs) {
+        if (batches.renewNotificationClaim(row.batchId(), token)) {
             final Attempted attempted = attempt(row, documentFileId);
             final NotificationOutcome outcome = attempted.outcome();
             metrics.notificationSettled(outcome.status(), outcome.responseCode());
-            stillOurs = batches.renewNotificationClaim(row.batchId(), token);
-            if (stillOurs) {
-                recordWhatTheStoreDid(notifications.update(settledAs(row, outcome),
-                        attempted.posts()), row, outcome);
+            if (batches.renewNotificationClaim(row.batchId(), token)) {
+                final NotificationSettlement did =
+                        notifications.update(settledAs(row, outcome), attempted.posts());
+                recordWhatTheStoreDid(did, row, outcome);
+                turn = did == NotificationSettlement.ABSENT ? Turn.ROW_ABSENT : Turn.SETTLED;
             } else {
                 tallyWhatTheLostClaimSpent(row, attempted.posts());
             }
         }
-        return stillOurs;
+        return turn;
     }
 
     /**
@@ -735,6 +797,11 @@ public class RegisterNotifierService {
      * <p>Both are things that changed no settlement, and something that changes nothing has to be
      * visible or the only trace is a row that looks untouched. The line carries the batch, the
      * notification id and a bounded code, and none of the three is about a person.
+     *
+     * <p>The two are reported and no more: the tally taken at settlement reads the row as it now
+     * stands, so a late outcome needs nothing done about it. The third answer is the one the caller
+     * acts on - a row the store does not hold ends the cycle - which is why what the statement did
+     * is read there as well as reported here.
      *
      * @param did     what the settlement statement did
      * @param row     the row it was asked about
@@ -994,6 +1061,34 @@ public class RegisterNotifierService {
             outcome = BatchStatus.PARTIALLY_NOTIFIED;
         }
         return outcome;
+    }
+
+    /**
+     * How one recipient's turn ended, as the three things the cycle does about it.
+     *
+     * <p>Bounded and private: it is the loop's own control and never a label or a message. What a
+     * caller of this service branches on is {@link NotificationDisposition}, which two of these
+     * three produce.
+     */
+    private enum Turn {
+
+        /**
+         * The row carries this attempt's verdict, or kept the acceptance it already had, so the
+         * next recipient is asked and the batch may be settled on the tally.
+         */
+        SETTLED,
+
+        /**
+         * The claim was taken over, so this run stops: the notifier that now holds the batch is
+         * telling the recipients this one had not reached.
+         */
+        CLAIM_LOST,
+
+        /**
+         * The store holds no row under the identity this run posted under, so the cycle cannot
+         * account for one of the batch's recipients and the batch is left where it stands.
+         */
+        ROW_ABSENT
     }
 
     /**

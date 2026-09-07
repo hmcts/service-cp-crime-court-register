@@ -1849,7 +1849,7 @@ class RegisterNotifierServiceTest {
                     .thenReturn(List.of(new RegisterNotification(UUID.randomUUID(), BATCH_ID,
                             ADDRESS_A, YOT_A, RegisterNotifierService.TEMPLATE_NAME, TEMPLATE_ID,
                             NotificationStatus.PENDING, null, null, MINTED_NEVER_SETTLED)))
-                    .thenAnswer(invocation -> rowsOf(invocation));
+                    .thenAnswer(RegisterNotifierServiceTest.this::rowsOf);
         }
 
         @Test
