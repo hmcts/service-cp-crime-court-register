@@ -33,8 +33,14 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
  */
 public class SupersedeBeforeCli {
 
-    /** What the command takes, printed under a refusal and on request. */
-    private static final String USAGE = "usage: " + CliMain.SUPERSEDE_BEFORE + " --"
+    /**
+     * What the command takes, printed under a refusal and on request.
+     *
+     * <p>Package-visible because {@link CliMain} answers {@code --help} with it before it resolves
+     * a single bean: a pod with the downstream half switched off holds none of this command's
+     * collaborators, and what the command takes is still the answer to what was asked.
+     */
+    /* default */ static final String USAGE = "usage: " + CliMain.SUPERSEDE_BEFORE + " --"
             + Args.SHARED_BEFORE + " T (an ISO instant with a zone, e.g. 2026-09-04T17:00:00Z)";
 
     private static final Logger LOG = LoggerFactory.getLogger(SupersedeBeforeCli.class);

@@ -337,50 +337,68 @@ public class CliMain {
      * @param output  where every command's lines are written
      * @return the five commands, by name
      */
-    /* default */ static Map<String, Command> registryOf(final ConfigurableApplicationContext context,
-            final Consumer<String> output) {
+    /* default */ static Map<String, Command> registryOf(
+            final ConfigurableApplicationContext context, final Consumer<String> output) {
 
         return Map.of(
-                GENERATE_REGISTER, args -> wired(GENERATE_REGISTER, output,
+                GENERATE_REGISTER, args -> wired(GENERATE_REGISTER,
+                        GenerateRegisterCli.USAGE, args, output,
                         () -> new GenerateRegisterCli(context.getBean(FeatureFlagGate.class),
                                 context.getBean(RegisterStore.class),
                                 context.getBean(BatchAssembler.class),
                                 context.getBean(RegisterGenerationService.class),
                                 context.getBean(GenerationProperties.class),
                                 context.getBean(Clock.class), output).run(args)),
-                NOTIFY_REGISTER, args -> wired(NOTIFY_REGISTER, output,
+                NOTIFY_REGISTER, args -> wired(NOTIFY_REGISTER, NotifyRegisterCli.USAGE, args,
+                        output,
                         () -> new NotifyRegisterCli(
                                 context.getBean(RegisterNotifierService.class), output).run(args)),
-                LIST_BATCHES, args -> wired(LIST_BATCHES, output,
+                LIST_BATCHES, args -> wired(LIST_BATCHES, ListBatchesCli.USAGE, args, output,
                         () -> new ListBatchesCli(context.getBean(RegisterBatchRepository.class),
                                 context.getBean(RegisterNotificationRepository.class),
                                 context.getBean(RegisterStore.class), output).run(args)),
-                SUPERSEDE_BEFORE, args -> wired(SUPERSEDE_BEFORE, output,
+                SUPERSEDE_BEFORE, args -> wired(SUPERSEDE_BEFORE, SupersedeBeforeCli.USAGE, args,
+                        output,
                         () -> new SupersedeBeforeCli(context.getBean(RegisterStore.class), output)
                                 .run(args)),
-                CHECK_FLAG, args -> wired(CHECK_FLAG, output,
+                CHECK_FLAG, args -> wired(CHECK_FLAG, CheckFlagCli.USAGE, args, output,
                         () -> new CheckFlagCli(context.getBean(FeatureFlagReader.class), output)
                                 .run(args)));
     }
 
     /**
-     * Runs one command, or says that this context does not hold it.
+     * Answers what a command takes, runs it, or says that this context does not hold it.
      *
      * <p>A deployment with the downstream half switched off has no batches to regenerate and no
      * flag reader to ask, and the honest answer to a command against it is {@link #FAILED} under a
      * bounded reason: a refusal would say the arguments were wrong, and a stack trace about a bean
      * definition would say nothing an operator can act on.
      *
+     * <p><strong>{@code --help} is answered before a bean is resolved.</strong> The registry's
+     * lambdas ask this context for their collaborators as the command is <em>built</em>, which is
+     * before the command has looked at what was typed - so on an intake-only pod every one of the
+     * five answered "not wired" to a question that reads nothing, sends nothing and needs none of
+     * them. What a command takes is a fact about the image rather than about the deployment, and an
+     * operator on that pod is exactly the person asking.
+     *
      * @param command the command being run, by its own name
+     * @param usage   what it takes, which is the answer to {@code --help}
+     * @param args    the arguments that followed the command's name
      * @param output  where the line is written where it could not be
      * @param run     the command, over the beans it asks for as it is built
-     * @return whatever the command answered, or {@link #FAILED}
+     * @return whatever the command answered, {@link #SUCCESS} where help was asked for, or
+     *         {@link #FAILED}
      */
-    // PMD.OnlyOneReturn: the command's own answer and "not wired here" are two different verdicts,
-    // and the second is only knowable in the catch.
+    // PMD.OnlyOneReturn: three verdicts, each said where it is decided - the answer to --help, the
+    // command's own answer, and "not wired here", which is only knowable in the catch.
     @SuppressWarnings("PMD.OnlyOneReturn")
-    private static int wired(final String command, final Consumer<String> output,
-            final IntSupplier run) {
+    private static int wired(final String command, final String usage, final List<String> args,
+            final Consumer<String> output, final IntSupplier run) {
+
+        if (askedForHelp(args)) {
+            output.accept(usage);
+            return SUCCESS;
+        }
         try {
             return run.getAsInt();
         } catch (BeansException notOnThisContext) {
@@ -389,5 +407,26 @@ public class CliMain {
                     notOnThisContext.getClass().getName(), notOnThisContext);
             return failure(command, "", NOT_WIRED, output);
         }
+    }
+
+    /**
+     * Whether this invocation is the one question every command answers without doing anything.
+     *
+     * <p>Read through {@link Args} rather than by looking for the token, so that the grammar is the
+     * one the command itself would have applied: {@code --help} given twice, or given a value, is a
+     * mistyped invocation rather than a request for the usage, and this answers false to it so the
+     * command refuses it in the ordinary way.
+     *
+     * @param args the arguments that followed the command's name
+     * @return true where {@code --help} was given as the switch it is
+     */
+    private static boolean askedForHelp(final List<String> args) {
+        boolean asked;
+        try {
+            asked = Args.parse(args).askedForHelp();
+        } catch (IllegalArgumentException notUsable) {
+            asked = false;
+        }
+        return asked;
     }
 }

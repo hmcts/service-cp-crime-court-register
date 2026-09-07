@@ -39,8 +39,15 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
  */
 public class NotifyRegisterCli {
 
-    /** What the command takes, printed under a refusal and on request. */
-    private static final String USAGE = "usage: " + CliMain.NOTIFY_REGISTER + " --" + Args.BATCH
+    /**
+     * What the command takes, printed under a refusal and on request.
+     *
+     * <p>Package-visible because {@link CliMain} answers {@code --help} with it before it resolves
+     * a single bean: a pod with the downstream half switched off holds none of this command's
+     * collaborators, and what the command takes is still the answer to what was asked.
+     */
+    /* default */ static final String USAGE = "usage: " + CliMain.NOTIFY_REGISTER
+            + " --" + Args.BATCH
             + " B (re-requests the FAILED recipients of one batch, and only those)";
 
     private static final Logger LOG = LoggerFactory.getLogger(NotifyRegisterCli.class);

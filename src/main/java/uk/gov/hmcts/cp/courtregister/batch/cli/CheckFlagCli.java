@@ -34,8 +34,14 @@ import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
  */
 public class CheckFlagCli {
 
-    /** What the command takes, which is nothing, and what it says when asked. */
-    private static final String USAGE = "usage: " + CliMain.CHECK_FLAG
+    /**
+     * What the command takes, which is nothing, and what it says when asked.
+     *
+     * <p>Package-visible because {@link CliMain} answers {@code --help} with it before it resolves
+     * a single bean: a pod with the downstream half switched off holds none of this command's
+     * collaborators, and what the command takes is still the answer to what was asked.
+     */
+    /* default */ static final String USAGE = "usage: " + CliMain.CHECK_FLAG
             + " (no arguments; prints flag=ON|OFF|UNREADABLE, exit 0 for ON and OFF, 2 for "
             + "UNREADABLE)";
 

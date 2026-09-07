@@ -48,10 +48,12 @@ import org.testcontainers.utility.MountableFile;
  * that reaches only the parser, and neither can leave a batch, a document or an e-mail behind it.
  *
  * <p><strong>The environment is the compose stack's, and generation is ON.</strong> That is forced
- * rather than chosen. {@code generate-register} resolves the generation beans as it is built, and
- * they exist only where {@code courtregister.generation.enabled} is true - without it the command
- * answers {@code command-not-wired} and exits 2, which records nothing about the dispatch. And with
- * generation on, {@code courtregister.generation.flag-mode=STUB} is refused at startup
+ * rather than chosen: {@code check-flag} asks the flag reader, which exists only where
+ * {@code courtregister.generation.enabled} is true, so without it that command answers
+ * {@code command-not-wired} and exits 2 and records nothing about the dispatch.
+ * {@code generate-register --help} no longer needs it - {@code CliMain.wired} answers what a
+ * command takes before it resolves a bean, so an intake-only pod prints the usage as this one does -
+ * but the two commands share one container. And with generation on, {@code courtregister.generation.flag-mode=STUB} is refused at startup
  * ({@code PropertiesValidator}: a deployment that means to produce registers tonight cannot produce
  * them against a stand-in), so the flag is read by the REAL App Configuration reader under
  * {@code courtregister.feature.credential=local-test} against a WireMock container serving the

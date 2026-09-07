@@ -42,8 +42,14 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  */
 public class ListBatchesCli {
 
-    /** What the command takes, printed under a refusal and on request. */
-    private static final String USAGE = "usage: " + CliMain.LIST_BATCHES + " --" + Args.DATE
+    /**
+     * What the command takes, printed under a refusal and on request.
+     *
+     * <p>Package-visible because {@link CliMain} answers {@code --help} with it before it resolves
+     * a single bean: a pod with the downstream half switched off holds none of this command's
+     * collaborators, and what the command takes is still the answer to what was asked.
+     */
+    /* default */ static final String USAGE = "usage: " + CliMain.LIST_BATCHES + " --" + Args.DATE
             + " D | --" + Args.RECORDED_WHILE_OFF + " (exactly one of the two)";
 
     /** Printed where a batch's row carries no court house, so no line is left truncated. */

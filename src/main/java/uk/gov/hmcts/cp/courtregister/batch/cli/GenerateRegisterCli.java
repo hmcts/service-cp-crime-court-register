@@ -67,10 +67,16 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  */
 public class GenerateRegisterCli {
 
-    /** What the command takes, printed under a refusal and on request. */
-    private static final String USAGE = "usage: " + CliMain.GENERATE_REGISTER + " --" + Args.DATE
-            + " D [--" + Args.COURT_HOUSE + " H] [--" + Args.BATCH + " B] [--" + Args.IGNORE_FLAG
-            + "] [--" + Args.RECORDED_BEFORE + " T]";
+    /**
+     * What the command takes, printed under a refusal and on request.
+     *
+     * <p>Package-visible because {@link CliMain} answers {@code --help} with it before it resolves
+     * a single bean: a pod with the downstream half switched off holds none of this command's
+     * collaborators, and what the command takes is still the answer to what was asked.
+     */
+    /* default */ static final String USAGE = "usage: " + CliMain.GENERATE_REGISTER
+            + " --" + Args.DATE + " D [--" + Args.COURT_HOUSE + " H] [--" + Args.BATCH
+            + " B] [--" + Args.IGNORE_FLAG + "] [--" + Args.RECORDED_BEFORE + " T]";
 
     private static final Logger LOG = LoggerFactory.getLogger(GenerateRegisterCli.class);
 
@@ -80,7 +86,7 @@ public class GenerateRegisterCli {
     /** What a batch left carrying its stamp is reported as, which is not a failure. */
     private static final String WITHHELD = "withheld";
 
-    /** The key has a batch in flight, so the assembler would defer it whatever this run released. */
+    /** The key has a batch in flight, so the assembler defers it whatever this run released. */
     private static final String KEY_IN_FLIGHT = "key-in-flight";
 
     /** The batch holds a register the operator's own narrowing excludes from this run. */
@@ -254,7 +260,8 @@ public class GenerateRegisterCli {
     private int generate(final Selection selection) {
         try {
             final List<RegisterBatch> day = store.batchesOn(selection.registerDate());
-            final List<RegisterRecord> released = released(narrowed(day, selection), day, selection);
+            final List<RegisterRecord> released =
+                    released(narrowed(day, selection), day, selection);
             final List<RegisterRecord> registers = registers(released, selection);
             final BatchAssembly assembly = assembler.assemble(registers, day, BY_HAND);
             final int requested = request(assembly);
@@ -313,8 +320,8 @@ public class GenerateRegisterCli {
      *
      * <p><strong>And a batch this run will not re-assemble is left where it is too.</strong> A
      * release is not undoable: the moment the stamp is off, the rows are what
-     * {@link RegisterStore#activeUnbatched()} answers, so any row this run then drops belongs to the
-     * 18:00 schedule instead - batched as system-generated, and outside the bound the operator
+     * {@link RegisterStore#activeUnbatched()} answers, so any row this run then drops belongs to
+     * the 18:00 schedule instead - batched as system-generated, and outside the bound the operator
      * stated. The two ways that happens are decided before the release rather than discovered after
      * it, and the batch left alone is named on its own line under the reason it was left.
      *
@@ -347,11 +354,12 @@ public class GenerateRegisterCli {
     /**
      * Why one FAILED batch is not released, or {@code null} where it is.
      *
-     * <p>{@link #KEY_IN_FLIGHT} is the assembler's own deferral asked before the release rather than
-     * after it: a key with a batch still being rendered is left for a later run, so releasing its
-     * rows first would only move them from this batch to the schedule. {@link #OUTSIDE_THE_BOUND} is
-     * the operator's narrowing: a batch is re-assembled whole, so one holding a register the bound
-     * or the court house excludes cannot be released without handing that register to the 18:00 run.
+     * <p>{@link #KEY_IN_FLIGHT} is the assembler's own deferral asked before the release rather
+     * than after it: a key with a batch still being rendered is left for a later run, so
+     * releasing its rows first would only move them from this batch to the schedule.
+     * {@link #OUTSIDE_THE_BOUND} is the operator's narrowing: a batch is re-assembled whole, so one
+     * holding a register the bound or the court house excludes cannot be released without handing
+     * that register to the 18:00 run.
      *
      * <p>The registers are read while the stamp is still on them, which is the only moment they can
      * be read at all - after the release they are indistinguishable from the day's other waiting

@@ -749,10 +749,15 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       from a second application having been started. The extra stack is one WireMock serving the
       committed App Configuration `kv` mapping, on the `local-test` credential and **not**
       `COURTREGISTER_GENERATION_FLAG_MODE=STUB`, which the task offered: STUB is unavailable, and
-      empirically rather than by assumption - with generation disabled the image answers
+      empirically rather than by assumption - with generation disabled the image answered
       `generate-register --help` "outcome=failed reason=command-not-wired" exit 2, because
-      `CliMain.registryOf` resolves the generation beans as the command is built, and with
-      generation enabled `PropertiesValidator` refuses STUB outright. Non-vacuity, two mutations
+      `CliMain.registryOf` resolved the generation beans as the command was built, and with
+      generation enabled `PropertiesValidator` refuses STUB outright. **That first half was a defect
+      and is fixed** (review 7): `CliMain.wired` now answers `--help` with the command's own usage
+      before it resolves a bean, so an intake-only pod prints the usage and exits 0 - red at
+      `bcd05e8` in `CliMainTest`, green with the fix. `check-flag` still needs generation enabled,
+      because the flag reader is one of the beans that deployment builds, which is why this suite
+      still forces it. Non-vacuity, two mutations
       applied together and reverted before the commit: `CheckFlagCli.FLAG` "flag=" to "flagging="
       and `GenerateRegisterCli.USAGE` "usage: " to "takes: ", each failing its own assertion
       ("could not find the following element(s): [\"flag=ON\"]" and the usage line) with both exit
