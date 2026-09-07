@@ -19,6 +19,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param consumer      whether intake runs at all
  * @param servicebus    broker connection and consumer settings
  * @param claim         the single-runner claim's timings
+ * @param notification  the notifying leg's own claim timing
  * @param store         processed-log store probing
  * @param stub          test-only control over the stub adapters
  * @param payload       where the hearing payload is read from
@@ -41,6 +42,7 @@ public record CourtRegisterProperties(
         @DefaultValue Consumer consumer,
         @DefaultValue Servicebus servicebus,
         @DefaultValue Claim claim,
+        @DefaultValue Notification notification,
         @DefaultValue Store store,
         @DefaultValue Stub stub,
         @DefaultValue Payload payload,
@@ -91,6 +93,27 @@ public record CourtRegisterProperties(
     public record Claim(
             @DefaultValue("5m") Duration lease,
             @DefaultValue("4m") Duration processingDeadline) {
+    }
+
+    /**
+     * The notifying leg's claim timing, which is not the intake half's and not the reconciler's.
+     *
+     * <p>A separate setting because it bounds different work. {@link Claim#lease} bounds one
+     * hearing's pipeline run, and the reconciler's {@code grace-period} says how long a batch may
+     * hold a document before the safety net looks - neither is an answer to "how long can telling
+     * one batch's recipients take", which depends on how many Youth Offending Teams the batch is
+     * addressed to and on how patient notificationnotify is being tonight. A lease that runs out
+     * under the notifier holding it puts a second notifier into the cycle, and a Youth Offending
+     * Team is sent a register about children twice.
+     *
+     * <p>Renewed before every write the cycle makes, so the number here bounds one recipient's turn
+     * rather than the whole batch, and startup holds it to twice the longest single POST cycle
+     * ({@code PropertiesValidator}).
+     *
+     * @param claimLease how long a notification claim stays live before another notifier may take
+     *                   it over, measured from the last renewal
+     */
+    public record Notification(@DefaultValue("15m") Duration claimLease) {
     }
 
     /**

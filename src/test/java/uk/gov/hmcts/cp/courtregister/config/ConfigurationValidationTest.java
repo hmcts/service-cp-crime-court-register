@@ -1427,6 +1427,106 @@ class ConfigurationValidationTest {
     }
 
     /**
+     * The notifying leg's claim has to outlast one recipient's POST cycle, twice over.
+     *
+     * <p>A notification claim's lease is a bound on work whose length it cannot know from itself: a
+     * batch is addressed to as many Youth Offending Teams as subscribed to its court centre, and
+     * each of them costs up to {@code max-attempts} POSTs with a read timeout and a back-off wait
+     * apiece. The lease is renewed before every POST and before every write, so what it has to cover
+     * is one recipient's turn - and a lease shorter than that expires under a notifier still waiting
+     * on a socket, after which a second notifier takes the batch over and the team is sent a
+     * register about children twice.
+     *
+     * <p>So the rule is the transport's own worst case for one recipient,
+     * {@code max-attempts x (read-timeout + max-backoff)}, doubled as margin. Unconditional, like
+     * the zone and lock rules: a job that happens to be disabled in this deployment is not a reason
+     * to accept a lease that cannot cover a POST cycle in the next one.
+     */
+    @Nested
+    @DisplayName("the notification claim must outlast one recipient's POST cycle")
+    class NotificationLeaseAgainstOnePostCycle {
+
+        @Test
+        void a_lease_shorter_than_one_post_cycle_refuses_to_start() {
+            generating.withPropertyValues("courtregister.notification.claim-lease=30s")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.notification.claim-lease")
+                                .hasMessageContaining("courtregister.endpoints.max-attempts")
+                                .hasMessageContaining("courtregister.endpoints.read-timeout")
+                                .hasMessageContaining("courtregister.endpoints.max-backoff");
+                    });
+        }
+
+        /**
+         * The margin is fixed rather than configured, for the reason the scheduler lock's is: a
+         * lease that expires the instant the longest POST cycle does is a lease that recipient
+         * races.
+         */
+        @Test
+        void a_lease_that_only_just_covers_one_post_cycle_refuses_to_start() {
+            generating.withPropertyValues("courtregister.notification.claim-lease=36s")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.notification.claim-lease");
+                    });
+        }
+
+        @Test
+        void a_lease_that_covers_one_post_cycle_twice_over_should_start() {
+            generating.withPropertyValues("courtregister.notification.claim-lease=72s")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /**
+         * And the rule is a relationship, so lengthening the transport is what breaks it in
+         * practice: nobody sets a short lease deliberately, and a deployment that gives
+         * notificationnotify five minutes to answer has quietly made the shipped lease too short.
+         */
+        @Test
+        void a_transport_the_shipped_lease_cannot_cover_refuses_to_start() {
+            generating.withPropertyValues("courtregister.endpoints.read-timeout=5m")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.notification.claim-lease");
+                    });
+        }
+
+        @Test
+        void a_lease_the_transport_outgrew_is_refused_even_with_the_job_disabled() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.endpoints.read-timeout=5m").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.notification.claim-lease");
+                    });
+        }
+
+        @Test
+        void the_shipped_lease_should_cover_the_shipped_transport_twice_over() {
+            generating.run(context -> {
+                assertThat(context).hasNotFailed();
+                final CourtRegisterProperties properties =
+                        context.getBean(CourtRegisterProperties.class);
+                final CourtRegisterProperties.Endpoints endpoints = properties.endpoints();
+
+                assertThat(properties.notification().claimLease())
+                        .as("the shipped lease against the shipped transport's worst case for one "
+                                + "recipient, doubled: %s attempts of a %s read plus a %s wait",
+                                endpoints.maxAttempts(), endpoints.readTimeout(),
+                                endpoints.maxBackoff())
+                        .isGreaterThanOrEqualTo(endpoints.readTimeout()
+                                .plus(endpoints.maxBackoff())
+                                .multipliedBy(endpoints.maxAttempts())
+                                .multipliedBy(PropertiesValidator.NOTIFICATION_LEASE_MARGIN));
+            });
+        }
+    }
+
+    /**
      * Enabling the downstream half is enabling everything it depends on.
      *
      * <p>Each of these is the same failure wearing a different name: the pod starts, reports itself

@@ -28,5 +28,22 @@ public enum NotificationDisposition {
      * that meets this has nothing left to do. The tally that travels with it is the batch as it
      * stood when the claim was refused, which is the winner's work part-done.
      */
-    ALREADY_NOTIFYING
+    ALREADY_NOTIFYING,
+
+    /**
+     * This call held the claim, began the cycle, and lost the claim part way through it.
+     *
+     * <p>The third answer, and a different event from {@link #ALREADY_NOTIFYING}: that one is a
+     * notifier that never started, and this is one that started, told some of the batch's teams and
+     * then found the batch was no longer its own. So some POSTs were really made and the rows and
+     * the batch are part-written, by two notifiers rather than one.
+     *
+     * <p>The claim is renewed before every POST and before every write, so what this says is that a
+     * renewal was refused: the lease ran out under this notifier - it is telling more recipients than
+     * the lease covers, or notificationnotify is answering more slowly than the lease allows - and
+     * something else has taken the batch over. The run stops there rather than writing over the work
+     * of the notifier that now holds it, and the rows it did not settle are re-requested by a later
+     * run under the identities they already hold.
+     */
+    CLAIM_LOST
 }

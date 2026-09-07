@@ -65,6 +65,18 @@ public class PropertiesValidator implements InitializingBean {
     public static final Duration SCHEDULER_LOCK_MARGIN = Duration.ofMinutes(10);
 
     /**
+     * The factor the notification claim's lease has to exceed one recipient's POST cycle by.
+     *
+     * <p>Fixed rather than configured, for the reason {@link #SCHEDULER_LOCK_MARGIN} is: a lease
+     * that expires the instant the longest single POST cycle does is a lease that recipient races,
+     * and there is no environment for which that is the right answer. Doubling rather than a fixed
+     * duration, because what it is margin against scales with the transport it is measured from - a
+     * deployment that gives notificationnotify five minutes to answer has made every one of its POST
+     * cycles longer, and a flat margin would be swallowed by the first of them.
+     */
+    public static final long NOTIFICATION_LEASE_MARGIN = 2;
+
+    /**
      * How many cache reads one payload fetch makes, and therefore how many of them the run's time
      * budget has to cover.
      *

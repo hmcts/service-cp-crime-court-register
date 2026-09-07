@@ -429,6 +429,29 @@ public class RegisterBatchRepository {
     }
 
     /**
+     * Keeps this notifier's claim alive, and says whether it is still this notifier's.
+     *
+     * <p>Asked before every POST the cycle makes and before every write it makes about one, because
+     * the two things it answers are wanted at exactly those moments: that the batch is still this
+     * notifier's to tell, and that the lease covers what is about to be done to it. A notifier whose
+     * claim has been taken over is told so by the same statement that would have extended it, and
+     * stops.
+     *
+     * <p>No advisory lock, exactly as the release needs none: the token is the whole predicate and
+     * only one token can be on the row.
+     *
+     * @param batchId the batch whose claim is being kept alive
+     * @param token   the token the claim was taken under; a renewal under any other changes nothing
+     * @return whether the claim is still this notifier's
+     */
+    public boolean renewNotificationClaim(final UUID batchId, final UUID token) {
+        // The statement above is what answers this, and it arrives with the notification lease it
+        // extends. Until then the honest seam is the fail-safe answer - a notifier told the claim is
+        // not its own stops - so the cases waiting on it record a failing assertion.
+        return StoreOutage.translating("renew a batch's notification claim", () -> false);
+    }
+
+    /**
      * Statement 9 - releases a notification claim this notifier holds.
      *
      * <p>Fenced on the token, so a notifier whose claim was reclaimed while it was working releases

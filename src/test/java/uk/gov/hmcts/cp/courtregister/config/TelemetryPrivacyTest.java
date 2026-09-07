@@ -741,6 +741,7 @@ class TelemetryPrivacyTest {
                         connectionString, null, "courtregister.requests", 2, MAX_DELIVERY_COUNT,
                         Duration.ofMinutes(5), Duration.ofSeconds(60)),
                 new CourtRegisterProperties.Claim(Duration.ofMinutes(5), RUN_DEADLINE),
+                new CourtRegisterProperties.Notification(Duration.ofMinutes(15)),
                 new CourtRegisterProperties.Store(Duration.ofSeconds(10)),
                 new CourtRegisterProperties.Stub(PayloadFailureMode.NONE, StubFlagAnswer.ON),
                 new CourtRegisterProperties.Payload(

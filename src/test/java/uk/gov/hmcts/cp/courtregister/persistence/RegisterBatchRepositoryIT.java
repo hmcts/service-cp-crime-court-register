@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -86,6 +87,14 @@ class RegisterBatchRepositoryIT {
      * waits it out.
      */
     private static final Duration NOTIFIER_LEASE = Duration.ofMillis(250);
+
+    /**
+     * How long the renewal case waits before renewing, so the moved stamp is visible.
+     *
+     * <p>Well inside the lease above - a renewal is not a takeover - and long enough that
+     * {@code now()} has really moved on between the claim and the renewal.
+     */
+    private static final Duration RENEWAL_GAP = Duration.ofMillis(30);
 
     /**
      * This case's payload ids, minted per test for the same reason as the court centre.
@@ -626,6 +635,82 @@ class RegisterBatchRepositoryIT {
                     .isEqualTo(recovering);
         }
 
+        /**
+         * The claim kept alive by the notifier that holds it, and by nobody else.
+         *
+         * <p>A lease is a bound on work whose length the lease cannot know: how long telling one
+         * batch's recipients takes depends on how many Youth Offending Teams the batch is addressed
+         * to and on how patient notificationnotify is being tonight. So the notifier renews before
+         * every POST and before every write about one, and the lease bounds one recipient's turn
+         * rather than the whole batch.
+         *
+         * <p>Fenced on the token for the reason the release is: a renewal keyed on the batch alone
+         * would let a notifier whose claim had already been taken over extend the claim of the
+         * notifier that took it, and carry on posting believing the batch was still its own.
+         */
+        @Test
+        void renewing_the_claim_should_extend_it_only_for_the_notifier_that_holds_it()
+                throws InterruptedException {
+            final RegisterBatch generated = walkedToGenerated(inserted(MONDAY));
+            final UUID holder = UUID.randomUUID();
+            repository.claimForNotification(generated.batchId(), holder);
+            final OffsetDateTime taken = claimedSinceOf(generated.batchId());
+            Thread.sleep(RENEWAL_GAP.toMillis());
+
+            assertThat(repository.renewNotificationClaim(generated.batchId(), holder))
+                    .as("the notifier that holds the claim is still the one telling this batch's "
+                            + "recipients, and the lease has to cover the POST it is about to make")
+                    .isTrue();
+            assertThat(claimedSinceOf(generated.batchId()))
+                    .as("and the lease now runs from this moment rather than from the moment the "
+                            + "claim was taken, which is what makes it a bound on one recipient's "
+                            + "turn instead of on a whole batch of them")
+                    .isAfter(taken);
+
+            final OffsetDateTime renewed = claimedSinceOf(generated.batchId());
+            assertThat(repository.renewNotificationClaim(
+                    generated.batchId(), UUID.randomUUID()))
+                    .as("and a notifier that does not hold it is told so by the same statement "
+                            + "that would have extended it")
+                    .isFalse();
+            assertThat(claimedSinceOf(generated.batchId()))
+                    .as("having changed nothing: a renewal under somebody else's token would "
+                            + "extend the claim of the notifier that holds the batch")
+                    .isEqualTo(renewed);
+        }
+
+        /**
+         * And the takeover is what makes the fence matter rather than a formality.
+         *
+         * <p>The notifier that lost the claim is still inside its cycle, holding a token the row no
+         * longer carries. Its next renewal is refused, which is how it learns to stop: a renewal it
+         * was granted would extend the lease of the notifier that took the batch over while the old
+         * one went on posting under it, which is two notifiers telling one batch's Youth Offending
+         * Teams - the state the claim exists to prevent.
+         */
+        @Test
+        void a_renewal_after_a_takeover_should_change_nothing_for_the_old_token()
+                throws InterruptedException {
+            final RegisterBatch generated = walkedToGenerated(inserted(MONDAY));
+            final UUID lapsed = UUID.randomUUID();
+            final UUID recovering = UUID.randomUUID();
+            repository.claimForNotification(generated.batchId(), lapsed);
+            Thread.sleep(NOTIFIER_LEASE.plusMillis(150).toMillis());
+            repository.claimForNotification(generated.batchId(), recovering);
+            final OffsetDateTime takenOver = claimedSinceOf(generated.batchId());
+
+            assertThat(repository.renewNotificationClaim(generated.batchId(), lapsed))
+                    .as("the batch is not this notifier's any more, and it is still in the middle "
+                            + "of its cycle: this answer is how it finds out")
+                    .isFalse();
+            assertThat(claimHolderOf(generated.batchId()))
+                    .as("the claim is the recovering notifier's")
+                    .isEqualTo(recovering);
+            assertThat(claimedSinceOf(generated.batchId()))
+                    .as("and its lease was not extended by the notifier it took the batch from")
+                    .isEqualTo(takenOver);
+        }
+
         @Test
         void claiming_a_batch_this_store_never_assembled_should_be_refused() {
             assertThat(repository.claimForNotification(UUID.randomUUID(), UUID.randomUUID()))
@@ -656,6 +741,25 @@ class RegisterBatchRepositoryIT {
         final RegisterBatch document = generated(generating);
         repository.compareAndSet(document, BatchStatus.GENERATING);
         return document;
+    }
+
+    /**
+     * When the batch's claim last started running, read off the column the domain has not got.
+     *
+     * <p>Read rather than computed: the lease is compared by the database against its own
+     * {@code now()}, so what a renewal has to be shown to move is the stamp the database wrote.
+     *
+     * @param batchId the batch
+     * @return the instant the claim's lease currently runs from, or {@code null} where nobody holds
+     *     one
+     */
+    private static OffsetDateTime claimedSinceOf(final UUID batchId) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("SELECT notifying_since FROM register_batch WHERE batch_id = :batchId")
+                .param("batchId", batchId)
+                .query(OffsetDateTime.class)
+                .optional()
+                .orElse(null);
     }
 
     /** Who holds the batch's notification claim, read off the two columns the domain has not got. */

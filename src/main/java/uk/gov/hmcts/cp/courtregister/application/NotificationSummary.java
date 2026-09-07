@@ -59,6 +59,25 @@ public record NotificationSummary(
     }
 
     /**
+     * The answer of a notifier that held the claim, began the cycle and lost the claim inside it.
+     *
+     * <p>The tally is the rows as they stood when the renewal was refused and the state is where the
+     * batch stood then, and neither is this call's work alone: this notifier told some of the teams,
+     * and the notifier that took the batch over is telling the rest. Which is why the disposition
+     * and not the counts is what a caller branches on.
+     *
+     * @param accepted how many of the batch's rows stood accepted when the claim was lost
+     * @param failed   how many of them stood FAILED
+     * @param standing where the batch stood when the claim was lost, which this call did not write
+     * @return the summary, carrying {@link NotificationDisposition#CLAIM_LOST}
+     */
+    public static NotificationSummary claimLost(
+            final int accepted, final int failed, final BatchStatus standing) {
+        return new NotificationSummary(
+                accepted, failed, standing, NotificationDisposition.CLAIM_LOST);
+    }
+
+    /**
      * Whether this call is the one that posted for the batch and settled it.
      *
      * @return true where this call held the claim

@@ -163,6 +163,18 @@ public class GenerationMetrics {
      */
     public static final String ALREADY_NOTIFYING = "already-notifying";
 
+    /**
+     * The {@code reason} label of a notifier that lost the batch's claim part way through the cycle.
+     *
+     * <p>Its own series and not a reading of {@link #ALREADY_NOTIFYING}, because that one is a
+     * notifier that never started and this one is a notifier that did: some POSTs were really made,
+     * and the rows and the batch are part-written by two notifiers rather than one. What it means is
+     * that the lease did not cover the work - more recipients than it allows for, or a slower
+     * notificationnotify than it allows for - and it is the reading
+     * {@code courtregister.notification.claim-lease} is raised on.
+     */
+    public static final String CLAIM_LOST = "claim-lost";
+
     private static final int READABLE = 1;
     private static final int UNREADABLE = 0;
 
@@ -379,6 +391,18 @@ public class GenerationMetrics {
      */
     public void alreadyNotifying() {
         counter(NOTIFICATIONS_IGNORED, REASON_TAG, ALREADY_NOTIFYING).increment();
+    }
+
+    /**
+     * Counts a notifier that lost the batch's claim part way through telling its recipients.
+     *
+     * <p>Separate from {@link #alreadyNotifying()}: that reading is a notifier that never started,
+     * and this one made POSTs before the batch stopped being its own. It is the number the
+     * notification lease is raised on, because what it says is that the lease did not cover the
+     * work.
+     */
+    public void claimLost() {
+        counter(NOTIFICATIONS_IGNORED, REASON_TAG, CLAIM_LOST).increment();
     }
 
     /**

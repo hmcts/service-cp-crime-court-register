@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -277,6 +278,7 @@ class RegisterNotifierServiceTest {
         doAnswer(this::recordSettlement).when(store).markNotified(any(), any());
         doAnswer(this::acceptThePost).when(notifier).send(any(), any(), any());
         doAnswer(this::takeTheClaim).when(batches).claimForNotification(any(), any());
+        doAnswer(this::renewTheClaim).when(batches).renewNotificationClaim(any(), any());
         doAnswer(this::releaseTheClaim).when(batches).releaseNotificationClaim(any(), any());
     }
 
@@ -571,6 +573,17 @@ class RegisterNotifierServiceTest {
     /** The claim, taken by whichever notifier asks while nobody holds it. */
     private Object takeTheClaim(final InvocationOnMock invocation) {
         return claim.compareAndSet(null, invocation.getArgument(1));
+    }
+
+    /**
+     * The claim kept alive, and answered only for the notifier whose token is on the row.
+     *
+     * <p>The statement is one question - is this still yours, and if so let the lease cover what you
+     * are about to do - so the double answers the first half, which is the half the service branches
+     * on. A notifier whose claim has been taken over reads false here and stops.
+     */
+    private Object renewTheClaim(final InvocationOnMock invocation) {
+        return invocation.getArgument(1).equals(claim.get());
     }
 
     /** The claim, released only by the notifier whose token it was taken under. */
@@ -1429,6 +1442,110 @@ class RegisterNotifierServiceTest {
                             + "reconciliation could ever pick up, which is the state defect fix P1 "
                             + "is about wearing a different hat")
                     .isNull();
+        }
+    }
+
+    /**
+     * The claim that stopped being this notifier's while it was still telling the batch.
+     *
+     * <p>A claim carries a lease, and a lease is a bound on work whose length it cannot know: how
+     * long telling one batch's recipients takes depends on how many Youth Offending Teams the batch
+     * is addressed to and on how patient notificationnotify is being tonight. So the claim is
+     * renewed before every POST and before every write about one, and a renewal that is refused is
+     * how a notifier learns the batch has been taken over.
+     *
+     * <p><strong>And what it does about it is stop.</strong> The notifier that now holds the batch
+     * is deriving the same owed set from the same records, so anything this one writes from here is
+     * written over that one's work: a settlement onto a row the other notifier is about to POST for,
+     * or a batch tally taken while it is still writing. The rows this run did not settle stay
+     * unsettled under the identities they already hold, which is exactly the state a later run
+     * re-requests - the retry reaches notificationnotify's own aggregate rather than asking for a
+     * second register about the same children.
+     *
+     * <p>Counted on its own bounded reason, and not on the loser-of-the-claim's: that reading is a
+     * notifier that never started, and this is one that told some of the teams. It is the number
+     * {@code courtregister.notification.claim-lease} is raised on.
+     */
+    @Nested
+    @DisplayName("the claim taken over mid-cycle")
+    class TheClaimTakenOverMidCycle {
+
+        /** Guards the takeover, so it happens once rather than on every POST. */
+        private final AtomicBoolean takenOver = new AtomicBoolean();
+
+        /**
+         * Something else takes the batch over while the first recipient's POST is in flight.
+         *
+         * <p>Which is where a real lease runs out: the POST is where a run spends its time, and a
+         * notifier waiting on notificationnotify for one recipient is a notifier not renewing.
+         */
+        private void aSecondNotifierTakesTheBatchOverDuringTheFirstPost() {
+            doAnswer(invocation -> {
+                if (takenOver.compareAndSet(false, true)) {
+                    claim.set(UUID.randomUUID());
+                }
+                return acceptThePost(invocation);
+            }).when(notifier).send(any(), any(), any());
+        }
+
+        @Test
+        void a_notifier_whose_claim_was_taken_over_should_stop_posting_and_settle_nothing_more() {
+            aSecondNotifierTakesTheBatchOverDuringTheFirstPost();
+
+            final NotificationSummary summary = notifyBatch();
+
+            softly.assertThat(postedAddresses())
+                    .as("the notifier that now holds the batch is deriving the same owed set from "
+                            + "the same records, so a POST from here is a second register about the "
+                            + "same children to the same team")
+                    .containsExactly(ADDRESS_A);
+            softly.assertThat(settled)
+                    .as("and nothing is settled either: the row this run posted for stays "
+                            + "unsettled under the identity it holds, which is the state a later "
+                            + "run re-requests")
+                    .isEmpty();
+            softly.assertThat(settlements)
+                    .as("least of all the batch, whose tally would be taken while the notifier "
+                            + "that took it over is still writing its rows")
+                    .isEmpty();
+            softly.assertThat(summary)
+                    .extracting(NotificationSummary::disposition)
+                    .as("a bounded disposition of its own: this notifier started, told part of the "
+                            + "batch and lost it, which is not the same event as one that never "
+                            + "started")
+                    .isEqualTo(NotificationDisposition.CLAIM_LOST);
+            softly.assertThat(notificationIgnoredCount(GenerationMetrics.CLAIM_LOST))
+                    .as("and it is the reading the notification lease is raised on, so it has to "
+                            + "be a series rather than a warn nobody queries")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void a_claim_lost_after_the_last_post_should_leave_the_batch_where_it_stands() {
+            when(store.batched(BATCH_ID)).thenReturn(
+                    List.of(registerRecord(List.of(recipient(YOT_A, ADDRESS_A)))));
+            // Renewed for the POST and for its settlement, and taken over before the batch's own.
+            // doReturn rather than when(...).thenReturn(...), which would really call the method
+            // while stubbing and have the claim double answer a pair of nulls.
+            doReturn(true, true, false)
+                    .when(batches).renewNotificationClaim(any(), any());
+
+            final NotificationSummary summary = notifyBatch();
+
+            softly.assertThat(postedAddresses())
+                    .as("the one recipient this batch has was told, because the claim was still "
+                            + "this notifier's when it was asked")
+                    .containsExactly(ADDRESS_A);
+            softly.assertThat(settlements)
+                    .as("and the batch is not settled: markNotified is a compare-and-set against "
+                            + "the state this run read, and the notifier that took the batch over "
+                            + "is the one whose tally should decide it")
+                    .isEmpty();
+            softly.assertThat(summary)
+                    .extracting(NotificationSummary::disposition)
+                    .isEqualTo(NotificationDisposition.CLAIM_LOST);
+            softly.assertThat(notificationIgnoredCount(GenerationMetrics.CLAIM_LOST))
+                    .isEqualTo(1);
         }
     }
 
