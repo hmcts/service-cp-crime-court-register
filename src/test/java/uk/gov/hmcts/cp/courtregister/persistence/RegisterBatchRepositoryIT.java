@@ -91,6 +91,20 @@ class RegisterBatchRepositoryIT {
     private static final UUID LATER_IDENTITY =
             UUID.fromString("f0b62d84-51ae-4c37-9b18-2e5d7a4c0f19");
 
+    /**
+     * Two more of them, for the case about the batch that cannot say where it sat.
+     *
+     * <p>Their own rather than the pair above, because a batch identity is this table's primary key
+     * and the several cases here share one container. The unnamed court house takes the earlier of
+     * the two deliberately: a read that had fallen back to the tie-break alone would then answer it
+     * first, which is the other way round from where the rule puts it.
+     */
+    private static final UUID NO_COURT_HOUSE_IDENTITY =
+            UUID.fromString("1b3d5f07-4a29-4e68-9c15-8d0e2f7a6b34");
+
+    private static final UUID A_COURT_HOUSE_IDENTITY =
+            UUID.fromString("9e5c7a12-6b40-4f83-a27d-3f1b8c04d95e");
+
     /** A date this suite writes no batch for, so a listing of it is a listing of nothing. */
     private static final LocalDate WEDNESDAY = LocalDate.of(2026, 8, 26);
 
@@ -787,6 +801,30 @@ class RegisterBatchRepositoryIT {
                             + "breaks the tie a date's several batches for one court house would "
                             + "otherwise leave to the planner")
                     .containsExactly(earlier, later, otherHouse);
+        }
+
+        /**
+         * <strong>[A] characterisation.</strong> The read already answers this way and this case
+         * states it rather than driving it: {@code ORDER BY court_house} is ascending, and
+         * ascending in Postgres is NULLS LAST. What was missing is that the rule the statement's
+         * javadoc, this nest's and data-model.md all state was held down by nothing at all - every
+         * case here seeded a named court house - so a rewrite to {@code NULLS FIRST} would have
+         * inverted it and stayed green. Green on introduction; non-vacuity is the mutation quoted
+         * in this commit.
+         */
+        @Test
+        void a_batch_that_cannot_say_where_it_sat_should_come_last() {
+            final RegisterBatch nowhere = failed(NO_COURT_HOUSE_IDENTITY, null);
+            final RegisterBatch somewhere = listed(A_COURT_HOUSE_IDENTITY, COURT_HOUSE);
+
+            assertThat(findByRegisterDate(MONDAY))
+                    .as("`court_house` is nullable and descriptive - it is copied from the first "
+                            + "record's hearing venue, and a document that named none leaves it "
+                            + "unset - so a listing read by court house has to put that row "
+                            + "somewhere and says where: last, after every row that can say. Its "
+                            + "identity is the earlier of the two, so a read that fell back to the "
+                            + "tie-break alone would answer it first")
+                    .containsExactly(somewhere, nowhere);
         }
 
         @Test
