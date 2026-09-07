@@ -4,13 +4,13 @@
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md
 
 **Tests are MANDATORY** (Constitution Principle II) and every implementation task is strictly
-preceded by the test task that guards it. Test names come from the plan's test matrix — do not
+preceded by the test task that guards it. Test names come from the plan's test matrix - do not
 rename them without updating the matrix. A P-fix task's test is written to **fail against the
 progression behaviour and pass against the fix**, and its DEFECT-FIXES row names it.
 
 **Red-run convention (applies to every test task)**: a test task includes creating the minimal
-**compile-safe seams** its test needs — interface declarations, record signatures, class skeletons
-whose methods throw `UnsupportedOperationException` — so that the recorded red run is a **failing
+**compile-safe seams** its test needs - interface declarations, record signatures, class skeletons
+whose methods throw `UnsupportedOperationException` - so that the recorded red run is a **failing
 assertion**, never a missing class or a compile error. The failing assertion is quoted in the test
 task's commit narrative; the paired implementation task's narrative quotes the green run.
 
@@ -71,7 +71,7 @@ exceptions of this kind are pre-approved. **Never two committing agents at once.
 ## Format: `[ID] [P?] [A?] [US#] Description`
 
 - **[P]**: may run in parallel with other [P] tasks in the same phase (different files, no dependency)
-- **[A]**: acceptance/characterisation — see above
+- **[A]**: acceptance/characterisation - see above
 - **[US#]**: the spec user story the task traces to
 
 ---
@@ -186,30 +186,30 @@ two days:
 
 ### Tests first ⚠️
 
-- [x] T007 [P] `persistence/SchemaMigrationV2IT` — V2 facts: new `processed_output` columns and status
+- [x] T007 [P] `persistence/SchemaMigrationV2IT` - V2 facts: new `processed_output` columns and status
       values, `register_batch` with its partial unique constraint, `register_notification` with
       `UNIQUE (batch_id, email_address)`, `shedlock`, the two indexes (data-model.md). Red: table
       `register_batch` does not exist.
-- [x] T008 [P] `persistence/RegisterStoreIT` — `record` inserts RECORDED with document, hearing,
+- [x] T008 [P] `persistence/RegisterStoreIT` - `record` inserts RECORDED with document, hearing,
       register time, defendant type, flag state; same-key re-share supersedes in one transaction
       (`superseded_by` set, only the newer row active); a row with a `batch_id` is never superseded;
       a later-date re-share starts a fresh row; `activeUnbatched()` excludes superseded, batched and
       `recorded_flag_state <> 'ON'` rows; `markGenerated(batchId)` flips only that batch's rows
-      (**P3 pin: `generation_flips_only_the_batchs_own_rows`** — fails against a court-centre-wide
+      (**P3 pin: `generation_flips_only_the_batchs_own_rows`** - fails against a court-centre-wide
       flip). Red: `UnsupportedOperationException` from the seam replaced by a failing assertion on
       the row count.
-- [x] T009 [P] `config/ConfigurationValidationTest` (extend) — generation enabled requires
+- [x] T009 [P] `config/ConfigurationValidationTest` (extend) - generation enabled requires
       fileservice url, flag endpoint/label, SDG and NN endpoints, template id; zone must be
       `Europe/London` unless `zone-override-acknowledged` (`SchedulingConfigTest.job_is_scheduled_in_europe_london`
       lives here as a binding test); `completion=event` requires broker url; STUB modes refused with a
       namespace; **P9 pin: `blank_email_template_refuses_to_start_in_live_mode`**. Red: context starts.
-- [x] T010 [P] `config/GenerationMetricsTest` — instrument names and tags:
+- [x] T010 [P] `config/GenerationMetricsTest` - instrument names and tags:
       `courtregister.batches{outcome}`, `courtregister.generation.request{response_code}`,
       `courtregister.generation.latency`, `courtregister.generation.reconciled`,
       `courtregister.generation.skipped{reason}`, `courtregister.notifications{status,response_code}`,
       gauges `oldest_recorded_unbatched_age`, `oldest_generating_age`, `pending_after_deadline`,
       `flag_read_ok`. Red: meter absent.
-- [x] T011 [P] `domain/BatchStateTest` — `BatchStatus` transitions permitted/refused per the
+- [x] T011 [P] `domain/BatchStateTest` - `BatchStatus` transitions permitted/refused per the
       data-model state machine; `BatchFailureReason` and `NotificationStatus` codes bounded;
       `FlagDecision` never carries free text beyond a bounded reason code. Red: illegal transition
       not refused.
@@ -229,12 +229,12 @@ two days:
       contracts; no Azure/HTTP/JDBC/JMS type in any signature.
 - [x] T015 `persistence/ProcessedOutputRepository` (extend) + `persistence/RegisterBatchRepository` +
       `persistence/RegisterNotificationRepository` + `persistence/JdbcRegisterStore` implementing
-      `RegisterStore` with write-time supersession and batch-scoped `mark*`. Green: T008 incl. P3 —
+      `RegisterStore` with write-time supersession and batch-scoped `mark*`. Green: T008 incl. P3  - 
       **flip P3 to FIXED in this commit.**
 - [x] T016 [P] `config/GenerationProperties`, `config/FeatureFlagProperties`,
       `config/FileServiceDataSourceConfig` (second `DataSource` + `JdbcClient`, Hikari
       `initialization-fail-timeout: -1`, `socketTimeout: 30`), `config/PropertiesValidator` (extend)
-      — the T009 rules; template id validated as UUID in LIVE mode. Green: T009 incl. P9 — **flip P9
+      - the T009 rules; template id validated as UUID in LIVE mode. Green: T009 incl. P9 - **flip P9
       to FIXED in this commit.**
 - [x] T017 [P] `config/GenerationMetrics`. Green: T010.
 - [x] T018 [P] `adapter/stub/Stub{PayloadFileStore,DocumentRenderer,RegisterNotifier,FeatureFlagReader}`
@@ -287,7 +287,7 @@ precedent.
 
 ---
 
-## Phase 3: User Story 1 — record, not POST (Priority: P1) 🎯 MVP
+## Phase 3: User Story 1 - record, not POST (Priority: P1) 🎯 MVP
 
 **Goal**: a command ends as a RECORDED row with the validated document; nothing is sent to progression.
 
@@ -296,27 +296,27 @@ re-share supersedes; schema-invalid fails SCHEMA_INVALID with no row.
 
 ### Tests first ⚠️
 
-- [x] T019 [P] [US1] `pipeline/DefendantTypeResolverTest` — goldens from T004: Applicant default,
+- [x] T019 [P] [US1] `pipeline/DefendantTypeResolverTest` - goldens from T004: Applicant default,
       Appellant (appeal + applicantAppellant flags with applicant masterDefendant), Respondent
       (respondent masterDefendantId among defendants), null when no court application; the
       as-at-hearing deviation pinned (`respondents_are_read_from_the_hearing_not_the_aggregate`).
       Red: seam throws → failing equality.
-- [x] T020 [P] [US1] `application/DistributionPipelineTest` (extend) — in `record` mode the pipeline
+- [x] T020 [P] [US1] `application/DistributionPipelineTest` (extend) - in `record` mode the pipeline
       calls `RegisterStore.record` with the validated document, defendant type and flag state and
       completes `recorded`; SCHEMA_INVALID is raised before any record; store failure ⇒ abandon +
       suspend; in `progression-post` mode the 001 submission path is used unchanged. Red: reason is
       `submitted`.
-- [x] T021 [P] [US1] `pipeline/RegisterTransformationChainTest` (extend) — the chain sets
+- [x] T021 [P] [US1] `pipeline/RegisterTransformationChainTest` (extend) - the chain sets
       `defendantType` on the document; the 001 goldens are otherwise byte-identical. Red: field absent.
 
 ### Implementation
 
-- [x] T022 [US1] `pipeline/DefendantTypeResolver` — port of `PROG CourtRegisterHandler.getDefendantType`
+- [x] T022 [US1] `pipeline/DefendantTypeResolver` - port of `PROG CourtRegisterHandler.getDefendantType`
       (`:131-153`) over `hearing.courtApplications[]` by `courtApplicationId`. Green: T019.
 - [x] T023 [US1] `pipeline/RegisterTransformationChain` (extend) wires the resolver; `domain/CourtRegisterDocument`
-      gains `defendantType` (already a legal field in the frozen schema — confirm with
+      gains `defendantType` (already a legal field in the frozen schema - confirm with
       `OutboundContractValidationTest`). Green: T021.
-- [x] T024 [US1] `application/DistributionPipeline` — `RegisterStore` replaces `RegisterSubmissionClient`
+- [x] T024 [US1] `application/DistributionPipeline` - `RegisterStore` replaces `RegisterSubmissionClient`
       in `record` mode; `config/PipelineConfig` selects by `courtregister.output`; `adapter/progression`
       retained behind `progression-post`. Green: T020.
 - [x] T024a [US1] V3 partial unique index enforcing one active row per `(hearing_id,
@@ -324,7 +324,7 @@ re-share supersedes; schema-invalid fails SCHEMA_INVALID with no row.
       `JdbcRegisterStore.record`; `RegisterStoreIT` case
       `two_concurrent_re_shares_leave_exactly_one_active_row` red first (T020 group), then the
       migration + code. Green: that case.
-- [x] T025 [A] [US1] `e2e/RecordEndToEndIT` — emulator + Postgres + real payload cache: command →
+- [x] T025 [A] [US1] `e2e/RecordEndToEndIT` - emulator + Postgres + real payload cache: command →
       RECORDED row with digest of the stored document, reason `recorded`, **zero** requests to the
       progression WireMock; re-share ⇒ supersession; schema-invalid ⇒ dead-letter, no row. Record the
       first observed result.
@@ -333,7 +333,7 @@ re-share supersedes; schema-invalid fails SCHEMA_INVALID with no row.
 
 ---
 
-## Phase 4: User Story 4 + 7 — the flag is the one lever (Priority: P1)
+## Phase 4: User Story 4 + 7 - the flag is the one lever (Priority: P1)
 
 **Goal**: the nightly job reads `CourtRegisterService` first and does nothing when OFF/unreadable;
 the CLI respects it; recorded-while-off rows are stamped and excluded.
@@ -344,10 +344,10 @@ CLI refuses without `--ignore-flag`.
 ### Tests first ⚠️
 
 - [x] T026 [P] [US4] `adapter/appconfig/AppConfigurationFlagReaderTest` (WireMock on the App
-      Configuration `kv` endpoint) — `enabled:true` ⇒ ON; `false` ⇒ OFF; 404 / 403 / 5xx / timeout /
+      Configuration `kv` endpoint) - `enabled:true` ⇒ ON; `false` ⇒ OFF; 404 / 403 / 5xx / timeout /
       malformed ⇒ UNREADABLE with a bounded reason; label and key are passed; never throws. Red: seam
       throws.
-- [x] T027 [P] [US4] `batch/FeatureFlagGateTest` — OFF/UNREADABLE ⇒ `Skipped(reason)` + metric
+- [x] T027 [P] [US4] `batch/FeatureFlagGateTest` - OFF/UNREADABLE ⇒ `Skipped(reason)` + metric
       `generation.skipped{reason}` + `flag_read_ok` gauge; ON ⇒ `Proceed`; `ignoreFlag=true` ⇒
       `Proceed(overridden)` logged. Red: proceeds on OFF.
 - [x] T028 [P] [US4] `inbound/RecordedFlagStateTest` - `RecordedFlagStateSource` renews the reading
@@ -370,7 +370,7 @@ review 4 (folded into review 5 if Phase 5 follows immediately).
 
 ---
 
-## Phase 5: User Story 2 — the nightly batch renders one PDF per court centre and date (Priority: P1)
+## Phase 5: User Story 2 - the nightly batch renders one PDF per court centre and date (Priority: P1)
 
 **Goal**: 18:00 Europe/London, flag-gated, one batch per key, payload byte-identical to progression's,
 file-service insert, `generate-document` 202, outcome from `public.event` with the reconciler safety net.
@@ -378,55 +378,55 @@ file-service insert, `generate-document` 202, outcome from `public.event` with t
 **Independent Test**: seeded rows → job → two batches GENERATING with golden payloads → events →
 GENERATED / FAILED with reason; grace period → reconciler.
 
-### Tests first ⚠️ (all [P] — one file each; seams from T013/T014)
+### Tests first ⚠️ (all [P] - one file each; seams from T013/T014)
 
-- [x] T031 [P] [US2] `pipeline/PdfPayloadMapperTest` — byte-identical to every T004 pdf-payload golden;
+- [x] T031 [P] [US2] `pipeline/PdfPayloadMapperTest` - byte-identical to every T004 pdf-payload golden;
       `sentinel_is_substituted_exactly_as_progression_did` (C24 `####` → `\n`, `:336`);
       `DASH` fallbacks, date formats, `getAge`, aliases, counsel, application validity
       (`isApplicationValid`) each pinned on a golden that exercises it. Red: seam throws.
-- [x] T032 [P] [US2] `batch/BatchAssemblerTest` — grouping by (court centre, register date); first
+- [x] T032 [P] [US2] `batch/BatchAssemblerTest` - grouping by (court centre, register date); first
       row's `fileName`; recorded-while-off and superseded rows excluded; `batch_id` stamped;
       `system_generated` from the trigger source. Red: one batch for two keys.
 - [x] T033 [P] [US2] `adapter/fileservice/FileServicePayloadStoreIT` (Testcontainers Postgres seeded
-      from `contracts/fileservice/`) — inserts `metadata` (JSONB with progression's five keys) and
+      from `contracts/fileservice/`) - inserts `metadata` (JSONB with progression's five keys) and
       `content` (bytea, `deleted=false`) under the given `file_id`; unavailable DB ⇒
       `PayloadStoreUnavailableException`; no other statement issued (statement log). Red: seam throws.
-- [x] T034 [P] [US2] `adapter/systemdocgenerator/SystemDocGeneratorClientTest` (WireMock) — body
+- [x] T034 [P] [US2] `adapter/systemdocgenerator/SystemDocGeneratorClientTest` (WireMock) - body
       verbatim (`templateIdentifier=OEE_Layout5`, `conversionFormat=pdf`, `payloadFileServiceId`,
       `sourceCorrelationId=batch_id`, `originatingSource=CourtRegisterService`), media type,
       `CJSCPPUID`; 202 only (200 ⇒ `RENDER_REQUEST_REJECTED`); `retry_taxonomy_matches_the_submission_client`
       (shared `RetryPolicy`); `query` maps the four optional fields. Red: seam throws.
-- [x] T035 [P] [US2] `adapter/publicevents/DocumentEventListenerTest` — parses a framework
+- [x] T035 [P] [US2] `adapter/publicevents/DocumentEventListenerTest` - parses a framework
       `JsonEnvelope` body, reads `CPPNAME`, ignores `originatingSource != CourtRegisterService`
       (acknowledged, counted), routes `document-available` / `generation-failed` to the sink with
       `sourceCorrelationId` and `payloadFileServiceId`. Red: sink not called.
-- [x] T036 [P] [US2] `adapter/publicevents/DocumentEventListenerIT` (embedded Artemis) — durable
+- [x] T036 [P] [US2] `adapter/publicevents/DocumentEventListenerIT` (embedded Artemis) - durable
       subscription: an event published while the listener is stopped is delivered on restart; the
       selector excludes other `CPPNAME`s; two events for one batch ⇒ one outcome. Red: event lost.
-- [x] T037 [P] [US2] `application/DocumentOutcomeSinkTest` — `documentAvailable` ⇒ batch GENERATED,
+- [x] T037 [P] [US2] `application/DocumentOutcomeSinkTest` - `documentAvailable` ⇒ batch GENERATED,
       `document_file_id`, `completed_by=EVENT`, rows of **this batch only** → GENERATED (reuses the
       P3 pin through the store); `generationFailed` ⇒ FAILED `GENERATION_FAILED` + `sdg_reason`
       (**P2 pin: `generation_failed_event_fails_the_batch_with_reason`**); unknown correlation ⇒
       counted, ignored; duplicate ⇒ idempotent. Red: FAILED not recorded.
-- [x] T038 [P] [US2] `batch/GenerationReconcilerTest` — GENERATING older than grace ⇒ one `query`;
+- [x] T038 [P] [US2] `batch/GenerationReconcilerTest` - GENERATING older than grace ⇒ one `query`;
       answer applied via the sink with `completed_by=RECONCILER` + `reconciled` metric; still pending
       ⇒ FAILED `GENERATION_TIMED_OUT`. Red: no query.
-- [x] T039 [P] [US2] `application/RegisterGenerationServiceTest` — payload id minted and persisted
+- [x] T039 [P] [US2] `application/RegisterGenerationServiceTest` - payload id minted and persisted
       before `store`; store failure ⇒ FAILED `PAYLOAD_STORE_UNAVAILABLE`, rows stay RECORDED; 202 ⇒
       GENERATING + `requested_at`; transient ⇒ retry within the run deadline then
       `RENDER_REQUEST_FAILED`; **P5 pin: `assembly_failure_fails_the_batch_and_the_run_continues`**.
       Red: seam throws.
-- [x] T040 [P] [US2] `batch/RegisterGenerationJobTest` — reads the flag first (gate outcome ends the
+- [x] T040 [P] [US2] `batch/RegisterGenerationJobTest` - reads the flag first (gate outcome ends the
       run); sequential batches; run deadline bounds requesting only; `RunReport` emitted with counts,
       flag decision, duration; `@Scheduled` cron `0 0 18 * * MON-FRI` zone `Europe/London` and
       `@SchedulerLock` present (`job_is_scheduled_in_europe_london`). Red: runs with flag OFF.
 - [x] T041 [P] [US2] `config/PublicEventsHealthIndicatorTest` + `config/FileServiceRunHealthIndicatorTest`
-      — broker state and last-delivery age reported, never in readiness; file-service datasource DOWN
+      - broker state and last-delivery age reported, never in readiness; file-service datasource DOWN
       affects readiness only while a run is in progress. Red: readiness includes broker.
 
 ### Implementation (serialised where files are shared)
 
-- [x] T042 [US2] `pipeline/PdfPayloadMapper` — Java→Java port of `PROG CourtRegisterPdfPayloadGenerator`
+- [x] T042 [US2] `pipeline/PdfPayloadMapper` - Java→Java port of `PROG CourtRegisterPdfPayloadGenerator`
       (364 ln), `javax.json` → Jackson tree, every helper verbatim. Green: T031.
 - [x] T043 [P] [US2] `batch/BatchAssembler` (resolve data-model.md's open question / design Q27
       first). Green: T032.
@@ -439,15 +439,15 @@ GENERATED / FAILED with reason; grace period → reconciler.
       (listener container factory, durable, client-id, `auto-startup` tied to generation enabled).
       Green: T035, T036.
 - [x] T047 [US2] `application/DocumentOutcomeSinkImpl` (one code path for event and reconciler).
-      Green: T037 — **flip P2 to FIXED in this commit.**
+      Green: T037 - **flip P2 to FIXED in this commit.**
 - [x] T048 [US2] `batch/GenerationReconciler`. Green: T038.
-- [x] T049 [US2] `application/RegisterGenerationService`. Green: T039 — **flip P5 to FIXED in this
+- [x] T049 [US2] `application/RegisterGenerationService`. Green: T039 - **flip P5 to FIXED in this
       commit.**
 - [x] T050 [US2] `batch/RegisterGenerationJob` (+ `config/SchedulingConfig` with ShedLock provider and
       the zone validation) wiring gate → assembler → service → report. Green: T040.
 - [x] T051 [P] [US2] `config/PublicEventsHealthIndicator`, `config/FileServiceRunHealthIndicator`;
       readiness group unchanged for the broker. Green: T041.
-- [x] T052 [A] [US2] `e2e/GenerationEndToEndIT` — seeded RECORDED rows, flag ON (WireMock), job run →
+- [x] T052 [A] [US2] `e2e/GenerationEndToEndIT` - seeded RECORDED rows, flag ON (WireMock), job run →
       file-service rows present → SDG WireMock received `generate-document` → embedded Artemis
       `document-available` → GENERATED → (Phase 6 completes the notify leg; until then assert
       GENERATED and the run report). Record the first observed result. (**first observed run: RED**,
@@ -459,7 +459,7 @@ GENERATED / FAILED with reason; grace period → reconciler.
       no run. Both were fixed before this suite's recorded run - the wiring at `602474c` under its own
       red run `a24ac4f`, the ShedLock defect at `935a1c3` under its own red run `4b34bd3` - and the
       run recorded in `f562e52` is the green one after them.)
-- [x] T053 [A] [US2] `e2e/FlagGateEndToEndIT` — flag OFF ⇒ run skipped, nothing requested, rows stay
+- [x] T053 [A] [US2] `e2e/FlagGateEndToEndIT` - flag OFF ⇒ run skipped, nothing requested, rows stay
       RECORDED; unreadable (WireMock 500) ⇒ skipped `flag-unreadable`; ON ⇒ requested. Record.
       (**first observed run: RED**, for the same two reasons T052's was, and this suite is what found
       the ShedLock one: it is the only place the run's proxy exists. Green after `602474c` and
@@ -493,7 +493,7 @@ arrived test-after is a defect, not a precedent.
 
 ---
 
-## Phase 6: User Story 3 — every matched Youth Offending Team receives the register once (Priority: P1)
+## Phase 6: User Story 3 - every matched Youth Offending Team receives the register once (Priority: P1)
 
 **Goal**: recipient union, one `send-email-notification` per address with the PDF attached, per-recipient
 accounting, NOTIFIED / PARTIALLY_NOTIFIED / NOTIFIED_NOBODY, resend of every row not ACCEPTED
@@ -505,16 +505,16 @@ PARTIALLY_NOTIFIED; resend ⇒ NOTIFIED.
 
 ### Tests first ⚠️
 
-- [x] T054 [P] [US3] `batch/RecipientSetTest` — union by `emailAddress1`, name from first occurrence,
+- [x] T054 [P] [US3] `batch/RecipientSetTest` - union by `emailAddress1`, name from first occurrence,
       order stable; **P4 pin: `recipients_are_the_union_across_the_batch_not_the_first_rows`** (fails
       against first-row-only). Red: seam throws. (red at `6e2d7e1`, over the compile-safe seam
       `56eef87`.)
-- [x] T055 [P] [US3] `adapter/notificationnotify/NotificationNotifyClientTest` (WireMock) — body
+- [x] T055 [P] [US3] `adapter/notificationnotify/NotificationNotifyClientTest` (WireMock) - body
       verbatim (`templateId`, `sendToAddress`, `fileId`, `personalisation.yotsName`) with no
       `notificationId` in it, media type `application/vnd.notificationnotify.email+json`, `CJSCPPUID`,
       path `/notifications/{notificationId}` carrying the id; 202 only; retry reuses the same id in
       the path; `retry_taxonomy_matches_the_submission_client`. Red: seam throws. (red at `8ef978c`.)
-- [x] T056 [P] [US3] `application/RegisterNotifierServiceTest` — rows minted PENDING before any POST;
+- [x] T056 [P] [US3] `application/RegisterNotifierServiceTest` - rows minted PENDING before any POST;
       ACCEPTED/FAILED per recipient; batch NOTIFIED / PARTIALLY_NOTIFIED; **P1 pin:
       `a_batch_with_no_recipients_ends_notified_nobody_not_generated_forever`**; `resendFailed(batchId)`
       re-requests every row not ACCEPTED, PENDING included (`af3a089`; the task was written as FAILED
@@ -522,14 +522,14 @@ PARTIALLY_NOTIFIED; resend ⇒ NOTIFIED.
 
 ### Implementation
 
-- [x] T057 [US3] `batch/RecipientSet`. Green: T054 — **flip P4 to FIXED in this commit** (sign-off
+- [x] T057 [US3] `batch/RecipientSet`. Green: T054 - **flip P4 to FIXED in this commit** (sign-off
       marker stays). (`11e077a`; P4 flipped to FIXED there, sign-off marker kept.)
 - [x] T058 [P] [US3] `adapter/notificationnotify/NotificationNotifyClient` implementing
       `RegisterNotifier`. Green: T055. (`fbce03e`.)
 - [x] T059 [US3] `application/RegisterNotifierService` (+ wiring from `DocumentOutcomeSinkImpl` on
-      GENERATED). Green: T056 — **flip P1 to FIXED in this commit.** (`322fc07`; P1 flipped to FIXED
+      GENERATED). Green: T056 - **flip P1 to FIXED in this commit.** (`322fc07`; P1 flipped to FIXED
       there.)
-- [x] T060 [A] [US3] `e2e/GenerationEndToEndIT` (complete) — … → NN WireMock received one request per
+- [x] T060 [A] [US3] `e2e/GenerationEndToEndIT` (complete) - … → NN WireMock received one request per
       distinct recipient with the document id → NOTIFIED; run report counts. Record. (**first observed
       run of the completed suite: GREEN**, all three cases, at `1337c78`. The suite as T052 left it was
       **RED at `322fc07`** and it is the only thing that was: the full `./gradlew build` failed on its
@@ -542,7 +542,7 @@ PARTIALLY_NOTIFIED; resend ⇒ NOTIFIED.
       `fileId` the document's id rather than the payload's, and all three rows ACCEPTED on 202. The run
       report is asserted for what it can say - a GENERATING batch and no notified one, since the
       document arrives long after the run has ended.)
-- [x] T061 [A] [US3] `e2e/GenerationFailureEndToEndIT` — `generation-failed` ⇒ FAILED with reason; no
+- [x] T061 [A] [US3] `e2e/GenerationFailureEndToEndIT` - `generation-failed` ⇒ FAILED with reason; no
       event ⇒ reconciler completes; NN 500 for one recipient ⇒ PARTIALLY_NOTIFIED; resend via the
       service ⇒ NOTIFIED. Record. (**first observed run: GREEN**, all four cases, at `0d85ead`. The
       un-answered batch reaches the reconciler by having its own `requested_at` moved into the past
@@ -646,14 +646,14 @@ answer - are held to it.
 
 ---
 
-## Phase 7: User Story 5 — operations CLI in the image (Priority: P2)
+## Phase 7: User Story 5 - operations CLI in the image (Priority: P2)
 
 **Goal**: `generate-register`, `notify-register`, `list-batches`, `supersede-before`, `check-flag`,
 dispatched by `docker/startup.sh`, no HTTP endpoint.
 
 ### Tests first ⚠️
 
-- [x] T062 [P] [US5] `batch/cli/GenerateRegisterCliTest` — `--date` re-assembles FAILED and unbatched
+- [x] T062 [P] [US5] `batch/cli/GenerateRegisterCliTest` - `--date` re-assembles FAILED and unbatched
       rows for the date (optionally `--court-house`, `--batch`, `--recorded-before`); refuses on flag OFF
       without `--ignore-flag`; with it proceeds and prints the override; `system_generated=false`.
       (red at `8749f83`, over the compile-safe seams `62aa056`: 26 tests completed, 26 failed, every
@@ -665,7 +665,7 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       was: -1" and on Expecting actual "" to contain "flag-off". Green at `98c8a10`:
       generate-register 26 tests, 0 failures, 0 errors.)
 - [x] T063 [P] [US5] `batch/cli/NotifyRegisterCliTest`, `ListBatchesCliTest`, `SupersedeBeforeCliTest`,
-      `CheckFlagCliTest` — behaviours per spec US5 and FR-016; outputs are stable, line-oriented, PII-free
+      `CheckFlagCliTest` - behaviours per spec US5 and FR-016; outputs are stable, line-oriented, PII-free
       (addresses masked in `list-batches`).
       (red at `964da97`: 64 tests completed, 64 failed over the four suites.
       `CheckFlagCliTest.a_flag_read_as_on_should_exit_zero_and_say_so` on "expected: 0 but was: -1"
@@ -678,7 +678,7 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       "registerStore.supersedeSharedBefore(2026-09-04T17:00:00Z)". Green at `98c8a10`:
       notify-register 13, list-batches 25, supersede-before 13, check-flag 13, each 0 failures and
       0 errors.)
-- [x] T064 [P] [US5] `config/HttpSurfaceTest` (extend) — still zero controllers with generation enabled.
+- [x] T064 [P] [US5] `config/HttpSurfaceTest` (extend) - still zero controllers with generation enabled.
       (`config/CliModeConfigTest` lands with it, because "zero controllers" and "no consumer, no
       schedule, no listener" are one property's job, and it is the suite that boots the same
       generating pod twice differing by `courtregister.cli` alone. Red at `c3d8ff7`: 14 tests, 3
@@ -736,7 +736,7 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       `app` service generation-enabled against the committed stubs, and `15c1ae2` corrects the
       quickstart's generation-enabled `bootRun` block, which could never have started as written -
       the `workload-identity` default with none of the three projected variables present.)
-- [x] T067 [A] [US5] `CliDispatchIT` (container) — `generate-register --help` and `check-flag` exit 0
+- [x] T067 [A] [US5] `CliDispatchIT` (container) - `generate-register --help` and `check-flag` exit 0
       inside the built image. Record. (**first observed run: GREEN**, both cases, at `84ac9cc`:
       "check-flag reads the one lever through the deployed reader and exits 0 PASSED" and
       "generate-register --help prints what the command takes and exits 0 PASSED", BUILD SUCCESSFUL
@@ -953,17 +953,17 @@ red run against a real Postgres (`RegisterStoreIT`, `RegisterBatchRepositoryIT`,
 
 ---
 
-## Phase 8: User Stories 6 and 7 — register, audit, observability (Priority: P2)
+## Phase 8: User Stories 6 and 7 - register, audit, observability (Priority: P2)
 
-- [ ] T068 [P] [US6] `doc/DEFECT-FIXES.md` — confirm P1–P5, P9 FIXED with their pinning tests named
+- [ ] T068 [P] [US6] `doc/DEFECT-FIXES.md` - confirm P1–P5, P9 FIXED with their pinning tests named
       verbatim; P3/P4 sign-off markers; P6/P7 RETIRED with the retirement-PR pointer; P8 MOOT; header
       counts updated (36 C rows + 9 P rows).
-- [ ] T069 [P] [US6] `differential/DifferentialAuditTest` (extend) — the 001 document corpus is
+- [ ] T069 [P] [US6] `differential/DifferentialAuditTest` (extend) - the 001 document corpus is
       unchanged by 002 (digest equality), and every `PdfPayloadMapper` golden is reproduced; the
       `RegisteredDefectFixes` table gains the P numbers.
-- [ ] T070 [P] [US7] `config/TelemetryPrivacyTest` (extend) — recipient e-mail addresses, recipient
+- [ ] T070 [P] [US7] `config/TelemetryPrivacyTest` (extend) - recipient e-mail addresses, recipient
       names and `sdg_reason` free text never at INFO or above; batch and notification ids are.
-- [ ] T071 [P] [US7] `e2e/ReadinessPolicyIT` (extend) — broker down: ready; file-service DB down outside
+- [ ] T071 [P] [US7] `e2e/ReadinessPolicyIT` (extend) - broker down: ready; file-service DB down outside
       a run: ready; during a run: not ready.
 - [ ] T072 [US7] Run report: one structured log line per run (`event=register_generation_run`) with
       the `RunReport` fields; gauges published; documented in the metrics section of the Confluence
@@ -981,7 +981,7 @@ red run against a real Postgres (`RegisterStoreIT`, `RegisterBatchRepositoryIT`,
       not POST; the flag; ids before calls). Docs-only, exempt from the loop.
 - [ ] T074 [P] `README.md` Status → 002 complete; `CLAUDE.md` unchanged unless a rule moved; the
       constitution's Sync Impact Report `⚠ pending` items → `✅`.
-- [ ] T075 [P] `scripts/container-smoke.sh` — readiness UP < 60 s with generation enabled against the
+- [ ] T075 [P] `scripts/container-smoke.sh` - readiness UP < 60 s with generation enabled against the
       compose stubs; `check-flag` exit 0.
 - [ ] T076 Spec checklists: `checklists/requirements.md` re-validated against the delivered behaviour;
       add `checklists/consolidation-audit.md` recording T069's result and the goldens' provenance.
