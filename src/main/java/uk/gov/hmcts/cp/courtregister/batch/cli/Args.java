@@ -41,7 +41,13 @@ public record Args(Map<String, String> options, Set<String> flags) {
     /** One batch, by its identifier. */
     public static final String BATCH = "batch";
 
-    /** The register date's records recorded before this instant, and no later ones. */
+    /**
+     * The register date's records shared before this instant, and no later ones.
+     *
+     * <p>The register's own shared instant, which is the same thing {@link #SHARED_BEFORE} bounds
+     * on: this service's record of a register does not carry the moment the row was written, and a
+     * period of this pod's writes is not what either command narrows.
+     */
     public static final String RECORDED_BEFORE = "recorded-before";
 
     /** The records recorded before this instant, whichever date they are for. */

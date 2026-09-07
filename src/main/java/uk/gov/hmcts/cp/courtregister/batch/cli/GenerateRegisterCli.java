@@ -37,9 +37,17 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * re-assembled and re-requested and its records that never reached a batch are included, so the
  * one command answers both "last night's court centre failed" and "these hearings arrived after
  * 18:00". {@code --court-house} narrows it to one court house of the date and {@code --batch} to
- * one batch of it; {@code --recorded-before} bounds it to what had been recorded by an instant,
- * which is how a date part-way through being re-run is finished off without picking up what has
- * arrived since.
+ * one batch of it; {@code --recorded-before} bounds it to the registers <em>shared</em> before an
+ * instant, which is how a date part-way through being re-run is finished off without taking in the
+ * registers a later part of the day produced.
+ *
+ * <p><strong>The bound is the register's own shared instant, not this pod's recording
+ * time.</strong> It is read against {@code registerTime} - progression's own
+ * {@code register_time}, the moment the estate agrees a hearing's results were shared - which is
+ * the same column {@code supersede-before --shared-before} bounds on, so the two commands narrow a
+ * period the same way. Nothing in this service's register record carries the moment the row was
+ * written, and a bound over that would be a period of this pod's writes rather than a period of
+ * hearings. The option's name is the grammar research §13 fixed; what it means is this.
  *
  * <p><strong>The flag is asked first, through the same gate the schedule uses.</strong> A
  * regeneration is a generation, and a stack whose {@code CourtRegisterService} flag says the legacy
@@ -464,6 +472,10 @@ public class GenerateRegisterCli {
          * <p>The store answers with everything waiting, whatever day it is for, so the day is
          * tested here as well as asked for: a command that grouped all of it would generate a day
          * nobody asked about and e-mail it.
+         *
+         * <p>The bound is tested against the register's own shared instant, which is what
+         * {@code --recorded-before} names a period of; the hearing day beside it is a fact about
+         * the hearing and says nothing about which registers a part-finished re-run has dealt with.
          *
          * @param register a register released or waiting
          * @return true where the day, the court house and the bound all admit it
