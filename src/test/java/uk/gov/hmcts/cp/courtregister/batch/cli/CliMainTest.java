@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -100,6 +101,9 @@ class CliMainTest {
 
     /** This service's own package, whose every line the stack-trace case reads. */
     private static final String SERVICE_PACKAGE = "uk.gov.hmcts.cp.courtregister";
+
+    /** Stood in for an exit code an invocation threw instead of answering with. */
+    private static final int NOT_ANSWERED = -1;
 
     /** What an operator's terminal shows, one entry per line a command wrote. */
     private final List<String> printed = new ArrayList<>();
@@ -286,6 +290,54 @@ class CliMainTest {
                     .as("and the answer is the usage rather than this service's own context "
                             + "having been built and refused")
                     .containsExactlyElementsOf(usageLines());
+        }
+
+        @Test
+        void no_command_name_at_all_should_be_answered_by_the_process_entry_point_too() {
+            final int code = dispatched();
+
+            softly.assertThat(code)
+                    .as("`startup.sh` only reaches this with a name, but a person debugging a "
+                            + "runbook step reaches it by hand and with the variable unset: the "
+                            + "answer is the refusal and the five names, said once here and once "
+                            + "in run(), because a stack trace out of main ends the process on 1 - "
+                            + "the code that means declined - having printed no list at all")
+                    .isEqualTo(CliMain.REFUSED);
+            softly.assertThat(printed)
+                    .as("and the list is what a person with nothing to go on needs")
+                    .containsExactlyElementsOf(usageLines());
+        }
+
+        @Test
+        void a_missing_argument_array_should_be_answered_by_it_the_same_way() {
+            final int code = dispatched((String[]) null);
+
+            softly.assertThat(code)
+                    .as("nothing at all is not a command, and the refusal is what changes nothing")
+                    .isEqualTo(CliMain.REFUSED);
+            softly.assertThat(printed)
+                    .as("said the same way as every other name this image does not carry")
+                    .containsExactlyElementsOf(usageLines());
+        }
+
+        /**
+         * Dispatches an invocation that names no command, and answers with the code it ended on.
+         *
+         * <p>The call is made inside {@code assertThatCode(...).doesNotThrowAnyException()} so that
+         * an invocation which threw is recorded as an assertion rather than ending the case, and
+         * the code it never produced is then asserted on as {@link #NOT_ANSWERED}.
+         *
+         * @param args the invocation, which in both cases here names nothing
+         * @return the exit code, or {@link #NOT_ANSWERED} where it threw instead
+         */
+        private int dispatched(final String... args) {
+            final AtomicInteger code = new AtomicInteger(NOT_ANSWERED);
+            softly.assertThatCode(() -> code.set(cli.dispatch(args, output)))
+                    .as("the exit code is the whole interface between a command and the step that "
+                            + "ran it, so an invocation this one cannot serve is answered rather "
+                            + "than thrown on")
+                    .doesNotThrowAnyException();
+            return code.get();
         }
 
         /**
