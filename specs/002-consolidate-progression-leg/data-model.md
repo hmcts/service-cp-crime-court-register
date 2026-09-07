@@ -169,8 +169,8 @@ given to finish is how long the safety net waits before it looks. That is wrong 
 questions are different: how long a batch may hold a document before the reconciler looks is no bound
 at all on telling that batch's recipients, whose cost is the number of Youth Offending Teams the
 batch is addressed to times whatever notificationnotify makes of each of them - a batch with twelve
-subscribers, each costing up to `courtregister.endpoints.max-attempts` POSTs with a read timeout and a
-back-off wait apiece, can outlast ten minutes without anything having gone wrong. And ownership was
+subscribers, each costing up to `courtregister.endpoints.max-attempts` POSTs with a connect timeout, a
+read timeout and a back-off wait apiece, can outlast ten minutes without anything having gone wrong. And ownership was
 never rechecked: once the lease lapsed a second notifier could take the claim while the first was
 still posting and settling under a token the row no longer carried, which is the state the claim
 exists to prevent.
@@ -178,25 +178,70 @@ exists to prevent.
 So the lease is **`courtregister.notification.claim-lease`** (default `15m`), and
 `RegisterBatchRepository.renewNotificationClaim(batchId, token)` -
 `UPDATE register_batch SET notifying_since = now() WHERE batch_id = :batchId AND notifier_token =
-:token` - is asked **before each recipient's POST, before each row's settlement and before the
-batch's own**. One statement, because the re-check and the extension are one question asked at one
-moment: is the batch still yours, and if so let the lease cover what you are about to do. Token-fenced
-for the reason the release is - a renewal keyed on the batch alone would let a notifier whose claim
-had been taken over extend the claim of the notifier that took it. The lease therefore bounds **one
-recipient's turn** rather than a whole batch of them, and startup refuses any value below
-`PropertiesValidator.NOTIFICATION_LEASE_MARGIN` (2) `x max-attempts x (read-timeout + max-backoff)`
-- 72s at the shipped transport - unconditionally, because the way this breaks in practice is a
-deployment lengthening `read-timeout` and leaving the lease where it was.
+:token` - is asked **before every POST, the retries of one recipient included, before each row's
+settlement and before the batch's own**. Before every POST and not once per recipient: renewing once
+for the recipient and spending that renewal across its retry cycle fenced the first attempt and none
+of the others, and the others are the ones made after a read timeout and a back-off wait, which is
+precisely how long a lease has been left unrenewed. One statement, because the re-check and the
+extension are one question asked at one moment: is the batch still yours, and if so let the lease
+cover what you are about to do. Token-fenced for the reason the release is - a renewal keyed on the
+batch alone would let a notifier whose claim had been taken over extend the claim of the notifier
+that took it.
+
+The lease therefore bounds **one recipient's retry cycle** rather than a whole batch of them, and
+startup (`PropertiesValidator.validateTheNotificationClaimOutlastsOnePostCycle`) refuses any value
+below
+
+```
+NOTIFICATION_LEASE_MARGIN (2) x (max-attempts x (connect-timeout + read-timeout)
+                                 + (max-attempts - 1) x max-backoff)
+```
+
+read off the shared `courtregister.endpoints.*` transport - `2 x (3 x (5s + 10s) + 2 x 2s)` = **98s**
+at the shipped values, which is what makes the shipped `15m` generous. The connect timeout is charged
+because an attempt that hangs on the connect and then on the read is the longest single thing this
+leg does, and the waits are the gaps **between** attempts, of which there is one fewer than there are
+attempts (`max-backoff` per wait rather than the doubling schedule, because a `Retry-After` is
+honoured on every retryable answer and the ceiling is the only thing bounding what the other side can
+ask for). The rule is unconditional, because the way this breaks in practice is a deployment
+lengthening `connect-timeout` or `read-timeout`, or raising `max-attempts`, and leaving the lease
+where it was.
 
 A renewal that is refused means the batch has been taken over, and the notifier that lost it **stops
-and writes nothing further**: no further POST, because the notifier that now holds the batch derives
+and settles nothing further**: no further POST, because the notifier that now holds the batch derives
 the same owed set from the same records; no row settlement and no batch settlement, because either
 would be written over that notifier's work. It answers `NotificationDisposition.CLAIM_LOST` with the
 rows and the state as they stood, counted on
 `courtregister_notifications_ignored_total{reason=claim-lost}` - apart from `already-notifying`,
-which is a notifier that never started, whereas this one told some of the teams. The rows it left
-unsettled stay under the identities they hold and are re-requested by a later run, whose POST reaches
-notificationnotify's own aggregate rather than asking for a second e-mail.
+which is contention rather than loss: a notifier that never started, whereas this one told some of
+the teams. The rows it left unsettled stay under the identities they hold and are re-requested by a
+later run, whose POST reaches notificationnotify's own aggregate rather than asking for a second
+e-mail.
+
+**Every settlement write is token-fenced; the tally-only write after a lost claim deliberately is
+not.** The renewal statement *is* the ownership re-check, so each row's settlement and the batch's
+own mark are made only by a notifier that has just re-established that the batch is its own. The one
+write a notifier that has lost the claim still makes is the attempt tally
+(`RegisterNotificationRepository.tallyAttempts`: `attempts = attempts + :posts` and no other column),
+and it is fenced on the row's identity alone - not on the claim, which has already gone, and not on
+the row's status. The POSTs made before the renewal was refused were really made, notificationnotify
+has them, and leaving them off the row's lifetime total loses exactly the attempts spent in the window
+two notifiers were in the cycle at once, which is the window the count is reached for: a row two
+notifiers posted for would read as one notifier's work. A tally that finds no row to add to is the
+same fault `NotificationSettlement.ABSENT` names and is reported the same way, on
+`{reason=settlement-row-absent}`.
+
+**What a call to this leg answers is `NotificationDisposition`, and it is four things.** A caller
+branches on it and the `reason` label is derived from it; the counts it travels with cannot say any
+of this, because the counts a loser reads are somebody else's work in progress and a batch state is
+where the batch stands rather than what this call decided.
+
+| Disposition | What the call did |
+|---|---|
+| `SETTLED` | Held the claim throughout, posted for whoever was owed an e-mail, and settled the batch on the tally |
+| `ALREADY_NOTIFYING` | Never got the claim, so posted nothing and settled nothing. Contention and not loss: the batch is being told by somebody else, and this caller has nothing left to do. Counted `{reason=already-notifying}` |
+| `CLAIM_LOST` | Held the claim, began the cycle, and had a renewal refused part way through it. POSTs were really made and are on their rows' tallies; the settlements belong to the notifier that now holds the batch. Counted `{reason=claim-lost}` |
+| `INCOMPLETE` | Held the claim throughout and could not finish the cycle: a settlement, or the tally a lost claim writes instead of one, was made for a row this run read back or minted and the store does not hold it. The batch is **not** settled. The fault itself is counted `{reason=settlement-row-absent}` |
 
 Pinned by `RegisterBatchRepositoryIT.Claiming` (the store's half: the advisory lock and
 compare-and-set, the second notifier's refusal, the token-fenced release, the takeover past the lease,
@@ -251,7 +296,7 @@ attributable, and leaves the nightly job able to send them without being asked.
 | `status` | `text NOT NULL` | `PENDING` → `ACCEPTED` \| `FAILED` |
 | `response_code` | `int` | |
 | `sent_at` | `timestamptz` | **The settlement instant of every terminal attempt**, an acceptance and a refusal alike: what it records is when this service decided how the attempt ended, not when NN accepted anything. So a FAILED row carries it too, and a connect failure that reached no verdict is settled at the instant the run gave up on it. Empty on one row shape only - a minted row, written PENDING before its POST, which has nothing to stamp yet |
-| `attempts` | `int NOT NULL DEFAULT 0` | Accumulates the POSTs made for the row, not the runs that made them: a transient refusal retried inside one call adds each attempt, and so does an attempt whose settlement the row's own ACCEPTED held off (below) - a POST that happened is on the total whatever state the row is in |
+| `attempts` | `int NOT NULL DEFAULT 0` | Accumulates the POSTs made for the row, not the runs that made them: a transient refusal retried inside one call adds each attempt, and so does an attempt whose settlement the row's own ACCEPTED held off (below), and so do the POSTs a notifier had already made when its claim was taken over, written on the way out by the tally-only statement (below) - a POST that happened is on the total whatever state the row is in and whoever settles it |
 
 Constraint: `UNIQUE (batch_id, email_address)`.
 
@@ -282,14 +327,30 @@ which could not tell the last two apart because both changed nothing.
 `{reason=late-acceptance-ignored}` where it was accepted against one - two 202s for one recipient is
 a Youth Offending Team holding two copies of a register about children, and filing it under the
 milder reason would hide it - and `{reason=settlement-row-absent}`, whose only honest reading is a
-row this service wrote and the store has lost. `{reason=already-notifying}` on the same counter is
-the notifier that lost the claim. Something that changed nothing has to be visible, or the only
-trace is a row that looks untouched. Pinned by `RegisterNotificationRepositoryIT
+row this service wrote and the store has lost. Two further reasons share the counter and are about
+the claim rather than about a row: `{reason=already-notifying}` is the notifier that never got the
+claim, which is contention and not loss, and `{reason=claim-lost}` the one that had a renewal refused
+part way through the cycle. Something that changed nothing has to be visible, or the only trace is a
+row that looks untouched. Pinned by `RegisterNotificationRepositoryIT
 .a_late_failure_against_an_accepted_row_should_be_tallied_and_not_settled`,
 `…a_late_acceptance_against_an_accepted_row_should_be_tallied_and_not_re_settled`,
 `…settling_a_recipient_this_service_never_minted_should_say_there_is_no_such_row` and
 `…two_settlements_computed_from_one_read_should_each_add_their_own_attempts`, and at service level by
 `RegisterNotifierServiceTest.AnAcceptedRowIsTerminal`.
+
+**`ABSENT` ends the cycle, and it is the one answer that leaves the batch unsettled.** A settlement -
+or the tally a lost claim writes instead of one - made for a row this run read back or minted, and
+that the store then does not hold, means the attempt is recorded nowhere: no tally taken afterwards
+is a complete account of what this batch's recipients were sent. So the recipients after it are not
+asked (a batch that cannot be settled is not made more settleable by more POSTs), the claim is given
+back, `markNotified` is never reached, and the call answers `NotificationDisposition.INCOMPLETE`.
+Settling anyway was the worse answer, and silently so where the vanished row was the only one: nought
+rows tallies to `NOTIFIED_NOBODY` - P1's terminal state, saying the document was rendered and there
+was nobody to send it to - written over a batch addressed to a Youth Offending Team all along, and
+terminal, so no later resend could revisit it. The batch stays where it stands instead, which is a
+state both `notify-register --batch` and the reconciler recover: a later run derives the owed set
+from the records again, **mints the missing row**, posts under it and settles the batch on a tally
+that then accounts for every recipient (`RegisterNotifierServiceTest.AVanishedRowEndsTheCycle`).
 
 **The batch is re-read before it is settled**, inside the same claim. The row a run started from is
 minutes old by the time the last recipient has been posted for, and `markNotified` is a
@@ -328,8 +389,13 @@ operator's question. Pinned by `RegisterNotifierServiceTest.RecoveringAnUnsettle
 failure, is asked again up to `courtregister.endpoints.max-attempts` under the same
 `notification_id` with the shared `RetryPolicy`'s back-off, and only then FAILED with the last
 status; a NON_TRANSIENT refusal is settled on the first attempt (research §11,
-`RegisterNotifierServiceTest.RetryingWhatMayAnswerDifferently`). No deadline bounds it: the
-notifying leg holds no claim, so the attempt budget and `max-backoff` are what do.
+`RegisterNotifierServiceTest.RetryingWhatMayAnswerDifferently`). No deadline is measured against
+each attempt, which is the one place this differs from the generation leg: that leg runs inside the
+nightly run's claim and charges every attempt against what is left of it, whereas this leg holds a
+notification claim whose lease it renews before every POST instead - the retries included, so no
+attempt is made by a notifier that has not just asked whether the batch is still its own. What bounds
+one recipient's cycle is therefore the attempt budget and `max-backoff`, and startup holds the lease
+to twice that cycle (above).
 
 ## `shedlock`
 
@@ -391,6 +457,14 @@ reconciler takes that reading from a third read (`RegisterBatchRepository.genera
 5) and settles nothing there: the document exists, so the batch is owed its e-mails and both
 `resendFailed` and `notify` are re-entrant and send exactly those, while failing it would throw the
 document away.
+
+**A notifying arrow is not drawn for a cycle that could not account for a row.** The `ABSENT` answer
+above leaves the batch unmarked: a run that posted under a row the store no longer holds gives the
+claim back without reaching `markNotified` at all, so GENERATED stays GENERATED (on
+`courtregister_oldest_generated_age`) and PARTIALLY_NOTIFIED stays PARTIALLY_NOTIFIED, and both are
+states either entry point can pick up again. The resend that follows mints the missing row, posts
+under it and settles the batch on a tally that accounts for every recipient. Nor is one drawn for
+`CLAIM_LOST`: the notifier that took the batch over is the one whose tally settles it.
 
 **The last arrow out of PENDING, and why it is drawn.** `RegisterGenerationService.storeAndRequest`
 mints the payload id, writes it down (`markPayloadMinted`), stores the payload, POSTs, and only then
