@@ -244,6 +244,12 @@ public interface RegisterStore {
      * service made. The two that are somebody's answer - a {@code generation-failed} event, a
      * reconciled query - carry EVENT and RECONCILER respectively.
      *
+     * <p>Where the reason releases the rows, a row the hearing has since been re-shared for is
+     * superseded against the re-share as its stamp is cleared, exactly as {@link #releaseFailed}
+     * does it: a recording supersedes an incumbent that is unbatched, so a re-share that arrived
+     * while the row was stamped left the key holding two rows, and unstamping the older one is what
+     * would make both active.
+     *
      * @param batchId     the batch that failed
      * @param reason      the bounded reason it is failed under
      * @param sdgReason   systemdocgenerator's own words, for support only, or {@code null} where it

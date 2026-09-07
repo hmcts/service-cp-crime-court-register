@@ -510,6 +510,16 @@ public class JdbcRegisterStore implements RegisterStore {
      * batch identity (data-model.md). The other four leave the stamp in place - systemdocgenerator
      * was asked, so a document may yet exist, and re-rendering it is a decision a person makes.
      *
+     * <p><strong>A released register the estate has already replaced is superseded rather than
+     * handed back.</strong> Statement 1's {@code incumbent} predicate supersedes a row that is
+     * active and <em>unbatched</em>, so a hearing shared again between the assembly and the failure
+     * leaves two RECORDED rows for one key - one stamped into this batch, one active. Clearing the
+     * stamp off the older one would meet {@code idx_output_active_register_key}, and the release
+     * being a branch of this same statement, the mark would go down with it: the batch would still
+     * call itself in flight under a run that had already given up on it. So the successor is looked
+     * for as the stamp is cleared and the older row is written SUPERSEDED against it, which is what
+     * statement 9a does for the release a person types.
+     *
      * <p>{@code completed_by} is written here for the same reason it is written by statement 6, and
      * it is null for most of these endings: only a {@code generation-failed} event and a reconciled
      * query are somebody else's answer about the render. The other four are this service's own
@@ -528,13 +538,33 @@ public class JdbcRegisterStore implements RegisterStore {
                        failed_at = now()
                  WHERE batch_id = :batchId AND status = :expected
                 RETURNING batch_id
+            ), stamped AS (
+                SELECT recorded.output_id,
+                       (SELECT successor.output_id
+                          FROM processed_output successor
+                         WHERE successor.hearing_id = recorded.hearing_id
+                           AND successor.court_centre_id = recorded.court_centre_id
+                           AND successor.register_date = recorded.register_date
+                           AND successor.output_id <> recorded.output_id
+                           AND successor.superseded_at IS NULL
+                           AND successor.status <> 'SUPERSEDED'
+                         ORDER BY successor.register_time DESC, successor.output_id DESC
+                         LIMIT 1) AS successor_id
+                  FROM processed_output recorded
+                  JOIN failed ON failed.batch_id = recorded.batch_id
+                 WHERE recorded.status = 'RECORDED'
+                   AND CAST(:releaseRows AS boolean)
             ), released AS (
                 UPDATE processed_output recorded
-                   SET batch_id = NULL, updated_at = now()
-                  FROM failed
-                 WHERE recorded.batch_id = failed.batch_id
-                   AND recorded.status = 'RECORDED'
-                   AND CAST(:releaseRows AS boolean)
+                   SET batch_id = NULL,
+                       status = CASE WHEN stamped.successor_id IS NULL
+                                     THEN 'RECORDED' ELSE 'SUPERSEDED' END,
+                       superseded_at = CASE WHEN stamped.successor_id IS NULL
+                                            THEN NULL ELSE now() END,
+                       superseded_by = stamped.successor_id,
+                       updated_at = now()
+                  FROM stamped
+                 WHERE recorded.output_id = stamped.output_id
                 RETURNING recorded.output_id
             )
             SELECT count(*) FROM failed

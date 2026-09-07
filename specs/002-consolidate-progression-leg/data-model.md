@@ -95,7 +95,10 @@ asks for these, so they are recorded here with the invariants they keep; three r
   left out of the answer: a recording supersedes an incumbent that is unbatched, so a re-share that
   arrived while the row was stamped left the key holding two rows, and unstamping the older one is
   what would make both active - the invariant is kept by this statement rather than defended by
-  `idx_output_active_register_key`.
+  `idx_output_active_register_key`. Statement **9** releases under the same rule and for a
+  sharper reason: its release is a branch of the statement that marks the batch, so a collision
+  there takes the mark down with it and leaves the batch calling itself in flight under a run that
+  had already given up on it.
 - Statement **11**, `recordedWhileOff()` - the registers automatic batching passed over. Statement
   2's predicate with its fourth test turned round, and deliberately one predicate with it: RECORDED,
   unsuperseded and unbatched in both, `recorded_flag_state <> 'ON'` the only difference (research
