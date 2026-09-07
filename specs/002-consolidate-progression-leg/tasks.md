@@ -472,7 +472,9 @@ arrived test-after is a defect, not a precedent.
 ## Phase 6: User Story 3 — every matched Youth Offending Team receives the register once (Priority: P1)
 
 **Goal**: recipient union, one `send-email-notification` per address with the PDF attached, per-recipient
-accounting, NOTIFIED / PARTIALLY_NOTIFIED / NOTIFIED_NOBODY, resend of failures only.
+accounting, NOTIFIED / PARTIALLY_NOTIFIED / NOTIFIED_NOBODY, resend of every row not ACCEPTED
+(`af3a089` widened this from FAILED only: a row minted PENDING and never settled is the same debt to
+the same team, and reading only the refusals left it untouched for ever).
 
 **Independent Test**: two-record batch with overlapping recipients ⇒ three requests; one refusal ⇒
 PARTIALLY_NOTIFIED; resend ⇒ NOTIFIED.
@@ -491,7 +493,8 @@ PARTIALLY_NOTIFIED; resend ⇒ NOTIFIED.
 - [x] T056 [P] [US3] `application/RegisterNotifierServiceTest` — rows minted PENDING before any POST;
       ACCEPTED/FAILED per recipient; batch NOTIFIED / PARTIALLY_NOTIFIED; **P1 pin:
       `a_batch_with_no_recipients_ends_notified_nobody_not_generated_forever`**; `resendFailed(batchId)`
-      re-requests FAILED only. Red: seam throws. (red at `86db5b5`.)
+      re-requests every row not ACCEPTED, PENDING included (`af3a089`; the task was written as FAILED
+      only). Red: seam throws. (red at `86db5b5`.)
 
 ### Implementation
 
@@ -526,7 +529,9 @@ PARTIALLY_NOTIFIED; resend ⇒ NOTIFIED.
       refused team's own path, which is the whole of what makes the retry reach the attempt it is
       retrying rather than send a second e-mail.)
 
-**Checkpoint**: the whole downstream leg works against stubs; six P rows FIXED. Codex review 6.
+**Checkpoint**: the whole downstream leg works against stubs; seven P rows FIXED (P1, P2, P3, P4,
+P5, P9 and the appended P10, as `doc/DEFECT-FIXES.md` counts them; the phase was planned as six,
+before P10 was appended under review). Codex review 6.
 
 ### Approved TDD exceptions (Phase 6)
 
