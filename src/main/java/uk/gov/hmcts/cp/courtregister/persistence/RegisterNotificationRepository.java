@@ -153,6 +153,34 @@ public class RegisterNotificationRepository {
             RETURNING held.status <> 'ACCEPTED' AS applied
             """;
 
+    /**
+     * Statement 5 - one row's lifetime attempt total moved by the POSTs a lost claim spent, and
+     * nothing else touched.
+     *
+     * <p>The settlement columns are not among the columns set, and that is the whole statement. A
+     * cycle whose claim was taken over between its POST and the settlement that would have recorded
+     * it may not say how the attempt ended - the notifier that now holds the batch is deriving the
+     * same owed set from the same records, and a status written from here would be written over its
+     * work - but the POST was really made, and what {@code attempts} accumulates is the POSTs made
+     * for the row.
+     *
+     * <p>Fenced on the row's identity and on nothing else. Not on the claim, which has already
+     * gone, and not on the row's status: an accepted row's total is moved by a POST as readily as a
+     * pending row's is, which is the reading {@link #UPDATE_NOTIFICATION} stopped fencing its own
+     * tally for. And the total is arithmetic over whatever the row holds at the moment of the write,
+     * so two runs that each read the row at nought cannot each write the same total.
+     *
+     * <p>{@code RETURNING} says whether there was a row to add to, because a write that recorded an
+     * attempt nowhere is a row this service posted under that the store no longer holds - the same
+     * fault {@link NotificationSettlement#ABSENT} names, and not one to make silently.
+     */
+    private static final String TALLY_ATTEMPTS = """
+            UPDATE register_notification
+               SET attempts = attempts + :posts
+             WHERE notification_id = :notificationId
+            RETURNING notification_id
+            """;
+
     private final JdbcClient jdbcClient;
 
     /**
@@ -260,7 +288,7 @@ public class RegisterNotificationRepository {
     }
 
     /**
-     * Adds the POSTs a call made to one row's lifetime total, and settles nothing.
+     * Statement 5 - adds the POSTs a call made to one row's lifetime total, and settles nothing.
      *
      * <p>The write a notifier makes on its way out. A cycle whose claim was taken over between its
      * POST and the settlement that would have recorded it may not touch the settlement columns - the
@@ -284,10 +312,13 @@ public class RegisterNotificationRepository {
      *     longer has
      */
     public boolean tallyAttempts(final UUID notificationId, final int posts) {
-        // The statement arrives with the implementation. Until then the honest seam is that nothing
-        // was tallied, so the cases waiting on it record a failing assertion rather than a false
-        // green.
-        return StoreOutage.translating("tally the POSTs a lost claim made", () -> false);
+        return StoreOutage.translating("tally the POSTs a lost claim made",
+                () -> jdbcClient.sql(TALLY_ATTEMPTS)
+                        .param("notificationId", notificationId)
+                        .param("posts", posts)
+                        .query(UUID.class)
+                        .optional()
+                        .isPresent());
     }
 
     /**

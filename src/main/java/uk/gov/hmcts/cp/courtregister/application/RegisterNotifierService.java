@@ -120,10 +120,17 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * {@code renewNotificationClaim(batchId, token)} - one token-fenced statement that re-checks
  * ownership and extends the lease together - is asked before each recipient's POST, before each
  * row's settlement and before the batch's own. A notifier whose renewal is refused has been taken
- * over: it stops, writes nothing further and answers
+ * over: it stops, settles nothing further and answers
  * {@link NotificationDisposition#CLAIM_LOST}, counted apart from the notifier that never started,
  * because the rows it left unsettled are re-requested by a later run under the identities they
  * already hold.
+ *
+ * <p><strong>The one thing it does still write is the attempt.</strong> A POST made before the
+ * renewal was refused was really made, so the POSTs of the recipient it was in the middle of are
+ * added to that row's lifetime {@code attempts} by a tally-only write that touches no settlement
+ * column ({@code tallyAttempts}). Anything else from here would be written over the work of the
+ * notifier that now holds the batch; omitting this left off the total exactly the attempts made in
+ * the window two notifiers were in the cycle at once, which is the window the count is reached for.
  *
  * <p>A claim rather than one transaction around the cycle, and for the same reason the intake half
  * holds a {@code RunClaim}: the cycle POSTs to notificationnotify once per recipient and waits
@@ -365,11 +372,15 @@ public class RegisterNotifierService {
      *
      * <p>What it does about it is stop, which is the whole of the disposition: the notifier that now
      * holds the batch is deriving the same owed set from the same records, so a POST from here is a
-     * second register about the same children to a team the other run is telling, and a write from
-     * here is over that run's work - a settlement onto a row it is about to POST for, or a batch
-     * tally taken while it is still writing. The rows this run did not settle stay unsettled under
-     * the identities they already hold, which is exactly the state a later run re-requests: the
-     * retry reaches notificationnotify's own aggregate rather than asking for a second e-mail.
+     * second register about the same children to a team the other run is telling, and a settlement
+     * from here is over that run's work - onto a row it is about to POST for, or a batch tally taken
+     * while it is still writing. The rows this run did not settle stay unsettled under the
+     * identities they already hold, which is exactly the state a later run re-requests: the retry
+     * reaches notificationnotify's own aggregate rather than asking for a second e-mail.
+     *
+     * <p>The POSTs it had already made are on their row's attempt total all the same, written by
+     * {@link #tallyWhatTheLostClaimSpent} on the way out: a POST that happened is a POST that
+     * happened, whoever settles the row it was made for.
      *
      * <p>Counted apart from the loser of the claim, because they are different events: that one
      * never started, and this one told some of the teams. This is the reading
@@ -656,6 +667,12 @@ public class RegisterNotifierService {
      * already holds, because that is the state a later run re-requests and the re-request reaches
      * notificationnotify's own aggregate rather than asking for a second e-mail.
      *
+     * <p><strong>The POSTs are tallied either way.</strong> A renewal refused before the settlement
+     * leaves this run unable to say how the attempt ended and no less certain that it was made, so
+     * what it writes instead is the tally alone ({@link #tallyWhatTheLostClaimSpent}). The
+     * alternative was a row that says one notifier posted for it where two did, in the one
+     * situation where knowing otherwise matters.
+     *
      * <p>The e-mail counter moves once the POST has been made, whether or not the settlement that
      * follows is this run's to write. What {@code courtregister_notifications_total} answers is how
      * many e-mails a night asked for and got, and an attempt made is an attempt made.
@@ -678,9 +695,38 @@ public class RegisterNotifierService {
             if (stillOurs) {
                 recordWhatTheStoreDid(notifications.update(settledAs(row, outcome),
                         attempted.posts()), row, outcome);
+            } else {
+                tallyWhatTheLostClaimSpent(row, attempted.posts());
             }
         }
         return stillOurs;
+    }
+
+    /**
+     * The one thing a notifier that has lost the claim still owes the row it posted for.
+     *
+     * <p>Stopping is right about the settlement and wrong about the tally. How the attempt ended is
+     * the verdict of the notifier that now holds the batch - it is deriving the same owed set from
+     * the same records, and a status written from here would be written over its work - but the POST
+     * was really made: notificationnotify has it, and the Youth Offending Team may have the e-mail.
+     * Leaving it off the row's lifetime total loses exactly the attempts made in the window two
+     * notifiers were in the cycle at once, which is the window the count is reached for, so a row
+     * two notifiers posted for reads as one notifier's work.
+     *
+     * <p>So the tally-only write is made, and nothing else is. A tally that finds no row to add to
+     * is reported where the settlement's own {@link NotificationSettlement#ABSENT} is: it is the
+     * same fault - a row this service posted under that the store no longer holds - and this path
+     * may not be the quieter of the two.
+     *
+     * @param row   the row whose POSTs were made before the claim went
+     * @param posts how many POSTs this run made for it, which is at least one wherever this is
+     *              asked: the claim is renewed before every POST, so a run that lost it before the
+     *              first has nothing to tally and never reaches here
+     */
+    private void tallyWhatTheLostClaimSpent(final RegisterNotification row, final int posts) {
+        if (!notifications.tallyAttempts(row.notificationId(), posts)) {
+            reportTheRowHasGone(row);
+        }
     }
 
     /**
@@ -713,12 +759,27 @@ public class RegisterNotifierService {
                         row.batchId(), row.notificationId());
             }
         } else if (did == NotificationSettlement.ABSENT) {
-            metrics.settlementRowAbsent();
-            LOG.error("Batch {} holds no notification row under the identity this run posted "
-                    + "under, so the attempt is recorded nowhere: the row was read back or minted "
-                    + "by this run, and the store no longer has it. notificationId={}",
-                    row.batchId(), row.notificationId());
+            reportTheRowHasGone(row);
         }
+    }
+
+    /**
+     * The row this run posted under, which the store turns out not to hold.
+     *
+     * <p>Named once because two writes meet it: the settlement, and the tally a run that lost the
+     * claim makes instead of one. It is a fault of this service's own store rather than a racing
+     * notifier - every row either write is made for was read back or minted by this run - so it is
+     * loud where it is met, and the line carries the batch, the notification id and nothing about a
+     * person.
+     *
+     * @param row the row the write was made for
+     */
+    private void reportTheRowHasGone(final RegisterNotification row) {
+        metrics.settlementRowAbsent();
+        LOG.error("Batch {} holds no notification row under the identity this run posted "
+                + "under, so the attempt is recorded nowhere: the row was read back or minted "
+                + "by this run, and the store no longer has it. notificationId={}",
+                row.batchId(), row.notificationId());
     }
 
     /**
