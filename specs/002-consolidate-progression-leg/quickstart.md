@@ -58,16 +58,33 @@ configuration, the SDG/NN endpoints or the template id is missing, or if the zon
 
 The `app` service in `docker-compose.yml` carries the same settings, so the commands below run
 inside the container with generation enabled against the stubs above - and `check-flag` reads the
-one lever through the real reader on the `local-test` credential.
+one lever through the real reader on the `local-test` credential. `app` is deliberately not one of
+the local dependencies above, because the host-side `bootRun` block wants 8082 to itself, so this
+block brings it up and the `bootRun` above stays stopped.
+
+**The local stack records no registers, so these commands run against an empty day.** The compose
+`app` sets `COURTREGISTER_PAYLOAD_MODE=STUB`, and the stub payload source fetches nothing: a
+command published to `courtregister.requests` is processed to completion `no-defendants` and
+writes no `processed_output` row, so nothing is ever there to batch. `LIVE` is the only source
+that yields a register, and it needs the results payload cache, reference data and a CJSCPPUID
+identity, none of which this stack has. So the RECORDED to NOTIFIED sequence is proved by
+`e2e/RecordEndToEndIT` and `e2e/GenerationEndToEndIT` under `./gradlew test`, not here. What this
+block does verify is the other half, which no JUnit suite reaches: that the five commands dispatch
+out of the image, run the store's own statements and the real flag reader, and answer on their
+three documented exit codes.
 
 ```bash
-# 1. publish a command (the 001 helper) — the service records a RECORDED row
-./scripts/publish-command.sh fixtures/hearing-with-surviving-youth-defendant.json
+# 1. the service in its own container. Wait for ready before any command below: it is the
+#    application that runs the Flyway migration, and `courtregister.cli=true` switches off the
+#    configuration that owns the only caller of it, so a command cannot migrate a store itself.
+docker compose up -d app
+curl -s localhost:8082/actuator/health/readiness      # {"status":"UP"}
 
 # 2. run the job now instead of waiting for 18:00 London (flag is ON in the WireMock stub)
 docker compose exec app ./startup.sh generate-register --date "$(date +%F)"
+#    date=<D> released=0 registers=0 batches=0 requested=0 deferred=0
 
-# 3. watch the batch: PENDING → GENERATING → GENERATED (SDG stub echoes document-available) → NOTIFIED
+# 3. list the day's batches. An empty day prints no batch line and still exits 0
 docker compose exec app ./startup.sh list-batches --date "$(date +%F)"
 
 # 4. flip the flag off and show the gate
