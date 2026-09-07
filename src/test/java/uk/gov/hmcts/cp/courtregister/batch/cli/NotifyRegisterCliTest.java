@@ -68,6 +68,15 @@ class NotifyRegisterCliTest {
     /** The batch an operator carries in from a support ticket. */
     private static final UUID BATCH = UUID.fromString("6f1d0c62-4a3b-4f7e-9c8d-2b5e7a1f0c34");
 
+    /** The four codes the line's last field carries, one per thing a call can have done. */
+    private static final String SETTLED = "settled";
+
+    private static final String ALREADY_NOTIFYING = "already-notifying";
+
+    private static final String CLAIM_LOST = "claim-lost";
+
+    private static final String INCOMPLETE = "incomplete";
+
     private final RegisterNotifierService notifier = mock(RegisterNotifierService.class);
     private final List<String> lines = new ArrayList<>();
     private final Consumer<String> output = lines::add;
@@ -94,10 +103,33 @@ class NotifyRegisterCliTest {
         return code.get();
     }
 
-    /** The one line the command has to print, so the format is stated once. */
+    /** The one line the command has to print for a call that settled the batch. */
     private static String reportOf(final NotificationSummary summary) {
+        return reportOf(summary, SETTLED);
+    }
+
+    /**
+     * The same line for a call that did not settle it, so the format is stated once.
+     *
+     * <p>The disposition is on the line because the tally cannot carry it: nought accepted and
+     * three failed is a resend that was refused the claim and a resend that really did fail three
+     * teams, and an operator reading the line against a support ticket has to be able to tell them
+     * apart. Written as the literal an operator would see rather than read off the enum, so a
+     * renamed constant cannot silently rename what a runbook greps for.
+     *
+     * @param summary     what the notifier answered
+     * @param disposition the bounded code for what the call did
+     * @return the line the command prints
+     */
+    private static String reportOf(final NotificationSummary summary, final String disposition) {
         return "batch=" + BATCH + " accepted=" + summary.accepted() + " failed=" + summary.failed()
-                + " state=" + summary.outcome();
+                + " state=" + summary.outcome() + " disposition=" + disposition;
+    }
+
+    /** How the command says it could not finish, which is {@link CliMain#FAILED} and a reason. */
+    private static String failureOf(final String reason) {
+        return "command=" + CliMain.NOTIFY_REGISTER + " batch=" + BATCH
+                + " outcome=failed reason=" + reason;
     }
 
     /**
@@ -203,6 +235,84 @@ class NotifyRegisterCliTest {
             softly.assertThat(lines)
                     .as("named by the state the batch actually stands in")
                     .containsExactly(reportOf(settled));
+        }
+    }
+
+    /**
+     * The three answers where the call did not settle the batch, which the tally cannot say.
+     *
+     * <p>{@link NotificationSummary} carries a disposition beside the counts because the counts are
+     * not this call's work on the other three answers: they are the batch as it stood when the
+     * claim was refused or lost, or as it stands with a recipient unaccounted for. So
+     * {@code accepted=0 failed=3} means "this run failed three teams" on one of them and "another
+     * notifier is part-way through" on another, and a command that printed only the tally would have
+     * an operator escalate a resend that posted nothing as though it had been refused three times.
+     *
+     * <p><strong>And two of the three are {@link CliMain#FAILED}.</strong> Exit 0 is "the command
+     * did what it was asked": a lost claim and an unaccounted-for recipient are both a cycle that
+     * stopped with the batch unsettled, which is the one thing a runbook step is meant to retry.
+     * {@code ALREADY_NOTIFYING} is not - the batch is being told by somebody else and there is
+     * nothing left to do - so it is a success whose line says why nothing moved.
+     */
+    @Nested
+    @DisplayName("a resend that did not settle the batch")
+    class NotSettled {
+
+        @Test
+        void a_batch_another_notifier_holds_should_say_so_and_still_exit_zero() {
+            final NotificationSummary standing =
+                    NotificationSummary.alreadyNotifying(0, 3, BatchStatus.GENERATED);
+            when(notifier.resendFailed(BATCH)).thenReturn(standing);
+
+            final int code = run("--batch", BATCH.toString());
+
+            softly.assertThat(code)
+                    .as("the batch is being told by the outcome sink and this call posted nothing: "
+                            + "not a failure and not a refusal, because there is nothing left for "
+                            + "the operator to do")
+                    .isEqualTo(CliMain.SUCCESS);
+            softly.assertThat(lines)
+                    .as("and the line says which of the two it was, because the tally beside it is "
+                            + "the other notifier's work part-done rather than this call's")
+                    .containsExactly(reportOf(standing, ALREADY_NOTIFYING));
+        }
+
+        @Test
+        void a_resend_that_lost_the_claim_should_fail_under_its_own_reason() {
+            final NotificationSummary standing =
+                    NotificationSummary.claimLost(1, 2, BatchStatus.GENERATED);
+            when(notifier.resendFailed(BATCH)).thenReturn(standing);
+
+            final int code = run("--batch", BATCH.toString());
+
+            softly.assertThat(code)
+                    .as("the cycle stopped part way and the batch is not settled, which is the "
+                            + "one thing exit 2 is for: the step that ran this may retry it")
+                    .isEqualTo(CliMain.FAILED);
+            softly.assertThat(lines)
+                    .as("the tally as the rows stood, then the bounded reason the command could "
+                            + "not finish - and how far it had got is not fixed, which is why the "
+                            + "reason is the disposition rather than a count")
+                    .containsExactly(reportOf(standing, CLAIM_LOST), failureOf(CLAIM_LOST));
+        }
+
+        @Test
+        void a_resend_that_could_not_account_for_a_recipient_should_fail_under_its_own_reason() {
+            final NotificationSummary standing =
+                    NotificationSummary.incomplete(2, 0, BatchStatus.GENERATED);
+            when(notifier.resendFailed(BATCH)).thenReturn(standing);
+
+            final int code = run("--batch", BATCH.toString());
+
+            softly.assertThat(code)
+                    .as("a settlement made for a row the store no longer holds leaves the batch "
+                            + "GENERATED and nothing recovers it unasked, so the command an "
+                            + "operator would have to type again is the one that says it failed")
+                    .isEqualTo(CliMain.FAILED);
+            softly.assertThat(lines)
+                    .as("and state=GENERATED beside the reason is the batch left where it stands, "
+                            + "not a verdict this call wrote")
+                    .containsExactly(reportOf(standing, INCOMPLETE), failureOf(INCOMPLETE));
         }
     }
 
