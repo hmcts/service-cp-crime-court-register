@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -142,6 +143,28 @@ public interface RegisterStore {
     List<RegisterBatch> batchesFor(Collection<CourtCentreDay> keys);
 
     /**
+     * The batches recorded for one register day, whatever state each of them reached.
+     *
+     * <p>The read a person's regeneration starts from, and the one thing
+     * {@link #batchesFor(Collection)} cannot answer: a support call is about a day rather than about
+     * a set of keys, and the day's FAILED batches are precisely the ones whose registers still carry
+     * a stamp and are therefore outside {@link #activeUnbatched()}. A command that could only read
+     * the keys the active registers fall under would silently leave out the court centre whose whole
+     * night failed, which is the call that is actually made at 08:00.
+     *
+     * <p>Every state, because what to do with each is the caller's decision and they differ: a
+     * FAILED batch may be re-assembled, a notified one is what a supplementary index is counted
+     * over, and one still in flight is why a key is left alone (design Q27). A read that filtered to
+     * FAILED here would leave the second and third of those unanswerable from the same page, and the
+     * day would be re-rendered against a history it could not see.
+     *
+     * @param registerDate the London register day being asked about
+     * @return every batch recorded for that day, in no particular order; empty where the day holds
+     *         none
+     */
+    List<RegisterBatch> batchesOn(LocalDate registerDate);
+
+    /**
      * Writes the batch the assembler decided on and stamps its identity onto the rows.
      *
      * <p><strong>The batch is an argument, not something this port invents.</strong> Which identity
@@ -230,6 +253,32 @@ public interface RegisterStore {
      */
     void markFailed(UUID batchId, BatchFailureReason reason, String sdgReason,
             CompletedBy completedBy);
+
+    /**
+     * Gives one FAILED batch's registers back, so that a person may have the day rendered again.
+     *
+     * <p>The other half of {@link #markFailed}. Two of the six reasons say the batch never left this
+     * service, and those release the stamp as they fail - their registers are active and unbatched
+     * by the time any later run reads them. The other four say systemdocgenerator was asked, so a
+     * document may yet exist and the rows keep their stamp: re-rendering that day is a decision a
+     * person makes (data-model.md), and this is the statement that decision is written as.
+     *
+     * <p><strong>From FAILED only, and the refusal matters more than the release.</strong> A stamp
+     * cleared off a GENERATING batch's rows would let the next run assemble a second batch for a day
+     * systemdocgenerator is still rendering, and both would reach the same Youth Offending Team. The
+     * batch row itself is left FAILED, carrying what happened to it, because the register store is
+     * the audit of what this service decided and a re-run is exactly when that audit is read.
+     *
+     * <p>The released registers are answered rather than left to be read back, so that a caller
+     * cannot assemble a row this call did not release: between a release and a second read a
+     * re-share can supersede a row, and a caller re-assembling what it read a moment earlier would
+     * be stamping a register the store no longer calls active.
+     *
+     * @param batchId the FAILED batch whose registers are to be released
+     * @return the registers whose stamp was cleared, in the order the batch held them; empty where
+     *         the batch's own failure had already released them
+     */
+    List<RegisterRecord> releaseFailed(UUID batchId);
 
     /**
      * Settles the batch on its notification tally, and moves its rows to NOTIFIED.

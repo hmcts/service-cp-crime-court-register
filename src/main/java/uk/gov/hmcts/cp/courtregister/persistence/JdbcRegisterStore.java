@@ -961,6 +961,20 @@ public class JdbcRegisterStore implements RegisterStore {
     }
 
     /**
+     * {@inheritDoc}
+     *
+     * <p><strong>Seam only.</strong> The statement lands with T065, the task that wires the
+     * operations CLI, so that {@code GenerateRegisterCliTest} records a failing assertion rather
+     * than a compile error. Nothing in the service calls it yet: the nightly run reads the history
+     * of the keys its active registers fall under ({@link #batchesFor(Collection)}), and the by-day
+     * read exists for the command a person types.
+     */
+    @Override
+    public List<RegisterBatch> batchesOn(final LocalDate registerDate) {
+        throw new UnsupportedOperationException("T065");
+    }
+
+    /**
      * The assembly statement and the count that judges it, inside the transaction that undoes both.
      *
      * <p>The refusal is thrown from here rather than from the caller precisely so that it is thrown
@@ -1083,6 +1097,19 @@ public class JdbcRegisterStore implements RegisterStore {
                     .query(Long.class)
                     .single(), batchId, expected, BatchStatus.FAILED);
         });
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><strong>Seam only.</strong> The statement lands with T065, the task that wires the
+     * operations CLI, so that {@code GenerateRegisterCliTest} records a failing assertion rather
+     * than a compile error. The four reasons {@code RELEASING_REASONS} does not name are the ones
+     * this statement exists for, and nothing but a person's own command may issue it.
+     */
+    @Override
+    public List<RegisterRecord> releaseFailed(final UUID batchId) {
+        throw new UnsupportedOperationException("T065");
     }
 
     /**
