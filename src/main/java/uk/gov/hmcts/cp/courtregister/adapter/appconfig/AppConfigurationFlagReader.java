@@ -157,11 +157,7 @@ public class AppConfigurationFlagReader implements FeatureFlagReader {
                 .endpoint(properties.endpoint())
                 .credential(credential)
                 .retryOptions(NO_RETRIES)
-                .httpClient(HttpClient.createDefault(new HttpClientOptions()
-                        .setConnectTimeout(properties.timeout())
-                        .setReadTimeout(properties.timeout())
-                        .setWriteTimeout(properties.timeout())
-                        .setResponseTimeout(properties.timeout())))
+                .httpClient(httpClientFor(properties))
                 .buildClient();
     }
 
@@ -178,7 +174,11 @@ public class AppConfigurationFlagReader implements FeatureFlagReader {
      * @return the client, with connect, read, write and response all held to the budget
      */
     public static HttpClient httpClientFor(final FeatureFlagProperties properties) {
-        return HttpClient.createDefault();
+        return HttpClient.createDefault(new HttpClientOptions()
+                .setConnectTimeout(properties.timeout())
+                .setReadTimeout(properties.timeout())
+                .setWriteTimeout(properties.timeout())
+                .setResponseTimeout(properties.timeout()));
     }
 
     @Override

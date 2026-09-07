@@ -110,9 +110,14 @@ public class LiveFeatureFlagConfig {
      * are all the deployed ones, which is exactly the trade
      * {@code GenerationStackConfiguration} already makes for the end-to-end suites.
      *
-     * <p>Retries off, for the reason the reader's own client has them off: the budget is the whole
-     * of the read, and three SDK attempts inside it would spend the run's decision on the first
-     * attempt's back-off. The outer deadline is the reader's, so it holds here too.
+     * <p>Retries off and every leg bounded, for the reason the reader's own client has them so: the
+     * budget is the whole of the read, three SDK attempts inside it would spend the run's decision
+     * on the first attempt's back-off, and a leg nobody bounded is an abandoned read holding its
+     * thread and its connection until the SDK's own default gives up. The four timeouts come from
+     * {@link AppConfigurationFlagReader#httpClientFor}, which is the same factory the deployed
+     * credential's client is built through - one client-building path, so this one cannot come to
+     * differ from it by anything but the credential. The outer deadline is the reader's, so it
+     * holds here too.
      *
      * <p>No endpoint is no client, which the reader reads as {@code NOT_CONFIGURED} - a skipped run
      * with a cause on it. {@link PropertiesValidator} has already refused the case that matters,
@@ -128,6 +133,7 @@ public class LiveFeatureFlagConfig {
                     .connectionString("Endpoint=" + properties.endpoint()
                             + ";Id=" + LOCAL_TEST_ID + ";Secret=" + LOCAL_TEST_SECRET)
                     .retryOptions(NO_RETRIES)
+                    .httpClient(AppConfigurationFlagReader.httpClientFor(properties))
                     .buildClient();
         }
         return client;
