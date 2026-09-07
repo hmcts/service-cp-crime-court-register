@@ -167,11 +167,13 @@ public class GenerationMetrics {
      * The {@code reason} label of a notifier that lost the batch's claim part way through the cycle.
      *
      * <p>Its own series and not a reading of {@link #ALREADY_NOTIFYING}, because that one is a
-     * notifier that never started and this one is a notifier that did: some POSTs were really made,
-     * and the rows and the batch are part-written by two notifiers rather than one. What it means is
-     * that the lease did not cover the work - more recipients than it allows for, or a slower
-     * notificationnotify than it allows for - and it is the reading
-     * {@code courtregister.notification.claim-lease} is raised on.
+     * notifier that never got the claim and this one is a notifier that held it: whatever the rows
+     * and the batch carry was written by two notifiers rather than one. How much of it this
+     * notifier wrote is not fixed - the claim is renewed in front of every POST, so the refusal may
+     * have come before the first of them or before the batch's own settlement, and zero or more
+     * POSTs were really made. What it means is that the lease did not cover the work - more
+     * recipients than it allows for, or a slower notificationnotify than it allows for - and it is
+     * the reading {@code courtregister.notification.claim-lease} is raised on.
      */
     public static final String CLAIM_LOST = "claim-lost";
 

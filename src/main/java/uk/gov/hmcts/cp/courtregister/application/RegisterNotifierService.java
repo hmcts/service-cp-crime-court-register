@@ -135,9 +135,11 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * cycle fenced the first attempt and none of the others, and the others are the ones made after a
  * read timeout and a back-off wait. A notifier whose renewal is refused has been taken
  * over: it stops, settles nothing further and answers
- * {@link NotificationDisposition#CLAIM_LOST}, counted apart from the notifier that never started,
- * because the rows it left unsettled are re-requested by a later run under the identities they
- * already hold.
+ * {@link NotificationDisposition#CLAIM_LOST}, counted apart from the notifier that never got the
+ * claim, because the rows it left unsettled are re-requested by a later run under the identities
+ * they already hold. Renewed in front of every POST is also why that answer says nothing about how
+ * many POSTs were made: the refusal can be the one asked before the first of them, and can equally
+ * be the one asked before the batch's own settlement, with every recipient already posted for.
  *
  * <p><strong>The one thing it does still write is the attempt.</strong> A POST made before the
  * renewal was refused was really made, so the POSTs of the recipient it was in the middle of are
@@ -398,10 +400,15 @@ public class RegisterNotifierService {
      *
      * <p>The POSTs it had already made are on their row's attempt total all the same, written by
      * {@link #tallyWhatTheLostClaimSpent} on the way out: a POST that happened is a POST that
-     * happened, whoever settles the row it was made for.
+     * happened, whoever settles the row it was made for. Where that write finds no row to add to,
+     * the fault is reported and this is still the answer: the batch is no longer this run's, so
+     * what became of it is not this run's to say either.
      *
      * <p>Counted apart from the loser of the claim, because they are different events: that one
-     * never started, and this one told some of the teams. This is the reading
+     * never got the claim, and this one held it and began the cycle. <strong>How far it had got is
+     * not fixed</strong> - the renewal is asked in front of every POST, so a refusal before the
+     * first of them leaves this run having posted for nobody, and one before the batch's own
+     * settlement leaves it having posted for every recipient. This is the reading
      * {@code courtregister.notification.claim-lease} is raised on, and the line carries the batch
      * and nothing else.
      *
@@ -525,10 +532,19 @@ public class RegisterNotifierService {
      * P1's terminal state, saying the document was rendered and there was nobody to send it to -
      * and writing that over a batch addressed to a Youth Offending Team all along ends the night
      * claiming there was nobody to tell, terminally, where no later resend could revisit it.
-     * GENERATED is recoverable: either entry point re-derives the owed set from the records and
-     * mints the row the store has no record of, and
-     * {@code courtregister_oldest_generated_age} is the reading that says a batch has been standing
-     * there since before anybody was worried.
+     *
+     * <p><strong>GENERATED is recoverable, and nothing recovers it unasked.</strong> Either entry
+     * point re-derives the owed set from the records and mints the row the store has no record of,
+     * so what recovers the batch is a notify call for it - an operator's
+     * {@code notify-register --batch} resend, or the next one the outcome sink drives. The
+     * reconciler is not that call: its third read names such a batch and publishes
+     * {@code courtregister_oldest_generated_age}, which is the reading that says a batch has been
+     * standing there since before anybody was worried, and it settles nothing.
+     *
+     * <p>This is the answer of a notifier that still held the claim, and only that one. The same
+     * absent row met by the tally a lost claim writes instead of a settlement is the same fault and
+     * is reported the same way, but that call answers
+     * {@link NotificationDisposition#CLAIM_LOST}: the batch is no longer its own.
      *
      * <p>The fault itself was counted and logged at ERROR where the write met it
      * ({@link #reportTheRowHasGone}); this line says what became of the batch, and carries the
@@ -543,8 +559,10 @@ public class RegisterNotifierService {
                 + "store holds no row under an identity this run posted under - so the cycle stops "
                 + "and the batch is not settled: a tally over the rows that are left would settle "
                 + "it on an incomplete account of what was sent, and a batch of one vanished row "
-                + "would be settled as having had nobody to tell. It stays where it stands, which "
-                + "a resend and the reconciler both recover.", batchId);
+                + "would be settled as having had nobody to tell. It stays where it stands and is "
+                + "recovered by the next notification asked of it, which an operator starts with "
+                + "notify-register --batch; the reconciler reports such a batch and its age and "
+                + "settles nothing.", batchId);
         final NotificationSummary seen = tally(notifications.findByBatchId(batchId));
         return NotificationSummary.incomplete(
                 seen.accepted(), seen.failed(), batchOf(batchId).status());

@@ -62,8 +62,11 @@ public record NotificationSummary(
      * The answer of a notifier that held the claim, began the cycle and lost the claim inside it.
      *
      * <p>The tally is the rows as they stood when the renewal was refused and the state is where the
-     * batch stood then, and neither is this call's work alone: this notifier told some of the teams,
-     * and the notifier that took the batch over is telling the rest. Which is why the disposition
+     * batch stood then, and neither is this call's work alone: the notifier that took the batch
+     * over is telling whichever teams this one had not reached, and how many that leaves is not
+     * fixed. The claim is renewed in front of every POST, so the refusal may have come before the
+     * first of them, leaving this call nothing at all to its name, or before the batch's own
+     * settlement, by which point it had posted for every recipient. Which is why the disposition
      * and not the counts is what a caller branches on.
      *
      * @param accepted how many of the batch's rows stood accepted when the claim was lost
@@ -83,8 +86,9 @@ public record NotificationSummary(
      * <p>The tally is the rows as they stand and the state is where the batch stands, and neither
      * is a verdict: a settlement the store had no row for means one of this batch's recipients is
      * unaccounted for, so a tally over the rows that are left would settle the batch on an
-     * incomplete account of what was sent. The batch is therefore left where it is, which is a
-     * state a resend and the reconciler both recover.
+     * incomplete account of what was sent. The batch is therefore left where it is, which a later
+     * notify call recovers - an operator's {@code notify-register --batch} resend, or the next one
+     * the outcome sink drives. The reconciler names such a batch and ages it; it settles nothing.
      *
      * @param accepted how many of the batch's rows stood accepted when the cycle stopped
      * @param failed   how many of them stood FAILED

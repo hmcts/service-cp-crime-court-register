@@ -213,10 +213,13 @@ the same owed set from the same records; no row settlement and no batch settleme
 would be written over that notifier's work. It answers `NotificationDisposition.CLAIM_LOST` with the
 rows and the state as they stood, counted on
 `courtregister_notifications_ignored_total{reason=claim-lost}` - apart from `already-notifying`,
-which is contention rather than loss: a notifier that never started, whereas this one told some of
-the teams. The rows it left unsettled stay under the identities they hold and are re-requested by a
-later run, whose POST reaches notificationnotify's own aggregate rather than asking for a second
-e-mail.
+which is contention rather than loss: a notifier that never got the claim, whereas this one held it
+and began the cycle. **How much of the cycle it got through is not fixed.** The renewal is asked in
+front of every POST, so the one that is refused can be the renewal before the very first POST - a
+cycle that posted for nobody - or the one before the batch's own settlement, with every recipient
+already posted for; zero or more POSTs were really made. The rows it left unsettled stay under the
+identities they hold and are re-requested by a later run, whose POST reaches notificationnotify's
+own aggregate rather than asking for a second e-mail.
 
 **Every settlement write is token-fenced; the tally-only write after a lost claim deliberately is
 not.** The renewal statement *is* the ownership re-check, so each row's settlement and the batch's
@@ -240,8 +243,8 @@ where the batch stands rather than what this call decided.
 |---|---|
 | `SETTLED` | Held the claim throughout, posted for whoever was owed an e-mail, and settled the batch on the tally |
 | `ALREADY_NOTIFYING` | Never got the claim, so posted nothing and settled nothing. Contention and not loss: the batch is being told by somebody else, and this caller has nothing left to do. Counted `{reason=already-notifying}` |
-| `CLAIM_LOST` | Held the claim, began the cycle, and had a renewal refused part way through it. POSTs were really made and are on their rows' tallies; the settlements belong to the notifier that now holds the batch. Counted `{reason=claim-lost}` |
-| `INCOMPLETE` | Held the claim throughout and could not finish the cycle: a settlement, or the tally a lost claim writes instead of one, was made for a row this run read back or minted and the store does not hold it. The batch is **not** settled. The fault itself is counted `{reason=settlement-row-absent}` |
+| `CLAIM_LOST` | Held the claim, began the cycle, and had a renewal refused part way through it - which can be the renewal before the very first POST, so zero or more POSTs were made. Any that were are on their rows' tallies; the settlements belong to the notifier that now holds the batch, and an absent row met by that tally is reported without changing this answer. Counted `{reason=claim-lost}` |
+| `INCOMPLETE` | Held the claim throughout and could not finish the cycle: a **settlement** was made for a row this run read back or minted and the store does not hold it. Reserved for that write, and so for a notifier that still owned the batch. The batch is **not** settled. The fault itself is counted `{reason=settlement-row-absent}` |
 
 Pinned by `RegisterBatchRepositoryIT.Claiming` (the store's half: the advisory lock and
 compare-and-set, the second notifier's refusal, the token-fenced release, the takeover past the lease,
@@ -338,19 +341,27 @@ row that looks untouched. Pinned by `RegisterNotificationRepositoryIT
 `…two_settlements_computed_from_one_read_should_each_add_their_own_attempts`, and at service level by
 `RegisterNotifierServiceTest.AnAcceptedRowIsTerminal`.
 
-**`ABSENT` ends the cycle, and it is the one answer that leaves the batch unsettled.** A settlement -
-or the tally a lost claim writes instead of one - made for a row this run read back or minted, and
-that the store then does not hold, means the attempt is recorded nowhere: no tally taken afterwards
-is a complete account of what this batch's recipients were sent. So the recipients after it are not
-asked (a batch that cannot be settled is not made more settleable by more POSTs), the claim is given
-back, `markNotified` is never reached, and the call answers `NotificationDisposition.INCOMPLETE`.
-Settling anyway was the worse answer, and silently so where the vanished row was the only one: nought
-rows tallies to `NOTIFIED_NOBODY` - P1's terminal state, saying the document was rendered and there
-was nobody to send it to - written over a batch addressed to a Youth Offending Team all along, and
-terminal, so no later resend could revisit it. The batch stays where it stands instead, which is a
-state both `notify-register --batch` and the reconciler recover: a later run derives the owed set
-from the records again, **mints the missing row**, posts under it and settles the batch on a tally
-that then accounts for every recipient (`RegisterNotifierServiceTest.AVanishedRowEndsTheCycle`).
+**`ABSENT` ends the cycle, and it is the one answer that leaves the batch unsettled.** A settlement
+made for a row this run read back or minted, and that the store then does not hold, means the
+attempt is recorded nowhere: no tally taken afterwards is a complete account of what this batch's
+recipients were sent. So the recipients after it are not asked (a batch that cannot be settled is
+not made more settleable by more POSTs), the claim is given back, `markNotified` is never reached,
+and the call answers `NotificationDisposition.INCOMPLETE`. **That answer belongs to the settlement
+write alone**, and so to a notifier that still owned the batch: the same absent row met by the
+tally-only write a lost claim leaves behind is the same fault, reported the same way, but that call
+answers `CLAIM_LOST`, because the batch is no longer its own. Settling anyway was the worse answer,
+and silently so where the vanished row was the only one: nought rows tallies to `NOTIFIED_NOBODY` -
+P1's terminal state, saying the document was rendered and there was nobody to send it to - written
+over a batch addressed to a Youth Offending Team all along, and terminal, so no later resend could
+revisit it.
+
+**The batch stays where it stands instead, and nothing recovers it unasked.** What recovers it is
+the next notification asked of the batch - an operator's `notify-register --batch` resend (the Phase
+7 CLI) or the next `notify(batchId)` the outcome sink drives - which derives the owed set from the
+records again, **mints the missing row**, posts under it and settles the batch on a tally that then
+accounts for every recipient (`RegisterNotifierServiceTest.AVanishedRowEndsTheCycle`). The
+reconciler is not that call: its third read over GENERATED batches names them and publishes
+`courtregister_oldest_generated_age` from them, and settles nothing.
 
 **The batch is re-read before it is settled**, inside the same claim. The row a run started from is
 minutes old by the time the last recipient has been posted for, and `markNotified` is a

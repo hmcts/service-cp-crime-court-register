@@ -34,9 +34,12 @@ public enum NotificationDisposition {
      * This call held the claim, began the cycle, and lost the claim part way through it.
      *
      * <p>The third answer, and a different event from {@link #ALREADY_NOTIFYING}: that one is a
-     * notifier that never started, and this is one that started, told some of the batch's teams and
-     * then found the batch was no longer its own. So some POSTs were really made and the rows and
-     * the batch are part-written, by two notifiers rather than one.
+     * notifier that never got the claim, and this is one that held it, began the cycle and then
+     * found the batch was no longer its own. <strong>How far it had got is not fixed.</strong> The
+     * renewal that is refused may be the one asked before the first POST, which ends the cycle
+     * having posted for nobody, or the one asked before the batch's own settlement, by which point
+     * every recipient has been posted for. So zero or more POSTs were really made, and whatever the
+     * rows and the batch do carry was written by two notifiers rather than one.
      *
      * <p>The claim is renewed before every POST and before every settlement, so what this says is
      * that a renewal was refused: the lease ran out under this notifier - notificationnotify is
@@ -48,7 +51,9 @@ public enum NotificationDisposition {
      * <p>The one write it does still make is the attempt tally, deliberately unfenced: the POSTs it
      * had already made are added to their row's lifetime {@code attempts} by a statement that
      * touches no settlement column, because a POST made in the window the fence exists for was
-     * still really made.
+     * still really made. Where that write finds no row to add to, the fault is reported exactly as
+     * a settlement's absent row is - and this is still the answer the call gives. What it lost was
+     * the claim; {@link #INCOMPLETE} is reserved for the notifier that never lost one.
      */
     CLAIM_LOST,
 
@@ -62,16 +67,26 @@ public enum NotificationDisposition {
      * attempt is recorded nowhere, so the tally the batch would be settled from is a tally over
      * rows that no longer describe what was sent.
      *
+     * <p><strong>Reserved for the settlement write, and so for a notifier that still owned the
+     * batch.</strong> The same absent row met by the tally-only write a lost claim leaves behind is
+     * the same fault and is reported the same way, but that call answers {@link #CLAIM_LOST}: it no
+     * longer holds the batch, so what became of the batch is not its to say.
+     *
      * <p>Settling anyway was the worse answer, and quietly. A batch whose only recipient row had
      * gone tallied to nought rows and reached NOTIFIED_NOBODY - the terminal state that says the
      * document was rendered and there was nobody to send it to, defect fix P1's own words, written
      * over a batch addressed to a Youth Offending Team all along and terminal, so no later resend
      * could revisit it. So the cycle stops, the claim is given back, and the batch stays where it
-     * stands with whatever rows are settled: GENERATED is a state {@code notify-register --batch}
-     * and the reconciler both recover, and {@code courtregister_oldest_generated_age} is the
-     * reading that says a batch has been standing there. A later run derives the owed set from the
-     * records again, mints the row the store has no record of, posts under it and settles the batch
-     * on a tally that then accounts for every recipient.
+     * stands with whatever rows are settled.
+     *
+     * <p><strong>GENERATED is recoverable, and nothing recovers it unasked.</strong> The
+     * reconciler's third read names such a batch and publishes
+     * {@code courtregister_oldest_generated_age} from it, which is the reading that says a batch
+     * has been standing there - and it settles nothing, because there is a document and nothing to
+     * fail. What recovers the batch is a notify call for it: an operator's
+     * {@code notify-register --batch} resend, or the next one the outcome sink drives. Either
+     * derives the owed set from the records again, mints the row the store has no record of, posts
+     * under it and settles the batch on a tally that then accounts for every recipient.
      *
      * <p>The bounded reason it is counted under is {@code settlement-row-absent}, which is the
      * fault itself; this is what the call did about it.
