@@ -18,7 +18,16 @@
 # top-level `_metadata` (whose `name` is the field the listener reads) alongside the payload fields
 # - so the loop closes with no real SDG.
 #
-# `app` deliberately declares no depends_on, so it can be started on its own.
+# `app` runs the generation half against those stubs - `COURTREGISTER_GENERATION_ENABLED=true`, the
+# file-service datasource on `fileservice-postgres`, systemdocgenerator, notificationnotify and App
+# Configuration on `wiremock`, the broker on `artemis` - so `docker compose exec app ./startup.sh
+# generate-register|list-batches|check-flag` works as quickstart.md writes it.
+#
+# `app` still deliberately declares no depends_on, so it can be started on its own. Nothing it now
+# points at gates readiness: the readiness group is `db,intakeStartup,fileServiceRun`, the broker is
+# never in it (spec FR-011) and the file-service component answers UP between runs without asking,
+# which is what `e2e/ReadinessPolicyIT` pins. Only `postgres` has to be there for the pod to report
+# ready; `wiremock` has to be there for a command that reads the flag to get an answer.
 services:
   app:
     build:
@@ -43,6 +52,41 @@ services:
       # Local-only dummy: the submission gateway refuses to construct without an identity, and a
       # local run POSTs nothing. Never a real user id.
       COURT_REGISTER_SYSTEM_USER_ID: 00000000-0000-0000-0000-000000000000
+      # The generation half, on, against the stubs below. Enabling it makes every setting under it
+      # required at startup - the file-service datasource, the flag endpoint and label, the two
+      # downstream endpoints, the e-mail template id and the broker - which is the whole reason
+      # they are all named here rather than left to be discovered at 18:00.
+      COURTREGISTER_GENERATION_ENABLED: "true"
+      # The REAL App Configuration reader, pointed at the WireMock `kv` stub. local-test and not
+      # STUB: what runs here is the deployed reader, the deployed SDK client and the deployed
+      # fail-closed parsing, with only the identity swapped for a published pair the stub does not
+      # check - the SDK sends a credential's token over TLS alone, so a pod's own identity cannot
+      # read a plain-HTTP stand-in at all. Startup refuses this value against a real
+      # .azconfig.io store or on a pod with a Service Bus namespace.
+      COURTREGISTER_FEATURE_CREDENTIAL: local-test
+      APPCONFIG_ENDPOINT: http://wiremock:8080
+      # The label the committed mappings answer under (docker/wiremock/README.md).
+      STACK_LABEL: LOCAL
+      # The framework file service's own database, which the PDF payload is written straight into
+      # because systemdocgenerator renders only a payload that is already there. 5432 inside the
+      # network; 5433 is the host mapping.
+      FILESERVICE_DATASOURCE_URL: jdbc:postgresql://fileservice-postgres:5432/fileservice
+      FILESERVICE_DATASOURCE_USERNAME: fileservice
+      FILESERVICE_DATASOURCE_PASSWORD: fileservice
+      # Hosts only: each client appends its own contract path, so a path written here would be
+      # appended to. Both are the one WireMock, whose stubbed paths are disjoint.
+      SYSTEMDOCGENERATOR_BASE_URL: http://wiremock:8080
+      NOTIFICATIONNOTIFY_BASE_URL: http://wiremock:8080
+      # Local-only dummy, and a UUID because startup checks the shape rather than waiting for
+      # notificationnotify to refuse every recipient of every batch (fix P9). Never a real
+      # template id.
+      CR_EMAIL_TEMPLATE_ID: 11111111-1111-1111-1111-111111111111
+      # The broker the document-available events arrive on. Required whenever completion is
+      # event-driven, and it is; the broker never gates readiness, so the pod is ready before this
+      # is reachable and stays ready if it goes away.
+      ARTEMIS_BROKER_URL: tcp://artemis:61616
+      ARTEMIS_USER: admin
+      ARTEMIS_PASSWORD: admin
 
   postgres:
     image: postgres:16

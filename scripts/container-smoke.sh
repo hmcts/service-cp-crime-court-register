@@ -63,18 +63,28 @@ trap teardown EXIT
 log "building the application jar"
 ./gradlew bootJar
 
+# The whole local stack, because the image now runs generation-enabled against it: `wiremock` is
+# systemdocgenerator, notificationnotify and Azure App Configuration, `fileservice-postgres` is the
+# framework file service's database and `artemis` carries `public.event`.
 log "starting dependencies"
-compose up --detach postgres servicebus-emulator
+compose up --detach postgres servicebus-emulator wiremock fileservice-postgres artemis
 
-log "waiting for postgres to accept connections (budget ${DEPENDENCY_BUDGET_SECONDS}s)"
-deadline=$((SECONDS + DEPENDENCY_BUDGET_SECONDS))
-until [ "$(docker inspect --format '{{.State.Health.Status}}' \
-    "$(compose ps --quiet postgres)")" = "healthy" ]; do
-  if [ "$SECONDS" -ge "$deadline" ]; then
-    log "FAIL: postgres did not become healthy within ${DEPENDENCY_BUDGET_SECONDS}s"
-    exit 1
-  fi
-  sleep 2
+# Only these two are waited on, and the readiness policy is why. `postgres` is a readiness input, so
+# the pod cannot report UP without it; `wiremock` answers the flag read, so check-flag cannot get an
+# answer without it. The broker is never a readiness input (spec FR-011) and the file-service
+# component answers UP between runs without asking, both pinned by `e2e/ReadinessPolicyIT`, so
+# waiting on either would only make this script slower than the thing it is testing.
+for dependency in postgres wiremock; do
+  log "waiting for ${dependency} to report healthy (budget ${DEPENDENCY_BUDGET_SECONDS}s)"
+  deadline=$((SECONDS + DEPENDENCY_BUDGET_SECONDS))
+  until [ "$(docker inspect --format '{{.State.Health.Status}}' \
+      "$(compose ps --quiet "$dependency")")" = "healthy" ]; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      log "FAIL: ${dependency} did not become healthy within ${DEPENDENCY_BUDGET_SECONDS}s"
+      exit 1
+    fi
+    sleep 2
+  done
 done
 
 log "building the application image"
@@ -104,18 +114,23 @@ log "PASS: readiness reported UP within the ${READINESS_BUDGET_SECONDS}s budget"
 # code the command answered with is the code the container exits on.
 #
 # `check-flag` is the one to run: it reads and changes nothing, so a smoke run cannot leave a batch
-# or an e-mail behind it. The reading is taken through the stubbed reader, because the LIVE one
-# authorises its App Configuration read on the pod's workload identity - AZURE_CLIENT_ID, the tenant
-# and the projected federated token - and a compose container holds none of the three. That read
-# itself is covered against WireMock by `AppConfigurationFlagReaderTest`; what is left for the image
-# to answer is the dispatch, which is what this step asks it.
-readonly CLI_FLAG_MODE="COURTREGISTER_GENERATION_FLAG_MODE=STUB"
-
+# or an e-mail behind it.
+#
+# The reading is taken through the REAL reader, with no mode override at all. It used to need
+# `COURTREGISTER_GENERATION_FLAG_MODE=STUB`, because the live reader authorises its App Configuration
+# read on the pod's workload identity - AZURE_CLIENT_ID, the tenant and the projected federated token
+# - and a compose container holds none of the three; a bearer credential is refused a plain-HTTP URL
+# by the SDK before a socket is opened, so pointing it at the WireMock stub was not an option either.
+# `courtregister.feature.credential=local-test`, which docker-compose.yml sets on `app`, swaps that
+# identity for a published pair the stub does not check and leaves everything else deployed. So what
+# this step now asserts is the whole path a runbook uses: the dispatch out of the fat jar, the
+# deployed reader, the deployed SDK client, the key in the path, the label in the query and the
+# fail-closed reading of the answer.
 log "running check-flag through the entrypoint"
 # In the `if` deliberately: errexit does not apply to a condition, so a non-zero code is read and
 # reported here rather than ending the script with no line saying which command failed. `--no-TTY`
 # because CI has no terminal to allocate and `docker compose exec` insists on one by default.
-if cli_output=$(compose exec --no-TTY --env "$CLI_FLAG_MODE" app ./startup.sh check-flag 2>&1); then
+if cli_output=$(compose exec --no-TTY app ./startup.sh check-flag 2>&1); then
   cli_status=0
 else
   cli_status=$?
