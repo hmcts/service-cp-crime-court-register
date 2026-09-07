@@ -19,7 +19,7 @@ public enum NotificationDisposition {
      * This call held the batch's notification claim, posted for whoever was owed an e-mail, and
      * settled the batch on the tally.
      */
-    SETTLED,
+    SETTLED("settled"),
 
     /**
      * Another notifier held the claim, so this call posted nothing and settled nothing.
@@ -28,7 +28,7 @@ public enum NotificationDisposition {
      * that meets this has nothing left to do. The tally that travels with it is the batch as it
      * stood when the claim was refused, which is the winner's work part-done.
      */
-    ALREADY_NOTIFYING,
+    ALREADY_NOTIFYING("already-notifying"),
 
     /**
      * This call held the claim, began the cycle, and lost the claim part way through it.
@@ -55,7 +55,7 @@ public enum NotificationDisposition {
      * a settlement's absent row is - and this is still the answer the call gives. What it lost was
      * the claim; {@link #INCOMPLETE} is reserved for the notifier that never lost one.
      */
-    CLAIM_LOST,
+    CLAIM_LOST("claim-lost"),
 
     /**
      * This call held the claim throughout and could not finish the cycle, so the batch is not
@@ -92,5 +92,26 @@ public enum NotificationDisposition {
      * <p>The bounded reason it is counted under is {@code settlement-row-absent}, which is the
      * fault itself; this is what the call did about it.
      */
-    INCOMPLETE
+    INCOMPLETE("incomplete");
+
+    private final String storedCode;
+
+    NotificationDisposition(final String code) {
+        this.storedCode = code;
+    }
+
+    /**
+     * The code this answer is reported and counted under.
+     *
+     * <p>Fixed here rather than derived from the constant name, so renaming a constant cannot
+     * silently rename what a runbook greps for or what a dashboard's series is called - the same
+     * reason {@code GateDecision.Reason} carries its own codes. Bounded and about this call rather
+     * than about the batch, so it never names a court centre, a batch or a recipient (constitution
+     * Principle VII).
+     *
+     * @return the bounded code
+     */
+    public String code() {
+        return storedCode;
+    }
 }

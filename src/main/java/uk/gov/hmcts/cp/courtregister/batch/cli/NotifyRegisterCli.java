@@ -6,6 +6,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import uk.gov.hmcts.cp.courtregister.application.NotificationDisposition;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 
@@ -25,6 +26,13 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
  * <p>A batch with no FAILED recipients is a success that changed nothing, said so in the output
  * rather than in the exit code: there is nothing wrong with asking, and an operator working down a
  * list of batches should not have to tell a refusal from a batch that was already fine.
+ *
+ * <p><strong>What the call did is on the line as well as what the rows say.</strong> A resend can
+ * find the batch already being told, lose the claim inside the cycle, or fail to account for one of
+ * the batch's rows, and on all three the tally that comes back is the batch as it stood rather than
+ * this call's work - so the line carries {@code disposition=<code>} and the exit code is taken from
+ * it. The two that leave the batch unsettled are {@link CliMain#FAILED}, because this command is
+ * the only thing that recovers such a batch and a step that read exit 0 would not run it again.
  *
  * <p>The batch is the one argument, and it is required: there is no default batch to resend and
  * there must not be one, because a command that guessed would e-mail a court centre nobody named.
@@ -127,14 +135,43 @@ public class NotifyRegisterCli {
         try {
             final NotificationSummary settled = notifier.resendFailed(batchId);
             output.accept("batch=" + batchId + " accepted=" + settled.accepted()
-                    + " failed=" + settled.failed() + " state=" + settled.outcome());
-            return CliMain.SUCCESS;
+                    + " failed=" + settled.failed() + " state=" + settled.outcome()
+                    + " disposition=" + settled.disposition().code());
+            return verdict(batchId, settled.disposition());
         } catch (RuntimeException notResent) {
             LOG.error("The recipients owed by batch {} could not be re-requested, so the batch is "
                     + "left as it stands. cause={}", batchId, notResent.getClass().getName(),
                     notResent);
             return CliMain.failure(CliMain.NOTIFY_REGISTER, "batch=" + batchId, NOT_RESENT, output);
         }
+    }
+
+    /**
+     * The exit code one of the four answers deserves, which the tally cannot decide.
+     *
+     * <p>A caller branches on the disposition and not on the counts
+     * ({@link uk.gov.hmcts.cp.courtregister.application.NotificationSummary}), and the exit code is
+     * this command's whole interface with the step that ran it. SETTLED is the ordinary success and
+     * ALREADY_NOTIFYING is a success too: the batch is being told by the outcome sink, this call
+     * posted nothing, and there is nothing left for the operator to do. The other two are
+     * {@link CliMain#FAILED} - a claim lost inside the cycle and a recipient the store could not
+     * account for both leave the batch unsettled, which is the one thing a runbook step is meant to
+     * retry, and nothing but this command recovers it.
+     *
+     * @param batchId     the batch the attempt was about, named on the failure line
+     * @param disposition what the call actually did
+     * @return {@link CliMain#SUCCESS} or {@link CliMain#FAILED}, under the disposition's own code
+     */
+    private int verdict(final UUID batchId, final NotificationDisposition disposition) {
+        return switch (disposition) {
+            case SETTLED, ALREADY_NOTIFYING -> CliMain.SUCCESS;
+            case CLAIM_LOST, INCOMPLETE -> {
+                LOG.warn("The recipients owed by batch {} were not settled by this resend, so the "
+                        + "batch stands where it is. disposition={}", batchId, disposition.code());
+                yield CliMain.failure(CliMain.NOTIFY_REGISTER, "batch=" + batchId,
+                        disposition.code(), output);
+            }
+        };
     }
 
     /**
