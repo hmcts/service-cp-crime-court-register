@@ -78,6 +78,26 @@ public record NotificationSummary(
     }
 
     /**
+     * The answer of a notifier that held the claim and could not account for one of the rows.
+     *
+     * <p>The tally is the rows as they stand and the state is where the batch stands, and neither
+     * is a verdict: a settlement the store had no row for means one of this batch's recipients is
+     * unaccounted for, so a tally over the rows that are left would settle the batch on an
+     * incomplete account of what was sent. The batch is therefore left where it is, which is a
+     * state a resend and the reconciler both recover.
+     *
+     * @param accepted how many of the batch's rows stood accepted when the cycle stopped
+     * @param failed   how many of them stood FAILED
+     * @param standing where the batch stands, which this call did not write
+     * @return the summary, carrying {@link NotificationDisposition#INCOMPLETE}
+     */
+    public static NotificationSummary incomplete(
+            final int accepted, final int failed, final BatchStatus standing) {
+        return new NotificationSummary(
+                accepted, failed, standing, NotificationDisposition.INCOMPLETE);
+    }
+
+    /**
      * Whether this call is the one that posted for the batch and settled it.
      *
      * @return true where this call held the claim

@@ -45,5 +45,29 @@ public enum NotificationDisposition {
      * of the notifier that now holds it, and the rows it did not settle are re-requested by a later
      * run under the identities they already hold.
      */
-    CLAIM_LOST
+    CLAIM_LOST,
+
+    /**
+     * This call held the claim throughout and could not finish the cycle, so the batch is not
+     * settled.
+     *
+     * <p>The fourth answer, and the one that is about this service's own store rather than about
+     * two notifiers. A settlement made for a row this run read back or minted, and that the store
+     * then does not hold, means the cycle cannot account for one of the batch's recipients: the
+     * attempt is recorded nowhere, so the tally the batch would be settled from is a tally over
+     * rows that no longer describe what was sent.
+     *
+     * <p>Settling anyway was the worse answer, and quietly. A batch whose only recipient row had
+     * gone tallied to nought rows and reached NOTIFIED_NOBODY - the terminal state that says the
+     * document was rendered and there was nobody to send it to, defect fix P1's own words, written
+     * over a batch addressed to a Youth Offending Team all along and terminal, so no later resend
+     * could revisit it. So the cycle stops, the claim is given back, and the batch stays where it
+     * stands with whatever rows are settled: GENERATED is a state {@code notify-register --batch}
+     * and the reconciler both recover, and {@code courtregister_oldest_generated_age} is the
+     * reading that says a batch has been standing there.
+     *
+     * <p>The bounded reason it is counted under is {@code settlement-row-absent}, which is the
+     * fault itself; this is what the call did about it.
+     */
+    INCOMPLETE
 }

@@ -1810,6 +1810,93 @@ class RegisterNotifierServiceTest {
     }
 
     /**
+     * The settlement row the store turns out not to hold, and why it ends the cycle.
+     *
+     * <p>A row this run read back or minted, POSTed under, and then could not settle because the
+     * store holds no such row: the attempt is recorded nowhere. It is loud where it is met, and
+     * that was the whole of what the cycle did about it - the loop went on to the next recipient
+     * and the batch was then settled from the tally, which is a tally over rows that no longer
+     * describe what was sent.
+     *
+     * <p><strong>Where the vanished row was the batch's only recipient, that tally is nought
+     * rows.</strong> Nought rows is NOTIFIED_NOBODY - defect fix P1's terminal state, saying the
+     * document was rendered and there was nobody to send it to - and it was written over a batch
+     * addressed to a Youth Offending Team all along, terminally, so no later resend could revisit
+     * it. The same P1 violation the owed set is derived from the records to prevent, arriving by
+     * the back door.
+     *
+     * <p>So an absent settlement row is a cycle that cannot be finished: it stops, gives the claim
+     * back and settles nothing, and the batch stays GENERATED with whatever rows are settled -
+     * which is a state {@code notify-register --batch} and the reconciler both recover, and which
+     * {@code courtregister_oldest_generated_age} makes visible while it stands there.
+     */
+    @Nested
+    @DisplayName("the settlement row the store has lost")
+    class AVanishedRowEndsTheCycle {
+
+        /**
+         * One recipient whose row this run reads back and the store no longer holds.
+         *
+         * <p>The read answers the row once - which is what a run that reads, POSTs and then cannot
+         * settle really sees - and afterwards answers the ledger, so a later call sees the batch as
+         * it actually stands rather than as this one found it.
+         */
+        @BeforeEach
+        void oneRecipientWhoseRowTheStoreHasLost() {
+            when(store.batched(BATCH_ID)).thenReturn(
+                    List.of(registerRecord(List.of(recipient(YOT_A, ADDRESS_A)))));
+            when(notifications.findByBatchId(BATCH_ID))
+                    .thenReturn(List.of(new RegisterNotification(UUID.randomUUID(), BATCH_ID,
+                            ADDRESS_A, YOT_A, RegisterNotifierService.TEMPLATE_NAME, TEMPLATE_ID,
+                            NotificationStatus.PENDING, null, null, MINTED_NEVER_SETTLED)))
+                    .thenAnswer(invocation -> rowsOf(invocation));
+        }
+
+        @Test
+        void a_vanished_row_should_never_let_a_batch_settle_as_nobody_to_tell() {
+            final NotificationSummary summary = notifyBatch();
+
+            softly.assertThat(settlements)
+                    .as("the batch is addressed to one Youth Offending Team and its row has gone, "
+                            + "so a tally over what is left is nought rows - which is "
+                            + "NOTIFIED_NOBODY, terminal, and a lie about a batch that had somebody "
+                            + "to tell all along")
+                    .isEmpty();
+            softly.assertThat(summary)
+                    .extracting(NotificationSummary::disposition)
+                    .as("a bounded disposition of its own: this notifier held the claim throughout "
+                            + "and could not account for one of the batch's recipients, which is "
+                            + "neither a verdict about the batch nor a claim it lost")
+                    .isEqualTo(NotificationDisposition.INCOMPLETE);
+            softly.assertThat(claim.get())
+                    .as("and the claim is given back, because a batch left standing with a claim on "
+                            + "it is a batch no resend and no reconciliation could pick up")
+                    .isNull();
+        }
+
+        @Test
+        void a_batch_left_standing_by_a_vanished_row_should_be_settled_by_a_later_resend() {
+            notifyBatch();
+
+            final NotificationSummary summary = resend();
+
+            softly.assertThat(mintedAddresses())
+                    .as("the batch stands where it stood, so the resend derives the owed set from "
+                            + "the records exactly as a first notification does and mints the row "
+                            + "the store has no record of")
+                    .containsExactly(ADDRESS_A);
+            softly.assertThat(summary)
+                    .as("and the register reaches the team it is addressed to, on a batch a "
+                            + "terminal NOTIFIED_NOBODY would have closed for ever")
+                    .isEqualTo(new NotificationSummary(1, 0, BatchStatus.NOTIFIED));
+            softly.assertThat(settlements)
+                    .as("settled once, by the call that could account for every row it posted for")
+                    .containsExactly(new BatchSettlement(BATCH_ID,
+                            new NotificationSummary(1, 0, BatchStatus.NOTIFIED)));
+        }
+    }
+
+    /**
      * The tally the batch is settled on, taken after the POSTs rather than before them.
      */
     @Nested
