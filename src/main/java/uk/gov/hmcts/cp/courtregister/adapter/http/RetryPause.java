@@ -10,7 +10,7 @@ import java.time.Duration;
  * honoured by taking two seconds to run would be paid for in every build thereafter. The production
  * implementation is a method reference; the suites record what would have been waited.
  *
- * <p>One interface for all three clients, because there is one policy. A per-client waiting
+ * <p>One interface for all four clients (the C3 trio and the notification client), because there is one policy. A per-client waiting
  * abstraction would be the same shape three times over and would let three suites disagree about
  * what a wait is.
  */

@@ -111,7 +111,7 @@ courtregister:
     # a deployment that sets it correctly and still fails to start.
     system-user-id: ${COURT_REGISTER_SYSTEM_USER_ID:}
     # Retry policy for the POST (defect fixes C1/C3), and the SAME three keys the payload fallback
-    # and the reference-data read carry: one RetryPolicy object serves all three clients, so
+    # and the reference-data read carry: one RetryPolicy object serves all four clients (notificationnotify included), so
     # max-attempts / initial-backoff / max-backoff mean the same thing wherever they appear.
     # Connect and read failures, 5xx, 429 AND 408 are retried with exponential back-off; any other
     # 4xx is a refusal and is never retried; a Retry-After header is honoured on EVERY retryable
