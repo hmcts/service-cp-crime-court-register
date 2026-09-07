@@ -392,6 +392,34 @@ public class JdbcRegisterStore implements RegisterStore {
              ORDER BY register_date, supplement_index, batch_id
             """;
 
+    /**
+     * Statement 4b - every batch recorded for one register day, whatever state it reached.
+     *
+     * <p>The read a person's regeneration starts from, and the one thing statement 4a cannot answer:
+     * a support call is about a day rather than about a set of keys, and the day's FAILED batches are
+     * precisely the ones whose registers still carry a stamp and are therefore outside
+     * {@code ACTIVE_UNBATCHED}. Asked for the keys the active registers fall under, that court centre
+     * would not be among them at all.
+     *
+     * <p>Every state for the reason 4a reads every state, and it is the same three answers: a FAILED
+     * batch may be released and re-assembled, a notified one is what a supplementary index is counted
+     * over, and one still in flight is why a key is left alone (design Q27).
+     *
+     * <p>The day is the whole of the predicate, so the court centre takes the place statement 4a
+     * gives the register date: the same three columns, ordered so that a day reads a court centre at
+     * a time and the identity breaks the tie the key's supplements would otherwise leave to the
+     * planner.
+     */
+    private static final String BATCHES_ON_DAY = """
+            SELECT batch_id, court_centre_id, court_centre_ou_code, court_house, register_date,
+                   file_name, payload_file_id, document_file_id, status, failure_reason,
+                   sdg_reason, system_generated, completed_by, assembled_at, requested_at,
+                   generated_at, notified_at, failed_at, attempts, supplement_of, supplement_index
+              FROM register_batch
+             WHERE register_date = :registerDate
+             ORDER BY court_centre_id, supplement_index, batch_id
+            """;
+
     /** Statement 5 - the status a transition is asked about and then fenced on. */
     private static final String READ_BATCH_STATUS = """
             SELECT status FROM register_batch WHERE batch_id = :batchId
@@ -513,6 +541,51 @@ public class JdbcRegisterStore implements RegisterStore {
             """;
 
     /**
+     * Statement 9a - the registers of a FAILED batch given back, so the day may be rendered again.
+     *
+     * <p>The other half of statement 9. Two of the six reasons release the stamp as they fail; the
+     * other four leave it, because systemdocgenerator was asked and a document may yet exist - so no
+     * later run will ever pick those registers up, a stamped row being neither active nor unbatched.
+     * Re-rendering that day is a decision a person makes, and this is the statement it is written as.
+     *
+     * <p><strong>Fenced on the batch's own FAILED, in the statement as well as before it.</strong>
+     * The status is read first because a count of nought here means two different things - a FAILED
+     * batch whose failure had already released its rows, and a batch that never failed at all - and
+     * only the first of those is an answer. The predicate is then carried into the statement too, so
+     * a release is never made against a row the read no longer agrees with.
+     *
+     * <p>The rows are read as they are released rather than afterwards, and answered rather than
+     * left to be read back: between a release and a second read a re-share can supersede a row, and
+     * a caller re-assembling what it read a moment earlier would be stamping a register this store
+     * no longer calls active. {@code recorded.status = 'RECORDED'} is the same predicate statement 9
+     * releases under - the rows of a failed batch were never sent about, so RECORDED is all they can
+     * be, and a row that somehow was not is left carrying its stamp rather than unstamped into a
+     * second document.
+     *
+     * <p>The assembly order, because it is the order the batch held them in and the first of them
+     * names the file the day is rendered under.
+     */
+    private static final String RELEASE_FAILED = """
+            WITH released AS (
+                UPDATE processed_output recorded
+                   SET batch_id = NULL, updated_at = now()
+                  FROM register_batch failed
+                 WHERE recorded.batch_id = failed.batch_id
+                   AND failed.batch_id = :batchId
+                   AND failed.status = 'FAILED'
+                   AND recorded.status = 'RECORDED'
+                RETURNING recorded.output_id, recorded.hearing_id, recorded.hearing_date,
+                          recorded.court_centre_id, recorded.register_date,
+                          recorded.register_time, recorded.file_name, recorded.defendant_type,
+                          recorded.recorded_flag_state, recorded.document
+            )
+            SELECT output_id, hearing_id, hearing_date, court_centre_id, register_date,
+                   register_time, file_name, defendant_type, recorded_flag_state, document
+              FROM released
+             ORDER BY register_time, output_id
+            """;
+
+    /**
      * Statement 10 - every recipient of the batch has been attempted.
      *
      * <p>The batch's own terminal state is the summary's verdict - NOTIFIED, PARTIALLY_NOTIFIED or
@@ -535,6 +608,72 @@ public class JdbcRegisterStore implements RegisterStore {
                 RETURNING generated.output_id
             )
             SELECT count(*) FROM notified
+            """;
+
+    /**
+     * Statement 11 - the registers automatic batching passed over.
+     *
+     * <p>Statement 2's predicate with its fourth test turned round, and the two are deliberately one
+     * predicate: RECORDED, unsuperseded and unbatched in both, the flag state as recorded the only
+     * thing that separates them (research §12). A register recorded while the legacy was generating
+     * may already have been sent by the legacy, so it is left out of every automatic run - and
+     * nothing else in this service would ever look at it again, which is why it is read here.
+     *
+     * <p>{@code <> 'ON'} rather than {@code IN ('OFF', 'UNKNOWN')}, because the column is NOT NULL
+     * with a vocabulary the schema bounds ({@code processed_output_flag_state_chk}): a state added to
+     * that vocabulary later is a state this read must answer with by default, since anything the
+     * batching did not claim is exactly what this read is for.
+     *
+     * <p>Oldest first, by the register instant, as statement 2 is: the two answer one question and a
+     * person comparing them should not have to reconcile two orders.
+     */
+    private static final String RECORDED_WHILE_OFF = """
+            SELECT output_id, hearing_id, hearing_date, court_centre_id, register_date,
+                   register_time, file_name, defendant_type, recorded_flag_state, document
+              FROM processed_output
+             WHERE status = 'RECORDED'
+               AND superseded_at IS NULL
+               AND batch_id IS NULL
+               AND recorded_flag_state <> 'ON'
+             ORDER BY register_time, output_id
+            """;
+
+    /**
+     * Statement 12 - the registers shared before an instant superseded, so no run will batch them.
+     *
+     * <p>The rollback lever's other half. The bound is read against {@code register_time} - the
+     * register's own shared instant - because that is the moment the estate agrees on: the period the
+     * legacy has taken back over is a period of hearings, not a period of this pod's writes. Strictly
+     * before it, because the caller states the bound and this statement never widens it.
+     *
+     * <p>Statement 2's first three predicates and not its fourth. A stamped row has been handed to
+     * the renderer and unstamping it is not something the schema offers; a row already superseded is
+     * not superseded twice, which would restamp {@code superseded_at} over the pair that says which
+     * register replaced which; and a GENERATED or NOTIFIED row is not rewritten to say a register
+     * that was sent was never claimed. Whether the flag was on when a row arrived is deliberately
+     * outside the predicate: a rollback supersedes the period, and a row recorded while the flag was
+     * off is in that period too.
+     *
+     * <p><strong>{@code superseded_by} is left null, and that is the honest answer.</strong> Every
+     * other supersession here names the register that replaced this one, because there is one; a
+     * rollback replaces nothing - it says this service is no longer the one that will send this day -
+     * so a column naming a successor would have to invent one. The pair is therefore
+     * {@code superseded_at} alone, which is what statement 0 already tells apart from a row that
+     * recorded itself SUPERSEDED against another.
+     *
+     * <p>Supersession rather than deletion: the rows stay, carrying what was recorded and when,
+     * because the register store is the audit of what this service decided and a rollback is exactly
+     * when that audit is read.
+     */
+    private static final String SUPERSEDE_SHARED_BEFORE = """
+            UPDATE processed_output
+               SET status = 'SUPERSEDED',
+                   superseded_at = now(),
+                   updated_at = now()
+             WHERE status = 'RECORDED'
+               AND superseded_at IS NULL
+               AND batch_id IS NULL
+               AND register_time < :sharedBefore
             """;
 
     /** The three states a notification tally is allowed to settle a batch in. */
@@ -963,15 +1102,18 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * {@inheritDoc}
      *
-     * <p><strong>Seam only.</strong> The statement lands with T065, the task that wires the
-     * operations CLI, so that {@code GenerateRegisterCliTest} records a failing assertion rather
-     * than a compile error. Nothing in the service calls it yet: the nightly run reads the history
-     * of the keys its active registers fall under ({@link #batchesFor(Collection)}), and the by-day
-     * read exists for the command a person types.
+     * <p>Asked by the day alone, and so deliberately not narrowed by a court centre: a support call
+     * is about a register date, and the court centre whose whole night failed is precisely the one
+     * the caller cannot name in advance. {@link #batchesFor(Collection)} is the run's read and this
+     * is the person's, and neither can answer the other's question.
      */
     @Override
     public List<RegisterBatch> batchesOn(final LocalDate registerDate) {
-        throw new UnsupportedOperationException("T065");
+        return StoreOutage.translating("read the batches recorded for a register day",
+                () -> jdbcClient.sql(BATCHES_ON_DAY)
+                        .param(REGISTER_DATE, registerDate)
+                        .query((rs, rowNumber) -> recordedBatch(rs))
+                        .list());
     }
 
     /**
@@ -1102,14 +1244,57 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * {@inheritDoc}
      *
-     * <p><strong>Seam only.</strong> The statement lands with T065, the task that wires the
-     * operations CLI, so that {@code GenerateRegisterCliTest} records a failing assertion rather
-     * than a compile error. The four reasons {@code RELEASING_REASONS} does not name are the ones
-     * this statement exists for, and nothing but a person's own command may issue it.
+     * <p>The four reasons {@link #RELEASING_REASONS} does not name are the ones this statement
+     * exists for, and nothing but a person's own command may issue it.
+     *
+     * <p><strong>The state is read before anything is written, and that read is the refusal.</strong>
+     * A release that changed no rows means two different things - a FAILED batch whose own failure
+     * had already released them, and a batch that never failed at all - and only the first is an
+     * answer. So FAILED is asked for by name: a stamp cleared off a GENERATING batch's rows would
+     * let the next run assemble a second batch for a day systemdocgenerator is still rendering and
+     * both would reach the same Youth Offending Team, a GENERATED batch holds a document a release
+     * would throw away, and a NOTIFIED one has already been sent.
+     *
+     * <p>No transition is settled and none is asked of {@link BatchStatus}: FAILED is terminal, so
+     * there is no arrow for this to be judged against and nothing can move the batch out from under
+     * the statement either. The batch row is left FAILED, carrying what happened to it.
+     *
+     * @throws IllegalStateException if there is no such batch, or if it is in any state but FAILED
      */
     @Override
     public List<RegisterRecord> releaseFailed(final UUID batchId) {
-        throw new UnsupportedOperationException("T065");
+        return StoreOutage.translating("release a failed batch's registers", () -> {
+            permittedRelease(batchId);
+            return jdbcClient.sql(RELEASE_FAILED)
+                    .param(BATCH_ID, batchId)
+                    .query((rs, rowNumber) -> registerRecord(rs))
+                    .list();
+        });
+    }
+
+    /**
+     * The one state a release may be asked for, read where the release is made.
+     *
+     * <p>Asked here rather than left to the statement's own count, because a count of nought is an
+     * answer for a FAILED batch and a refusal for every other state, and one number cannot be both.
+     * The statement carries the predicate as well, so nothing is released against a row this read no
+     * longer agrees with.
+     *
+     * <p>The message names the batch and the state it is in and nothing else; neither is about a
+     * document whose every defendant is a child (constitution Principle VII).
+     */
+    private void permittedRelease(final UUID batchId) {
+        final BatchStatus current = jdbcClient.sql(READ_BATCH_STATUS)
+                .param(BATCH_ID, batchId)
+                .query(String.class)
+                .optional()
+                .map(BatchStatus::valueOf)
+                .orElseThrow(() -> new IllegalStateException(
+                        "no register batch " + batchId + " to release registers from"));
+        if (current != BatchStatus.FAILED) {
+            throw new IllegalStateException(BATCH + batchId + " is " + current + " rather than "
+                    + BatchStatus.FAILED + ", so its registers are not a person's to take back");
+        }
     }
 
     /**
@@ -1140,23 +1325,32 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * The rows automatic batching passed over, which the operations CLI is the only reader of.
      *
-     * <p>The statement is {@code ACTIVE_UNBATCHED}'s predicate with the flag-state test turned
-     * round, and it lands with T065 beside the command that asks it.
+     * <p>{@code RECORDED_WHILE_OFF} is {@code ACTIVE_UNBATCHED}'s predicate with the flag-state test
+     * turned round, so the two are one predicate rather than two that can drift: a row this read
+     * missed would be a row neither reading answers with, waiting for somebody to notice it.
      */
     @Override
     public List<RegisterRecord> recordedWhileOff() {
-        throw new UnsupportedOperationException("T065");
+        return StoreOutage.translating("read the registers recorded while the flag was not on",
+                () -> jdbcClient.sql(RECORDED_WHILE_OFF)
+                        .query((rs, rowNumber) -> registerRecord(rs))
+                        .list());
     }
 
     /**
      * The rollback's write, which the operations CLI is the only caller of.
      *
-     * <p>One statement over the active predicate bounded by {@code register_time}, and it lands
-     * with T065 beside the command that asks it.
+     * <p>One statement over the active predicate bounded by {@code register_time}, so the period a
+     * person named is taken back in one commit and no run can read half of it. The bound is passed
+     * straight through as the caller stated it: this store never defaults it, and a rollback that
+     * quietly widened its own period would supersede registers nobody had decided about.
      */
     @Override
     public int supersedeSharedBefore(final Instant sharedBefore) {
-        throw new UnsupportedOperationException("T065");
+        return StoreOutage.translating("supersede the registers shared before an instant",
+                () -> jdbcClient.sql(SUPERSEDE_SHARED_BEFORE)
+                        .param("sharedBefore", offsetOf(sharedBefore))
+                        .update());
     }
 
     /**

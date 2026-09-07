@@ -277,6 +277,24 @@ public class RegisterBatchRepository {
                AND notifier_token = :token
             """;
 
+    /**
+     * Statement 12 - every batch of one register date, in the order a listing reads them.
+     *
+     * <p>The read behind {@code list-batches --date D}, and the one statement here not asked by the
+     * identity every outcome is correlated on: a support call is about a date, and the identities of
+     * that date's batches are what the caller is asking to be told.
+     *
+     * <p>Court house then identity, which is what makes the output stable across two runs: a person
+     * reading a national date reads it a court house at a time, and the identity breaks the tie a
+     * date's several batches for one court house would otherwise leave to the planner. A court house
+     * the hearing venue never named sorts last, which is where a row that cannot say where it sat
+     * belongs in a listing read by court house.
+     */
+    private static final String FIND_BY_REGISTER_DATE = SELECT_BATCH + """
+             WHERE register_date = :registerDate
+             ORDER BY court_house, batch_id
+            """;
+
     private static final String BATCH_KEY = "batchKey";
     private static final String TOKEN = "token";
     private static final String LEASE_PARAM = "lease";
@@ -568,14 +586,17 @@ public class RegisterBatchRepository {
      * <p>The order is the statement's rather than the listing's, which is what makes the output
      * stable across two runs. Court house then identity: a person reading a national date reads it
      * a court house at a time, and the identity breaks the tie a date's supplementary batches would
-     * otherwise leave to the planner. It lands with T065, beside the command that asks it.
+     * otherwise leave to the planner.
      *
      * @param registerDate the register date whose batches are wanted
      * @return every batch recorded for that date, court house then identity; empty where the date
      *         has none
      */
     public List<RegisterBatch> findByRegisterDate(final LocalDate registerDate) {
-        throw new UnsupportedOperationException("T065");
+        return jdbcClient.sql(FIND_BY_REGISTER_DATE)
+                .param("registerDate", registerDate)
+                .query((rs, rowNumber) -> batch(rs))
+                .list();
     }
 
     /**

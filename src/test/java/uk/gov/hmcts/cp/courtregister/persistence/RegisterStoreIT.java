@@ -168,14 +168,37 @@ class RegisterStoreIT {
     private static final String RESPONDENT = "Respondent";
 
     /**
+     * The day the rollback cases work in, which is deliberately nobody else's.
+     *
+     * <p><strong>The one write in this suite that is not scoped to a court centre.</strong> A
+     * rollback takes back a <em>period</em>, so its statement reads the whole table and its answer
+     * is a count of the whole table - and every suite sharing this container records registers of
+     * its own. A period any of those fell in would have this suite superseding their rows and
+     * counting them, which is a failure in whichever suite ran next and a count that depends on how
+     * many other cases had run.
+     *
+     * <p>So the period sits before every register any suite records: the earliest of those is
+     * {@code RecordEndToEndIT}'s {@code 2020-06-01T10:00:00Z}. A suite that later records one
+     * earlier than this day has to move this day, and the count assertions below are what will say
+     * so.
+     */
+    private static final LocalDate ROLLBACK_DAY = LocalDate.of(2019, 1, 7);
+
+    /** A register shared inside the period a rollback takes back. */
+    private static final Instant ROLLBACK_SHARED = Instant.parse("2019-01-07T09:00:00Z");
+
+    /**
      * The instant a rollback takes the period back to, which the operator states and nothing
      * defaults.
      *
-     * <p>Noon on the Monday, so the day's morning share is inside the period and the afternoon
-     * re-share is outside it; the register recorded <em>at</em> it is what makes the bound's
-     * exclusiveness visible.
+     * <p>Noon on that day, so the morning share is inside the period and the afternoon re-share is
+     * outside it; the register shared <em>at</em> it is what makes the bound's exclusiveness
+     * visible.
      */
-    private static final Instant ROLLBACK_BOUND = Instant.parse("2026-08-24T12:00:00Z");
+    private static final Instant ROLLBACK_BOUND = Instant.parse("2019-01-07T12:00:00Z");
+
+    /** A register shared after the bound, which every case here leaves active behind it. */
+    private static final Instant ROLLBACK_AFTER = Instant.parse("2019-01-07T16:30:00Z");
 
     /**
      * A completion that could not be written, which is the pod dying between the two writes.
@@ -2142,20 +2165,20 @@ class RegisterStoreIT {
 
         @Test
         void the_registers_shared_before_the_bound_should_be_superseded_whatever_the_flag_said() {
-            final DistributionCommand on = seededCommand(HEARING_ONE, MONDAY_SHARED);
-            final DistributionCommand off = seededCommand(HEARING_TWO, MONDAY_SHARED);
+            final DistributionCommand on = seededCommand(HEARING_ONE, ROLLBACK_SHARED);
+            final DistributionCommand off = seededCommand(HEARING_TWO, ROLLBACK_SHARED);
             final DistributionCommand atTheBound = seededCommand(HEARING_THREE, ROLLBACK_BOUND);
-            final DistributionCommand after = seededCommand(HEARING_FOUR, MONDAY_RESHARED);
+            final DistributionCommand after = seededCommand(HEARING_FOUR, ROLLBACK_AFTER);
             final AtomicInteger superseded = new AtomicInteger(-1);
 
             softly.assertThatCode(() -> {
-                record(on, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(on, document(HEARING_ONE, ROLLBACK_DAY, ROLLBACK_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                record(off, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(off, document(HEARING_TWO, ROLLBACK_DAY, ROLLBACK_SHARED), APPLICANT,
                         RecordedFlagState.OFF);
-                record(atTheBound, document(HEARING_THREE, MONDAY, ROLLBACK_BOUND), APPLICANT,
+                record(atTheBound, document(HEARING_THREE, ROLLBACK_DAY, ROLLBACK_BOUND), APPLICANT,
                         RecordedFlagState.ON);
-                record(after, document(HEARING_FOUR, MONDAY, MONDAY_RESHARED), APPLICANT,
+                record(after, document(HEARING_FOUR, ROLLBACK_DAY, ROLLBACK_AFTER), APPLICANT,
                         RecordedFlagState.ON);
                 superseded.set(store.supersedeSharedBefore(ROLLBACK_BOUND));
             }).as(SEAM).doesNotThrowAnyException();
@@ -2189,13 +2212,13 @@ class RegisterStoreIT {
 
         @Test
         void a_stamped_register_should_be_left_alone() {
-            final DistributionCommand stamped = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand stamped = seededCommand(HEARING_ONE, ROLLBACK_SHARED);
             final AtomicInteger superseded = new AtomicInteger(-1);
 
             softly.assertThatCode(() -> {
-                record(stamped, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(stamped, document(HEARING_ONE, ROLLBACK_DAY, ROLLBACK_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                assembled(MONDAY, mine(store.activeUnbatched()));
+                assembled(ROLLBACK_DAY, mine(store.activeUnbatched()));
                 superseded.set(store.supersedeSharedBefore(ROLLBACK_BOUND));
             }).as(SEAM).doesNotThrowAnyException();
 
@@ -2206,7 +2229,7 @@ class RegisterStoreIT {
             softly.assertThat(statusOf(stamped))
                     .as("so the row says exactly what it said before the command")
                     .contains(RECORDED);
-            softly.assertThat(stampedRowsOn(MONDAY))
+            softly.assertThat(stampedRowsOn(ROLLBACK_DAY))
                     .as("and it is still the batch's, which is what a GENERATED or NOTIFIED row is "
                             + "protected by too: both of them carry a stamp")
                     .isEqualTo(1);
@@ -2214,14 +2237,14 @@ class RegisterStoreIT {
 
         @Test
         void a_register_already_superseded_should_not_be_superseded_twice() {
-            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
-            final DistributionCommand reshared = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final DistributionCommand first = seededCommand(HEARING_ONE, ROLLBACK_SHARED);
+            final DistributionCommand reshared = seededCommand(HEARING_ONE, ROLLBACK_AFTER);
             final AtomicInteger superseded = new AtomicInteger(-1);
 
             softly.assertThatCode(() -> {
-                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(first, document(HEARING_ONE, ROLLBACK_DAY, ROLLBACK_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                record(reshared, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                record(reshared, document(HEARING_ONE, ROLLBACK_DAY, ROLLBACK_AFTER), APPLICANT,
                         RecordedFlagState.ON);
             }).as(WALKED).doesNotThrowAnyException();
             final Optional<SupersessionPair> replaced = supersessionOf(first);
