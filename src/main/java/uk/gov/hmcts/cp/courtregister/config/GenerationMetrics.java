@@ -133,6 +133,27 @@ public class GenerationMetrics {
     public static final String LATE_FAILURE_IGNORED = "late-failure-ignored";
 
     /**
+     * The {@code reason} label of an acceptance that arrived after the row was already accepted.
+     *
+     * <p>The other half of {@link #LATE_FAILURE_IGNORED}, and its own series because the two say
+     * different things about the same window. A late refusal is an attempt that would have demoted a
+     * team's row; a late acceptance is two notifiers that both got a 202 for one recipient, which is
+     * a Youth Offending Team holding two copies of a register about children. Counting the second
+     * under the first's reason would hide the worse of the two inside the reading for the milder one.
+     */
+    public static final String LATE_ACCEPTANCE_IGNORED = "late-acceptance-ignored";
+
+    /**
+     * The {@code reason} label of a settlement for a row the store no longer holds.
+     *
+     * <p>Not reachable from the notifying leg, which only settles a row it read back or minted
+     * itself, and counted because it is the one answer that means the store lost a row this service
+     * wrote. Nought is the only reading a healthy pod produces, and it used to be indistinguishable
+     * from {@link #LATE_FAILURE_IGNORED} - both were nought rows changed.
+     */
+    public static final String SETTLEMENT_ROW_ABSENT = "settlement-row-absent";
+
+    /**
      * The {@code reason} label of a notifier that found the batch already claimed by another.
      *
      * <p>Not a failure: the outcome sink on a delivered {@code document-available} and an
@@ -327,6 +348,26 @@ public class GenerationMetrics {
      */
     public void lateFailureIgnored() {
         counter(NOTIFICATIONS_IGNORED, REASON_TAG, LATE_FAILURE_IGNORED).increment();
+    }
+
+    /**
+     * Counts an acceptance that arrived after the recipient's row was already accepted.
+     *
+     * <p>Its own series rather than a reading of {@link #lateFailureIgnored()}, because what it says
+     * is worse: two notifiers each got a 202 for one recipient, so the team holds the register twice.
+     */
+    public void lateAcceptanceIgnored() {
+        counter(NOTIFICATIONS_IGNORED, REASON_TAG, LATE_ACCEPTANCE_IGNORED).increment();
+    }
+
+    /**
+     * Counts a settlement for a recipient row the store no longer holds.
+     *
+     * <p>Nought is the only reading a healthy pod produces: the notifying leg settles a row it read
+     * back or minted itself, so anything here is a row this service wrote and the store has lost.
+     */
+    public void settlementRowAbsent() {
+        counter(NOTIFICATIONS_IGNORED, REASON_TAG, SETTLEMENT_ROW_ABSENT).increment();
     }
 
     /**

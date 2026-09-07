@@ -60,6 +60,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
+import uk.gov.hmcts.cp.courtregister.persistence.NotificationSettlement;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
@@ -176,10 +177,6 @@ class RegisterNotifierServiceTest {
 
     /** The attempt count of a row nothing has been posted for yet, which is the column's default. */
     private static final int MINTED_NEVER_SETTLED = 0;
-
-    /** What a settlement statement answers when it changed the row, and when it changed nothing. */
-    private static final int ONE_ROW = 1;
-    private static final int NO_ROW = 0;
 
     /** The attempt a transiently-refused address is refused on, and only that one. */
     private static final int FIRST_ATTEMPT = 1;
@@ -528,35 +525,47 @@ class RegisterNotifierServiceTest {
     }
 
     /**
-     * The settlement statement, including the two things it decides for itself.
+     * The settlement statement, including the three things it decides for itself.
      *
-     * <p>ACCEPTED is terminal at the row level, so a settlement that meets an accepted row changes
-     * nothing and says so with nought rows: a team that has been told has been told, and a late
-     * refusal that demoted its row would put the batch back to PARTIALLY_NOTIFIED and invite a
-     * resend of a register about children that has already been sent.
+     * <p>ACCEPTED is terminal at the row level, so a settlement that meets an accepted row leaves
+     * the settlement columns where they are and answers {@code ATTEMPTS_ONLY}: a team that has been
+     * told has been told, and a late refusal that demoted its row would put the batch back to
+     * PARTIALLY_NOTIFIED and invite a resend of a register about children that has already been
+     * sent. A row the store does not hold at all is its own answer, because a changed-row count
+     * could not tell it from that one.
      *
-     * <p>And the attempt total is the statement's arithmetic and not the caller's. What arrives is
-     * how many POSTs the call made; what is written is that added to whatever the row holds now, so
-     * two settlements computed from one read cannot each write the same total.
+     * <p><strong>The attempt tally is unconditional</strong>, which is the half the fence does not
+     * cover: the POST was really made, so it is added to the lifetime total whatever state the row
+     * is in. And the total is the statement's arithmetic and not the caller's - what arrives is how
+     * many POSTs the call made, added to whatever the row holds now, so two settlements computed
+     * from one read cannot each write the same total.
      */
     private Object settle(final InvocationOnMock invocation) {
         final RegisterNotification asked = invocation.getArgument(0);
         final int posts = invocation.getArgument(1);
         final RegisterNotification held = ledger.get(asked.notificationId());
-        final int changed;
+        final NotificationSettlement did;
 
-        if (held == null || held.status() == NotificationStatus.ACCEPTED) {
-            changed = NO_ROW;
+        if (held == null) {
+            did = NotificationSettlement.ABSENT;
         } else {
+            final boolean terminal = held.status() == NotificationStatus.ACCEPTED;
             final RegisterNotification row = new RegisterNotification(asked.notificationId(),
                     asked.batchId(), asked.emailAddress(), asked.recipientName(),
-                    asked.templateName(), asked.templateId(), asked.status(), asked.responseCode(),
-                    asked.sentAt(), held.attempts() + posts);
-            settled.add(row);
+                    asked.templateName(), asked.templateId(),
+                    terminal ? held.status() : asked.status(),
+                    terminal ? held.responseCode() : asked.responseCode(),
+                    terminal ? held.sentAt() : asked.sentAt(),
+                    held.attempts() + posts);
             ledger.put(row.notificationId(), row);
-            changed = ONE_ROW;
+            if (terminal) {
+                did = NotificationSettlement.ATTEMPTS_ONLY;
+            } else {
+                settled.add(row);
+                did = NotificationSettlement.APPLIED;
+            }
         }
-        return changed;
+        return did;
     }
 
     /** The claim, taken by whichever notifier asks while nobody holds it. */
@@ -1458,6 +1467,78 @@ class RegisterNotifierServiceTest {
                             + "of two notifiers racing over one batch is a row that looks "
                             + "untouched")
                     .isEqualTo(1);
+            softly.assertThat(notificationIgnoredCount(
+                            GenerationMetrics.LATE_ACCEPTANCE_IGNORED))
+                    .as("and the other window has no reading at all: this attempt was refused, "
+                            + "not accepted, so nobody was sent the register twice")
+                    .isEqualTo(ABSENT);
+        }
+
+        /**
+         * The worse window, and the reason it needs its own reason.
+         *
+         * <p>Here the late attempt was <em>accepted</em>: two notifiers each got a 202 for one
+         * recipient, so a Youth Offending Team holds two copies of a register about children. The
+         * row still changes nothing - it already says the team was told, and re-stamping it with a
+         * second sender's status line and instant would make it describe whichever attempt wrote
+         * last - but counting it as a late failure files the worse of the two windows under the
+         * reading for the milder one, and the number that says a claim is not holding stops being
+         * readable.
+         */
+        @Test
+        void a_late_acceptance_should_be_counted_on_its_own_reason_and_not_as_a_failure() {
+            final RegisterNotification alreadyTold = seeded(YOT_A, ADDRESS_A,
+                    NotificationStatus.ACCEPTED, ACCEPTED);
+            ledger.put(alreadyTold.notificationId(), alreadyTold);
+            when(store.batched(BATCH_ID)).thenReturn(
+                    List.of(registerRecord(List.of(recipient(YOT_A, ADDRESS_A)))));
+            // Read as unsettled and accepted at the write: the other notifier's POST was accepted
+            // between this run's read and its own settlement, and this run's POST was accepted too.
+            when(notifications.findByBatchId(BATCH_ID)).thenReturn(
+                    List.of(new RegisterNotification(alreadyTold.notificationId(), BATCH_ID,
+                            ADDRESS_A, YOT_A, RegisterNotifierService.TEMPLATE_NAME, TEMPLATE_ID,
+                            NotificationStatus.PENDING, null, null, MINTED_NEVER_SETTLED)));
+
+            notifyBatch();
+
+            softly.assertThat(notificationIgnoredCount(
+                            GenerationMetrics.LATE_ACCEPTANCE_IGNORED))
+                    .as("two 202s for one recipient is a team holding the register twice, which is "
+                            + "not the same event as an attempt that would have demoted its row")
+                    .isEqualTo(1);
+            softly.assertThat(notificationIgnoredCount(GenerationMetrics.LATE_FAILURE_IGNORED))
+                    .as("and it is not counted as one: an alert on the milder reading would fire "
+                            + "on the worse one and say the wrong thing about it")
+                    .isEqualTo(ABSENT);
+        }
+
+        /**
+         * The third answer, which used to be indistinguishable from the second.
+         *
+         * <p>Nought rows changed meant "the row was already accepted" and "there is no such row"
+         * alike, so a store that had lost a row this service wrote read as two notifiers doing their
+         * job. It is not reachable from this leg - every row it settles was read back or minted here
+         * - which is exactly why it is loud where it is met rather than folded into that reading.
+         */
+        @Test
+        void a_settlement_for_a_row_the_store_does_not_hold_should_be_its_own_reading() {
+            when(store.batched(BATCH_ID)).thenReturn(
+                    List.of(registerRecord(List.of(recipient(YOT_A, ADDRESS_A)))));
+            when(notifications.findByBatchId(BATCH_ID)).thenReturn(
+                    List.of(new RegisterNotification(UUID.randomUUID(), BATCH_ID, ADDRESS_A, YOT_A,
+                            RegisterNotifierService.TEMPLATE_NAME, TEMPLATE_ID,
+                            NotificationStatus.PENDING, null, null, MINTED_NEVER_SETTLED)));
+
+            notifyBatch();
+
+            softly.assertThat(notificationIgnoredCount(GenerationMetrics.SETTLEMENT_ROW_ABSENT))
+                    .as("a row this service wrote and the store no longer holds is a fault of its "
+                            + "own, and nought is the only reading a healthy pod produces")
+                    .isEqualTo(1);
+            softly.assertThat(notificationIgnoredCount(GenerationMetrics.LATE_FAILURE_IGNORED))
+                    .as("and it is not a racing notifier, which is what the count it used to share "
+                            + "would have said")
+                    .isEqualTo(ABSENT);
         }
     }
 

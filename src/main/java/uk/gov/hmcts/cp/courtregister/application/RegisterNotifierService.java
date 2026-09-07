@@ -23,6 +23,7 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
 import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
+import uk.gov.hmcts.cp.courtregister.persistence.NotificationSettlement;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 
@@ -146,14 +147,6 @@ public class RegisterNotifierService {
 
     /** A minted row has been posted for nothing yet, which is what the column's default says. */
     private static final int NO_ATTEMPTS_YET = 0;
-
-    /**
-     * What the settlement statement answers where it changed nothing.
-     *
-     * <p>Which is one thing only: the row was already ACCEPTED, because the identity is this row's
-     * own and the statement's only other predicate is that.
-     */
-    private static final int NOT_SETTLED = 0;
 
     private static final Logger LOG = LoggerFactory.getLogger(RegisterNotifierService.class);
 
@@ -549,7 +542,8 @@ public class RegisterNotifierService {
             final NotificationOutcome outcome = attempted.outcome();
             metrics.notificationSettled(outcome.status(), outcome.responseCode());
 
-            if (notifications.update(settledAs(row, outcome), attempted.posts()) == NOT_SETTLED) {
+            if (notifications.update(settledAs(row, outcome), attempted.posts())
+                    != NotificationSettlement.APPLIED) {
                 metrics.lateFailureIgnored();
                 LOG.info("A recipient of batch {} was already accepted by the time this run "
                         + "settled it, so the settlement changed nothing and the row keeps the "

@@ -209,15 +209,21 @@ public class RegisterNotificationRepository {
      *
      * @param notification the row as it should now stand, carrying the identity it was minted under
      * @param posts        how many POSTs this call made for the row
-     * @return how many rows the statement changed, which is the decision and never a read-back;
-     *     nought is a row an acceptance has already made terminal
+     * @return what the statement did: the settlement applied, the POSTs tallied onto a row an
+     *     acceptance had already made terminal, or no such row at all
      */
-    public int update(final RegisterNotification notification, final int posts) {
+    public NotificationSettlement update(
+            final RegisterNotification notification, final int posts) {
+        // The three-way answer is the statement's to give, and the statement that gives it arrives
+        // with the unconditional tally. Until then the changed-row count is translated here so the
+        // cases waiting on it record a failing assertion rather than a compile error.
         return StoreOutage.translating("settle a recipient's notification row",
                 () -> settlement(jdbcClient.sql(UPDATE_NOTIFICATION)
                         .param("notificationId", notification.notificationId()), notification)
                         .param("posts", posts)
-                        .update());
+                        .update() > 0
+                        ? NotificationSettlement.APPLIED
+                        : NotificationSettlement.ATTEMPTS_ONLY);
     }
 
     /**

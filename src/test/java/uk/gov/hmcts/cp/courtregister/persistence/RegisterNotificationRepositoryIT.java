@@ -55,9 +55,6 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 @DisplayName("register_notification repository")
 class RegisterNotificationRepositoryIT {
 
-    /** The single row a write of one notification is expected to change. */
-    private static final int ONE_ROW = 1;
-
     /** One POST made for the row, which is what a settlement adds to the attempt total. */
     private static final int ONE_POST = 1;
 
@@ -256,8 +253,8 @@ class RegisterNotificationRepositoryIT {
                     settled(pending, NotificationStatus.ACCEPTED, ACCEPTED, SENT_AT);
 
             assertThat(repository.update(accepted, ONE_POST))
-                    .as("the affected-row count is the decision, and never a read-back")
-                    .isEqualTo(ONE_ROW);
+                    .as("what the statement did is the decision, and never a read-back")
+                    .isEqualTo(NotificationSettlement.APPLIED);
             assertThat(repository.findByBatchId(batchId))
                     .as("202 and nothing else is acceptance, and the row says which attempt under "
                             + "this identity it was")
@@ -272,7 +269,8 @@ class RegisterNotificationRepositoryIT {
             final RegisterNotification failed =
                     settled(pending, NotificationStatus.FAILED, null, null);
 
-            assertThat(repository.update(failed, ONE_POST)).isEqualTo(ONE_ROW);
+            assertThat(repository.update(failed, ONE_POST))
+                    .isEqualTo(NotificationSettlement.APPLIED);
 
             assertThat(repository.findByBatchId(batchId))
                     .as("the statement binds both settlement columns absent, which is the shape "
@@ -283,20 +281,24 @@ class RegisterNotificationRepositoryIT {
         }
 
         /**
-         * ACCEPTED is terminal at the row level, and this is the statement that makes it so.
+         * ACCEPTED is terminal at the row level, and this is the statement that makes it so - but
+         * only for the settlement, never for the tally.
          *
          * <p>Two mechanisms can reach one generated batch at the same moment - the outcome sink on
          * a delivered {@code document-available} and an operator's resend - so a run can read a row
          * as unsettled, POST for it, and only then find that the other run's POST was accepted in
          * between. An unconditional settlement would write FAILED over that ACCEPTED row: the team
          * that has been told reads as untold, the batch goes back to PARTIALLY_NOTIFIED, and the
-         * resend that follows sends a register about children to a team that already has it.
+         * resend that follows sends a register about children to a team that already has it. So the
+         * three settlement columns are conditional on the row not already being ACCEPTED.
          *
-         * <p>Nought rows changed is the answer, and the caller counts it rather than believing the
-         * write landed.
+         * <p><strong>{@code attempts} is not.</strong> The POST was really made, and what the column
+         * accumulates is the POSTs made for the row, so leaving it out omitted from the lifetime
+         * total exactly the attempts made in the window the fence exists for - the window support
+         * reaches for the count in. A row POSTed for by two notifiers reads as one notifier's work.
          */
         @Test
-        void settling_a_recipient_already_accepted_should_change_nothing_and_say_so() {
+        void a_late_failure_against_an_accepted_row_should_be_tallied_and_not_settled() {
             seededBatch();
             final RegisterNotification pending = pending(WANDSWORTH, "Wandsworth YOT");
             repository.insert(pending);
@@ -308,12 +310,44 @@ class RegisterNotificationRepositoryIT {
                     settled(pending, NotificationStatus.FAILED, UNAVAILABLE, LATER), ONE_POST))
                     .as("a team that has been told has been told: the write that would demote its "
                             + "row is refused by the statement rather than by the caller "
-                            + "remembering to check")
-                    .isZero();
+                            + "remembering to check, and the answer says the POSTs were tallied "
+                            + "rather than that the row was settled")
+                    .isEqualTo(NotificationSettlement.ATTEMPTS_ONLY);
             assertThat(repository.findByBatchId(batchId))
-                    .as("and nothing about the row moved - not the status, not the status line, "
-                            + "not the settlement instant and not the attempt total")
-                    .containsExactly(withAttempts(accepted, ONE_POST));
+                    .as("the settlement did not move - not the status, not the status line and not "
+                            + "the instant - and the attempt did, because it was really made")
+                    .containsExactly(withAttempts(accepted, ONE_POST + ONE_POST));
+        }
+
+        /**
+         * And a late acceptance is tallied and not re-settled either, on its own answer.
+         *
+         * <p>The worse of the two windows: both notifiers got a 202 for one recipient, so the Youth
+         * Offending Team holds two copies of a register about children. The row keeps the first
+         * acceptance - its status line and the instant it was settled at are the ones this service
+         * can evidence, and re-stamping them with a second sender's would make the row describe an
+         * attempt whose e-mail is indistinguishable from the first - and the second POST is on the
+         * total. The distinct answer is what lets the caller count the two windows apart.
+         */
+        @Test
+        void a_late_acceptance_against_an_accepted_row_should_be_tallied_and_not_re_settled() {
+            seededBatch();
+            final RegisterNotification pending = pending(WANDSWORTH, "Wandsworth YOT");
+            repository.insert(pending);
+            final RegisterNotification accepted =
+                    settled(pending, NotificationStatus.ACCEPTED, ACCEPTED, SENT_AT);
+            repository.update(accepted, ONE_POST);
+
+            assertThat(repository.update(
+                    settled(pending, NotificationStatus.ACCEPTED, ACCEPTED, LATER), ONE_POST))
+                    .as("an acceptance onto an accepted row is not a loss and is not a settlement "
+                            + "either: the row already says what that write was going to say, so "
+                            + "what the statement did is tally the POST")
+                    .isEqualTo(NotificationSettlement.ATTEMPTS_ONLY);
+            assertThat(repository.findByBatchId(batchId))
+                    .as("the row keeps the settlement instant of the attempt this service can "
+                            + "evidence, and carries both POSTs")
+                    .containsExactly(withAttempts(accepted, ONE_POST + ONE_POST));
         }
 
         /**
@@ -346,14 +380,16 @@ class RegisterNotificationRepositoryIT {
         }
 
         @Test
-        void settling_a_recipient_this_service_never_minted_should_change_nothing() {
+        void settling_a_recipient_this_service_never_minted_should_say_there_is_no_such_row() {
             seededBatch();
             final RegisterNotification absent = pending(WANDSWORTH, "Wandsworth YOT");
 
             assertThat(repository.update(absent, ONE_POST))
-                    .as("nought rows changed is an identity this service never sent under, which "
-                            + "is a caller settling an attempt that was never made")
-                    .isZero();
+                    .as("an identity this service never sent under is a caller settling an attempt "
+                            + "that was never made, and it is its own answer: a row count could not "
+                            + "tell it from a row somebody else had accepted, because both changed "
+                            + "nothing")
+                    .isEqualTo(NotificationSettlement.ABSENT);
         }
     }
 
