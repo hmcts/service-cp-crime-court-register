@@ -134,3 +134,14 @@ configurations.all {
   exclude group: 'org.apache.activemq', module: 'artemis-jms-client'
   exclude group: 'org.apache.artemis', module: 'artemis-jms-client'
 }
+
+// e2e/CliDispatchIT builds the image from this repo's own Dockerfile, which COPYs build/libs/*.jar,
+// so the packaged application has to exist before the suite runs. `./gradlew build` assembles it
+// anyway, but `./gradlew test` on its own does not, and the alternative - a suite skipping on an
+// Assumption naming the missing jar - would be an acceptance test recording nothing on the path
+// no other suite in this build can see: the entrypoint's dispatch of the operations commands out of
+// the fat jar (FR-016). bootJar reads the same compiled classes the tests do, so this adds an
+// ordering rather than any work.
+tasks.named('test') {
+  dependsOn tasks.named('bootJar')
+}
