@@ -74,6 +74,13 @@ public class RegisterNotificationRepository {
      *
      * <p>ACCEPTED is the only state left out, and it is the whole selection: a team that was told
      * is not told twice.
+     *
+     * <p><strong>It answers what is outstanding; it is not what the sending path reads.</strong>
+     * {@code RegisterNotifierService} reads the whole batch through statement 2, because it has to
+     * know which addresses the batch <em>holds</em> a row for as well as which of them are owed one:
+     * a recipient with no row at all is owed an e-mail too, and this statement cannot see one. So
+     * this is the read for asking a batch what is still outstanding - the {@code notify-register}
+     * CLI's report and an operator's question - over one index and without the accepted rows.
      */
     private static final String FIND_UNSETTLED_BY_BATCH_ID = SELECT_NOTIFICATION + """
              WHERE batch_id = :batchId AND status <> 'ACCEPTED'
@@ -140,7 +147,9 @@ public class RegisterNotificationRepository {
      *
      * <p>FAILED and PENDING alike: a refusal and an attempt that reached no verdict are the same
      * debt to the same team, and only the row's own identity makes re-requesting either of them
-     * safe.
+     * safe. A recipient the batch holds no row for is owed an e-mail as well and is not here to be
+     * seen, which is why the sending path reads {@link #findByBatchId} and this answers what is
+     * outstanding.
      *
      * @param batchId the batch
      * @return its unsettled notification rows, each under the identity it was first attempted with

@@ -68,16 +68,25 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * rows and no others - the teams that were told are not told twice - and the batch reaches NOTIFIED
  * when the last of them is accepted.
  *
- * <p><strong>Unsettled means FAILED or PENDING, and both halves of this class are re-entrant.</strong>
- * A run that stopped between the 202 and the settlement - the pod died, the store blipped on the
- * update, the listener's session rolled the delivery back after the mark had already committed -
- * leaves a row that cannot say whether the e-mail was asked for. An ambiguous downstream outcome is
- * retried (constitution's Idempotency bullet), and it is safe to retry because the retry goes out
- * under the id the row already holds. So {@link #resendFailed} re-requests the PENDING rows beside
- * the FAILED ones, and {@link #notify} mints only for the addresses this batch holds no row for,
- * which is what makes a second notify possible at all: {@code UNIQUE (batch_id, email_address)}
- * refuses a second row per address, so a notify that minted for every recipient could be run
- * exactly once - and the run it was run in is the one that may have stopped half way.
+ * <p><strong>Unsettled means FAILED or PENDING or never written, and both halves of this class are
+ * re-entrant.</strong> A run that stopped between the 202 and the settlement - the pod died, the
+ * store blipped on the update, the listener's session rolled the delivery back after the mark had
+ * already committed - leaves a row that cannot say whether the e-mail was asked for; a run that
+ * stopped a moment earlier, between the mark and the first insert or between two inserts, leaves no
+ * row for a team at all. An ambiguous downstream outcome is retried (constitution's Idempotency
+ * bullet), and it is safe to retry because the retry goes out under the id the row already holds.
+ *
+ * <p>So both entry points ask the same question of the same batch, in the same order: <strong>who is
+ * owed comes from the records, and the rows are what this service has written down about it.</strong>
+ * The recipients are the union across the records, a row is minted for any of them the batch holds
+ * none for, and every row that is not ACCEPTED is then posted for - the PENDING ones beside the
+ * FAILED ones. Minting only where there is no row is what makes a second run possible at all:
+ * {@code UNIQUE (batch_id, email_address)} refuses a second row per address, so a run that minted
+ * for every recipient could be made exactly once - and the run it was made in is the one that may
+ * have stopped half way. Reading the rows alone, on the other hand, answered a batch whose rows were
+ * never written with "nothing to re-request", and a tally over an empty table is NOTIFIED_NOBODY:
+ * the state below, on a batch that had recipients all along, and terminal. Deriving the debt from
+ * the records leaves that state reachable only where the union itself is empty.
  *
  * <p><strong>The tally is read off the table rather than counted in flight</strong>, and the same
  * read serves both methods: a resend's verdict is about the batch as it now stands, in which the
@@ -202,26 +211,17 @@ public class RegisterNotifierService {
      * minted: a batch that turned out to carry no document would otherwise leave a table full of
      * PENDING rows for e-mails nothing was ever going to ask for.
      *
+     * <p>Re-entrant, and identical to {@link #resendFailed} in what it sends: a recipient the batch
+     * already holds a row for keeps it, an ACCEPTED row is left alone, and everything else is asked
+     * for again under the identity it holds. The two names are the two callers - the outcome sink on
+     * a document, an operator on a batch - and not two rules about one batch.
+     *
      * @param batchId the batch whose document has been generated
      * @return how many recipients were accepted, how many failed, and the terminal state the batch
      *     is settled in
      */
     public NotificationSummary notify(final UUID batchId) {
-        final RegisterBatch batch = batchOf(batchId);
-        final List<CourtRegisterRecipient> recipients =
-                RecipientSet.unionOf(store.batched(batchId));
-
-        if (recipients.isEmpty()) {
-            LOG.info("Batch {} has a document and no recipients at all, so there is nobody to tell "
-                    + "and nothing to record an attempt against; it ends here rather than waiting "
-                    + "on an e-mail nobody is owed.", batchId);
-        } else {
-            final UUID documentFileId = documentOf(batch);
-            LOG.info("Batch {} is addressed to {} recipients, each with a row minted before "
-                    + "anything is asked of notificationnotify.", batchId, recipients.size());
-            tell(owedRows(batchId, recipients), documentFileId);
-        }
-        return settle(batch);
+        return tellWhoeverIsOwed(batchOf(batchId));
     }
 
     /**
@@ -233,21 +233,61 @@ public class RegisterNotifierService {
      * every retry here is safe - it goes out under the notification id the row already holds, so it
      * reaches notificationnotify's own aggregate instead of asking for a second e-mail.
      *
+     * <p><strong>And a recipient with no row at all is owed one too.</strong> The debt is the
+     * recipient union across the batch's records, not the rows: a run that stopped before it could
+     * write them leaves a batch whose teams are owed an e-mail nothing has recorded, and a resend
+     * that read only the rows found nothing to send and settled the batch NOTIFIED_NOBODY - which
+     * is terminal. So the missing rows are minted here, exactly as a first notification mints them.
+     *
      * @param batchId the batch to resend for
      * @return the tally over the whole batch as it now stands, and the terminal state that produces
      */
     public NotificationSummary resendFailed(final UUID batchId) {
-        final RegisterBatch batch = batchOf(batchId);
-        final List<RegisterNotification> owed = notifications.findUnsettledByBatchId(batchId);
+        return tellWhoeverIsOwed(batchOf(batchId));
+    }
 
-        if (owed.isEmpty()) {
-            LOG.info("Batch {} has no unsettled recipient to re-request, so nothing is sent and "
-                    + "the batch is settled on the rows it already holds.", batchId);
+    /**
+     * Tells whichever of the batch's recipients is still owed an e-mail, and settles the batch.
+     *
+     * <p>The one path both entry points take, and the order in it is the whole of the discipline.
+     * <strong>Who is owed is derived from the records first and from the rows second.</strong> The
+     * recipients are the de-duplicated union across the batch's records ({@link RecipientSet},
+     * defect fix P4) and that union is the debt; the rows are only what this service has written
+     * down about it. A resend that read the rows alone answered a batch whose rows were never
+     * written - the run stopped between {@code markGenerated} and the first insert, or between the
+     * second insert and the third - with "nothing to re-request", and a tally over an empty table
+     * is NOTIFIED_NOBODY: P1's terminal state, saying the document was rendered and there was
+     * nobody to send it to, settled on a batch that had three Youth Offending Teams all along and
+     * terminal, so no later resend could revisit it. The missing rows are minted before anything is
+     * settled, which leaves NOTIFIED_NOBODY reachable only where the union itself is empty.
+     *
+     * <p>The document id is read before the first row is minted, for the reason it always was: a
+     * batch that turned out to carry no document would otherwise leave a table full of PENDING rows
+     * for e-mails nothing was ever going to ask for. A batch with neither a recipient nor a row is
+     * the one case that reads no document at all, because there is nothing to attach and nobody to
+     * attach it for.
+     *
+     * @param batch the batch as this run read it
+     * @return how many recipients were accepted, how many failed, and the terminal state the batch
+     *     is settled in
+     */
+    private NotificationSummary tellWhoeverIsOwed(final RegisterBatch batch) {
+        final UUID batchId = batch.batchId();
+        final List<CourtRegisterRecipient> recipients =
+                RecipientSet.unionOf(store.batched(batchId));
+        final List<RegisterNotification> held = notifications.findByBatchId(batchId);
+
+        if (recipients.isEmpty() && held.isEmpty()) {
+            LOG.info("Batch {} has a document and no recipients at all, so there is nobody to tell "
+                    + "and nothing to record an attempt against; it ends here rather than waiting "
+                    + "on an e-mail nobody is owed.", batchId);
         } else {
-            LOG.info("Batch {} is owed {} e-mails, each re-requested under the identity its row "
-                    + "was minted with so that it reaches the attempt it is retrying.",
-                    batchId, owed.size());
-            tell(owed, documentOf(batch));
+            final UUID documentFileId = documentOf(batch);
+            final List<RegisterNotification> owed = owedRows(batchId, recipients, held);
+            LOG.info("Batch {} is addressed to {} recipients and owes {} of them an e-mail, each "
+                    + "under the identity its own row holds and each minted before anything is "
+                    + "asked of notificationnotify.", batchId, recipients.size(), owed.size());
+            tell(owed, documentFileId);
         }
         return settle(batch);
     }
@@ -271,22 +311,33 @@ public class RegisterNotifierService {
      * <p>A row already ACCEPTED is not returned. The team it belongs to has been told, and telling
      * it again would be a second register about the same children.
      *
+     * <p><strong>Every other row is returned, whether or not the union still names it.</strong> A
+     * row exists only because a run minted it for a recipient of this batch, so it is a debt to a
+     * team that was matched for children on this document; reference data that has since stopped
+     * naming that team does not settle it, and re-requesting it is safe for the reason every retry
+     * here is safe - it goes out under the identity the row already holds.
+     *
      * @param batchId    the batch these recipients are being told about
      * @param recipients the batch's recipients, de-duplicated by address
-     * @return the rows still owed an e-mail, in the order the addresses were first seen
+     * @param held       every row the batch already holds, read once for this and for the minting
+     * @return the rows still owed an e-mail: the held ones in address order, then any newly minted
+     *     in the order the addresses were first seen
      */
     private List<RegisterNotification> owedRows(final UUID batchId,
-            final List<CourtRegisterRecipient> recipients) {
+            final List<CourtRegisterRecipient> recipients,
+            final List<RegisterNotification> held) {
 
-        final Map<String, RegisterNotification> held = new LinkedHashMap<>();
-        for (final RegisterNotification row : notifications.findByBatchId(batchId)) {
-            held.put(row.emailAddress(), row);
+        final Map<String, RegisterNotification> rows = new LinkedHashMap<>();
+        for (final RegisterNotification row : held) {
+            rows.put(row.emailAddress(), row);
         }
-        final List<RegisterNotification> owed = new ArrayList<>(recipients.size());
-
         for (final CourtRegisterRecipient recipient : recipients) {
-            final RegisterNotification row = held.computeIfAbsent(recipient.emailAddress1(),
+            rows.computeIfAbsent(recipient.emailAddress1(),
                     address -> mint(batchId, address, recipient.recipientName()));
+        }
+        final List<RegisterNotification> owed = new ArrayList<>(rows.size());
+
+        for (final RegisterNotification row : rows.values()) {
             if (row.status() != NotificationStatus.ACCEPTED) {
                 owed.add(row);
             }

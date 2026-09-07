@@ -167,13 +167,24 @@ Constraint: `UNIQUE (batch_id, email_address)`.
 after it, so a run that stopped in between - the pod died, the store blipped on the update, the
 listener's session rolled the JMS delivery back after the JDBC mark had already committed - leaves a
 row that cannot say whether the e-mail was asked for. Both entry points therefore treat it as owed:
-`RegisterNotifierService.resendFailed` and the `notify-register` CLI re-request every row whose
-`status <> 'ACCEPTED'` (`RegisterNotificationRepository.findUnsettledByBatchId`), and `notify` mints
-only for the addresses the batch holds no row for, so it can be run again at all - minting for every
-recipient a second time is what `UNIQUE (batch_id, email_address)` refuses. An ambiguous downstream
-outcome is retried, and the retry is safe because it goes out under the `notification_id` the row
-already holds: NN keys its aggregate on it, so the second POST reaches the attempt it is retrying
-(§10). Pinned by `RegisterNotifierServiceTest.RecoveringAnUnsettledRow` and
+`RegisterNotifierService.notify` and `.resendFailed` re-request every row whose `status <>
+'ACCEPTED'`, and mint only for the addresses the batch holds no row for, so either can be run again
+at all - minting for every recipient a second time is what `UNIQUE (batch_id, email_address)`
+refuses. An ambiguous downstream outcome is retried, and the retry is safe because it goes out under
+the `notification_id` the row already holds: NN keys its aggregate on it, so the second POST reaches
+the attempt it is retrying (§10).
+
+**A row that was never written is owed too, and that is why the debt is read off the records.** Both
+entry points take the recipient union across the batch's records (`RecipientSet`, P4) as the set of
+teams owed an e-mail and the rows as what this service has written down about it: a run that stopped
+between the GENERATED mark and the first insert, or between two inserts, leaves a GENERATED batch
+whose teams have no row at all. A resend that read only the rows
+(`RegisterNotificationRepository.findUnsettledByBatchId`) found nothing to send and settled such a
+batch `NOTIFIED_NOBODY` - P1's terminal state, on a batch that had recipients all along - so
+`NOTIFIED_NOBODY` is now reachable only where the union itself is empty. The whole batch is read
+(`findByBatchId`) because the sending path has to know which addresses are held as well as which are
+owed; `findUnsettledByBatchId` answers what is outstanding, for the `notify-register` report and an
+operator's question. Pinned by `RegisterNotifierServiceTest.RecoveringAnUnsettledRow` and
 `RegisterNotificationRepositoryIT
 .reading_the_resendable_recipients_should_answer_with_every_row_never_accepted`.
 
