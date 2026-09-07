@@ -31,8 +31,11 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
  * decides who starts, and nothing else.
  *
  * <p>Off wherever nothing says otherwise, so an ordinary pod is unaffected by the property
- * existing; {@code docker/startup.sh} sets it only on the invocations it dispatches to
- * {@link uk.gov.hmcts.cp.courtregister.batch.cli.CliMain}.
+ * existing. {@link uk.gov.hmcts.cp.courtregister.batch.cli.CliMain} passes
+ * {@code --courtregister.cli=true} on the invocations {@code docker/startup.sh} dispatches to it -
+ * as a command-line property, so {@code application.yaml}'s {@code false} cannot win over it. The
+ * script itself never names the property: what it decides is whether an invocation reaches
+ * {@code CliMain} at all, and a JVM that got there sets this itself.
  *
  * <p><strong>The three conditionals are on the configurations rather than on the beans.</strong>
  * {@code ServiceBusConsumerConfig} owns both the processor client and the one component permitted
