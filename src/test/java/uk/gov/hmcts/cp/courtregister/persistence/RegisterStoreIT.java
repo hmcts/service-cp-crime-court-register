@@ -1588,6 +1588,15 @@ class RegisterStoreIT {
      * <p>The rows stay RECORDED under every reason. Nothing was ever sent about them, and a status
      * that said otherwise would take a register out of the next run without anybody having received
      * it.
+     *
+     * <p><strong>Unless the estate replaced one of them while the batch was in flight.</strong> The
+     * recording predicate only supersedes an incumbent that is active and <em>unbatched</em>, so a
+     * hearing shared again between the assembly and the failure leaves two RECORDED rows for one
+     * key - one stamped, one active. Releasing the stamp off the older one would meet
+     * {@code idx_output_active_register_key}, and the whole mark would be refused with it: the
+     * batch would still call itself in flight under a run that had already given up on it. So the
+     * release supersedes that row against the register that replaced it, exactly as the release a
+     * person types does.
      */
     @Nested
     @DisplayName("failing a batch")
@@ -1623,6 +1632,48 @@ class RegisterStoreIT {
                     .as("and the next run picks the same registers up, under a fresh batch identity")
                     .extracting(RegisterRecord::hearingId)
                     .containsExactlyInAnyOrder(HEARING_ONE, HEARING_TWO);
+        }
+
+        @Test
+        void a_failure_that_never_left_should_supersede_a_register_a_re_share_has_replaced() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                // Between the assembly and the failure the hearing is shared again. The recording
+                // predicate supersedes an incumbent that is active and unbatched, and this one is
+                // stamped, so the day now holds two RECORDED rows for one key.
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                store.markFailed(monday.batchId(),
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the failure is recorded whatever the re-share did: a mark refused by the "
+                            + "active-row index would leave the batch claiming to be in flight "
+                            + "under a run that had already given up on it")
+                    .contains(new BatchOutcome(FAILED, "PAYLOAD_STORE_UNAVAILABLE", null));
+            softly.assertThat(supersessionOf(first).map(SupersessionPair::supersededBy))
+                    .as("the register the batch was assembled from is superseded as its stamp is "
+                            + "cleared, and by the register that replaced it")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("one SUPERSEDED and one RECORDED, which is the invariant the whole batch "
+                            + "half is written against: at most one active row per key")
+                    .containsExactlyInAnyOrder(SUPERSEDED, RECORDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("and the failed batch holds nothing, because a batch that never left this "
+                            + "service holds no register hostage to a document that cannot exist")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("so tomorrow's first batch is the re-share alone, and never the register "
+                            + "the estate has already replaced")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(reshare).orElse(null));
         }
 
         @Test
