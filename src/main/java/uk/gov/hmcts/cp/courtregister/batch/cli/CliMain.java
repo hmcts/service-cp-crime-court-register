@@ -337,7 +337,7 @@ public class CliMain {
      * @param output  where every command's lines are written
      * @return the five commands, by name
      */
-    static Map<String, Command> registryOf(final ConfigurableApplicationContext context,
+    /* default */ static Map<String, Command> registryOf(final ConfigurableApplicationContext context,
             final Consumer<String> output) {
 
         return Map.of(
