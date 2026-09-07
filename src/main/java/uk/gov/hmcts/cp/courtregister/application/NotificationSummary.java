@@ -86,9 +86,11 @@ public record NotificationSummary(
      * <p>The tally is the rows as they stand and the state is where the batch stands, and neither
      * is a verdict: a settlement the store had no row for means one of this batch's recipients is
      * unaccounted for, so a tally over the rows that are left would settle the batch on an
-     * incomplete account of what was sent. The batch is therefore left where it is, which a later
-     * notify call recovers - an operator's {@code notify-register --batch} resend, or the next one
-     * the outcome sink drives. The reconciler names such a batch and ages it; it settles nothing.
+     * incomplete account of what was sent. The batch is therefore left where it is, and only an
+     * operator's explicit {@code notify-register --batch} resend recovers it: the outcome sink
+     * drives one notify call per transition into GENERATED and suppresses the callback for a batch
+     * already there, so nothing revisits it unasked. The reconciler names such a batch and ages
+     * it; it settles nothing.
      *
      * @param accepted how many of the batch's rows stood accepted when the cycle stopped
      * @param failed   how many of them stood FAILED
@@ -104,7 +106,8 @@ public record NotificationSummary(
     /**
      * Whether this call is the one that posted for the batch and settled it.
      *
-     * @return true where this call held the claim
+     * @return true only for {@link NotificationDisposition#SETTLED}; false for every other
+     *         disposition, including the ones where this call held the claim and did not settle
      */
     public boolean settled() {
         return disposition == NotificationDisposition.SETTLED;

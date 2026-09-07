@@ -356,12 +356,14 @@ over a batch addressed to a Youth Offending Team all along, and terminal, so no 
 revisit it.
 
 **The batch stays where it stands instead, and nothing recovers it unasked.** What recovers it is
-the next notification asked of the batch - an operator's `notify-register --batch` resend (the Phase
-7 CLI) or the next `notify(batchId)` the outcome sink drives - which derives the owed set from the
-records again, **mints the missing row**, posts under it and settles the batch on a tally that then
-accounts for every recipient (`RegisterNotifierServiceTest.AVanishedRowEndsTheCycle`). The
-reconciler is not that call: its third read over GENERATED batches names them and publishes
-`courtregister_oldest_generated_age` from them, and settles nothing.
+an operator's explicit `notify-register --batch` resend (the Phase 7 CLI), and nothing else: the
+outcome sink drives `notify(batchId)` once, on the transition into GENERATED, and suppresses the
+callback for a batch that is already GENERATED, so no event redelivery revisits it. The resend
+derives the owed set from the records again, **mints the missing row**, posts under it and settles
+the batch on a tally that then accounts for every recipient
+(`RegisterNotifierServiceTest.AVanishedRowEndsTheCycle`). The reconciler is not that call: its third
+read over GENERATED batches names them and publishes `courtregister_oldest_generated_age` from them,
+and settles nothing.
 
 **The batch is re-read before it is settled**, inside the same claim. The row a run started from is
 minutes old by the time the last recipient has been posted for, and `markNotified` is a

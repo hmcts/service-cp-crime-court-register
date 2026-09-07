@@ -83,10 +83,11 @@ public enum NotificationDisposition {
      * reconciler's third read names such a batch and publishes
      * {@code courtregister_oldest_generated_age} from it, which is the reading that says a batch
      * has been standing there - and it settles nothing, because there is a document and nothing to
-     * fail. What recovers the batch is a notify call for it: an operator's
-     * {@code notify-register --batch} resend, or the next one the outcome sink drives. Either
-     * derives the owed set from the records again, mints the row the store has no record of, posts
-     * under it and settles the batch on a tally that then accounts for every recipient.
+     * fail. What recovers the batch is an operator's explicit {@code notify-register --batch}
+     * resend, and nothing else: the outcome sink drives one notify call per transition into
+     * GENERATED and suppresses the callback for a batch already there. The resend derives the owed
+     * set from the records again, mints the row the store has no record of, posts under it and
+     * settles the batch on a tally that then accounts for every recipient.
      *
      * <p>The bounded reason it is counted under is {@code settlement-row-absent}, which is the
      * fault itself; this is what the call did about it.

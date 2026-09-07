@@ -535,9 +535,11 @@ public class RegisterNotifierService {
      *
      * <p><strong>GENERATED is recoverable, and nothing recovers it unasked.</strong> Either entry
      * point re-derives the owed set from the records and mints the row the store has no record of,
-     * so what recovers the batch is a notify call for it - an operator's
-     * {@code notify-register --batch} resend, or the next one the outcome sink drives. The
-     * reconciler is not that call: its third read names such a batch and publishes
+     * so what recovers the batch is an operator's explicit {@code notify-register --batch}
+     * resend. The outcome sink is not that call either: it drives one notify per transition into
+     * GENERATED and suppresses the callback for a batch already there, so no event redelivery
+     * revisits the batch. The reconciler is not that call: its third read names such a batch and
+     * publishes
      * {@code courtregister_oldest_generated_age}, which is the reading that says a batch has been
      * standing there since before anybody was worried, and it settles nothing.
      *
@@ -559,10 +561,10 @@ public class RegisterNotifierService {
                 + "store holds no row under an identity this run posted under - so the cycle stops "
                 + "and the batch is not settled: a tally over the rows that are left would settle "
                 + "it on an incomplete account of what was sent, and a batch of one vanished row "
-                + "would be settled as having had nobody to tell. It stays where it stands and is "
-                + "recovered by the next notification asked of it, which an operator starts with "
-                + "notify-register --batch; the reconciler reports such a batch and its age and "
-                + "settles nothing.", batchId);
+                + "would be settled as having had nobody to tell. It stays where it stands until an "
+                + "operator resends it with notify-register --batch; nothing recovers it unasked, "
+                + "and the reconciler reports such a batch and its age and settles nothing.",
+                batchId);
         final NotificationSummary seen = tally(notifications.findByBatchId(batchId));
         return NotificationSummary.incomplete(
                 seen.accepted(), seen.failed(), batchOf(batchId).status());

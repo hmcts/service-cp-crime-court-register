@@ -1935,9 +1935,10 @@ class RegisterNotifierServiceTest {
      *
      * <p>So an absent settlement row is a cycle that cannot be finished: it stops, gives the claim
      * back and settles nothing, and the batch stays GENERATED with whatever rows are settled -
-     * which is a state the next notification asked of the batch recovers (an operator's
-     * {@code notify-register --batch}, or the next notify call); the reconciler only reports and
-     * ages it, and {@code courtregister_oldest_generated_age} makes it visible while it stands.
+     * which is a state only an operator's explicit {@code notify-register --batch} resend
+     * recovers (the outcome sink suppresses its callback for a batch already GENERATED); the
+     * reconciler only reports and ages it, and {@code courtregister_oldest_generated_age} makes it
+     * visible while it stands.
      */
     @Nested
     @DisplayName("the settlement row the store has lost")

@@ -146,9 +146,9 @@ public class GenerationMetrics {
     /**
      * The {@code reason} label of a settlement for a row the store no longer holds.
      *
-     * <p>Not reachable from the notifying leg, which only settles a row it read back or minted
-     * itself, and counted because it is the one answer that means the store lost a row this service
-     * wrote. Nought is the only reading a healthy pod produces, and it used to be indistinguishable
+     * <p>An invariant breach when met: the notifying leg only settles a row it read back or minted
+     * itself, so this answer is never expected, and it is counted because it is the one result that
+     * means the store lost a row this service wrote. Nought is the only reading a healthy pod produces, and it used to be indistinguishable
      * from {@link #LATE_FAILURE_IGNORED} - both were nought rows changed.
      */
     public static final String SETTLEMENT_ROW_ABSENT = "settlement-row-absent";

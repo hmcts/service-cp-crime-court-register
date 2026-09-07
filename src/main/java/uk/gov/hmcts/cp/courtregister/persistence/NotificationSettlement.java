@@ -37,8 +37,9 @@ public enum NotificationSettlement {
     /**
      * The store holds no row under that identity, so nothing was tallied and nothing was settled.
      *
-     * <p>Not reachable from the notifying leg, which only ever settles a row it read back or minted
-     * itself, and named here for exactly that reason: an answer of {@code 0} rows shared this
+     * <p>An invariant breach when met: the notifying leg only ever settles a row it read back or
+     * minted itself, so this result is never expected, and it is named for exactly that reason: an
+     * answer of {@code 0} rows shared this
      * meaning with {@link #ATTEMPTS_ONLY} and made a lost row indistinguishable from a row somebody
      * else had accepted. It is a store that no longer holds a row this service wrote, which is loud
      * and counted where it is met rather than folded into a reading about racing notifiers.
