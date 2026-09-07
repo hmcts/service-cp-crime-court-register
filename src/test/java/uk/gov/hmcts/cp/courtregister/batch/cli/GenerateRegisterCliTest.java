@@ -421,12 +421,31 @@ class GenerateRegisterCliTest {
      */
     private static RegisterRecord register(final UUID courtCentre, final LocalDate day,
             final String courtHouse, final Instant registerTime) {
+        return register(courtCentre, day, courtHouse, registerTime, registerTime);
+    }
+
+    /**
+     * The same register with its shared instant and its hearing day pulled apart.
+     *
+     * <p>Every other case here gives one instant to both, which is what makes them the same
+     * fixture; the case about what the bound is read against needs them on opposite sides of it.
+     *
+     * @param courtCentre  the court centre it was recorded for
+     * @param day          the register day it falls under
+     * @param courtHouse   the court house it was produced at
+     * @param registerTime the instant the results were shared, which is what orders a batch
+     * @param hearingDate  the day the hearing sat, which is a fact about the hearing and not about
+     *                     when anybody shared or recorded anything
+     * @return the register as the batch half reads it back
+     */
+    private static RegisterRecord register(final UUID courtCentre, final LocalDate day,
+            final String courtHouse, final Instant registerTime, final Instant hearingDate) {
         final UUID hearingId = UUID.randomUUID();
         final String fileName = "courtregister_" + day + ".json";
-        return new RegisterRecord(UUID.randomUUID(), hearingId, registerTime,
+        return new RegisterRecord(UUID.randomUUID(), hearingId, hearingDate,
                 new CourtCentreDay(courtCentre, day), registerTime, fileName, "Applicant",
                 RecordedFlagState.ON,
-                new CourtRegisterDocument(registerTime.toString(), registerTime.toString(),
+                new CourtRegisterDocument(registerTime.toString(), hearingDate.toString(),
                         hearingId.toString(), courtCentre.toString(), fileName, "Applicant",
                         new CourtRegisterHearingVenue("West Yorkshire", courtHouse, null),
                         List.of(new CourtRegisterRecipient(
@@ -824,6 +843,35 @@ class GenerateRegisterCliTest {
                             + "up what has arrived since; the bound excludes the instant itself, "
                             + "so a run bounded at what it already did cannot repeat it")
                     .isEqualTo(List.of(morning.hearingId()));
+        }
+
+        /**
+         * <strong>[A] characterisation.</strong> The bound already reads the register's own shared
+         * instant - {@code register_time}, which is progression's own column and the moment the
+         * estate agrees on - and this states it rather than driving it. Every other case here gives
+         * one instant to the shared moment and to the hearing day at once, so which of the two the
+         * bound is read against was held down by nothing at all. It is the same column
+         * {@code supersede-before --shared-before} bounds on, and it is deliberately not this pod's
+         * own recording time, which no register record carries. Green on introduction; non-vacuity
+         * is the mutation quoted in this commit.
+         */
+        @Test
+        void the_bound_should_be_read_against_the_registers_own_shared_instant() {
+            theFlagIsOn();
+            final RegisterRecord sharedInside =
+                    register(LEEDS, THURSDAY, LEEDS_HOUSE, MORNING, SIX_PM);
+            stillWaiting(sharedInside);
+            stillWaiting(register(LEEDS, THURSDAY, LEEDS_HOUSE, SIX_PM, MORNING));
+
+            run("--" + Args.DATE, THURSDAY.toString(),
+                    "--" + Args.RECORDED_BEFORE, SIX_PM.toString());
+
+            softly.assertThat(hearingsGrouped())
+                    .as("the register shared before the bound is in and the one shared at it is "
+                            + "out, whichever side of the bound the hearing itself sat on: the "
+                            + "hearing day is a fact about the hearing and says nothing about "
+                            + "which registers a part-finished re-run has already dealt with")
+                    .isEqualTo(List.of(sharedInside.hearingId()));
         }
 
         /**
