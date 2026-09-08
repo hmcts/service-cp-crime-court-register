@@ -962,12 +962,12 @@ lines above and in the exceptions block below rather than here.
 
 ### Approved TDD exceptions (Phase 7)
 
-Eight approved, and one recorded below awaiting approval - 6 and 7 written down at review round 2,
-8 and 9 at the phase gate. They are recorded here rather than argued for in a commit body.
-Approver for 1 to 5: **design owner, 2026-09-07**; for 6, 7 and 8: **design owner, 2026-09-08**.
-9 **has been put to the design owner and no answer has come yet**, so the phase gate is not clean
-while it stands; it says below what is being asked and what happens if approval is withheld.
-Anything else in Phase 7 that arrived test-after is a defect, not a precedent.
+Nine, all approved - 1 to 5 as the phase was built, 6 and 7 at review round 2, 8 and 9 at the phase
+gate. They are recorded here rather than argued for in a commit body, and each entry states what
+was asked of the design owner, the evidence that stood in place of a red run, and the rework that
+was available had approval been withheld. Approver for 1 to 5: **design owner, 2026-09-07**; for 6
+to 9: **design owner, 2026-09-08**. Anything else in Phase 7 that arrived test-after is a defect,
+not a precedent.
 
 Three things in the phase were judged against this list and are deliberately not on it. `c3d8ff7`
 (T064) is a test task with a recorded red run, and the ten cases of it that were green on
@@ -1239,7 +1239,12 @@ take the property away. No implementation follows it and its passing run is in t
    narrowings come back out of `StandardOutput` and are driven in from the failing assertions the
    mutations above already show are available, which leaves `07e325b` the pure extraction it
    claims to be.
-   **Awaiting approval: recorded 2026-09-08.**
+   **Approved: design owner, 2026-09-08**, the pin taken before and after the change accepted with
+   those two mutations in place of a red run. The rework was judged the most valuable of the four
+   available and was still not required: what it would add is a failing assertion behind the
+   encoding, and the UTF-8 case named above holds that property either way. The third narrowing
+   has since been driven red on its own account by `19e52ff` / `b390eb6`, which gave the refusal
+   its own type, and by `f009bc5` / `2a2afb1`, which stopped the commands answering for it.
 
 **The five store statements T065 held back are the Phase 6 rule working rather than an exception to
 it**: `batchesOn`, `releaseFailed`, `recordedWhileOff`, `supersedeSharedBefore` and
