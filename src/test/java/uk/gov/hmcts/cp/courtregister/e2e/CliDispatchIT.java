@@ -46,6 +46,9 @@ import org.testcontainers.utility.MountableFile;
  * and changes nothing, and {@code generate-register --help} prints what the command takes and does
  * not generate anything: between them they cover a command that reaches a downstream and a command
  * that reaches only the parser, and neither can leave a batch, a document or an e-mail behind it.
+ * A third case asks the same entrypoint for a name that is not one of the five, which is the other
+ * thing an operator does with a runbook step and the one answer no JUnit suite over
+ * {@code CliMain} can reach: the dispatch it exercises is the script's, before the JVM.
  *
  * <p><strong>The environment is the compose stack's, and generation is ON.</strong> That is forced
  * rather than chosen: {@code check-flag} asks the flag reader, which exists only where
@@ -177,6 +180,47 @@ class CliDispatchIT {
                         + " [--recorded-before T]");
         assertThat(asked.getStderr())
                 .contains("Running the generate-register command from /app/");
+    }
+
+    /**
+     * The third thing an operator does, which is mistype one of the five names.
+     *
+     * <p>Both {@code docker/startup.sh} and {@code CliMain} say that a name the script does not
+     * recognise "starts the application instead, and a name CliMain does not recognise is answered
+     * with the list and a refusal" - and the second half is unreachable through the only entry
+     * point FR-016 gives an operator, because the script's {@code case} has no arm for a first
+     * argument it does not know. A typo therefore takes the deployed pod's own fall-through: a
+     * second whole application, with the operator's arguments dropped and
+     * {@code courtregister.cli} left false, which fails to bind the port the pod is already serving
+     * and ends the exec on 1 - the code {@code CliMain} reserves for "declined, changed nothing, do
+     * not retry", and the very confusion the no-jar arm chose 2 over 1 to avoid.
+     *
+     * <p>So the answer asked for here is the one both files already claim: the five names, and the
+     * failure code. On stderr, because that is where the script's own lines go - what a command
+     * writes to stdout is what a runbook step greps.
+     */
+    @Test
+    @DisplayName("a mistyped command name is answered with the five names and exits 2")
+    void a_name_the_script_does_not_know_should_be_refused_rather_than_start_a_second_application()
+            throws Exception {
+        final Container.ExecResult mistyped = APP.execInContainer("./startup.sh", "check-flags");
+
+        // 2 and not 1: the command could not be run at all, which is a failure, and not the
+        // refusal a runbook step must never retry as though it were one.
+        assertThat(mistyped.getExitCode()).isEqualTo(2);
+        assertThat(mistyped.getStderr())
+                .as("the list an operator who mistyped a runbook step needs, and nothing about "
+                        + "what they typed: it is a string from outside this service and their "
+                        + "terminal is pasted into tickets")
+                .contains("usage: startup.sh <command> [arguments]")
+                .contains("generate-register", "notify-register", "list-batches",
+                        "supersede-before", "check-flag")
+                .doesNotContain("check-flags");
+        assertThat(mistyped.getStdout())
+                .as("and no second application was started: the fall-through is for a container "
+                        + "with no arguments, which is every deployed pod")
+                .doesNotContain("Running docker java jarfile")
+                .doesNotContain("Started Application");
     }
 
     /**
