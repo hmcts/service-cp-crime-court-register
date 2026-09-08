@@ -58,8 +58,14 @@ teardown() {
 }
 trap teardown EXIT
 
-# Unconditional: the image is built from whatever sits in build/libs, and a jar left there by an
-# earlier checkout would have this script smoke-testing code that is no longer in the tree.
+# Cleared first, then built. `bootJar` does not remove what it did not write, and the artefact is
+# named for the version it was built under (`ARTEFACT_VERSION`), so a jar from an earlier build with
+# a different version sits beside the new one - the Dockerfile copies `build/libs/*.jar` whole and
+# the entrypoint takes the lexicographically first of them, which is how this script comes to smoke
+# code that is no longer in the tree while printing PASS.
+log "clearing any earlier application jar"
+rm -f build/libs/*.jar
+
 log "building the application jar"
 ./gradlew bootJar
 

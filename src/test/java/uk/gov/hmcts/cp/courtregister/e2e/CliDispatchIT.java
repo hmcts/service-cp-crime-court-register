@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
@@ -99,6 +100,9 @@ class CliDispatchIT {
 
     /** Long enough for a cold image build and a JVM start, short enough to fail not hang. */
     private static final Duration STARTS_WITHIN = Duration.ofMinutes(5);
+
+    /** How many jars {@code build/libs} may hold for this suite to know which one the image runs. */
+    private static final int ONE_JAR = 1;
 
     /** The line the application prints once its context is up, whatever readiness then says. */
     private static final String APPLICATION_IS_UP = ".*Started Application in .*";
@@ -249,20 +253,41 @@ class CliDispatchIT {
      * thing it would have recorded - that the packaged artefact dispatches its own commands - is
      * exactly what is unobservable everywhere else in this build.
      *
+     * <p><strong>One jar, or none, and never a choice between two.</strong> {@code bootJar} does
+     * not remove what it did not write and the artefact is named for the version it was built under
+     * ({@code ARTEFACT_VERSION}), so a build at another version leaves its jar beside the new one.
+     * {@code Files.list} answers in no defined order, so a suite that took the first would package
+     * an arbitrary one of them and record what an arbitrary artefact does - and the image
+     * {@code docker/startup.sh} runs is the lexicographically first, which is not necessarily the
+     * same one. Two candidates is therefore a build to fix rather than a choice to make, and the
+     * refusal names them.
+     *
      * @return the packaged application, {@code -plain} excluded as {@code startup.sh} excludes it
      */
     private static Path packagedJar() {
         final Path libs = Paths.get("build", "libs").toAbsolutePath();
+        final List<Path> candidates;
         try (Stream<Path> built = Files.list(libs)) {
-            return built.filter(candidate -> candidate.getFileName().toString().endsWith(".jar"))
+            candidates = built
+                    .filter(candidate -> candidate.getFileName().toString().endsWith(".jar"))
                     .filter(candidate -> !candidate.getFileName().toString().contains("plain"))
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalStateException(
-                            "no packaged jar in " + libs + " - run ./gradlew bootJar"));
+                    .sorted()
+                    .toList();
         } catch (IOException notThere) {
             throw new UncheckedIOException(
                     "no " + libs + " to build the image from - run ./gradlew bootJar", notThere);
         }
+        if (candidates.isEmpty()) {
+            throw new IllegalStateException("no packaged jar in " + libs
+                    + " - run ./gradlew bootJar");
+        }
+        if (candidates.size() > ONE_JAR) {
+            throw new IllegalStateException("more than one packaged jar in " + libs + " "
+                    + candidates.stream().map(Path::getFileName).map(Path::toString).toList()
+                    + " - this suite would record what an arbitrary one of them does; run"
+                    + " ./gradlew clean bootJar");
+        }
+        return candidates.getFirst();
     }
 
     /**
