@@ -48,6 +48,14 @@ import java.util.function.Consumer;
  * carried on from: a truncated listing that a step read as a complete one is exactly the quiet
  * failure Principle VI is about, and the static stream this class replaces would have swallowed it
  * into an error flag nobody reads.
+ *
+ * <p><strong>And it is wrapped in a type of this package's own.</strong> {@link ReportNotWritten},
+ * not a plain {@link UncheckedIOException}: everything upstream catches broadly on purpose - a
+ * context that will not start throws whatever the bean that refused threw - so a destination which
+ * stopped taking lines is only tellable from those by being a type nothing else here throws.
+ * {@link CliMain#exitCodeFor(String[], java.util.function.Consumer)} is where it is answered, and
+ * it is answered rather than reported: the one place a report nobody could write can be said out
+ * loud is the log.
  */
 public final class StandardOutput implements Consumer<String> {
 
@@ -89,8 +97,8 @@ public final class StandardOutput implements Consumer<String> {
      *
      * @param line one line of a command's report, already bounded and PII-free by the command that
      *             wrote it (constitution Principle VII)
-     * @throws UncheckedIOException where the line could not be written, so that a report a step
-     *                              read as complete cannot have been cut short in silence
+     * @throws ReportNotWritten where the line could not be written, so that a report a step read as
+     *                          complete cannot have been cut short in silence
      */
     @Override
     public void accept(final String line) {
@@ -99,7 +107,7 @@ public final class StandardOutput implements Consumer<String> {
             lines.write(END_OF_LINE);
             lines.flush();
         } catch (IOException notWritten) {
-            throw new UncheckedIOException(
+            throw new ReportNotWritten(
                     "a command's report line could not be written to standard output", notWritten);
         }
     }

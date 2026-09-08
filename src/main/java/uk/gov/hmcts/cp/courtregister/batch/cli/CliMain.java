@@ -56,7 +56,9 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * and nobody passed {@code --ignore-flag}, or the arguments were not usable - and nothing was
  * changed by it; {@link #FAILED} is the command tried and could not. A runbook step that retried a
  * refusal as though it were a failure would be an operator overriding the cutover flag by accident,
- * which is why the two are not the same number.
+ * which is why the two are not the same number. A report the destination would not take is one of
+ * the three rather than a fourth: the command could not finish, whatever it managed to do first,
+ * and it is answered on {@link #FAILED} ({@link ReportNotWritten}).
  *
  * <p><strong>What a command prints is read by a person under pressure.</strong> Output is
  * line-oriented and stable, and carries bounded codes, counts and identifiers only: no defendant,
@@ -173,6 +175,15 @@ public class CliMain {
      */
     private static final String CLI_LOGGING = "--logging.config=classpath:logback-cli.xml";
 
+    /**
+     * Written where an invocation named none of the five, so a log line can say which command it
+     * was about without repeating what was typed.
+     *
+     * <p>The five names are this service's own text and may be written down; a sixth token is an
+     * operator's typing and may not ({@link #NO_ARGUMENT_NAMED}, constitution Principle VII).
+     */
+    private static final String NOT_A_COMMAND = "unnamed";
+
     /** What a command reports when this context could not be built at all. */
     private static final String NO_CONTEXT = "context-unavailable";
 
@@ -212,12 +223,15 @@ public class CliMain {
      *
      * <p>The report's destination is taken from {@link StandardOutput}, which is where this
      * service's one write to a file descriptor lives and why a command's protocol output is not the
-     * diagnostics constitution Principle VI sends through SLF4J.
+     * diagnostics constitution Principle VI sends through SLF4J. A destination that stops taking
+     * lines is answered here too, by {@link #exitCodeFor(String[], Consumer)} and on
+     * {@link #FAILED}: {@code list-batches | head -1} is an everyday invocation, and left to the
+     * JVM it ends the process on 1 - the code that means the command declined.
      *
      * @param args the command name followed by its own arguments
      */
     public static void main(final String[] args) {
-        System.exit(new CliMain().dispatch(args, StandardOutput.ofProcess()));
+        System.exit(new CliMain().exitCodeFor(args, StandardOutput.ofProcess()));
     }
 
     /**
@@ -243,9 +257,7 @@ public class CliMain {
      * @return the exit code the process should end on
      */
     public int exitCodeFor(final String[] args, final Consumer<String> output) {
-        throw new UnsupportedOperationException(
-                "a report the destination refused is not told apart from a context that would not "
-                        + "start");
+        return reported(nameOf(args), () -> dispatch(args, output));
     }
 
     /**
@@ -265,8 +277,54 @@ public class CliMain {
     public int exitCodeFor(final String[] args, final Map<String, Command> registry,
             final Consumer<String> output) {
 
-        throw new UnsupportedOperationException(
-                "a report the destination refused is not told apart from a command that answered");
+        return reported(nameOf(args), () -> run(args, registry, output));
+    }
+
+    /**
+     * Runs one invocation, and answers {@link #FAILED} where its report could not be written.
+     *
+     * <p>The only throwable caught here is {@link ReportNotWritten}, which is why it is a type of
+     * this package's own rather than any IO failure at all: a command that threw for its own
+     * reasons is reported where it happened - {@link #dispatch} for a context that would not start,
+     * {@link #wired} for a bean this deployment does not hold - and each of those says what it was
+     * on a line of an operator's own. A report nobody could write has no such line available, so it
+     * is the one failure that has to be answered by the exit code and the log alone.
+     *
+     * @param command    the command the invocation named, or {@link #NOT_A_COMMAND}
+     * @param invocation the dispatch, over a context of this service's own or over a registry
+     * @return whatever the invocation answered, or {@link #FAILED} where its report was refused
+     */
+    private static int reported(final String command, final IntSupplier invocation) {
+        int code;
+        try {
+            code = invocation.getAsInt();
+        } catch (ReportNotWritten notWritten) {
+            LOG.error("The {} command's report could not be written to its destination, so it is "
+                    + "cut short and this line is the whole of what is left of it. Nothing further "
+                    + "was written there, and whatever the command did stands. cause={}", command,
+                    notWritten.getCause().getClass().getName(), notWritten);
+            code = FAILED;
+        }
+        return code;
+    }
+
+    /**
+     * The command this invocation named, where it named one of this image's own.
+     *
+     * <p>Nothing that was typed is answered with: a name this image does not carry is
+     * {@link #NOT_A_COMMAND} and not the token itself, because an operator's terminal is pasted
+     * into tickets and a log line is read by the whole estate (constitution Principle VII).
+     *
+     * <p>The null is answered before {@link #COMMANDS} is asked, because an immutable list refuses
+     * a null lookup with an exception of its own - which is how an invocation whose argument was
+     * never set once ended on a stack trace instead of on the five names.
+     *
+     * @param args the command name followed by its own arguments, either of which may be absent
+     * @return the name, or {@link #NOT_A_COMMAND}
+     */
+    private static String nameOf(final String... args) {
+        final String typed = args == null || args.length == 0 ? null : args[0];
+        return typed != null && COMMANDS.contains(typed) ? typed : NOT_A_COMMAND;
     }
 
     /**
@@ -311,6 +369,15 @@ public class CliMain {
                 .bannerMode(Banner.Mode.OFF)
                 .run(CLI_MODE, CLI_LOGGING)) {
             return run(args, registryOf(context, output), output);
+        } catch (ReportNotWritten notWritten) {
+            // Not this context's failure and not this command's: the destination the report is
+            // written to refused a line, and this is the one throwable reaching here that the
+            // catch below must not answer. It said the context would not start, which is a false
+            // diagnostic about a context that had started and run the command; it said it on a
+            // line written to the destination that had just refused one, so the write threw again;
+            // and the second throw left the process on the JVM's own 1 rather than on any of the
+            // three codes. It leaves here for the entry point, which answers it without a terminal.
+            throw notWritten;
         } catch (RuntimeException notStarted) {
             LOG.error("The {} command could not be run because this service's own context would "
                     + "not start, so nothing was read, assembled or sent. cause={}", name,

@@ -303,7 +303,7 @@ class CliDispatchIT {
                 .as("said once, and about the report: the log is the only place left to say it, "
                         + "the destination having refused a line, and the context this command ran "
                         + "in started exactly as it does in every other case here")
-                .contains("could not write its report")
+                .contains("report could not be written")
                 .doesNotContain("context would not start");
     }
 
