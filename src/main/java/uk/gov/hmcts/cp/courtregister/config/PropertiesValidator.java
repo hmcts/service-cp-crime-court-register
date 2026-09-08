@@ -159,12 +159,29 @@ public class PropertiesValidator implements InitializingBean {
      * <p>Matched on the authority rather than searched for anywhere in the string, so that the
      * question asked is the one that matters - whether the <em>host</em> ends {@code .azconfig.io} -
      * and a path or a query mentioning it is not mistaken for a store. A value that is not an
-     * endpoint at all matches nothing and is refused nothing: it names no store either way, and the
-     * flag read fails on it as a skipped run with a cause rather than as a deployment nobody can
-     * start.
+     * endpoint at all matches nothing here, because it names no store either way; what refuses it
+     * is {@link #FLAG_STORE_URL}, under the setting's own name.
      */
     private static final Pattern REAL_FLAG_STORE = Pattern.compile(
             "[a-z][a-z0-9+.\\-]*://[^/?#]*\\.azconfig\\.io([:/?#].*)?");
+
+    /**
+     * The shape an App Configuration endpoint has to be in for a client to be built from it.
+     *
+     * <p>Presence is not enough, and the refusal belongs here rather than in the SDK.
+     * {@code ConfigurationClientBuilder.endpoint} does {@code new URL(endpoint)} and throws
+     * "'endpoint' must be a valid URL"; the connection-string form fails the same way while parsing
+     * its credential. Both are reached as {@code LiveFeatureFlagConfig.featureFlagReader} is built,
+     * which is during refresh wherever generation is enabled - so a host pasted out of the portal
+     * without its scheme, or a Helm value that lost one, is a pod that never starts, under an Azure
+     * {@code IllegalArgumentException} that names no setting of this service's.
+     *
+     * <p>{@code http} and {@code https} and nothing else: App Configuration is reached over HTTP,
+     * the compose stub included, and a scheme no client has a handler for fails in the same place
+     * as no scheme at all. A host is required after it, because that is what a client connects to.
+     */
+    private static final Pattern FLAG_STORE_URL =
+            Pattern.compile("https?://[^/?#\\s]+([/?#].*)?");
 
     /** Shared so the wording of a required-setting refusal is one string and not four. */
     private static final String MUST_BE_SET_WHEN = " must be set when ";
@@ -1031,6 +1048,7 @@ public class PropertiesValidator implements InitializingBean {
             requireForGeneration(feature.endpoint(), FEATURE_ENDPOINT,
                     "the run reads the cutover flag before it does anything else, and an unreadable"
                             + " flag is a run skipped every night");
+            requireAFlagStoreUrl(feature.endpoint());
             requireForGeneration(feature.label(), FEATURE_LABEL,
                     "one App Configuration store serves every stack, so an unlabelled read is a read"
                             + " of somebody else's flag or of none");
@@ -1112,6 +1130,26 @@ public class PropertiesValidator implements InitializingBean {
             throw new IllegalStateException(
                     setting + MUST_BE_SET_WHEN + GENERATION_ENABLED + " is true - "
                             + consequence);
+        }
+    }
+
+    /**
+     * The endpoint has to be a URL a client can be built from, not merely a value that is set.
+     *
+     * <p>Asked only where generation is enabled, which is the only case in which the reader is
+     * built at all: an intake-only pod contributes no
+     * {@code LiveFeatureFlagConfig} and has nothing to refuse.
+     *
+     * @param endpoint what the deployment supplied for the flag store
+     */
+    private static void requireAFlagStoreUrl(final String endpoint) {
+        if (!FLAG_STORE_URL.matcher(endpoint.trim().toLowerCase(Locale.ROOT)).matches()) {
+            throw new IllegalStateException(
+                    FEATURE_ENDPOINT + " (" + endpoint + ") must be an http or https URL when "
+                            + GENERATION_ENABLED + " is true - the App Configuration client is"
+                            + " built as this context starts and refuses anything else, so a value"
+                            + " without a scheme is a pod that never starts rather than a flag that"
+                            + " could not be read");
         }
     }
 
