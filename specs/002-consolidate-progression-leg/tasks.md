@@ -739,7 +739,45 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       which bound that supersession to a register shared *after* the one being released - the pair
       the other way round had the current register written SUPERSEDED against the one it replaced
       and dropped from the answer, so no run and no command reached it again. `fdaf331` adds the
-      case that pins the order `batchesOn` answers a day in, exception 6 below.)
+      case that pins the order `batchesOn` answers a day in, exception 6 below.
+      **The Codex gate found the same two statements defective a third time, and two more defects in
+      the commands' own code**, each a red/green pair. `1609e80` / `3fae1a2` ranks a key's registers
+      by `(register_time, created_at, output_id)` - predicate and ORDER BY, in `markFailed`'s
+      `stamped` CTE and in RELEASE_FAILED - so an equal-instant register that arrived later is the
+      successor whatever its identity sorts like, which is the rule statement 1's `incumbent` `<=`
+      already encodes; the identity half of the old order was a random tie-break, and the direction
+      that lost a register unstamped the older row, made it active beside the register that had
+      replaced it and left the write refused by `idx_output_active_register_key`. Red at `1609e80`
+      against a real Postgres ("65 tests completed, 2 failed, every failure an assertion":
+      "org.springframework.dao.DuplicateKeyException: PreparedStatementCallback; SQL [WITH failed AS
+      ( ... ]; ERROR: duplicate key value violates unique constraint
+      \"idx_output_active_register_key\"", then "Expecting actual: Optional[BatchOutcome[status=
+      PENDING, failureReason=null, sdgReason=null]] to contain: BatchOutcome[status=FAILED,
+      failureReason=PAYLOAD_STORE_UNAVAILABLE, sdgReason=null]" - in `markFailed` the release is a
+      branch of the statement that marks the batch, so the mark went down with it), green at
+      `3fae1a2` (RegisterStoreIT classes=14 tests=65, RegisterBatchRepositoryIT classes=8 tests=34,
+      0 failures and 0 errors each; whole suite classes=508 tests=3127 failures=0 errors=0). Two of
+      its four cases are mirror **[A]** characterisations - exception 8 below - and the rule is now
+      stated in the port javadoc for `markFailed` and `releaseFailed`, in statement 1's javadoc as
+      the ranking reading of its own `<=`, and in data-model.md beside statements 9 and 9a, whose
+      `superseded_by` invariant had said "a later `register_time`" and never described an
+      equal-instant pair. `9e02bd7` / `c0bf9bb` stops `CliMain.unreadable` attaching the parser's
+      throwable or writing its message, so the token an operator typed into `--batch`, `--date`,
+      `--recorded-before` or `--shared-before` never reaches the pod's log: the WARN carries the
+      command name, the argument by the flag name this service owns (`argument=unnamed` where the
+      parser refused the invocation's shape before any argument was recognised) and the refusing
+      reader's class. Red at `9e02bd7` ("82 tests completed, 14 failed", every one an assertion,
+      among them "Expecting throwable message: \"an argument is written --name, and this one is not:
+      zqx7.marker@example.invalid\" not to contain: \"zqx7.marker@example.invalid\" but did"), green
+      at `c0bf9bb` (`batch.cli.*` with `TelemetryPrivacyTest` classes=41 tests=182 failures=0
+      errors=0). `Args.NAMES` is the bounded vocabulary a refusal may repeat, `GenerateRegisterCli`
+      reads its three optional arguments one at a time so a refusal can name one, and
+      `config/TelemetryPrivacyTest` gained the sweep that reads the log as well as the terminal over
+      all five commands - which is the file T070 asks to extend, and T070 should be read against it
+      as it now stands. And `07e325b` / `baa0c32` puts the report's destination behind
+      `batch/cli/StandardOutput`, a UTF-8 writer over `java.io.FileDescriptor.out` flushed per line,
+      so no compiled source in the service names a process stream while the report still reaches the
+      descriptor a runbook greps - exception 9 below.)
 - [x] T066 [US5] `docker/startup.sh` dispatch: a recognised first argument runs `CliMain` with the
       remaining args; otherwise unchanged `exec java -jar`. Green: T064; `scripts/container-smoke.sh`
       gains `startup.sh check-flag` (exit 0 against the compose WireMock).
@@ -748,9 +786,20 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       `-Dloader.main`, because a Boot 4 manifest names `JarLauncher` and `java -jar` cannot run a
       second main class out of the same archive; `exec`, so the container exits on the command's own
       code and an operator's Ctrl-C reaches the JVM; the one line the script prints goes to stderr,
-      alone among its lines, so a runbook's grep of stdout is unaffected; any other first argument
-      falls through to the unchanged `exec java -jar`. That commit records no run of its own -
-      exception 3 below - so the verification is the smoke script's and T067's.
+      alone among its lines, so a runbook's grep of stdout is unaffected; and any first argument
+      that was none of the five fell through to the unchanged `exec java -jar`. That commit records
+      no run of its own - exception 3 below - so the verification is the smoke script's and T067's.
+      **Only an empty argument list falls through now, and the task's "otherwise unchanged `exec
+      java -jar`" above describes `ce238a5` rather than the delivered script.** At `674753b` (round
+      2, the pair recorded under T067) the `case` gained the two arms it was missing: no arguments
+      at all is the deployed pod - the only invocation the Dockerfile's `ENTRYPOINT` produces - and
+      falls through to `exec java -jar`, while a **non-empty** first argument that is none of the
+      five names is answered on stderr with `usage: startup.sh <command> [arguments]`, the five
+      names, and exit 2. The two are distinguished because a mistyped name reaching the fall-through
+      started a second whole application in the pod, dropped the operator's arguments, left
+      `courtregister.cli` false and ended on 1 with none of the five names printed; 2 and not 1 for
+      the reason the no-jar arm already gives, that the command could not be run rather than
+      declined. Nothing about what was typed is echoed, as `CliMain`'s own usage does not echo it.
       `./scripts/container-smoke.sh` exit 0 at `441d653`, printing "PASS: readiness reported UP
       within the 60s budget" and "PASS: startup.sh check-flag printed flag=ON and exited 0"; that is
       also the commit that dropped the smoke's `COURTREGISTER_GENERATION_FLAG_MODE=STUB` override, so
@@ -799,8 +848,10 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       `674753b`), and stdout carrying the report and nothing else (`fe4750d` / `294d93e`).)
 
 **Checkpoint**: the compose block of quickstart.md **has now been run**, and running it is what
-rewrote it (`782b1e6`, which renumbered its steps and is the last commit of the phase). What that
-run recorded, against the stack the block brings up:
+rewrote it (`782b1e6`, which renumbered its steps and is the **last pre-review delivery commit** of
+the phase rather than its last commit - forty-nine commits follow it, all of them review work or
+the documentation corrections it produced). What that run recorded, against the stack the block
+brings up:
 
 - `docker compose exec app ./startup.sh generate-register --date 2026-09-07` prints
   `date=2026-09-07 released=0 registers=0 batches=0 requested=0 deferred=0` and exits 0; the
@@ -824,13 +875,43 @@ WireMock on the `local-test` credential (`./scripts/container-smoke.sh`, both PA
 `441d653`), and `check-flag` plus `generate-register --help` inside the built image
 (`CliDispatchIT`, `84ac9cc`). Still not re-run: the **host-side** `bootRun` block, whose correction
 at `15c1ae2` was reasoned from a recorded refusal because 5432 was occupied - it is the one thing
-of this phase the Build stage still owes. Codex review 7.
+of this phase the Build stage still owes.
+
+**Three rounds of review followed `782b1e6`**, and the fixes each produced are recorded on the tick
+lines above and in the exceptions block below rather than here.
+
+- **Round 1**, `ba7670d` to `7d7008d`, 23 commits, this file's "review 7": both release statements
+  re-driven for a released register the estate had already replaced (`ba7670d` / `6fb6fb3`,
+  `8745144` / `7245d9c`), the narrowed regeneration's history and the batch it withholds
+  (`261231e` / `c011bb1`, `b08a077` / `210695c`), `notify-register`'s report line and the exit codes
+  taken from it (`879c9a3` / `f4b638a`), `--help` answered where the command is not wired
+  (`bcd05e8` / `2e2d8ce`), where a batch with no court house sorts (`3c7e11e` / `fea8459`), both
+  flag credentials' clients built through one factory (`50e5bad` / `dcbe21a`), and the
+  characterisations `4601dfa` and `ed312b2` / `22a953a`, with `983c32d`, `7d7008d`, `c4c2da5` and
+  `b2689f1` beside them.
+- **Round 2**, `ce76e21` to `88ec762`, 18 commits, "review 8": the supersession bound to a register
+  shared after the one being released (`ce76e21` / `6c8334a`), the order a day's batches are
+  answered in (`fdaf331`), the summary line a day is answered with (`9a96898`), a flag-off refusal
+  logged as the decline it is (`2bbda7d` / `8805d47`), `notify-register`'s usage promise
+  (`67a6aa8` / `f1b5c9b`), a `courtregister.feature.endpoint` no App Configuration client can be
+  built from (`507263d` / `c22509c`), a mistyped command name answered with the five names
+  (`7e282ca` / `674753b`), the artefact the image is built from made unambiguous (`b544003`), and a
+  command's report given stdout to itself (`fe4750d` / `294d93e`), with `58769d2` and `e2ee872`
+  beside them; `88ec762` is where this record was brought level with the two rounds.
+- **The Codex gate**, `1609e80` to `baa0c32`, 8 commits, four red/green pairs: the successor's
+  ordering rule on both release statements (`1609e80` / `3fae1a2`, T065), an operator's own typing
+  swept out of a command's log (`9e02bd7` / `c0bf9bb`, T065), the flag store's endpoint read by
+  parsing rather than by its shape (`35d3277` / `5bf982f`, outside Phase 7's own tasks) and the
+  report's destination behind one boundary (`07e325b` / `baa0c32`, T065). Two exceptions come with
+  them, 8 and 9 below.
 
 ### Approved TDD exceptions (Phase 7)
 
-Five approved, and two more recorded below awaiting approval. They are recorded here rather than
-argued for in a commit body. Approver for 1 to 5: **design owner, 2026-09-07**. Anything else in
-Phase 7 that arrived test-after is a defect, not a precedent.
+Five approved, and four more recorded below awaiting approval - 6 and 7 written down at review
+round 2, 8 and 9 at the Codex gate. They are recorded here rather than argued for in a commit body.
+Approver for 1 to 5: **design owner, 2026-09-07**; 6 to 9 have not been put to the design owner yet,
+and each says below what is being asked of them and what happens if approval is withheld. Anything
+else in Phase 7 that arrived test-after is a defect, not a precedent.
 
 Two things in the phase were judged against this list and are deliberately not on it. `c3d8ff7`
 (T064) is a test task with a recorded red run, and the ten cases of it that were green on
@@ -994,14 +1075,23 @@ its observed run and its two reverted mutations are recorded in its tick line ab
      quickstart.md quotes verbatim and the checkpoint above records as observed, and which no test
      read. Mutations: `released=` printed as `freed=`, and `batches=` printed from
      `registers.size()`.
-   - **`4601dfa`** is review 7's and was not written down when it landed: it characterises how
-     `PropertiesValidator.REAL_FLAG_STORE` recognises a real flag store - the authority only, on a
-     trimmed and lower-cased value, unconditionally on the master switch - where one canonical
-     endpoint had stood for all of it. Green on introduction, 128 tests 0 failures, with four
-     mutations quoted in its body.
+   - **`4601dfa`** is round 1's and was not written down when it landed: it characterises how
+     `PropertiesValidator` recognised a real flag store - the authority only, on a trimmed and
+     lower-cased value, unconditionally on the master switch - where one canonical endpoint had
+     stood for all of it. Green on introduction, 128 tests 0 failures, with four mutations quoted in
+     its body. The `REAL_FLAG_STORE` pattern it characterised no longer exists: `5bf982f` (the
+     Codex gate) replaced it with a `java.net.URI` parse and `namesARealFlagStore`, which keeps the
+     authority-only, normalised, unconditional reading those cases state and adds the absolute-DNS
+     and upper-case spellings to them.
    All three are the shape the Phase 3, 5 and 6 blocks record for the same thing: behaviour that
    already existed, stated by cases that pass on introduction, with non-vacuity shown by mutation
    because there is no red run to show.
+   **What the design owner is being asked** is to accept three test-only **[A]** characterisations,
+   with reverted mutations standing in for the red run that is not available, as the record of
+   behaviour Phase 7 already had. **If approval is withheld**, each is reworked into a compliant
+   red/green pair: the order `BATCHES_ON_DAY` answers a day in, the summary line's fields and the
+   validator's recognition of a store are taken back out and driven in from a failing assertion -
+   which the mutations quoted above already show is available in every case.
    **Awaiting approval: recorded 2026-09-08.**
 7. **`b544003` "build(image): make the artefact the image is built from unambiguous" has no test
    pair.** It clears `build/libs/*.jar` in `scripts/container-smoke.sh` before the image is built
@@ -1015,6 +1105,72 @@ its observed run and its two reverted mutations are recorded in its tick line ab
    [service-cp-crime-court-register-0.0.1.jar, service-cp-crime-court-register-0.0.999.jar]" - and
    is green again with the extra jar removed. Same shape as exception 5, and the same reason it is
    written down: the preamble grants that exemption to Phase 1 infrastructure and not to Phase 7.
+   **What the design owner is being asked** is to accept that empirical evidence in place of a red
+   run for a commit that is one shell step and one suite's own fixture. **If approval is withheld**,
+   it is reworked into a compliant pair: the refusal is driven from a `CliDispatchIT` case that
+   fails against a `build/libs` holding two jars - the run quoted above, landed as a test commit -
+   with `packagedJar`'s check and the script's clearing step following it.
+   **Awaiting approval: recorded 2026-09-08.**
+8. **Two mirror [A] characterisations inside `1609e80`, from the Codex gate.** That commit records a
+   red run - two of its four cases fail against both release statements as they stood - and the two
+   that do not are the same arrangements with the two identities the other way round:
+   `Failure.a_failure_should_supersede_against_an_equal_time_re_share_that_sorts_last` and
+   `Releasing.a_release_should_supersede_against_an_equal_time_re_share_that_sorts_last`, labelled
+   **[A]** in their own javadoc.
+   **Why no red run was recorded**: the identity tie-break the old order fell back on happened to
+   agree with the recorder in that direction, so the behaviour already held and both cases were
+   green on introduction, with no implementation commit following them. They are written because one
+   direction on its own is also satisfied by a search that ranks a key's rows by identity and
+   nothing else.
+   **Non-vacuity was shown by mutation instead**, applied to both statements together, reverted
+   before the commit and quoted in its body: the direction test reading `<` rather than `>`, so the
+   search looks for a predecessor - "65 tests completed, 7 failed", both mirror cases on the same
+   shapes as their pairs ("Expecting Optional to contain: c9217314-7771-4bb5-b21e-f4340b986cd5 but
+   was empty.", "Expecting actual: [\"RECORDED\", \"RECORDED\"]") plus the three existing direction
+   cases.
+   This is `c3d8ff7`'s shape, which the paragraph above records as deliberately not on this list. It
+   is written down anyway because what these two cases characterise is a **SQL statement**, and the
+   preamble requires an integration red run for every change to one; the two directions of an
+   equal-instant pair are one rule, and half of it arrived without a failing assertion.
+   **What the design owner is being asked** is whether an [A] case may state the direction of a
+   statement's rule that already held, inside the commit that drives the other direction red.
+   **If approval is withheld**, the pair is reworked into a compliant one: the ranking is taken out
+   of both statements so that neither direction holds, and both are driven back in from the
+   DuplicateKeyException the mutation above already produces on the mirror cases.
+   **Awaiting approval: recorded 2026-09-08.**
+9. **`07e325b` / `baa0c32` extracted the report's destination and characterised it afterwards.**
+   `batch/cli/StandardOutput` was taken out of the `System.out::println` that `CliMain.main` handed
+   the dispatch - the token constitution Principle VI forbids in production code and tests alike -
+   and `batch/cli/StandardOutputTest` (five cases, labelled **[A]**, green on introduction) followed
+   in `baa0c32`, together with `CliMainTest`'s "where the lines go" group moved off `System.setOut`
+   onto a second `StandardOutput` handed to nobody.
+   **Why no red run was recorded**: `07e325b` claims Principle II's extract-with-no-behaviour-change
+   exemption and records the characterisation the suites already held in place of one - pinned
+   before the change (`batch.cli.*` classes=35 tests=159 failures=0 errors=0, and
+   `e2e/CliDispatchIT` 4 tests 0 failures, including the case that asserts the container's stdout
+   is exactly `flag=ON`) and taken again after it over the jar the image copies, so the real
+   descriptor is proved by the container rather than by a JUnit case.
+   **What is not a pure extraction, and is why this is written down**: three properties of the
+   boundary are deliberate narrowings of what the static stream did, named in that commit's body -
+   UTF-8 rather than the JVM's console encoding, one `\n` rather than the platform separator, and a
+   line that cannot be written wrapped in `UncheckedIOException` rather than swallowed into an error
+   flag nobody reads. No case failed before them, so that much of the pair is behaviour that arrived
+   test-after rather than behaviour that already existed.
+   **Non-vacuity was shown by mutation instead**, two of them, both reverted before `baa0c32` and
+   quoted in its body: `lines.flush()` dropped and US-ASCII encoded together - "35 tests completed,
+   6 failed", all five new cases and the moved one, "expected: \"flag=ON\ndate=2026-09-07
+   released=0\n\" but was: \"\"" and, on the write-failure case, "Expecting actual not to be null",
+   because a write held in an encoder's buffer never reaches the stream that would refuse it; and
+   the encoding on its own, flush restored - "5 tests completed, 1 failed",
+   `a_line_should_be_encoded_as_utf_8_rather_than_in_whatever_the_pod_reads_as_its_locale` on
+   "expected: [... 70, -61, -76, 110, 10] but was: [... 70, 63, 110, 10]", byte 63 being the `?` a
+   pod with no locale prints through a court house's name.
+   **What the design owner is being asked** is to accept a pin taken before and after the change,
+   with those mutations, in place of a red run for an extraction that narrowed three properties on
+   its way out. **If approval is withheld**, the pair is reworked into a compliant one: the three
+   narrowings come back out of `StandardOutput` and are driven in from the failing assertions the
+   mutations above already show are available, which leaves `07e325b` the pure extraction it
+   claims to be.
    **Awaiting approval: recorded 2026-09-08.**
 
 **The five store statements T065 held back are the Phase 6 rule working rather than an exception to
@@ -1022,7 +1178,8 @@ it**: `batchesOn`, `releaseFailed`, `recordedWhileOff`, `supersedeSharedBefore` 
 `findByRegisterDate` were left as seams instead of landing untested, and each got its integration
 red run against a real Postgres (`RegisterStoreIT`, `RegisterBatchRepositoryIT`, `903d33b`) before
 `e43cca3` implemented it - and both statements that were later found defective were re-driven the
-same way, `ba7670d` / `6fb6fb3`, `8745144` / `7245d9c` and `ce76e21` / `6c8334a`.
+same way, `ba7670d` / `6fb6fb3`, `8745144` / `7245d9c`, `ce76e21` / `6c8334a` and, at the Codex
+gate, `1609e80` / `3fae1a2`.
 
 **Review 8's other fixes are red/green pairs and are recorded on the tick lines they belong to**,
 not here: the successor guard on both release statements (T065), the summary line and the flag-off
@@ -1032,6 +1189,27 @@ name and stdout carrying the report alone (T067), and one outside Phase 7's own 
 can be built from, under the setting's own name rather than as an Azure `IllegalArgumentException`
 during refresh. Four documentation-only corrections landed with them (`58769d2`, `e2ee872`,
 `fdaf331`'s port contract, and this file), each named in its own commit body.
+
+**The Codex gate's fixes are recorded the same way**: three of its four pairs on the tick lines
+above - the successor's ordering rule and the two changes to the commands' own code, all three
+T065's - and the fourth outside Phase 7's own tasks, as `507263d` / `c22509c` was.
+`35d3277` / `5bf982f` replaces both endpoint patterns in `config/PropertiesValidator` with a
+`java.net.URI` parse: `asEndpointUri` parses the trimmed value and requires a host, which is also
+what requires a port that parses; `hostOf` lower-cases it and strips the root label's trailing dot
+before `namesARealFlagStore` asks whether it ends `.azconfig.io`; and `requireAFlagStoreUrl`
+additionally requires an http or https scheme. Red at `35d3277` ("137 tests completed, 5 failed",
+each on "Expecting: <Started application [AnnotationConfigApplicationContext@...]> to have failed
+but context started successfully") over three absolute-DNS spellings of a real store -
+`https://courtregister-ste86.azconfig.io./`, `https://COURTREGISTER-STE86.AZCONFIG.IO.` and
+`https://courtregister-ste86.azconfig.io.:443/kv` - and two endpoints naming no host,
+`http://foo:bad` and `http://:`, which `java.net.URI` parses as a registry authority with a null
+host. Green at `5bf982f` (`ConfigurationValidationTest` classes=20 tests=137, and `*config.*` with
+`*appconfig.*` classes=75 tests=374, 0 failures and 0 errors, so every generation-enabled context
+still starts). One deliberate narrowing is named in the fix's body: an authority `java.net.URI`
+cannot read a host out of - an underscore in a hostname being the realistic case - is now refused
+where the pattern admitted it, and nothing in `application.yaml`, `docker/`, `scripts/` or the
+suites uses such a host. `c22509c`'s `FLAG_STORE_URL` and the older `REAL_FLAG_STORE` no longer
+exist; every requirement they carried does, and the endpoint refusal's wording changed with them.
 
 ---
 
