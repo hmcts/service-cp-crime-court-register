@@ -69,6 +69,18 @@ public final class PersonalDataMarkers {
     public static final String RECIPIENT_EMAIL = "recipient.marker.zqx7@example.gov.uk";
 
     /**
+     * systemdocgenerator's own words for a render it refused.
+     *
+     * <p>Free text written by another service about a document whose every defendant is a child:
+     * the template it could not lay out, the field it found empty, and whatever else its authors
+     * chose to put in a sentence. It is the one value of this kind this service deliberately keeps
+     * - it is carried to the {@code sdg_reason} column, which is a column and not a log index - so
+     * the rule over it is the graded one and not the flat one: never at INFO or above, never in a
+     * metric label, and permitted at DEBUG where a local diagnosis can ask for it.
+     */
+    public static final String GENERATOR_REASON = "SDGREASONMARKERZQX7";
+
+    /**
      * What an operator mistypes, or pastes, into one of a command's arguments.
      *
      * <p>Shaped as a contact detail because that is the shape of the accident: a support call

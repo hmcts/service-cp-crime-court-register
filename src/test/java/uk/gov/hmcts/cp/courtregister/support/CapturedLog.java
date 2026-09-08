@@ -165,10 +165,20 @@ public final class CapturedLog implements AutoCloseable {
      * else wrote.
      */
     public List<String> renderings() {
-        return events().stream().map(CapturedLog::render).toList();
+        return events().stream().map(CapturedLog::rendering).toList();
     }
 
-    private static String render(final ILoggingEvent event) {
+    /**
+     * The same rendering, for one event a suite is holding on its own.
+     *
+     * <p>A suite whose claim is graded by level - forbidden at INFO and above, permitted below it -
+     * has to filter the events before it renders them, and a second copy of this method in that
+     * suite is how the two come to disagree about whether an attached exception counts.
+     *
+     * @param event one captured event
+     * @return everything it would put in front of a reader
+     */
+    public static String rendering(final ILoggingEvent event) {
         final IThrowableProxy thrown = event.getThrowableProxy();
         return thrown == null
                 ? event.getFormattedMessage()

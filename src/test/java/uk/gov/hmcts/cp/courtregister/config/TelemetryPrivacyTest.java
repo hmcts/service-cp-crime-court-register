@@ -15,7 +15,10 @@ import com.azure.core.amqp.exception.AmqpException;
 import com.azure.core.util.BinaryData;
 import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
 import com.azure.messaging.servicebus.ServiceBusReceivedMessageContext;
+import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -24,6 +27,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -31,10 +35,13 @@ import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -46,6 +53,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import uk.gov.hmcts.cp.courtregister.adapter.fileservice.FileServicePayloadStore;
 import uk.gov.hmcts.cp.courtregister.application.DistributionPipeline;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.HearingPayloadSource;
@@ -66,13 +74,18 @@ import uk.gov.hmcts.cp.courtregister.batch.cli.GenerateRegisterCli;
 import uk.gov.hmcts.cp.courtregister.batch.cli.ListBatchesCli;
 import uk.gov.hmcts.cp.courtregister.batch.cli.NotifyRegisterCli;
 import uk.gov.hmcts.cp.courtregister.batch.cli.SupersedeBeforeCli;
+import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
+import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
 import uk.gov.hmcts.cp.courtregister.domain.ContractViolation;
 import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
+import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
+import uk.gov.hmcts.cp.courtregister.domain.GateDecision;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
+import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
@@ -82,7 +95,9 @@ import uk.gov.hmcts.cp.courtregister.inbound.ServiceBusConsumerConfig;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
+import uk.gov.hmcts.cp.courtregister.support.GenerationLegs;
 import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
+import uk.gov.hmcts.cp.courtregister.support.LogStatement;
 import uk.gov.hmcts.cp.courtregister.support.NowSubscriptionFixtures;
 import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
 import uk.gov.hmcts.cp.courtregister.support.QueueHealthTestSupport;
@@ -169,6 +184,28 @@ class TelemetryPrivacyTest {
     /** The hearing the base fixtures are built around, and the court house its centre carries. */
     private static final String HEARING_ID = "1828f356-f746-4f2d-932b-79ef2df95c80";
     private static final String OU_CODE = "B01LY00";
+
+    /**
+     * The count the statement scan has to beat before its emptiness means anything.
+     *
+     * <p>Not the exact number, which would make every new statement a two-line change to a test
+     * that is not about counting; a floor well under the real total, which is what a scan that had
+     * quietly stopped matching anything would fall below.
+     */
+    private static final int EVERY_LINE_THE_LEGS_WRITE = 50;
+
+    /**
+     * The count the meter-name scan has to beat, for the reason the statement floor exists.
+     */
+    private static final int EVERY_METER_THE_LEGS_PUBLISH = 10;
+
+    /** The prefix every meter of this service carries, and no label value does. */
+    private static final String METER_PREFIX = "courtregister_";
+
+    /** The status lines a label may carry, which is every one a far end can answer with. */
+    private static final int MIN_STATUS = 100;
+
+    private static final int MAX_STATUS = 599;
 
     private static final int MAX_DELIVERY_COUNT = 5;
     private static final Duration RUN_DEADLINE = Duration.ofMinutes(4);
@@ -659,6 +696,334 @@ class TelemetryPrivacyTest {
                 arguments("a token where a name belongs", CliMain.CHECK_FLAG, List.of(token)),
                 arguments("a name nobody owns, given twice", CliMain.LIST_BATCHES,
                         List.of("--" + token, "--" + token)));
+    }
+
+    // --- the batch and the notification legs -----------------------------------------------------
+
+    /**
+     * What the downstream half may write down about who a register goes to.
+     *
+     * <p>The groups above are about the delivery path, whose personal data is the child's. This one
+     * is about everything after it, and the data is somebody else's: a night's registers are
+     * batched, rendered by systemdocgenerator and then <strong>e-mailed to named people at named
+     * Youth Offending Teams</strong>. Three values arrive with that, and none of them is a
+     * defendant's:
+     *
+     * <ul>
+     *   <li><strong>a recipient's e-mail address</strong>, which reference data supplies, the
+     *       document carries, {@code register_notification} keys on and the notify command's body
+     *       is addressed to - forbidden at every level, exactly as a child's own details are;</li>
+     *   <li><strong>a recipient's name</strong>, which the template greets by name and the same row
+     *       holds beside the address - forbidden at every level for the same reason;</li>
+     *   <li><strong>systemdocgenerator's own {@code reason}</strong>, which is free text another
+     *       service wrote about a document whose every defendant is a child. This one is the graded
+     *       rule rather than the flat one: it is deliberately kept - carried to the
+     *       {@code sdg_reason} column, which is a column and not a log index - so it is forbidden
+     *       at INFO and above and in every metric label, and permitted at DEBUG, where two
+     *       statements say so in their own comments.</li>
+     * </ul>
+     *
+     * <p>And the positive half, because a rule that forbade everything would be satisfied by a leg
+     * that wrote nothing at all and left support with a night of e-mails and no way to ask about
+     * one: <strong>a batch id, a notification id and a bounded reason code are written, at INFO and
+     * above.</strong> Those three are what a resend is asked for by - {@code notify-register
+     * --batch} takes the first of them - and none of them names a person.
+     *
+     * <p><strong>The sweep is over the statements rather than over a list of cases.</strong> Every
+     * line the two legs can write is enumerated out of the nine sources that write one, and the
+     * last case below insists the drive above reached <em>each</em> of them: a statement added to
+     * any of those classes later is inside this claim from the moment it is written, rather than
+     * inside it if somebody remembered to add a case. The classes are named because the two legs
+     * are not a package - the run and the reconciler are in {@code batch}, the two services in
+     * {@code application}, the renderer's client, the notifier's client and the topic listener in
+     * three {@code adapter} packages - and the tenth,
+     * {@link uk.gov.hmcts.cp.courtregister.adapter.fileservice.FileServicePayloadStore}, is in the
+     * list for the opposite reason: it holds a night's payload and writes no line at all, which is
+     * a claim of its own and is asserted as one.
+     *
+     * <p><strong>[A]</strong>: every case in this group is a characterisation of behaviour the two
+ * legs already had when it was written, so each records a passing run rather than a red one. What
+ * makes it more than a rubber stamp is stated where each case's own reason is, and was shown by
+ * mutation before it was committed: a line given the recipient's address, and a
+ * {@code sdg_reason} line raised from DEBUG to INFO, each failing exactly one case and each
+ * reverted.
+ *
+ * <p>What the drive doubles is the store and its two repositories, and nothing else: the two
+     * outward HTTP clients are the real ones over a real socket, the mapper that turns a batch into
+     * a payload is the real one, and the metrics are registered on a real registry which the last
+     * two cases read back. The clients matter most - they are the classes with the address in their
+     * hands and a far end's status line in their exceptions.
+     */
+    @Nested
+    @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+    @DisplayName("a register generated, and the teams told about it")
+    class TheGenerationAndNotificationLegs {
+
+        /** Every line the drive wrote, at every level, with any attached exception rendered. */
+        private final List<ILoggingEvent> written = new ArrayList<>();
+
+        /** The instruments the drive moved, on the registry the service would export from. */
+        private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+
+        @BeforeAll
+        void driveTheTwoLegs() throws Exception {
+            try (CapturedLog log = CapturedLog.everything();
+                    GenerationLegs legs = GenerationLegs.overMarkedRecipients(meters)) {
+                legs.driveEverything();
+                written.addAll(log.events());
+            }
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @MethodSource("uk.gov.hmcts.cp.courtregister.config.TelemetryPrivacyTest"
+                + "#everythingARecipientIsIdentifiedBy")
+        @DisplayName("[A] writes down nothing that identifies a recipient, at any level")
+        void should_never_write_down_anything_that_identifies_a_recipient(
+                final String what, final String marker) {
+
+            assertThat(renderings())
+                    .as("the drive has to have written something for its silence to mean anything")
+                    .isNotEmpty();
+            assertThat(renderings())
+                    .as("%s reached the log index, and the index is read by the whole estate", what)
+                    .noneMatch(line -> line.contains(marker));
+        }
+
+        @Test
+        @DisplayName("[A] keeps systemdocgenerator's own words out of INFO and above")
+        void should_keep_the_generator_s_own_words_below_info() {
+            assertThat(renderedAtOrAbove(Level.INFO))
+                    .as("a run that logged nothing above DEBUG would satisfy this vacuously")
+                    .isNotEmpty();
+            assertThat(renderedAtOrAbove(Level.INFO))
+                    .as("the generator's reason is free text about a document whose every "
+                            + "defendant is a child; it goes to sdg_reason, not to the index")
+                    .noneMatch(line -> line.contains(PersonalDataMarkers.GENERATOR_REASON));
+            assertThat(renderings())
+                    .as("and it is kept at DEBUG deliberately, so a sweep that found it nowhere at "
+                            + "all would be passing because the drive never carried one")
+                    .anyMatch(line -> line.contains(PersonalDataMarkers.GENERATOR_REASON));
+        }
+
+        @Test
+        @DisplayName("[A] and does say which batch, which notification and for what bounded reason")
+        void should_still_say_which_batch_and_which_notification_and_why() {
+            final List<String> reportable = renderedAtOrAbove(Level.INFO);
+
+            assertThat(reportable)
+                    .as("the batch id is what an operator resends by - notify-register --batch "
+                            + "- so a leg that named no batch would leave a night unrecoverable")
+                    .anyMatch(line -> line.contains(GenerationLegs.BATCH_ID.toString()));
+            assertThat(reportable)
+                    .as("the notification id is the identity one recipient's e-mail was asked for "
+                            + "under, and the only way to ask notificationnotify what became of it")
+                    .anyMatch(line -> line.contains(GenerationLegs.NOTIFICATION_ID.toString()));
+            assertThat(reportable)
+                    .as("and a failure names the bounded code it was failed under, which is what "
+                            + "the register's own column holds")
+                    .anyMatch(line -> line.contains(
+                            BatchFailureReason.RENDER_REQUEST_FAILED.name()));
+        }
+
+        @Test
+        @DisplayName("[A] and puts nothing that identifies anybody in a meter's name or label")
+        void should_never_label_a_series_with_anything_that_identifies_anybody() {
+            final List<String> series = meters.getMeters().stream()
+                    .map(meter -> meter.getId().getName() + " "
+                            + meter.getId().getTags().stream()
+                                    .map(tag -> tag.getKey() + "=" + tag.getValue())
+                                    .collect(Collectors.joining(",")))
+                    .toList();
+
+            assertThat(series)
+                    .as("a leg that published no series at all would satisfy this vacuously")
+                    .isNotEmpty();
+            for (final String marker : GenerationLegs.NOTHING_A_SERIES_MAY_CARRY) {
+                assertThat(series)
+                        .as("a label is a series, and a series is kept for as long as the estate "
+                                + "keeps metrics: %s", marker)
+                        .noneMatch(line -> line.contains(marker));
+            }
+            assertThat(series)
+                    .as("a batch id is not personal data and is still not a label - one series per "
+                            + "batch is a cardinality explosion the class's own javadoc refuses")
+                    .noneMatch(line -> line.contains(GenerationLegs.BATCH_ID.toString()));
+        }
+
+        @Test
+        @DisplayName("[A] and labels every series it publishes with a bounded code")
+        void should_label_every_series_with_a_bounded_code() {
+            final Set<String> bounded = boundedLabelVocabulary();
+            final List<String> labels = meters.getMeters().stream()
+                    .flatMap(meter -> meter.getId().getTags().stream())
+                    .map(Tag::getValue)
+                    .toList();
+
+            assertThat(labels)
+                    .as("a leg that labelled no series would satisfy this vacuously")
+                    .isNotEmpty();
+            assertThat(labels)
+                    .as("a label outside the bounded vocabulary is free text, and free text down "
+                            + "here is somebody's address or another service's prose")
+                    .allMatch(bounded::contains);
+            assertThat(labels)
+                    .as("and the bounded codes really are there, so the sweep is not passing "
+                            + "because nothing was labelled with a reason at all")
+                    .contains(GenerationMetrics.CLAIM_LOST);
+        }
+
+        /**
+         * The other half of the label claim: that the drive reached every series there is.
+         *
+         * <p>A sweep over the labels on a registry is only as wide as the meters something put
+         * there, so this is the meters' version of the statement scan below - the names are read
+         * off {@link GenerationMetrics}, and a meter declared later is inside the claim above from
+         * the moment its name is.
+         *
+         * <p><strong>One declared meter has no series, and it is named rather than
+         * exempted.</strong> {@code courtregister_generation_latency} is a timer no production
+         * code records: nothing
+         * calls {@code GenerationMetrics.generationLatency}, so no arrangement of this leg can put
+         * a reading on it. That is an alerting surface that never fires rather than anything about
+         * privacy - it carries no label either way - and it is asserted as the fact it is, so that
+         * whoever wires the timer up is told by this test to fold it into the drive rather than
+         * leaving its labels unswept.
+         */
+        @Test
+        @DisplayName("[A] and the drive above moved every meter the downstream half can publish")
+        void should_have_moved_every_meter_the_downstream_half_can_publish() {
+            final Set<String> published = meters.getMeters().stream()
+                    .map(meter -> meter.getId().getName())
+                    .collect(Collectors.toSet());
+
+            assertThat(declaredMeterNames())
+                    .as("a scan that found no meter name would make this cover nothing")
+                    .hasSizeGreaterThan(EVERY_METER_THE_LEGS_PUBLISH);
+            assertThat(declaredMeterNames().stream()
+                            .filter(name -> !published.contains(name))
+                            .toList())
+                    .as("a meter the drive never moved is a series whose labels nothing above "
+                            + "swept; each one needs a case in GenerationLegs.driveEverything")
+                    .containsExactly(GenerationMetrics.GENERATION_LATENCY);
+        }
+
+        @Test
+        @DisplayName("[A] and the drive above reached every line the two legs can write")
+        void should_have_reached_every_line_the_two_legs_can_write() throws Exception {
+            final List<LogStatement> declared = LogStatement.everyOneIn(GenerationLegs.THE_LEGS);
+            final Set<String> reached = written.stream()
+                    .map(event -> event.getLoggerName() + "|" + event.getMessage())
+                    .collect(Collectors.toSet());
+
+            assertThat(declared)
+                    .as("a scan that found no statement would make the sweep above cover nothing")
+                    .hasSizeGreaterThan(EVERY_LINE_THE_LEGS_WRITE);
+            assertThat(declared.stream()
+                            .filter(statement -> !reached.contains(statement.key()))
+                            .map(LogStatement::where)
+                            .toList())
+                    .as("a statement the drive never reached is a statement outside every claim "
+                            + "above; each needs a case in GenerationLegs.driveEverything")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("[A] and the payload store writes no line at all, so its words are its own")
+        void should_leave_the_payload_store_writing_nothing() throws Exception {
+            assertThat(LogStatement.everyOneIn(List.of(FileServicePayloadStore.class)))
+                    .as("the store's failures reach a log line as another class's reason=, and its "
+                            + "messages are bounded phrases written in this repository for that; a "
+                            + "line of its own would be a second, unasserted way out")
+                    .isEmpty();
+        }
+
+        private List<String> renderings() {
+            return written.stream().map(CapturedLog::rendering).toList();
+        }
+
+        private List<String> renderedAtOrAbove(final Level level) {
+            return written.stream()
+                    .filter(event -> event.getLevel().isGreaterOrEqual(level))
+                    .map(CapturedLog::rendering)
+                    .toList();
+        }
+    }
+
+    /**
+     * Every meter name {@link GenerationMetrics} declares, read off the class rather than listed.
+     *
+     * <p>The names are its own {@code public static final String} constants and they are the
+     * alerting surface the estate fires on, so the set is taken from the class: a meter added to
+     * the downstream half is then inside the claim above from the moment its name is declared.
+     *
+     * @return every declared meter name
+     */
+    private static Set<String> declaredMeterNames() {
+        return Arrays.stream(GenerationMetrics.class.getDeclaredFields())
+                .filter(field -> Modifier.isStatic(field.getModifiers()))
+                .filter(field -> field.getType() == String.class)
+                .map(TelemetryPrivacyTest::valueOf)
+                .filter(value -> value.startsWith(METER_PREFIX))
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    /**
+     * Every value a label of the downstream half is permitted to carry.
+     *
+     * <p>Three sources and no fourth: the bounded reason constants
+     * {@link GenerationMetrics} declares itself, the enumerations whose constants it turns into
+     * codes, and a status line, which is three digits. Anything else on a label is free text, and
+     * free text on this leg is a recipient's address or another service's prose about a document
+     * whose every defendant is a child.
+     *
+     * @return the bounded vocabulary
+     */
+    private static Set<String> boundedLabelVocabulary() {
+        return Stream.of(
+                        Arrays.stream(GenerationMetrics.class.getDeclaredFields())
+                                .filter(field -> Modifier.isStatic(field.getModifiers()))
+                                .filter(field -> field.getType() == String.class)
+                                .map(TelemetryPrivacyTest::valueOf)
+                                .filter(value -> !value.startsWith(METER_PREFIX)),
+                        Arrays.stream(BatchStatus.values()).map(TelemetryPrivacyTest::code),
+                        Arrays.stream(NotificationStatus.values())
+                                .map(TelemetryPrivacyTest::code),
+                        Stream.concat(
+                                        Stream.of(new FlagDecision.Enabled(),
+                                                new FlagDecision.Disabled()),
+                                        Arrays.stream(FlagDecision.UnreadableReason.values())
+                                                .map(FlagDecision.Unreadable::new))
+                                .map(FlagDecision::code),
+                        Arrays.stream(GateDecision.Reason.values()).map(GateDecision.Reason::code),
+                        IntStream.rangeClosed(MIN_STATUS, MAX_STATUS).mapToObj(String::valueOf))
+                .flatMap(values -> values)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    /** The label a state is counted under, as {@link GenerationMetrics} derives it. */
+    private static String code(final Enum<?> state) {
+        return state.name().toLowerCase(Locale.ROOT).replace('_', '-');
+    }
+
+    /** One declared constant's value, which a test-only read cannot be refused. */
+    private static String valueOf(final Field field) {
+        try {
+            return (String) field.get(null);
+        } catch (IllegalAccessException unreadable) {
+            throw new IllegalStateException(
+                    "a public constant of GenerationMetrics could not be read", unreadable);
+        }
+    }
+
+    /**
+     * Everything reference data and a subscription say about who a register is going to.
+     *
+     * @return each value, beside what it is
+     */
+    static Stream<Arguments> everythingARecipientIsIdentifiedBy() {
+        return Stream.of(
+                arguments("a recipient's e-mail address", PersonalDataMarkers.RECIPIENT_EMAIL),
+                arguments("a recipient's name", PersonalDataMarkers.RECIPIENT_ORGANISATION));
     }
 
     // --- secrets ---------------------------------------------------------------------------------
