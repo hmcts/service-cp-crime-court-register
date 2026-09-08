@@ -2,6 +2,7 @@ package uk.gov.hmcts.cp.courtregister.batch.cli;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -1050,6 +1051,65 @@ class GenerateRegisterCliTest {
     @Nested
     @DisplayName("what the operator is shown")
     class WhatIsPrinted {
+
+        /**
+         * The one line the command answers a day with, asserted whole.
+         *
+         * <p><strong>[A] characterisation.</strong> The line has been printed in this shape since
+         * the command landed; nothing here changes it. What was missing is a case that reads it:
+         * quickstart.md quotes it verbatim as what a compose run prints and the Phase 7 checkpoint
+         * records it as what was observed, while every case in this suite reads the counts out of
+         * the ledgers the doubles keep instead - so a renamed field, a dropped one or two counts
+         * swapped would have shipped green against the one line a runbook step tells an operator to
+         * read.
+         *
+         * <p>Six numbers, all of them different: a FAILED batch released, a register that never
+         * reached one, one batch assembled out of the two of them, one render asked for and one key
+         * the assembler deferred. A day arranged so that any two of the counts could stand in for
+         * each other would pin the arithmetic rather than the line.
+         */
+        @Test
+        void the_day_should_be_answered_with_one_line_of_counts_in_the_documented_order() {
+            theFlagIsOn();
+            final RegisterBatch failed = batch(new CourtCentreDay(LEEDS, THURSDAY), LEEDS_HOUSE,
+                    BatchStatus.FAILED);
+            theDayHolds(failed, leedsRegister());
+            stillWaiting(leedsRegister());
+            theAssemblerDefers(new CourtCentreDay(BRADFORD, THURSDAY));
+
+            final int code = run("--" + Args.DATE, THURSDAY.toString());
+
+            softly.assertThat(printed)
+                    .as("the summary line an operator and a runbook step both read: the day, what "
+                            + "was released, what was grouped, what was written down, what was "
+                            + "asked for and what waits for a later run")
+                    .contains("date=" + THURSDAY + " released=1 registers=2 batches=1 requested=1"
+                            + " deferred=1");
+            softly.assertThat(code).isEqualTo(CliMain.SUCCESS);
+        }
+
+        /**
+         * The assembler, answering one batch out of everything it was given and deferring a key.
+         *
+         * <p>The suite's own double answers one batch per key and defers nothing, which is what
+         * every other case wants. The line above needs a deferral, and a deferral is the one number
+         * on it that no arrangement of registers can produce: a key waits because a batch of its
+         * own is still in flight, which is the assembler's rule and not this command's.
+         *
+         * @param deferred the keys the assembler passed over
+         */
+        private void theAssemblerDefers(final CourtCentreDay... deferred) {
+            // doAnswer rather than when(...), which would call the mock and run the stub this one
+            // replaces, over the nulls the matchers stand in for.
+            doAnswer(call -> {
+                final List<RegisterRecord> registers = call.getArgument(0);
+                groupings.add(new Grouping(List.copyOf(registers), call.getArgument(1),
+                        call.getArgument(2)));
+                return new BatchAssembly(List.of(new AssembledBatch(
+                        batch(registers.getFirst().key(), LEEDS_HOUSE, BatchStatus.PENDING),
+                        registers)), List.of(deferred));
+            }).when(assembler).assemble(any(), any(), anyBoolean());
+        }
 
         @Test
         void the_batches_a_run_asked_for_should_be_named_by_their_own_identity() {
