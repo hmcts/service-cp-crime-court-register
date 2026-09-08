@@ -515,6 +515,36 @@ class GenerateRegisterCliTest {
                     .contains(Reason.FLAG_UNREADABLE.code());
         }
 
+        /**
+         * What the log says a flag-off refusal was, which is what an incident view reads.
+         *
+         * <p>The terminal line carries the gate's own bounded code and always has. The WARN line
+         * beside it is written by the refusal every command shares, and that one names a cause:
+         * "its arguments were not usable". For the four argument refusals it is true; for this one
+         * it is not, and it is the line indexed for the incident - so anybody searching the index
+         * for why the 08:00 regeneration did nothing is told the operator mistyped rather than that
+         * the cutover flag stopped them.
+         */
+        @Test
+        void a_run_the_flag_stopped_should_not_be_logged_as_a_typing_mistake() {
+            theFlagSays(new Skipped(Reason.FLAG_OFF));
+
+            try (CapturedLog log = CapturedLog.capturing(CliMain.class)) {
+                final int code = run("--" + Args.DATE, THURSDAY.toString());
+
+                softly.assertThat(code).isEqualTo(CliMain.REFUSED);
+                softly.assertThat(log.messages())
+                        .as("the arguments were usable and were read; what declined the run is the "
+                                + "one lever, and a log line saying otherwise sends an incident "
+                                + "after the wrong thing")
+                        .noneMatch(line -> line.contains("its arguments were not usable"));
+                softly.assertThat(log.messages())
+                        .as("and the line still says which reading it was, because that is what "
+                                + "the search is for")
+                        .anyMatch(line -> line.contains(Reason.FLAG_OFF.code()));
+            }
+        }
+
         @Test
         void a_run_without_the_override_should_not_ask_the_gate_for_one() {
             theFlagIsOn();
