@@ -962,12 +962,12 @@ lines above and in the exceptions block below rather than here.
 
 ### Approved TDD exceptions (Phase 7)
 
-Five approved, and four more recorded below awaiting approval - 6 and 7 written down at review
-round 2, 8 and 9 at the phase gate. They are recorded here rather than argued for in a commit body.
-Approver for 1 to 5: **design owner, 2026-09-07**. 6 to 9 **have been put to the design owner and
-no answer has come yet**, so the phase gate is not clean while they stand; each says below what is
-being asked and what happens if approval is withheld. Anything
-else in Phase 7 that arrived test-after is a defect, not a precedent.
+Eight approved, and one recorded below awaiting approval - 6 and 7 written down at review round 2,
+8 and 9 at the phase gate. They are recorded here rather than argued for in a commit body.
+Approver for 1 to 5: **design owner, 2026-09-07**; for 6, 7 and 8: **design owner, 2026-09-08**.
+9 **has been put to the design owner and no answer has come yet**, so the phase gate is not clean
+while it stands; it says below what is being asked and what happens if approval is withheld.
+Anything else in Phase 7 that arrived test-after is a defect, not a precedent.
 
 Three things in the phase were judged against this list and are deliberately not on it. `c3d8ff7`
 (T064) is a test task with a recorded red run, and the ten cases of it that were green on
@@ -1152,7 +1152,10 @@ take the property away. No implementation follows it and its passing run is in t
    red/green pair: the order `BATCHES_ON_DAY` answers a day in, the summary line's fields and the
    validator's recognition of a store are taken back out and driven in from a failing assertion -
    which the mutations quoted above already show is available in every case.
-   **Awaiting approval: recorded 2026-09-08.**
+   **Approved: design owner, 2026-09-08**, on the ground the entry states: all three describe
+   behaviour the service already had, no production code moved in any of them, and the reverted
+   mutations show each case would catch the behaviour changing. Reworking them would mean taking
+   correct code out to put it back unchanged.
 7. **`b544003` "build(image): make the artefact the image is built from unambiguous" has no test
    pair.** It clears `build/libs/*.jar` in `scripts/container-smoke.sh` before the image is built
    and makes `CliDispatchIT.packagedJar` refuse more than one candidate instead of choosing between
@@ -1170,7 +1173,9 @@ take the property away. No implementation follows it and its passing run is in t
    it is reworked into a compliant pair: the refusal is driven from a `CliDispatchIT` case that
    fails against a `build/libs` holding two jars - the run quoted above, landed as a test commit -
    with `packagedJar`'s check and the script's clearing step following it.
-   **Awaiting approval: recorded 2026-09-08.**
+   **Approved: design owner, 2026-09-08**, on the ground the entry states: one half is a shell
+   step and the other the suite's own fixture, so no failing assertion was available to drive it,
+   and the empirical run above stands in place of one. The packaged artefact is unchanged.
 8. **Two mirror [A] characterisations inside `1609e80`, from the phase gate.** That commit records a
    red run - two of its four cases fail against both release statements as they stood - and the two
    that do not are the same arrangements with the two identities the other way round:
@@ -1197,7 +1202,10 @@ take the property away. No implementation follows it and its passing run is in t
    **If approval is withheld**, the pair is reworked into a compliant one: the ranking is taken out
    of both statements so that neither direction holds, and both are driven back in from the
    DuplicateKeyException the mutation above already produces on the mirror cases.
-   **Awaiting approval: recorded 2026-09-08.**
+   **Approved: design owner, 2026-09-08**: an [A] case may state the direction of a statement's
+   rule that already held, inside the commit that drives the other direction red. The two
+   directions are one rule, the red half is in the same commit, and the reverted mutation shows the
+   mirror cases would fail if the rule were removed.
 9. **`07e325b` / `baa0c32` extracted the report's destination and characterised it afterwards.**
    `batch/cli/StandardOutput` was taken out of the `System.out::println` that `CliMain.main` handed
    the dispatch - the token constitution Principle VI forbids in production code and tests alike -
