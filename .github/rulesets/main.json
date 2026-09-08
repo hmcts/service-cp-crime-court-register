@@ -60,6 +60,14 @@
           {
             "context": "ci-draft / Artefact-Version",
             "integration_id": 15368
+          },
+          {
+            "context": "ci-draft / Test",
+            "integration_id": 15368
+          },
+          {
+            "context": "scan",
+            "integration_id": 15368
           }
         ]
       }
