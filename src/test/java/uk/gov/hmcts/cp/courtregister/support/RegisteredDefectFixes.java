@@ -60,6 +60,28 @@ import uk.gov.hmcts.cp.courtregister.support.DifferentialCorpus.RecordedCase;
  * would be an exclusion wearing a C-number, and the first regression in that component would ship
  * inside a green suite.
  *
+ * <p><strong>Two oracles, so two catalogues.</strong> The three mechanisms above all read the 001
+ * recordings, whose C-numbers catalogue the Node function app's defects. Increment 002 brings a
+ * second oracle with it - progression's own classes, recorded under
+ * {@code src/test/resources/goldens/progression/} by running them - and its defects are catalogued
+ * as the {@code P} rows of the same register. So {@link #progressionLegRows()} is the same
+ * mechanism over that oracle: a {@link ProgressionRow} recognises the signature of its fix in a
+ * {@link GoldenDeviation}, an answer the recorded golden and this port do not agree on, and the
+ * audit requires exactly one row for it. The citation rule is one rule across both catalogues -
+ * every entry here opens with its register row number and that row exists in
+ * {@code doc/DEFECT-FIXES.md} - which is what makes an unregistered {@code P} deviation refused
+ * exactly as an unregistered {@code C} one is.
+ *
+ * <p><strong>Only P10 has a signature a comparison of answers can carry, and that is a finding
+ * rather than an omission.</strong> P1 to P5 and P9 are batch, store and notifier rows - a batch
+ * that ends {@code NOTIFIED_NOBODY}, a render whose failure is recorded, a mark scoped to its own
+ * batch, a recipient union, an assembly failure that fails one batch and lets the run walk on, a
+ * blank template that refuses to start - and none of them is a value in a document or an answer
+ * from a rule, which is why each names its own pinning test elsewhere. P8 is MOOT and P6 and P7 are
+ * RETIRED in progression's own tree, with nothing in this repository to pin. P10 is the one row
+ * whose fix is an <em>answer</em>, so it is the one row a deviation from the recorded goldens can
+ * be attributed to.
+ *
  * @see <a href="file:../../../../../../../../doc/DEFECT-FIXES.md">doc/DEFECT-FIXES.md</a>
  */
 // PMD.OnlyOneReturn: a predicate reads as a list of disqualifying conditions, each answering where
@@ -96,6 +118,17 @@ public final class RegisteredDefectFixes {
 
     /** The recorded reason the orchestrator gives for a loose-equality group-proceedings skip. */
     private static final String LOOSE_GROUP_PROCEEDINGS_SKIP = "CourtRegisterOrchestrator/index.js:22";
+
+    /** The default P10 requires where progression's own rule cannot read the application. */
+    private static final String APPLICANT_TYPE = "Applicant";
+
+    /** How the recorder wrote a refusal progression's defendant-type rule answered with. */
+    private static final String PROGRESSION_REFUSAL = "java.lang.NullPointerException";
+
+    /** The two dereferences P10 names that a recorded golden actually reached. */
+    private static final List<String> UNREADABLE_APPLICATION = List.of(
+            "CourtApplicationType.getAppealFlag()",
+            "CourtApplication.getRespondents()");
 
     /**
      * The derivations, by the property name the component reaches the wire under.
@@ -143,6 +176,18 @@ public final class RegisteredDefectFixes {
             hearingDateDereferenceThatThrows(),
             subscriptionsReadForTheDayAfterTheShare());
 
+    /**
+     * The progression-leg rows, in the order the audit consults them.
+     *
+     * <p>The {@code P} half of the register, read the same way the {@code C} half is: one row or
+     * the deviation is a port defect. One entry, because P10 is the only one of the ten rows whose
+     * fix is an answer rather than a batch state, a mark or a startup refusal - the class javadoc
+     * reconciles the other nine - and a table of one is still the mechanism, because the mechanism
+     * is what refuses the second entry nobody registered.
+     */
+    private static final List<ProgressionRow> PROGRESSION_LEG_ROWS = List.of(
+            applicationProgressionsOwnRuleCannotRead());
+
     private RegisteredDefectFixes() {
     }
 
@@ -166,6 +211,15 @@ public final class RegisteredDefectFixes {
     }
 
     /**
+     * Every registered progression-leg row, for the citation check that reads both catalogues.
+     *
+     * @return the rows
+     */
+    public static List<ProgressionRow> progressionLegRows() {
+        return PROGRESSION_LEG_ROWS;
+    }
+
+    /**
      * The claims that explain an observed divergence.
      *
      * <p>Returns all of them rather than the first, because "exactly one row explains this" is an
@@ -176,6 +230,20 @@ public final class RegisteredDefectFixes {
      */
     public static List<Claim> claimedBy(final Divergence divergence) {
         return REGISTERED_CLAIMS.stream().filter(claim -> claim.explains(divergence)).toList();
+    }
+
+    /**
+     * The progression-leg rows that explain a deviation from a recorded golden.
+     *
+     * <p>All of them rather than the first, for the same reason {@link #claimedBy(Divergence)}
+     * answers all of them: "exactly one row explains this" is an assertion the audit makes and not
+     * an assumption it is entitled to.
+     *
+     * @param deviation the observed deviation
+     * @return the rows whose predicate recognises it, empty where none does
+     */
+    public static List<ProgressionRow> claimedBy(final GoldenDeviation deviation) {
+        return PROGRESSION_LEG_ROWS.stream().filter(row -> row.explains(deviation)).toList();
     }
 
     // --- the derivations -------------------------------------------------------------------------
@@ -815,6 +883,39 @@ public final class RegisteredDefectFixes {
                 });
     }
 
+    // --- the progression-leg rows ----------------------------------------------------------------
+
+    /**
+     * P10 - the defendant-type rule throws on shapes the contract permits.
+     *
+     * @return the row
+     */
+    private static ProgressionRow applicationProgressionsOwnRuleCannotRead() {
+        return new ProgressionRow("P10 (defendant-type resolution throws on permitted shapes)",
+                "CourtRegisterHandler.getDefendantType:139 unboxes getAppealFlag() and :144 "
+                        + "dereferences getRespondents(), neither of which courtApplication.json "
+                        + "makes required, so a hearing that is in contract kills progression's "
+                        + "command and every child on the register loses their entry. The recorder "
+                        + "captured both as thrown stacks rather than answers, which is why the "
+                        + "goldens for those two shapes carry a threw and no defendantType at all. "
+                        + "This port reads an absent flag as not set and an absent respondent list "
+                        + "as no respondents, so each answers the rule's own default. The row is "
+                        + "claimed against the recorded refusal itself - it must be the "
+                        + "NullPointerException the recorder wrote, at one of the two dereferences "
+                        + "the row names - and against the answer, which must be Applicant and "
+                        + "nothing else: a golden that recorded an answer is not this row's, and "
+                        + "neither is a port that answered something progression's rule would have "
+                        + "reached had it survived. The third shape P10 specifies, a respondent "
+                        + "carrying no masterDefendant, reaches no recorded golden and is pinned "
+                        + "from a synthesised hearing in DefendantTypeResolverTest instead.",
+                deviation -> deviation.recordedAnswer() == null
+                        && deviation.recordedRefusal() != null
+                        && deviation.recordedRefusal().startsWith(PROGRESSION_REFUSAL)
+                        && UNREADABLE_APPLICATION.stream()
+                                .anyMatch(deviation.recordedRefusal()::contains)
+                        && APPLICANT_TYPE.equals(deviation.portAnswer()));
+    }
+
     // --- reading the trees -----------------------------------------------------------------------
 
     /**
@@ -1306,6 +1407,55 @@ public final class RegisteredDefectFixes {
         public boolean explains(final Divergence divergence) {
             return predicate.test(divergence);
         }
+    }
+
+    /**
+     * One registered progression-leg row: a deviation class, the {@code P} row that authorises it,
+     * and the predicate that recognises it.
+     *
+     * <p>The {@link Claim} of the second oracle, and deliberately a separate type rather than a
+     * fourth {@link Divergence} shape: a {@link Divergence} carries a {@link RecordedCase} and a
+     * {@link PortOutcome} because it is always about one 001 recording put through this port, and a
+     * deviation from a progression golden is about neither. Widening that interface to admit a
+     * shape with no recorded case and no port outcome would make both accessors answer
+     * {@code null} for one variant, which every existing claim would then have to be read against.
+     *
+     * @param reference the {@code doc/DEFECT-FIXES.md} P-number, quoted into every failure message
+     * @param rationale what the row says, in enough detail to read a red build without opening it
+     * @param predicate whether an observed deviation carries this fix's signature
+     */
+    public record ProgressionRow(
+            String reference, String rationale, Predicate<GoldenDeviation> predicate) {
+
+        /**
+         * Whether this row explains an observed deviation.
+         *
+         * @param deviation the deviation
+         * @return whether the predicate recognises it
+         */
+        public boolean explains(final GoldenDeviation deviation) {
+            return predicate.test(deviation);
+        }
+    }
+
+    /**
+     * An answer a recorded progression golden and this port do not agree on.
+     *
+     * <p>Three readings rather than two, because the recorder wrote two different kinds of
+     * non-answer and they mean opposite things. A golden carrying an answer is an oracle for it. A
+     * golden carrying no answer <em>and</em> a {@code threw} is an oracle for progression having
+     * refused - which is what P10 is about - and is not an absence at all.
+     *
+     * @param goldenId       the golden, as {@code INDEX.json} names it
+     * @param recordedAnswer what progression answered, or {@code null} where it answered nothing
+     * @param recordedRefusal the stack the recorder wrote instead of an answer, or {@code null}
+     * @param portAnswer     what this port answers, or {@code null} where it answers nothing
+     */
+    public record GoldenDeviation(
+            String goldenId,
+            String recordedAnswer,
+            String recordedRefusal,
+            String portAnswer) {
     }
 
     /**

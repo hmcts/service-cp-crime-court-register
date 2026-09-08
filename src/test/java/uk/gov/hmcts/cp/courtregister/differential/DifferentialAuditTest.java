@@ -4,16 +4,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
@@ -28,6 +36,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 import uk.gov.hmcts.cp.courtregister.adapter.progression.OutboundContractValidator;
 import uk.gov.hmcts.cp.courtregister.application.GroupProceedingsPolicy;
@@ -39,6 +48,8 @@ import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationFailedException;
 import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
+import uk.gov.hmcts.cp.courtregister.pipeline.DefendantTypeResolver;
+import uk.gov.hmcts.cp.courtregister.pipeline.PdfPayloadMapper;
 import uk.gov.hmcts.cp.courtregister.pipeline.RegisterBuilder;
 import uk.gov.hmcts.cp.courtregister.pipeline.RegisterTransformationChain;
 import uk.gov.hmcts.cp.courtregister.pipeline.SubscriptionMatcher;
@@ -49,8 +60,10 @@ import uk.gov.hmcts.cp.courtregister.support.JsonParity;
 import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes;
 import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.Claim;
 import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.Divergence;
+import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.GoldenDeviation;
 import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.PortOutcome;
 import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.PortResult;
+import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.ProgressionRow;
 
 /**
  * The differential audit: 381 recorded legacy runs, put through this port, with every difference
@@ -118,9 +131,51 @@ import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.PortResult;
  * see {@link #asPosted}, which takes it out of the tree before anything is compared, and
  * {@code RegisterTransformationChainTest}, which pins what the chain puts there.
  *
+ * <p><strong>The second oracle, and the two things nothing asserted together until T069.</strong>
+ * Everything above reads the 001 recordings. Increment 002 answers to a second oracle as well -
+ * progression's own classes, recorded by running them, under
+ * {@code src/test/resources/goldens/progression/} - and the section at the end of this suite is
+ * where the two meet. It states two things, and the point is that it states them <em>together</em>:
+ *
+ * <ul>
+ *   <li><strong>001's corpus is unchanged by 002.</strong> Not field by field: the recorder wrote a
+ *       digest of every one of the 404 files it read and a manifest digest over the lot
+ *       ({@code PROVENANCE.md} "Inputs and the corpus digest"), and
+ *       {@link #the_001_corpus_reproduces_the_digest_the_recording_left_on_it()} recomputes both
+ *       from the tree on disk. A recording somebody adjusted to agree with the port has stopped
+ *       being evidence, and this is the assertion that says so about the whole corpus at once
+ *       rather than about whichever field a comparison happened to look at.</li>
+ *   <li><strong>Every {@code PdfPayloadMapper} golden is reproduced from its recorded
+ *       input.</strong>
+ *       {@code PdfPayloadMapperTest} already holds each golden to the file beside it, byte for
+ *       byte;
+ *       what it cannot say is that the file beside it is the file T004 recorded. So
+ *       {@link #every_pdf_payload_golden_is_reproduced_from_its_recorded_input()} closes that loop
+ *       through the index's own {@code outputSha256} - the digest recorded at recording time, not a
+ *       file the suite reads twice - and does it as one digest over the whole set, so a golden the
+ *       mapper stopped being asked about fails the same assertion as a golden it got wrong.</li>
+ * </ul>
+ *
+ * <p><strong>Two places the oracle legitimately has nothing to reproduce, and the rule for
+ * each.</strong>
+ * Fifty-two of the 213 recorded documents have no golden because progression's generator
+ * <em>threw</em> on them - 51 at {@code buildParentGuardianNameAndAddress:184} and one at
+ * {@code getAge:325} - and {@code PROVENANCE.md} states the rule: they are recorded as
+ * {@code refusal} with no output file, "because there is no output to be equal to", and no such
+ * document can reach this mapper in service, because the frozen contract refuses it at the write
+ * (C29) so it is never recorded, never batched and never rendered. What <em>is</em> assertable is
+ * that this port produces no payload for them either, and
+ * {@link #every_document_progression_refused_is_refused_here_too()} asserts exactly that and no
+ * more: the refusal's text is a {@code javax.json} message on one side and a Jackson one on the
+ * other, so the text is not an oracle and is not compared. The second place is
+ * {@code defendantType}, and {@link #asPosted} explains it; the case below is the missing half of
+ * that explanation, which is that the removal takes out nothing the corpus ever held.
+ *
  * <p><strong>It is fast because it is pure.</strong> The whole corpus runs in seconds against no
  * container, no socket and no clock, so it needs no tag and runs in {@code ./gradlew build} with
- * everything else.
+ * everything else. The goldens section keeps that property: {@code PdfPayloadMapper} takes the
+ * clock the goldens were recorded against, read out of the index, because {@code cases[].age} is
+ * the one field in the payload that reads one.
  *
  * @see <a href="file:../../../../../../../../doc/DEFECT-FIXES.md">doc/DEFECT-FIXES.md</a>
  */
@@ -136,8 +191,15 @@ class DifferentialAuditTest {
     /** Where the register the audit reads its C-numbers from lives, for the citation check. */
     private static final Path DEFECT_FIXES = Path.of("doc", "DEFECT-FIXES.md");
 
-    /** A C-number at the head of a registered reference, e.g. {@code C10 (…)}. */
-    private static final Pattern C_NUMBER = Pattern.compile("^(C\\d+) ");
+    /**
+     * A register row number at the head of a registered reference, e.g. {@code C10 (…)}.
+     *
+     * <p>Either catalogue. The {@code C} rows are the 001 function app's defects and the {@code P}
+     * rows are progression's, and increment 002 answers to both oracles, so one citation rule
+     * spans them: an unregistered {@code P} deviation is refused exactly as an unregistered
+     * {@code C} one is.
+     */
+    private static final Pattern REGISTER_ROW = Pattern.compile("^([CP]\\d+) ");
 
     /** How a classified contract refusal names the field at fault in its message. */
     private static final String AT = " at ";
@@ -182,7 +244,66 @@ class DifferentialAuditTest {
     /** The production date reader, for the one comparison that is about a request and not a value. */
     private static final Dates DATES = new Dates();
 
-    private final ObjectMapper mapper = JacksonConfig.contractObjectMapper();
+    /** The mapper both oracles are read with, so a recording arrives as the service reads it. */
+    private static final ObjectMapper MAPPER = JacksonConfig.contractObjectMapper();
+
+    /** Where T004 wrote what it recorded of progression's own classes, on the test classpath. */
+    private static final String GOLDENS = "/goldens/progression/";
+
+    /** Where the recorded 001 corpus the goldens were made from lives, on the test classpath. */
+    private static final String RECORDED = "/differential/recorded/";
+
+    /** How progression's caller spells "this register names no court application". */
+    private static final String NO_TYPE = "";
+
+    /** The prefix the index's repo-relative input paths carry and the classpath does not. */
+    private static final String SOURCE_ROOT = "src/test/resources";
+
+    /** The array progression's payload generator reads a batch's documents out of. */
+    private static final String REQUESTS = "courtRegisterDocumentRequests";
+
+    /** The one field increment 002 adds that the command the legacy posted never declared. */
+    private static final String DEFENDANT_TYPE = "defendantType";
+
+    /** The three index sections that name a recorded golden. */
+    private static final List<String> GOLDEN_SECTIONS =
+            List.of("pdfPayloadDocuments", "pdfPayloadBatches", "defendantType");
+
+    /** T004's own record of what it recorded: every golden, its inputs, and the counts. */
+    private static final JsonNode INDEX = readResource(GOLDENS + "INDEX.json");
+
+    /** The digest algorithm the recorder wrote every digest in that index with. */
+    private static final String SHA_256 = "SHA-256";
+
+    /** The two spaces a manifest line puts between a digest and the path it is of. */
+    private static final String MANIFEST_GAP = "  ";
+
+    /** How many files the recorder read, so a corpus that quietly shrank is caught by count too. */
+    private static final int RECORDED_INPUTS = 404;
+
+    /** How many of the 381 recorded cases produced a document, and so are oracles for one. */
+    private static final int RECORDED_DOCUMENTS = 205;
+
+    /** How many goldens the recorder wrote across the three sections: 161 + 7 + 9. */
+    private static final int RECORDED_GOLDENS = 177;
+
+    /** How many of those are the payload generator's: 161 documents and 7 whole batches. */
+    private static final int PDF_PAYLOAD_GOLDENS = 168;
+
+    /** How many recorded documents progression's generator threw on rather than mapping. */
+    private static final int PROGRESSION_REFUSALS = 52;
+
+    /** How many recorded defendant-type goldens carry a thrown stack instead of an answer. */
+    private static final int UNREADABLE_APPLICATIONS = 2;
+
+    /** The zone the goldens were recorded in, which is the only zone this service runs in. */
+    private static final ZoneId LONDON = ZoneId.of("Europe/London");
+
+    /** The payload generator's own answer, for the goldens leg. */
+    private final PdfPayloadMapper payloads = new PdfPayloadMapper(recordingClock());
+
+    /** Progression's defendant-type rule as this port carries it, for the P-row leg. */
+    private final DefendantTypeResolver defendantTypes = new DefendantTypeResolver();
 
     /** Everything the mappers skipped on the way, which C19, C20 and C27 count rather than fail on. */
     private final List<TransformationAnomaly> anomalies = new ArrayList<>();
@@ -248,15 +369,16 @@ class DifferentialAuditTest {
         final String rows = read(DEFECT_FIXES);
         final List<String> cited = new ArrayList<>();
         RegisteredDefectFixes.claims().forEach(claim -> cited.add(claim.reference()));
+        RegisteredDefectFixes.progressionLegRows().forEach(row -> cited.add(row.reference()));
         cited.add(RegisteredDefectFixes.forProperty("registerDate").reference());
         cited.add(RegisteredDefectFixes.forProperty("wording").reference());
 
         assertThat(cited).isNotEmpty();
         for (final String reference : cited) {
-            final Matcher number = C_NUMBER.matcher(reference);
+            final Matcher number = REGISTER_ROW.matcher(reference);
             assertThat(number.find())
-                    .describedAs("every registered entry opens with its C-number, but %s does not",
-                            reference)
+                    .describedAs("every registered entry opens with its register row number, but "
+                            + "%s does not", reference)
                     .isTrue();
             assertThat(rows)
                     .describedAs("%s cites %s, which is not a row of doc/DEFECT-FIXES.md",
@@ -270,6 +392,212 @@ class DifferentialAuditTest {
     void audits_the_whole_recorded_corpus() {
         // A corpus that quietly shrank would make this suite pass by looking at less.
         assertThat(recordedCorpus()).hasSize(381);
+    }
+
+    // --- the second oracle: 001's corpus, and progression's own recorded output ------------------
+
+    @Test
+    @DisplayName("[A] reproduces increment 001's whole recorded corpus, digest for digest")
+    void the_001_corpus_reproduces_the_digest_the_recording_left_on_it() {
+        // [A] characterisation. The recorder wrote a digest of every file it read and a manifest
+        // digest over the sorted lot, precisely so that a corpus somebody adjusted to agree with
+        // the port could be detected without re-reading 404 files by eye. Both halves are
+        // recomputed here from the tree on disk: the per-file digests first, because PROVENANCE.md
+        // says the point of keeping them is that a changed input can be *found* rather than only
+        // detected, and then the manifest digest, which is the statement about the whole corpus and
+        // the one that also catches an input added or taken away.
+        final JsonNode recordedDigests = INDEX.get("inputDigests");
+        final List<String> moved = new ArrayList<>();
+        final StringBuilder manifest = new StringBuilder(RECORDED_INPUTS * 80);
+        for (final String path : propertyNames(recordedDigests).stream().sorted().toList()) {
+            final String digest = digestOf(Path.of(path));
+            if (!digest.equals(recordedDigests.get(path).stringValue())) {
+                moved.add(path);
+            }
+            manifest.append(digest).append(MANIFEST_GAP).append(path).append('\n');
+        }
+
+        assertThat(recordedDigests.size())
+                .describedAs("the recorder read 404 files; an index naming fewer would let this "
+                        + "case pass by looking at less")
+                .isEqualTo(RECORDED_INPUTS);
+        assertThat(moved)
+                .describedAs("these recorded inputs are no longer the bytes T004 read, so the "
+                        + "oracle has been edited rather than the port corrected")
+                .isEmpty();
+        assertThat(digestOf(manifest.toString()))
+                .describedAs("the corpus manifest digest is what says increment 001's corpus is "
+                        + "unchanged as a whole, inputs added or removed included")
+                .isEqualTo(INDEX.get("corpusDigest").stringValue());
+    }
+
+    @Test
+    @DisplayName("[A] holds every golden T004 recorded to the digest it was recorded under")
+    void every_recorded_golden_is_the_one_that_was_recorded() {
+        // [A] characterisation, and the half that lets the case below compare against the recording
+        // rather than against a file: outputSha256 was written at recording time, so a golden
+        // edited afterwards fails here even though every suite that reads it agrees with it.
+        final List<String> moved = new ArrayList<>();
+        int counted = 0;
+        for (final JsonNode entry : recordedGoldens()) {
+            counted++;
+            final String golden = entry.get("golden").stringValue();
+            if (!digestOf(Path.of(SOURCE_ROOT, GOLDENS.substring(1) + golden))
+                    .equals(entry.get("outputSha256").stringValue())) {
+                moved.add(golden);
+            }
+        }
+
+        assertThat(counted)
+                .describedAs("161 document goldens, 7 batch goldens and 9 defendant-type goldens")
+                .isEqualTo(RECORDED_GOLDENS);
+        assertThat(moved)
+                .describedAs("these goldens are no longer the bytes the recorder wrote")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("[A] reproduces every PdfPayloadMapper golden from the input it was recorded from")
+    void every_pdf_payload_golden_is_reproduced_from_its_recorded_input() {
+        // [A] characterisation. PdfPayloadMapperTest holds each golden to the file beside it, byte
+        // for byte, with its own canonical writer; what it cannot say is that the file beside it is
+        // the one T004 recorded. This says both at once, and says it as one digest over the whole
+        // set rather than 168 comparisons: the manifest is built from the goldens the mapper
+        // actually reproduced and is required to equal the manifest of every golden the index
+        // names, so a golden the mapper got wrong and a golden nobody asked it about fail the same
+        // assertion. Key order is the one thing forgiven, for the reason PdfPayloadMapperTest gives
+        // - javax.json and Jackson disagree about insertion order and the template reads the
+        // payload by name - and trees are compared, which is exactly that tolerance and no other.
+        final List<String> notReproduced = new ArrayList<>();
+        final StringBuilder reproduced = new StringBuilder(PDF_PAYLOAD_GOLDENS * 80);
+        final StringBuilder named = new StringBuilder(PDF_PAYLOAD_GOLDENS * 80);
+        for (final JsonNode entry : payloadGoldens()) {
+            final String golden = entry.get("golden").stringValue();
+            final String digest = entry.get("outputSha256").stringValue();
+            named.append(digest).append(MANIFEST_GAP).append(golden).append('\n');
+            final JsonNode recorded = readResource(GOLDENS + golden);
+            if (mapped(entry).map(recorded::equals).orElse(false)) {
+                reproduced.append(digest).append(MANIFEST_GAP).append(golden).append('\n');
+            } else {
+                notReproduced.add(golden);
+            }
+        }
+
+        assertThat(payloadGoldens()).hasSize(PDF_PAYLOAD_GOLDENS);
+        assertThat(notReproduced)
+                .describedAs("these goldens are not reproduced from the input they were recorded "
+                        + "from, which is a defect in this increment rather than an expectation to "
+                        + "move: the recording is what progression did")
+                .isEmpty();
+        assertThat(digestOf(reproduced.toString()))
+                .describedAs("the digest over every payload golden reproduced must be the digest "
+                        + "over every payload golden the index names")
+                .isEqualTo(digestOf(named.toString()));
+    }
+
+    @Test
+    @DisplayName("[A] produces no payload for the documents progression's generator refused")
+    void every_document_progression_refused_is_refused_here_too() {
+        // [A] characterisation, and the rule rather than a skip. PROVENANCE.md: the 52 are recorded
+        // as a refusal with no output file "because there is no output to be equal to", and no such
+        // document reaches this mapper in service, because the frozen contract refuses it at the
+        // write (C29) so it is never recorded, never batched and never rendered. So the refusal's
+        // text is not an oracle - progression dereferenced an absent value through javax.json and
+        // this port does it through Jackson, so the two messages differ by construction - and what
+        // is asserted is the only thing that is assertable: no payload comes back on either side.
+        final List<String> produced = new ArrayList<>();
+        final List<String> misrecorded = new ArrayList<>();
+        for (final JsonNode entry : refusedDocuments()) {
+            final String caseId = entry.get("caseId").stringValue();
+            final String status = entry.get("contractStatus").stringValue();
+            if (entry.get("refusal").isNull() || !RecordedCase.SCHEMA_INVALID.equals(status)) {
+                misrecorded.add(caseId);
+            }
+            if (mapped(entry).isPresent()) {
+                produced.add(caseId);
+            }
+        }
+
+        assertThat(refusedDocuments()).hasSize(PROGRESSION_REFUSALS);
+        assertThat(misrecorded)
+                .describedAs("a recorded document with no golden is only permitted where the "
+                        + "recorder wrote the refusal that came instead, and every one of those is "
+                        + "a document the frozen contract was already refusing (C29)")
+                .isEmpty();
+        assertThat(produced)
+                .describedAs("progression's generator threw on these documents, so a payload from "
+                        + "this mapper is a payload no recording accounts for")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("[A] takes nothing out of the comparison that the recorded corpus ever carried")
+    void the_corpus_carries_nothing_at_the_field_002_adds() {
+        // [A] characterisation, and the missing half of asPosted's explanation. That method removes
+        // defendantType before anything is compared, on the grounds that the add-court-register
+        // command the legacy posted does not declare it. Stated as prose that is an argument; here
+        // it is a fact about all 381 recordings, so the removal is shown to hide no difference
+        // rather than asserted to.
+        final List<String> carrying = new ArrayList<>();
+        int documents = 0;
+        for (final String caseId : recordedCorpus()) {
+            final RecordedCase recorded = DifferentialCorpus.load(caseId);
+            if (!recorded.producedDocument()) {
+                continue;
+            }
+            documents++;
+            if (recorded.expected().get(DEFENDANT_TYPE) != null) {
+                carrying.add(caseId);
+            }
+        }
+
+        assertThat(documents)
+                .describedAs("205 of the 381 recorded cases produced a document at all")
+                .isEqualTo(RECORDED_DOCUMENTS);
+        assertThat(carrying)
+                .describedAs("these recordings carry a defendantType, so the corpus is an oracle "
+                        + "for it after all and asPosted is taking a real comparison out")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("[A] attributes every deviation from the recorded goldens to one P row")
+    void every_deviation_from_the_progression_oracle_names_its_p_row() {
+        // [A] characterisation. The same rule as the corpus half, over the second oracle: where
+        // this port and a recorded golden disagree, exactly one doc/DEFECT-FIXES.md row must
+        // explain it. Two of the nine defendant-type goldens carry a thrown stack rather than an
+        // answer, which is P10, and the other seven are reproduced - DefendantTypeResolverTest owns
+        // the per-case pins; what this case owns is that those two are the *only* deviations, so a
+        // tenth answer that changed would arrive here with no row to name.
+        final List<GoldenDeviation> deviations = new ArrayList<>();
+        for (final JsonNode entry : INDEX.get("defendantType")) {
+            if (entry.get("golden").isNull()) {
+                continue;
+            }
+            final GoldenDeviation deviation = answeredFor(entry);
+            if (deviation != null) {
+                deviations.add(deviation);
+            }
+        }
+
+        assertThat(deviations)
+                .describedAs("the two shapes progression's rule cannot read are the whole of what "
+                        + "this port answers differently")
+                .hasSize(UNREADABLE_APPLICATIONS);
+        for (final GoldenDeviation deviation : deviations) {
+            final List<ProgressionRow> rows = RegisteredDefectFixes.claimedBy(deviation);
+            assertThat(rows)
+                    .describedAs("%s: progression recorded %s and this port answers %s, which no "
+                            + "doc/DEFECT-FIXES.md P row explains, so it is a port defect until "
+                            + "one says otherwise", deviation.goldenId(),
+                            deviation.recordedRefusal() == null
+                                    ? deviation.recordedAnswer() : deviation.recordedRefusal(),
+                            deviation.portAnswer())
+                    .hasSize(1);
+            DIFFERED.merge(rows.get(0).reference(), 1, Integer::sum);
+            EXAMPLES.putIfAbsent(rows.get(0).reference(),
+                    deviation.goldenId() + " - the recorded defendant-type answer");
+        }
     }
 
     /**
@@ -360,7 +688,7 @@ class DifferentialAuditTest {
      * @return the tree this audit compares, which is the document the legacy's contract carried
      */
     private JsonNode asPosted(final CourtRegisterDocument document) {
-        final ObjectNode posted = (ObjectNode) mapper.valueToTree(document);
+        final ObjectNode posted = (ObjectNode) MAPPER.valueToTree(document);
         posted.remove("defendantType");
         return posted;
     }
@@ -784,6 +1112,241 @@ class DifferentialAuditTest {
             return Files.readString(path, StandardCharsets.UTF_8);
         } catch (IOException cannotRead) {
             throw new UncheckedIOException(cannotRead);
+        }
+    }
+
+    // --- reading what the recorder wrote ---------------------------------------------------------
+
+    /**
+     * The clock the payload goldens were recorded against.
+     *
+     * <p>Midday rather than midnight, so a mapper reading the date through some other zone still
+     * reads the day the ages were counted on. {@code cases[].age} is the one field in the payload
+     * that reads a clock at all, which is why the mapper takes one.
+     *
+     * @return a clock fixed to the recording date in Europe/London
+     */
+    private static Clock recordingClock() {
+        final LocalDate recorded = LocalDate.parse(INDEX.get("ageClockDate").stringValue());
+        return Clock.fixed(recorded.atTime(12, 0).atZone(LONDON).toInstant(), LONDON);
+    }
+
+    /**
+     * Every index entry that names a golden file, across all three sections.
+     *
+     * @return the entries
+     */
+    private static List<JsonNode> recordedGoldens() {
+        return GOLDEN_SECTIONS.stream().flatMap(section -> named(section).stream()).toList();
+    }
+
+    /**
+     * Every index entry that names one of the payload generator's goldens.
+     *
+     * @return the entries: 161 single documents and 7 whole batches
+     */
+    private static List<JsonNode> payloadGoldens() {
+        final List<JsonNode> goldens = new ArrayList<>(named("pdfPayloadDocuments"));
+        goldens.addAll(named("pdfPayloadBatches"));
+        return List.copyOf(goldens);
+    }
+
+    /**
+     * Every recorded document the payload generator threw on rather than mapping.
+     *
+     * @return the entries, which carry a refusal and no golden
+     */
+    private static List<JsonNode> refusedDocuments() {
+        return INDEX.get("pdfPayloadDocuments").valueStream()
+                .filter(entry -> entry.get("golden").isNull())
+                .toList();
+    }
+
+    /**
+     * The entries of one index section that name a golden file.
+     *
+     * @param section the section
+     * @return the entries
+     */
+    private static List<JsonNode> named(final String section) {
+        return INDEX.get(section).valueStream()
+                .filter(entry -> !entry.get("golden").isNull())
+                .toList();
+    }
+
+    /**
+     * The payload this port maps one recorded input to, where it maps one at all.
+     *
+     * <p>A refusal is carried into the answer rather than out of the case, for the same reason
+     * {@code PdfPayloadMapperTest} carries it: what the assertions need is the news that a payload
+     * did not come, and which type carried that news is the mapper's business. Nothing is
+     * swallowed - the emptiness <em>is</em> the observation, asserted in both directions by the two
+     * cases that read it, one requiring a payload for all 168 goldens and one requiring none for
+     * all 52 refusals.
+     *
+     * @param entry the index entry naming the input
+     * @return the payload, or empty where the mapper produced none
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private Optional<JsonNode> mapped(final JsonNode entry) {
+        Optional<JsonNode> payload;
+        try {
+            payload = Optional.of(payloads.mapPayload(inputFor(entry)));
+        } catch (RuntimeException refused) {
+            payload = Optional.empty();
+        }
+        return payload;
+    }
+
+    /**
+     * The input one golden was recorded from, in the shape the generator reads.
+     *
+     * <p>A document golden was recorded from a single register wrapped in a one-element array; a
+     * batch golden from its members' registers in the order the index lists them, which is the
+     * order the recorder grouped them in.
+     *
+     * @param entry the index entry naming the input
+     * @return the {@code courtRegisterDocumentRequests} envelope
+     */
+    private static JsonNode inputFor(final JsonNode entry) {
+        final ArrayNode requests = MAPPER.createArrayNode();
+        final JsonNode members = entry.get("members");
+        if (members == null) {
+            requests.add(readResource(classpath(entry.get("source").stringValue())));
+        } else {
+            members.valueStream()
+                    .map(member -> readResource(RECORDED + member.stringValue() + "/expected.json"))
+                    .forEach(requests::add);
+        }
+        final ObjectNode envelope = MAPPER.createObjectNode();
+        envelope.set(REQUESTS, requests);
+        return envelope;
+    }
+
+    /**
+     * What this port and one recorded defendant-type golden disagree about, where they do.
+     *
+     * <p><strong>The empty string and no answer at all are the same answer.</strong> Progression's
+     * caller seeds the type with {@code StringUtils.EMPTY} ({@code CourtRegisterHandler:84}) and
+     * replaces it only where an application was found, so its recorded answer for a hearing with no
+     * application is {@code ""}; this port answers {@link Optional#empty()} and the document leaves
+     * the field out. That is one statement in two vocabularies and not a deviation, which is the
+     * mapping {@code DefendantTypeResolverTest} states in those words and the only place the two
+     * spellings meet - so it is mapped here the same way rather than reported as a difference
+     * neither oracle nor register would recognise.
+     *
+     * @param entry the index entry naming the golden
+     * @return the deviation, or {@code null} where the two answers agree
+     */
+    private GoldenDeviation answeredFor(final JsonNode entry) {
+        final JsonNode golden = readResource(GOLDENS + entry.get("golden").stringValue());
+        final String recordedAnswer = text(golden.get("defendantType"));
+        final String portAnswer = defendantTypes.resolve(
+                        readResource(classpath(golden.get("hearingFixture").stringValue()))
+                                .get("hearing"),
+                        MAPPER.treeToValue(documentIn(golden), CourtRegisterDocument.class))
+                .orElse(NO_TYPE);
+        return NO_TYPE.equals(recordedAnswer) && NO_TYPE.equals(portAnswer)
+                || Objects.equals(recordedAnswer, portAnswer)
+                ? null
+                : new GoldenDeviation(entry.get("goldenId").stringValue(), recordedAnswer,
+                        text(golden.get("threw")), portAnswer);
+    }
+
+    /**
+     * The register document a defendant-type golden's recorded input carries.
+     *
+     * <p>A synthesised input carries it under {@code document}; a base fixture's input <em>is</em>
+     * the recorded register, because that is what the recorder typed.
+     *
+     * @param golden the golden
+     * @return the document tree
+     */
+    private static JsonNode documentIn(final JsonNode golden) {
+        final JsonNode source =
+                readResource(classpath(golden.get("documentSource").stringValue()));
+        final JsonNode document = source.get("document");
+        return document == null ? source : document;
+    }
+
+    /**
+     * One recorded field's text, where a golden that recorded a refusal carries nothing under it.
+     *
+     * @param value the field; may be {@code null}
+     * @return its text, or {@code null} where the golden recorded none
+     */
+    private static String text(final JsonNode value) {
+        return value == null || value.isNull() ? null : value.stringValue();
+    }
+
+    /**
+     * The classpath resource behind one of the repo-relative paths the index names.
+     *
+     * @param recordedPath the path as the index records it
+     * @return the resource path
+     */
+    private static String classpath(final String recordedPath) {
+        if (!recordedPath.startsWith(SOURCE_ROOT)) {
+            throw new IllegalStateException("the index names an input outside the test resources: "
+                    + recordedPath);
+        }
+        return recordedPath.substring(SOURCE_ROOT.length());
+    }
+
+    /**
+     * Reads one JSON file from the test classpath through the service's own contract mapper.
+     *
+     * @param resource the absolute resource path
+     * @return the parsed tree
+     */
+    private static JsonNode readResource(final String resource) {
+        try (InputStream stream = DifferentialAuditTest.class.getResourceAsStream(resource)) {
+            if (stream == null) {
+                throw new IllegalStateException("missing test resource " + resource);
+            }
+            return MAPPER.readTree(new String(stream.readAllBytes(), StandardCharsets.UTF_8));
+        } catch (IOException cannotRead) {
+            throw new UncheckedIOException(cannotRead);
+        }
+    }
+
+    // --- the digests the recorder left behind ----------------------------------------------------
+
+    /**
+     * The digest of one file of this repository, as the recorder wrote it.
+     *
+     * @param path the path, relative to the project directory
+     * @return the lower-case hexadecimal sha256
+     */
+    private static String digestOf(final Path path) {
+        try {
+            return hex(Files.readAllBytes(path));
+        } catch (IOException cannotRead) {
+            throw new UncheckedIOException(cannotRead);
+        }
+    }
+
+    /**
+     * The digest of a manifest, over its UTF-8 bytes.
+     *
+     * @param manifest the manifest
+     * @return the lower-case hexadecimal sha256
+     */
+    private static String digestOf(final String manifest) {
+        return hex(manifest.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * The sha256 of some bytes, rendered the way the index renders every digest it holds.
+     *
+     * @param bytes the bytes
+     * @return the lower-case hexadecimal digest
+     */
+    private static String hex(final byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance(SHA_256).digest(bytes));
+        } catch (NoSuchAlgorithmException everyJvmHasIt) {
+            throw new IllegalStateException("no " + SHA_256 + " on this JVM", everyJvmHasIt);
         }
     }
 }

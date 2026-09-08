@@ -10,8 +10,10 @@ import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.support.DifferentialCorpus.RecordedCase;
 import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.Claim;
 import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.Divergence;
+import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.GoldenDeviation;
 import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.PortOutcome;
 import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.PortResult;
+import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.ProgressionRow;
 
 /**
  * The register read adversarially: every entry, shown rejecting what it does not explain.
@@ -29,6 +31,15 @@ import uk.gov.hmcts.cp.courtregister.support.RegisteredDefectFixes.PortResult;
  * name, a failure classified as something else, a day computed from the wrong reading — asserted to
  * be claimed by <em>nothing</em>. The pair is what makes the assertion worth making: a near miss
  * nobody claims proves the predicate is narrow only if the control proves it is not simply dead.
+ *
+ * <p><strong>The {@code P} rows are read the same way, because the rule is one rule.</strong>
+ * {@link RegisteredDefectFixes.ProgressionRow} catalogues how this port may differ from
+ * progression's own recorded output rather than from the 001 function app's, and a predicate one
+ * notch too wide there is invisible to the audit for exactly the reason it is invisible here: the
+ * recorded goldens produce the deviations they produce, and a row that also waved through a
+ * deviation nobody has recorded yet would look identical. So P10 gets a control and its near
+ * misses like every {@code C} entry - a golden that recorded an answer, a refusal at a dereference
+ * the row does not name, and an answer that is not the default the row specifies.
  *
  * <p>The two <em>derivations</em> ({@link RegisteredDefectFixes.Fix}) are read the same way at the
  * end. Their behaviour through the comparator is pinned in {@code JsonParityTest}; what is pinned
@@ -61,6 +72,18 @@ class RegisteredDefectFixesRejectionTest {
     /** A hearing sitting at that court house. */
     private static final String HEARING_AT_THE_COURT_HOUSE =
             "{\"id\":\"" + HEARING_ID + "\",\"courtCentre\":{\"code\":\"" + OU_CODE + "\"}}";
+
+    /** The first of P10's two recorded refusals, as {@code synthetic__…-without-flags} wrote it. */
+    private static final String UNBOXED_APPEAL_FLAG =
+            "java.lang.NullPointerException: Cannot invoke \"java.lang.Boolean.booleanValue()\" "
+                    + "because the return value of "
+                    + "\"uk.gov.justice.core.courts.CourtApplicationType.getAppealFlag()\" is null";
+
+    /** The second, as {@code synthetic__respondents-absent} wrote it. */
+    private static final String ABSENT_RESPONDENT_LIST =
+            "java.lang.NullPointerException: Cannot invoke \"java.util.List.stream()\" because the "
+                    + "return value of "
+                    + "\"uk.gov.justice.core.courts.CourtApplication.getRespondents()\" is null";
 
     @Test
     @DisplayName("C11 rejects a file name that is right about the code and wrong about the day")
@@ -348,6 +371,45 @@ class RegisteredDefectFixesRejectionTest {
     }
 
     @Test
+    @DisplayName("P10 rejects a golden that recorded an answer rather than a refusal")
+    void p10_rejects_a_golden_progressions_own_rule_answered() {
+        isClaimedBy(unreadableApplication(UNBOXED_APPEAL_FLAG, "Applicant"), "P10");
+        isClaimedBy(unreadableApplication(ABSENT_RESPONDENT_LIST, "Applicant"), "P10");
+        // Progression answered this one, so the golden is an oracle for the answer and the port
+        // owes exactly it. P10 is about the shapes there is no answer to be equal to.
+        claimedByNothing(new GoldenDeviation(
+                "synthetic__respondent", "Respondent", null, "Applicant"));
+    }
+
+    @Test
+    @DisplayName("P10 rejects a refusal at a dereference the row does not name")
+    void p10_rejects_a_refusal_the_row_does_not_name() {
+        // The row names two dereferences and reaches its third shape through a synthesised hearing
+        // in DefendantTypeResolverTest. A NullPointerException somewhere else in progression's
+        // command is not this row's, however similarly it reads.
+        claimedByNothing(unreadableApplication("java.lang.NullPointerException: Cannot invoke "
+                + "\"java.util.List.stream()\" because the return value of "
+                + "\"uk.gov.justice.core.courts.CourtApplication.getApplicant()\" is null",
+                "Applicant"));
+        claimedByNothing(unreadableApplication(
+                "java.lang.ClassCastException: CourtApplicationType", "Applicant"));
+        claimedByNothing(new GoldenDeviation(
+                "synthetic__respondents-absent", null, null, "Applicant"));
+    }
+
+    @Test
+    @DisplayName("P10 rejects any answer but the default it specifies")
+    void p10_rejects_an_answer_that_is_not_the_rules_own_default() {
+        // Answering *something* is not the fix. P10's sentence is that an unreadable court
+        // application answers the rule's own default, so a port that guessed a side of the
+        // application progression never got far enough to decide is a port defect wearing this
+        // row's number.
+        claimedByNothing(unreadableApplication(UNBOXED_APPEAL_FLAG, "Respondent"));
+        claimedByNothing(unreadableApplication(UNBOXED_APPEAL_FLAG, "Appellant"));
+        claimedByNothing(unreadableApplication(UNBOXED_APPEAL_FLAG, null));
+    }
+
+    @Test
     @DisplayName("C10's derivation permits the instant the recording names, and nothing else")
     void c10_derivation_permits_only_the_instant_the_recording_names() {
         final RegisteredDefectFixes.Fix registerDate =
@@ -402,6 +464,22 @@ class RegisteredDefectFixesRejectionTest {
     }
 
     /**
+     * Asserts that exactly one progression-leg row explains a deviation, and that it is the
+     * expected one.
+     *
+     * @param deviation the deviation
+     * @param row       the P-number the claiming row opens with
+     */
+    private static void isClaimedBy(final GoldenDeviation deviation, final String row) {
+        final List<String> claimed = RegisteredDefectFixes.claimedBy(deviation).stream()
+                .map(ProgressionRow::reference).toList();
+        assertThat(claimed)
+                .describedAs("the control shape should be claimed by %s alone", row)
+                .hasSize(1);
+        assertThat(claimed.get(0)).startsWith(row + " ");
+    }
+
+    /**
      * Asserts that no row claims a divergence at all.
      *
      * @param divergence the divergence
@@ -413,7 +491,32 @@ class RegisteredDefectFixesRejectionTest {
                 .isEmpty();
     }
 
+    /**
+     * Asserts that no progression-leg row claims a deviation at all.
+     *
+     * @param deviation the deviation
+     */
+    private static void claimedByNothing(final GoldenDeviation deviation) {
+        assertThat(RegisteredDefectFixes.claimedBy(deviation))
+                .describedAs("no registered P row explains this, so the audit must call it a port "
+                        + "defect rather than attribute it")
+                .isEmpty();
+    }
+
     // --- the divergences themselves --------------------------------------------------------------
+
+    /**
+     * A defendant-type golden that recorded a refusal rather than an answer.
+     *
+     * @param refusal    the stack the recorder wrote instead of an answer
+     * @param portAnswer what this port answers, or {@code null} where it answers nothing
+     * @return the deviation
+     */
+    private static GoldenDeviation unreadableApplication(
+            final String refusal, final String portAnswer) {
+        return new GoldenDeviation(
+                "synthetic__master-defendant-without-flags", null, refusal, portAnswer);
+    }
 
     /**
      * A difference at a component of a document both sides produced.
