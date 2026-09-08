@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.assertj.core.api.SoftAssertions;
@@ -148,21 +149,49 @@ class RegisterGenerationJobTest {
     private static final int RECONCILED = 4;
 
     /**
+     * How many registers each of the mixed night's three batches groups.
+     *
+     * <p>Three different numbers on purpose, and none of them the count of batches: the row counts
+     * are what says how many registers a night got out rather than how many documents it asked for,
+     * and a fixture that gave every batch the same number of registers would be pinned by a line
+     * that had those fields in the wrong order.
+     */
+    private static final int GENERATING_ROWS = 3;
+
+    private static final int FAILING_ROWS = 2;
+
+    private static final int UNSTAMPABLE_ROWS = 1;
+
+    /** How many registers the mixed night leaves waiting under the two days it passed over. */
+    private static final int WAITING_ROWS = 5;
+
+    /** Every register the mixed night's store answered with, batched or left waiting. */
+    private static final int THE_MIXED_NIGHTS_ROWS =
+            GENERATING_ROWS + FAILING_ROWS + UNSTAMPABLE_ROWS + WAITING_ROWS;
+
+    /**
      * The line a night that did something leaves behind, in full.
      *
-     * <p>Every field of {@link RunReport}: what the gate decided and why, the three states the
-     * requesting leg can leave a batch in and their total, the court centre days the run passed
-     * over, the outcomes it had to chase and how long it took. Written out rather than asserted
-     * field by field because the claim is the whole line - a field dropped from it is a night an
-     * operator can no longer read, and a field renamed is an alert that stops firing.
+     * <p>Every field of {@link RunReport}: what the gate decided and why, how many batches the run
+     * asked the renderer for, the three states the requesting leg can leave a batch in and their
+     * total, the court centre days the run passed over, how many registers ended the run under each
+     * of those outcomes, the outcomes it had to chase and how long it took. Written out rather than
+     * asserted field by field because the claim is the whole line - a field dropped from it is a
+     * night an operator can no longer read, and a field renamed is an alert that stops firing.
      */
     private static final String THE_MIXED_NIGHTS_LINE = RUN_EVENT
-            + " gate=proceed reason=flag-on batches=3 generating=1 failed=1 pending=1 deferred=2"
+            + " gate=proceed reason=flag-on batches=3 requested=2 generating=1 failed=1 pending=1"
+            + " deferred=2 rows=" + THE_MIXED_NIGHTS_ROWS
+            + " rows_generating=" + GENERATING_ROWS
+            + " rows_failed=" + FAILING_ROWS
+            + " rows_pending=" + UNSTAMPABLE_ROWS
+            + " rows_deferred=" + WAITING_ROWS
             + " reconciled=" + RECONCILED + " duration_ms=180000";
 
     /** The same line for a night the flag stopped: the same fields, and nothing earned. */
     private static final String THE_SKIPPED_NIGHTS_LINE = RUN_EVENT
-            + " gate=skipped reason=flag-off batches=0 generating=0 failed=0 pending=0 deferred=0"
+            + " gate=skipped reason=flag-off batches=0 requested=0 generating=0 failed=0 pending=0"
+            + " deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0 rows_deferred=0"
             + " reconciled=0 duration_ms=0";
 
     /**
@@ -175,8 +204,9 @@ class RegisterGenerationJobTest {
      */
     private static final Pattern BOUNDED_FIELDS_ONLY = Pattern.compile(
             "event=register_generation_run gate=(?:proceed|skipped) reason=[a-z-]+ batches=\\d+ "
-                    + "generating=\\d+ failed=\\d+ pending=\\d+ deferred=\\d+ reconciled=\\d+ "
-                    + "duration_ms=\\d+");
+                    + "requested=\\d+ generating=\\d+ failed=\\d+ pending=\\d+ deferred=\\d+ "
+                    + "rows=\\d+ rows_generating=\\d+ rows_failed=\\d+ rows_pending=\\d+ "
+                    + "rows_deferred=\\d+ reconciled=\\d+ duration_ms=\\d+");
 
     /** What the store answers with; the run's job is to pass it on unchanged. */
     private static final List<RegisterRecord> ACTIVE = List.of(record(), record());
@@ -307,19 +337,34 @@ class RegisterGenerationJobTest {
      * refused, so it costs the run no time and the duration stays the two advances the other two
      * make.
      *
+     * <p><strong>Its registers are partitioned</strong>, unlike the nights above: each batch groups
+     * its own and the two days the assembler passed over have their own waiting behind them, so
+     * every register the store answered with is in exactly one of the run's row counts. Which
+     * records belong to which batch is the assembler's own concern (T032) and nothing here asserts
+     * it - what this shape makes assertable is that the run's own accounting adds up to the night.
+     *
      * @return the batches the night holds, in the order the assembler answered
      */
     private List<RegisterBatch> aMixedNight() {
         final RegisterBatch generating = batch();
         final RegisterBatch failing = batch();
         final RegisterBatch unstampable = batch();
+        final List<RegisterRecord> generatingRows = records(GENERATING_ROWS);
+        final List<RegisterRecord> failingRows = records(FAILING_ROWS);
+        final List<RegisterRecord> unstampableRows = records(UNSTAMPABLE_ROWS);
+        final CourtCentreDay busiest = key();
+        final CourtCentreDay quietest = key();
+        final List<RegisterRecord> waiting = Stream.concat(
+                recordsUnder(busiest, WAITING_ROWS - 1).stream(),
+                recordsUnder(quietest, 1).stream()).toList();
         theGateAnswers(new Proceed(false));
-        when(store.activeUnbatched()).thenReturn(ACTIVE);
+        when(store.activeUnbatched()).thenReturn(Stream.of(generatingRows, failingRows,
+                unstampableRows, waiting).flatMap(List::stream).toList());
         when(assembler.assemble(any(), any(), anyBoolean())).thenReturn(new BatchAssembly(
-                List.of(new AssembledBatch(generating, ACTIVE),
-                        new AssembledBatch(failing, ACTIVE),
-                        new AssembledBatch(unstampable, ACTIVE)),
-                List.of(key(), key())));
+                List.of(new AssembledBatch(generating, generatingRows),
+                        new AssembledBatch(failing, failingRows),
+                        new AssembledBatch(unstampable, unstampableRows)),
+                List.of(busiest, quietest)));
         when(store.assemble(any(), any())).thenAnswer(call -> call.getArgument(0));
         when(store.assemble(eq(unstampable), any())).thenThrow(new IllegalStateException(
                 "batch " + unstampable.batchId() + " was asked for 2 registers and stamped 1"));
@@ -451,9 +496,40 @@ class RegisterGenerationJobTest {
     }
 
     private static RegisterRecord record() {
-        return new RegisterRecord(UUID.randomUUID(), UUID.randomUUID(), SIX_PM,
-                new CourtCentreDay(UUID.randomUUID(), THURSDAY), SIX_PM,
+        return recordUnder(key());
+    }
+
+    /**
+     * One register recorded under the given court centre and day.
+     *
+     * @param key the day it is addressed by, which is what the assembler groups and defers on
+     * @return that register
+     */
+    private static RegisterRecord recordUnder(final CourtCentreDay key) {
+        return new RegisterRecord(UUID.randomUUID(), UUID.randomUUID(), SIX_PM, key, SIX_PM,
                 "courtregister_" + THURSDAY + ".json", "Applicant", RecordedFlagState.ON, null);
+    }
+
+    /**
+     * That many registers, each under a court centre day of its own.
+     *
+     * @param registers how many
+     * @return the registers
+     */
+    private static List<RegisterRecord> records(final int registers) {
+        return IntStream.range(0, registers).mapToObj(one -> record()).toList();
+    }
+
+    /**
+     * That many registers, all under the one court centre day.
+     *
+     * @param key       the day they are all addressed by
+     * @param registers how many
+     * @return the registers
+     */
+    private static List<RegisterRecord> recordsUnder(final CourtCentreDay key,
+            final int registers) {
+        return IntStream.range(0, registers).mapToObj(one -> recordUnder(key)).toList();
     }
 
     private static BatchOutcome requested(final RegisterBatch batch, final BatchStatus status,
@@ -955,6 +1031,54 @@ class RegisterGenerationJobTest {
                     .isEqualTo(1);
         }
 
+        /**
+         * What the run asked for, which is the half of the night it is answerable for.
+         *
+         * <p>The requesting leg ends when systemdocgenerator has been asked, so this is the count
+         * of what the run actually achieved rather than of what came of it: a batch counted here
+         * had its payload written and its render requested. Neither {@code batches} nor the outcome
+         * counts say it - the first counts batches the run may never have got to and the second
+         * puts a batch refused by the renderer and a batch whose payload never reached the file
+         * service under the same FAILED.
+         */
+        @Test
+        void the_report_should_count_the_batches_the_run_asked_the_renderer_for() {
+            aMixedNight();
+
+            final RunReport report = run();
+
+            softly.assertThat(reported(report, RunReport::requested))
+                    .as("what the run asked systemdocgenerator for: two of the three batches, the "
+                            + "third having never been written down at all")
+                    .isEqualTo(2);
+        }
+
+        /**
+         * The registers behind the batches, which are what a Youth Offending Team is waiting for.
+         *
+         * <p>A count of batches says how many documents were asked for and a count of registers
+         * says how many hearings are in them, and the two come apart on exactly the night worth
+         * reading: one batch left for the next run is one court centre, and how many youth
+         * defendants' registers are inside it is what decides whether that matters tonight.
+         */
+        @Test
+        void the_report_should_count_the_registers_the_run_accounted_for_by_outcome() {
+            aMixedNight();
+
+            final RunReport report = run();
+
+            softly.assertThat(reported(report, RunReport::rowOutcomes))
+                    .as("every register the run stamped into a batch, under the state that "
+                            + "batch's requesting leg ended in")
+                    .isEqualTo(Map.of(BatchStatus.GENERATING, GENERATING_ROWS,
+                            BatchStatus.FAILED, FAILING_ROWS,
+                            BatchStatus.PENDING, UNSTAMPABLE_ROWS));
+            softly.assertThat(reported(report, RunReport::deferredRows))
+                    .as("and the registers under the days it passed over, which are in no batch "
+                            + "at all and would otherwise be counted by nothing")
+                    .isEqualTo(WAITING_ROWS);
+        }
+
         @Test
         void the_line_the_run_leaves_behind_should_carry_the_keys_it_deferred() {
             aNightDeferring(key());
@@ -1013,19 +1137,18 @@ class RegisterGenerationJobTest {
     }
 
     /**
-     * <strong>[A]</strong> The line itself, field by field, as an operator and an alert read it.
+     * The line itself, field by field, as an operator and an alert read it.
      *
-     * <p>An <strong>[A] characterisation of behaviour this service already had</strong>: the line
-     * has been written for every run, skipped ones included, since {@code 6d7aca8} landed the
-     * nightly run, and every field asserted here was on it from that commit but one - {@code
-     * deferred}, which {@code eaf1413} added. What was missing was anything holding it down.
-     * {@code TheReport} above reads the report as a value and one case of it looks for {@code
-     * deferred=1} in the line; the other nine fields, their names, their order, the fact that a
-     * skipped night writes the same line at all, and the arithmetic between the counts were pinned
-     * nowhere, so any of them could have been renamed or dropped with the whole suite still green.
-     * Every case here therefore passes on introduction, no implementation commit follows them, and
-     * non-vacuity is shown by mutation instead - quoted in this commit's body and reverted before
-     * it.
+     * <p><strong>Mixed, and each case says which it is.</strong> The line has been written for
+     * every run, skipped ones included, since {@code 6d7aca8} landed the nightly run, and the ten
+     * fields it carried until this task were characterised here rather than driven - what was
+     * missing was anything holding them down, so any of them could have been renamed or dropped
+     * with the whole suite still green. The six fields this task adds are the other kind: the
+     * report was carrying what the run <em>asked</em> for and nothing about what it accounted for,
+     * and User Story 7 asks for the requested count and the registers per outcome as well. The
+     * cases about {@code requested}, {@code rows} and the four {@code rows_*} counts, and the
+     * whole-line cases they widen, therefore fail before the implementation that answers them; the
+     * rest still pass on introduction and are shown non-vacuous by mutation instead.
      *
      * <p>The gauges are the other half of the same report (data model: "recorded as the run report
      * (log + gauges), not as a table"). Their names, their labels and their readings are pinned in
@@ -1128,6 +1251,95 @@ class RegisterGenerationJobTest {
             }
         }
 
+        /**
+         * Asked and refused is not the same night as never asked, and only one field says so.
+         *
+         * <p>{@code generating} counts the renders systemdocgenerator accepted, so on a night when
+         * every request was accepted the two agree and {@code requested} looks redundant. The night
+         * they come apart is the night worth finding: a batch whose payload never reached the file
+         * service was never asked about, a batch the renderer answered with something other than
+         * the contract's 202 was, and both end FAILED - so {@code failed} cannot tell an outage in
+         * this service from a refusal by another one.
+         */
+        @Test
+        void a_batch_that_failed_before_the_renderer_was_asked_should_not_be_counted_as_requested() {
+            final RegisterBatch neverAsked = batch();
+            final RegisterBatch refused = batch();
+            aNightHolding(neverAsked, refused);
+            when(service.request(eq(neverAsked), any())).thenAnswer(call -> requested(neverAsked,
+                    BatchStatus.FAILED, BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE));
+            when(service.request(eq(refused), any())).thenAnswer(call -> requested(refused,
+                    BatchStatus.FAILED, BatchFailureReason.RENDER_REQUEST_REJECTED));
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "requested"))
+                        .as("one render left this service and one batch never got that far, and "
+                                + "a line that counted both would report a renderer refusing "
+                                + "documents it was never sent")
+                        .isEqualTo(1);
+                softly.assertThat(onTheLine(fields, "failed"))
+                        .as("both still failed, which is why the outcome count cannot carry the "
+                                + "distinction on its own")
+                        .isEqualTo(2);
+            }
+        }
+
+        /**
+         * A request the run cannot have made is one the line must not claim.
+         *
+         * <p>The bound in both directions: every batch the renderer accepted was asked for, and no
+         * batch the run left for the next one was - so the count sits between what was accepted and
+         * what the run got any verdict at all about. A {@code requested} outside that range is a
+         * night reported as busier, or quieter, than the batches it accounted for.
+         */
+        @Test
+        void the_batches_asked_for_should_sit_between_the_ones_accepted_and_the_ones_verdicted() {
+            aMixedNight();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "requested"))
+                        .as("at least the renders that were accepted and at most the batches the "
+                                + "requesting leg reached, which is the night minus the ones left "
+                                + "for tomorrow")
+                        .isBetween(onTheLine(fields, "generating"),
+                                onTheLine(fields, "batches") - onTheLine(fields, "pending"));
+            }
+        }
+
+        /**
+         * The registers have to add up to the night too, or the line describes a smaller one.
+         *
+         * <p>{@code rows} is every register the store answered with, and each of them ended the run
+         * in exactly one place: stamped into a batch that is generating, into one that failed, into
+         * one left for the next run, or waiting under a day the assembler passed over. A register in
+         * none of those four is one nobody is told is missing, which is the failure this whole leg
+         * was absorbed to stop.
+         */
+        @Test
+        void the_row_counts_on_the_line_should_add_up_to_the_registers_the_run_saw() {
+            aMixedNight();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "rows"))
+                        .as("every register the store called active is counted exactly once, and "
+                                + "under one of the four things a run can leave a register in")
+                        .isEqualTo(THE_MIXED_NIGHTS_ROWS)
+                        .isEqualTo(onTheLine(fields, "rows_generating")
+                                + onTheLine(fields, "rows_failed")
+                                + onTheLine(fields, "rows_pending")
+                                + onTheLine(fields, "rows_deferred"));
+            }
+        }
+
         @Test
         void nothing_on_the_line_should_be_free_text_or_anything_a_register_carries() {
             aMixedNight();
@@ -1194,13 +1406,22 @@ class RegisterGenerationJobTest {
 
         /** The line a run that stopped before it read anything can still write. */
         private static final String NOTHING_YET = RUN_EVENT
-                + " gate=proceed reason=flag-on batches=0 generating=0 failed=0 pending=0"
-                + " deferred=0 reconciled=0 duration_ms=0";
+                + " gate=proceed reason=flag-on batches=0 requested=0 generating=0 failed=0"
+                + " pending=0 deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0"
+                + " rows_deferred=0 reconciled=0 duration_ms=0";
 
-        /** The line the mixed night can write once its second batch stops the run. */
+        /**
+         * The line the mixed night can write once its second batch stops the run.
+         *
+         * <p>One batch requested and its registers accounted for, the two days it passed over and
+         * the registers waiting under them known before any of it, and nothing chased.
+         */
         private static final String AS_FAR_AS_IT_GOT = RUN_EVENT
-                + " gate=proceed reason=flag-on batches=1 generating=1 failed=0 pending=0"
-                + " deferred=2 reconciled=0 duration_ms=60000";
+                + " gate=proceed reason=flag-on batches=1 requested=1 generating=1 failed=0"
+                + " pending=0 deferred=2 rows=" + (GENERATING_ROWS + WAITING_ROWS)
+                + " rows_generating=" + GENERATING_ROWS
+                + " rows_failed=0 rows_pending=0 rows_deferred=" + WAITING_ROWS
+                + " reconciled=0 duration_ms=60000";
 
         /** Sets the night up as one the flag allowed and the store then refused. */
         private void aStoreThatWentAway() {

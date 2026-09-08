@@ -221,7 +221,8 @@ public class RegisterGenerationJob {
         final GateDecision decision = gate.decide(false);
 
         if (decision instanceof Skipped) {
-            return recorded(new RunReport(decision, Map.of(), 0, 0, sinceStart(startedAt)));
+            return recorded(new RunReport(decision, Map.of(), 0, Map.of(), 0, 0, 0,
+                    sinceStart(startedAt)));
         }
         // Only from here on is the file service anything readiness should have an opinion
         // about, and it stops being one however the run ends.
@@ -550,8 +551,10 @@ public class RegisterGenerationJob {
          * @return what the run had done
          */
         private RunReport reportOf(final GateDecision decision, final Duration duration) {
-            return new RunReport(decision, outcomes,
-                    nightsAssembly == null ? 0 : nightsAssembly.deferred().size(),
+            // The seam T072's gate finding is answered against: the two counts and the row
+            // outcomes are declared here and nothing earns them yet.
+            return new RunReport(decision, outcomes, 0, Map.of(),
+                    nightsAssembly == null ? 0 : nightsAssembly.deferred().size(), 0,
                     outcomesChased, duration);
         }
     }

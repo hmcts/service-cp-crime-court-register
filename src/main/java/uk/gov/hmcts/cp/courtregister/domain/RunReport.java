@@ -37,10 +37,17 @@ import java.util.Map;
  * @param gateDecision what the gate decided from its one read of the flag, which is the first thing
  *                     a run does and the reason a skipped run is a success
  * @param outcomes     how many batches ended in each state; empty for a skipped run
+ * @param requested    how many batches this run asked systemdocgenerator to render - the payload
+ *                     written and the request away - whatever the renderer then answered; zero for
+ *                     a skipped run
+ * @param rowOutcomes  how many registers this run stamped into a batch, under the state that
+ *                     batch's requesting leg ended in; empty for a skipped run
  * @param deferredKeys how many court-centre days the assembler passed over because a batch of
  *                     theirs is still in flight ({@link BatchAssembly#deferred()}); zero for a
- *                     skipped run, and the count of the registers this run knowingly left for the
- *                     next one
+ *                     skipped run, and the count of the court centres this run knowingly left for
+ *                     the next one
+ * @param deferredRows how many registers are waiting under those days, which is what the deferral
+ *                     costs measured in hearings rather than in court centres
  * @param reconciled   how many outcomes the grace-period reconciler had to fetch rather than
  *                     receive, which is the broker's health seen from here
  * @param duration     how long the run took
@@ -48,17 +55,22 @@ import java.util.Map;
 public record RunReport(
         GateDecision gateDecision,
         Map<BatchStatus, Integer> outcomes,
+        int requested,
+        Map<BatchStatus, Integer> rowOutcomes,
         int deferredKeys,
+        int deferredRows,
         int reconciled,
         Duration duration) {
 
     /**
-     * Freezes the outcome counts, and settles absent and empty as one statement.
+     * Freezes both sets of counts, and settles absent and empty as one statement.
      *
-     * <p>A copy because the run accumulates these as it goes: a report holding that same map would
-     * describe whatever the run did next rather than what it had done when the report was made.
+     * <p>A copy because the run accumulates these as it goes: a report holding those same maps
+     * would describe whatever the run did next rather than what it had done when the report was
+     * made.
      */
     public RunReport {
         outcomes = outcomes == null ? Map.of() : Map.copyOf(outcomes);
+        rowOutcomes = rowOutcomes == null ? Map.of() : Map.copyOf(rowOutcomes);
     }
 }
