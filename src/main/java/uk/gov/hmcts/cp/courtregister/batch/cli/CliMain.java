@@ -31,9 +31,12 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * recipients, listing what a date holds, superseding what was recorded before an instant and
  * reading the flag are all commands in the image rather than endpoints on the pod (FR-016,
  * constitution Principle III). {@code docker/startup.sh} dispatches here when its first argument is
- * one of the five names below and starts the application unchanged otherwise, so the tool runs with
- * the pod's own identity and network path and support needs no data-plane credential of its own
- * (research §13).
+ * one of the five names below, so the tool runs with the pod's own identity and network path and
+ * support needs no data-plane credential of its own (research §13). A container started with no
+ * arguments - every deployed pod - starts the application unchanged, and any other first argument
+ * is answered by the script with the same five names and {@link #FAILED}: a mistyped name dropped
+ * into the application would start a second one inside the pod rather than tell an operator what
+ * this image offers.
  *
  * <p>The context a command runs in is the deployed one with three things off:
  * {@code courtregister.cli=true} keeps the Service Bus consumer, the nightly scheduler and the
