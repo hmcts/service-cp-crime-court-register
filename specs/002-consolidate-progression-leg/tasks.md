@@ -1409,54 +1409,51 @@ exist; every requirement they carried does, and the endpoint refusal's wording c
       alerting gap and not a privacy one, and it is carried in the open items below. Two shared
       test-support files changed, each for one reason stated in that body: `CapturedLog` gained a
       public `rendering(event)` and `PersonalDataMarkers` gained `GENERATOR_REASON`.)
-- [ ] T071 [P] [US7] `e2e/ReadinessPolicyIT` (extend) - broker down: ready; file-service DB down
+- [x] T071 [P] [US7] `e2e/ReadinessPolicyIT` (extend) - broker down: ready; file-service DB down
       outside a run: ready; during a run: not ready.
-      **Not done, and deliberately not ticked: the second claim is false against the service as it
-      stands, and the code is what looks wrong.** All three cases were written and run, and nothing
-      was committed - the branch is untouched by this task, `git status --short` clean at `81d2b87`,
-      and the finished work is preserved as `T071-readiness-three-cases.patch` in the stage's
-      scratchpad (507 lines; `git apply --check` passes), holding all three cases, the
-      `PostgresTestSupport.refuseConnectionsTo` / `allowConnectionsTo` fixture and the nested
-      file-service pool configuration. Nothing was committed because the fix is a production-wiring
-      decision that is not the test stage's to make, and a `test(readiness)` commit carrying a red
-      suite would leave the branch failing `./gradlew build` for the next stage.
-      Gate read green before each attempt: "./gradlew -q compileJava compileTestJava checkstyleMain
-      checkstyleTest pmdMain pmdTest" with no findings. Run of exactly that class: `./gradlew test
-      --tests 'uk.gov.hmcts.cp.courtregister.e2e.ReadinessPolicyIT' -Dtest.noFailFast=true` - "8
-      tests completed, 1 failed". Green are the two new [A] cases, "a broker outage fails no
-      readiness probe at all, not merely the first" and "a run that cannot write its payload stops
-      claiming the pod can do its one job", beside the five cases the suite already had. **The
-      failing assertion**, on the case
-      `should_keep_readiness_up_while_the_file_service_database_is_down_outside_a_run`:
-      "org.awaitility.core.ConditionTimeoutException: Condition with Lambda expression in
-      uk.gov.hmcts.cp.courtregister.e2e.ReadinessPolicyIT was not fulfilled within 2 minutes."
-      **Why**, from a throwaway diagnostic in the same suite, reverted: "db=DOWN[dataSource=UP{...}
-      fileServiceDataSource=DOWN{error=org.springframework.jdbc.CannotGetJdbcConnectionException:
-      Failed to obtain JDBC Connection} ] fileServiceRun=UP{run=idle, fileservice=not-probed}" - the
-      component decided correctly and never asked, and is defeated by `db`, which on a
-      generation-enabled pod has become a composite over both pools. Confirmed against the real
-      deployed wiring rather than the suite's hand-declared bean, by a throwaway
-      `TempDbCompositeProbeIT` over `GenerationStackSupport` with
-      `courtregister.generation.enabled=true` (since deleted): "PROBE-OUTAGE-STATUS DOWN" with no
-      run in progress.
-      **The mechanism** (spring-boot-jdbc 4.1.0): `DataSourceHealthContributorAutoConfiguration`
-      collects every `DataSource`-typed bean through
-      `SimpleAutowireCandidateResolver.resolveAutowireCandidates`, which filters on the bean
-      definition's `autowire-candidate` flag and not on `defaultCandidate`, so
-      `@Bean(defaultCandidate = false)` removes the pool from unqualified injection points - which
-      is why `@ConditionalOnMissingBean` still backs off and the component is still named `db` - and
-      not from that enumeration. **Two harms, both of them ones the design explicitly refused**: an
-      unreachable file service rolls a pod whose intake half is working perfectly, and this service
-      asks the file-service pool for a connection on every health poll, holding a connection to
-      another team's database open all day for an answer that cannot matter until 18:00 - which is
-      the harm `FileServiceRunHealthIndicator`'s own javadoc describes and `application.yaml`'s
-      readiness block spells out the opposite of. Blast radius is deployed environments with
-      `COURTREGISTER_GENERATION_ENABLED=true` only: a default local run and every
-      `@ActiveProfiles("test")` context has one datasource, which is the other reason it went
-      unnoticed. Claims 1 and 3 agree with the service and are green. No `doc/DEFECT-FIXES.md` row
-      moves for this: it is a defect in 002's own code rather than a progression one, which is the
-      judgement Phase 7's exception 2 records for the `CliMain.dispatch` NullPointerException. The
-      fix, the pair it lands as and the mutations it still owes are in the open items below.
+      (**The second claim was false against the service when the cases were written, and the code
+      was what was wrong.** All three were written under this task and not committed, because the
+      fix was a production-wiring decision the test stage would not take on its own and a
+      `test(readiness)` commit carrying a red suite would have left the branch failing
+      `./gradlew build`. They landed as a pair once the decision was made: `28a2fd5`
+      "test(readiness): pin the three outages that may and may not roll a pod" then `1da7125`
+      "fix(health): db means the register store, not every pool on the context".
+      **The failing assertion at `28a2fd5`**, on
+      `should_keep_readiness_up_while_the_file_service_database_is_down_outside_a_run`, after the
+      case was sharpened to name the component that objected rather than time out: "[readiness is
+      about the work this pod is being sent, and at 09:00 that is intake: a database nothing will
+      touch until 18:00 must not roll a pod whose intake half is recording registers perfectly
+      well. The components say who objected: {db=DOWN, fileServiceRun=UP, intakeStartup=UP}]
+      expected: UP but was: DOWN" - 8 tests completed, 1 failed. `fileServiceRun` decided correctly
+      throughout, at `run=idle, fileservice=not-probed`.
+      **The defect**: `DataSourceHealthContributorAutoConfiguration` collects the context's
+      datasource beans and, finding two on a generation-enabled pod, contributed `db` as a composite
+      over both, so the platform file service being unreachable reported `db` DOWN at any hour and
+      rolled the intake half, and every health poll asked another team's database for a connection.
+      Both are harms FR-011 and `FileServiceRunHealthIndicator` exist to prevent, and the service
+      said so in three places while doing the opposite.
+      **The fix is option (c) of the three the open items listed**: the auto-configured contributor
+      is switched off in `application.yaml` and `config/StoreHealth` contributes `db` over the
+      primary pool alone. (a) was rejected because `autowire-candidate` would hide the pool from the
+      two qualified injections that are the only intended way to reach it, and (b) because it would
+      hand this service the pool's lifecycle for a health-naming problem. The component is
+      unconditional and resolves its pool per probe, both deliberately: Spring validates
+      health-group membership at startup, which `HttpSurfaceTest`'s generating context demonstrated
+      while the fix was being written, and a `@ConditionalOnBean` in an ordinary configuration is
+      evaluated before the auto-configuration that defines the pool, so it answers "no pool" on a
+      pod that has one. No pool answers DOWN, the judgement `GenerationHealth` already records for
+      the file service.
+      **Green at `1da7125`**: `./gradlew test --tests '*ReadinessPolicyIT'` 8 tests, 0 failures,
+      `{db=UP, fileServiceRun=UP, intakeStartup=UP}` throughout a file-service outage with no run
+      on; `./gradlew build` green, 3200 tests, 0 failures. The third case is no longer confounded -
+      readiness goes DOWN during a run because `fileServiceRun` says so and `db` stays UP - and
+      `GenerationHealth.probe`'s javadoc now says what actually keeps `db` named `db`.
+      The outage is staged by `PostgresTestSupport.refuseConnectionsTo`, which is
+      `ALTER DATABASE ... ALLOW_CONNECTIONS false` plus `pg_terminate_backend`: the shared container
+      holds the file-service database beside the processed log, so a freeze would take readiness
+      DOWN through `db` and the case would assert the opposite of what it claims. No deployment
+      manifest ships in this repository, so the sustained-outage window is not grounded in a real
+      `failureThreshold` times `periodSeconds`, and the constant's javadoc says so.)
 - [x] T072 [US7] Run report: one structured log line per run (`event=register_generation_run`) with
       the `RunReport` fields; gauges published; documented in the metrics section of the Confluence
       page (the note for the page owner is recorded below rather than in a PR description, the
@@ -1581,12 +1578,15 @@ meter they can move, with no leak found (T070, `81d2b87`); and the run report's 
 fields, its arithmetic and its three gauges are pinned, including the night that stops part way
 (T072, `23e4daf` / `0aa2cc5` / `4021608`).
 
-**T071 is not done, and the gate has a defect to rule on rather than a task to tick.** The readiness
-policy's second claim is false against the service as it stands: on a generation-enabled pod an
-unreachable file service takes readiness DOWN outside a run, through `db`'s composite over both
-pools, and rolls the intake half over a database nothing will touch until 18:00. The failing
-assertion, the mechanism, the blast radius and the three available fixes are on T071's line above
-and in the open items below. Nothing else in the phase is outstanding.
+**T071 found a defect before it could be ticked, and both are now done.** The readiness policy's
+second claim was false against the service: on a generation-enabled pod an unreachable file service
+took readiness DOWN outside a run, through `db`'s composite over both pools, and rolled the intake
+half over a database nothing would touch until 18:00. It landed as a pair, `28a2fd5` then
+`1da7125`, whose evidence is on T071's line above; open items 1 to 5 below are closed by it and say
+so. **Two of T070's findings were closed the same way**, `667b9e8` then `7332149`: both readers of
+an optional field on a public event attached the parser's exception to a WARN, and those messages
+quote the value the field held, which is another context's and did not parse. That is open item 7,
+and it is the defect the phase gate fixed once already in `CliMain.unreadable`, one door along.
 
 **One phase-gate finding of Phase 7's was closed here**, `29cbc9d` "test(store): state the
 successors a release may pick past RECORDED". Both release statements admit `RECORDED`, `GENERATED`
@@ -1632,51 +1632,44 @@ Phase 7's own three documentation commits were recorded on.
 workflow report. Items 1 to 6 are T071's and the gate's; 7 to 10 came out of T070's drive; 11 to 14
 are decisions rather than defects.
 
-1. **The `db` composite.** Decide and implement the fix, then land the pair: the red half already
-   exists in the saved patch, as `ReadinessPolicyIT`'s case
-   `should_keep_readiness_up_while_the_file_service_database_is_down_outside_a_run`.
-   Three options, none free. (a) `autowireCandidate = false` beside
-   `defaultCandidate = false` on `FileServiceDataSourceConfig.fileServiceDataSource` -
-   `SimpleAutowireCandidateResolver` does honour that flag, but it also removes the bean from the
-   `@Qualifier` injection `GenerationHealth.probe()` uses, so that must become an explicit
-   `beanFactory.getBean(DATA_SOURCE, DataSource.class)`. (b) Stop registering the pool as a
-   `DataSource`-typed bean at all: build it inside the configuration, expose only the qualified
-   `JdbcClient` and the probe, and own the pool's lifecycle. (c)
-   `management.health.db.enabled=false` plus a hand-built `db` contributor over the processed log's
-   pool alone.
-2. **`GenerationHealth.probe()`'s javadoc is factually wrong** whichever fix lands: "the pool it
-   probes is `defaultCandidate = false` and so is invisible to the auto-configuration that collects
-   datasources by type". The name `db` survives; the invisibility does not.
-   `FileServiceDataSourceConfig`'s class javadoc makes a narrower version of the same claim about
-   the auto-configurations' conditions, and that half is true.
-3. **Nothing asserts what `db` covers on a generation-enabled pod**, which is why every generation
-   end-to-end suite is green over this defect: they all assert on batches, documents and e-mails and
-   none of them reads the health endpoint. Characterise it whichever fix lands.
-4. **T071's third case is green but confounded** by the same defect: readiness would go DOWN through
-   `db`'s composite even with `fileServiceRun` out of the group. Its unconfounded half is the
-   component assertion, which passed with `fileServiceRun` DOWN and details exactly
-   `{run=in-progress, fileservice=down}`. Re-record that case's evidence after a fix.
-5. **Two mutations are owed** when T071's two green cases land, [A] mutation evidence belonging in a
-   commit body and no commit having been made: drop `fileServiceRun` from the readiness `include:`
-   line in `application.yaml`, and case 3 must fail; add `servicebus` to it, and case 1 must fail.
+1. **CLOSED by `28a2fd5` / `1da7125`.** The `db` composite, fixed as option (c): the
+   auto-configured contributor switched off and `config/StoreHealth` contributing `db` over the
+   primary pool alone. (a) was rejected because `autowire-candidate` would hide the pool from the
+   two qualified injections that are the only intended way to reach it, (b) because it would hand
+   this service the pool's lifecycle to solve a health-naming problem.
+2. **CLOSED by `1da7125`.** `GenerationHealth.probe()`'s javadoc had said the pool was invisible
+   to the auto-configuration because it is `defaultCandidate = false`; it now says what actually
+   keeps `db` named `db`, and names the flag that would have done what that claim described.
+   `FileServiceDataSourceConfig`'s narrower claim about the auto-configurations' conditions was
+   true and is untouched.
+3. **PARTLY CLOSED by `28a2fd5`.** `ReadinessPolicyIT`'s new case now reads the health endpoint
+   over a generation-enabled pod with one database out of service, which is what the defect needed
+   and no generation end-to-end suite does. What is still uncharacterised is the shape of `db`
+   itself - that it covers the processed log and nothing else - as distinct from its behaviour
+   under this one outage. Worth a case in Phase 9 or the next increment.
+4. **CLOSED by `1da7125`.** T071's third case is no longer confounded: readiness goes DOWN during
+   a run because `fileServiceRun` says so, and `db` stays UP throughout, which is recorded on
+   T071's line above.
+5. **STILL OPEN, narrowed.** The two [A] cases landed inside `28a2fd5`, whose body records the
+   failing assertion of the case that was red rather than a mutation for the two that were green.
+   The mutations that would show those two non-vacuous are named here and have not been run: drop
+   `fileServiceRun` from the readiness `include:` line in `application.yaml` and case 3 must fail;
+   add `servicebus` to it and case 1 must fail.
 6. **`PostgresTestSupport.refuseConnectionsTo` / `allowConnectionsTo`** is worth folding into the
    fixture on its own merits - `ALTER DATABASE ... ALLOW_CONNECTIONS false` plus
    `pg_terminate_backend` is the only way this build can stage an outage of one database inside the
    shared server, and `FileServicePayloadStoreIT` and the generation suites may want it. Note also
    that no deployment manifest ships in this repository, so T071's sustained-outage window is not
    grounded in a real `failureThreshold` times `periodSeconds`; the constant's javadoc says so.
-7. **`DocumentEventListener` echoes another context's raw token at WARN**, which is the defect class
-   the phase gate already fixed once in `CliMain.unreadable`: `uuid()` (line 355) and `instant()`
-   (line 381) attach the parser's exception, and those messages quote the token - "Invalid UUID
-   string: <the event's sourceCorrelationId / payloadFileServiceId / documentFileServiceId>" and
-   "Text '<the event's generatedTime / failedTime>' could not be parsed at index 0". There the text
-   was an operator's typing; here it is a public topic the whole estate publishes to. It is outside
-   T070's claim, since none of the three named values can reach those fields (`reason` is read via
-   `text()` and never parsed), so it was not fixed red-first without a register row. The fix is the
-   same shape: report the field by the name this service owns and the refusing reader's class, and
-   drop the throwable. Measured while T070 was written: Jackson 3 redacts the source in a parse
-   failure, so the envelope parse at `DocumentEventListener:191` does not quote the event body and a
-   `generation-failed` body carrying `sdg_reason` is safe there.
+7. **CLOSED by `667b9e8` / `7332149`.** `DocumentEventListener`'s two readers of an optional field
+   attached the parser's exception to their WARN, and those messages quote what the field held:
+   "Invalid UUID string: <value>" and "Text '<value>' could not be parsed". Both now report the
+   field by the name this service owns and the refusing reader's class, and neither writes the
+   value. The red run is two cases in `DocumentEventListenerTest` over
+   `CapturedLog.renderings()`, because an attached exception reaches a log index exactly as a
+   message does. Measured while T070 was written and still true: Jackson 3 redacts the source in a
+   parse failure, so the envelope parse does not quote the event body and a `generation-failed`
+   body carrying `sdg_reason` is safe there.
 8. **`RegisterGenerationService:220` puts an English sentence in a `reason=` slot**, logging
    `unavailable.getMessage()`. Not a leak - the phrase is bounded and written in
    `FileServicePayloadStore`, which documents exactly that - but the suite's own stated rule is that
