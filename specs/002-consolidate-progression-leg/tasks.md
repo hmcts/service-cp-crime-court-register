@@ -943,18 +943,22 @@ lines above and in the exceptions block below rather than here.
   (`7e282ca` / `674753b`), the artefact the image is built from made unambiguous (`b544003`), and a
   command's report given stdout to itself (`fe4750d` / `294d93e`), with `58769d2` and `e2ee872`
   beside them; `88ec762` is where this record was brought level with the two rounds.
-- **The phase gate**, `1609e80` to `b390eb6`, 13 commits: five red/green pairs, one
-  refactor/characterisation pair and one documentation commit. The pairs are the successor's
-  ordering rule over `(register_time, created_at, output_id)` on both release statements
-  (`1609e80` / `3fae1a2`, T065), an operator's own typing swept out of a command's log
+- **The phase gate**, `1609e80` to `980230d`, 17 commits over four re-reviews: six red/green
+  pairs, one refactor/characterisation pair and three documentation commits. The pairs are the
+  successor's ordering rule over `(register_time, created_at, output_id)` on both release
+  statements (`1609e80` / `3fae1a2`, T065), an operator's own typing swept out of a command's log
   (`9e02bd7` / `c0bf9bb`, T065), the flag store's endpoint read by parsing rather than by its shape
   (`35d3277` / `5bf982f`, outside Phase 7's own tasks), only a register admitted as the register
   that replaced one, where 001's POST rows on the same key had been (`605e6a2` / `382629b`, T065),
-  and a report the destination refused told apart from a context that would not start
-  (`19e52ff` / `b390eb6`, T065 and T067). The sixth is `07e325b` / `baa0c32`, the report's
+  a report the destination refused told apart from a context that would not start
+  (`19e52ff` / `b390eb6`, T065 and T067), and that refusal let past each command's own broad catch
+  (`f009bc5` / `2a2afb1`, T065). The seventh pair is `07e325b` / `baa0c32`, the report's
   destination behind one boundary, which is an extraction pinned before and after rather than
-  driven red and is exception 9 below; `f199fd1` is where this record was brought level with the
-  gate's first eight commits. Two exceptions come with them, 8 and 9 below.
+  driven red and is exception 9 below, so it is named here rather than counted with the six. The
+  three documentation commits are where this record was brought level with the gate as it went:
+  `f199fd1` after its first eight commits, `d610df1` after the second re-review, `980230d` after
+  the third, and the fourth is the commit carrying this line. Two exceptions come with them all,
+  8 and 9 below.
 
 ### Approved TDD exceptions (Phase 7)
 
