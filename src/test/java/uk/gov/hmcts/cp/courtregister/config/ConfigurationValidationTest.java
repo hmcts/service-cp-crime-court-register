@@ -1596,6 +1596,40 @@ class ConfigurationValidationTest {
         }
 
         /**
+         * A flag store named by a value the client cannot be built from.
+         *
+         * <p>Presence is not enough here, and the shape is this validator's to refuse rather than
+         * the SDK's. {@code ConfigurationClientBuilder.endpoint} does {@code new URL(endpoint)} and
+         * throws "'endpoint' must be a valid URL"; the connection-string form fails the same way in
+         * its credential parsing. Both happen while {@code LiveFeatureFlagConfig.featureFlagReader}
+         * is being built, which is during refresh with generation enabled - so a host pasted out of
+         * the portal without its scheme, or a Helm value that lost one, is a pod that never starts,
+         * on an Azure {@code IllegalArgumentException} that names no setting of this service's.
+         *
+         * <p>Every shape below is one an operator can plausibly supply: the bare host, a host and
+         * port, a value with the scheme separator half typed, and something that is not an endpoint
+         * at all.
+         */
+        @ParameterizedTest
+        @ValueSource(strings = {
+            "courtregister-ste86.azconfig.io",
+            "wiremock:8080",
+            "https:/wiremock:8080",
+            "not-an-endpoint",
+        })
+        void enabling_generation_with_a_flag_store_that_is_not_a_url_should_fail_startup(
+                final String endpoint) {
+
+            generating.withPropertyValues("courtregister.feature.endpoint=" + endpoint)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.feature.endpoint")
+                                .hasMessageContaining("courtregister.generation.enabled");
+                    });
+        }
+
+        /**
          * The label is how one App Configuration store serves every stack, so an unlabelled read is
          * not a read of this stack's flag - it is a read of somebody else's, or of none.
          */
