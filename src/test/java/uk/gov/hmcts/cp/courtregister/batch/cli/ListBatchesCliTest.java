@@ -1,9 +1,13 @@
 package uk.gov.hmcts.cp.courtregister.batch.cli;
 
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Level;
+import java.io.IOException;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -34,6 +38,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
 
 /**
@@ -612,6 +617,80 @@ class ListBatchesCliTest {
             softly.assertThat(lines)
                     .as("and no batch line is printed, because none was read")
                     .noneMatch(line -> line.startsWith("batch="));
+        }
+    }
+
+    /**
+     * The date was read and the destination stopped taking the listing part-way through it.
+     *
+     * <p><strong>{@code startup.sh list-batches --date D | head -1} is the everyday
+     * invocation.</strong> The destination stops taking lines the moment {@code head} has had its
+     * one, which is in the middle of a listing whose reads have all been made - so the failure
+     * arrives with the work done and half the answer on the operator's terminal. Caught as though
+     * the store had gone away, that would tell support the date's rows could not be read while a
+     * batch line for the date is on the screen above it, which is the one contradiction a person
+     * mid-incident cannot resolve from the output: they cannot tell whether the line they can see
+     * is the truth or the sentence under it is.
+     *
+     * <p>So the refusal leaves this command untouched, for {@link CliMain} to answer on
+     * {@link CliMain#FAILED} with one log line and no second write to the destination that has just
+     * refused one. The exit code is the same either way - a listing an operator did not get in full
+     * is a command that could not finish - and what this case is about is the diagnosis beside it.
+     */
+    @Nested
+    @DisplayName("a report the destination refused")
+    class AReportRefused {
+
+        /** How many lines the destination takes before it refuses, as {@code head -1} takes one. */
+        private static final int TAKES_ONE_LINE = 1;
+
+        /** What the boundary says of a line it could not write, in this service's own words. */
+        private static final String NOT_WRITTEN =
+                "a command's report line could not be written to standard output";
+
+        /** Every line the listing tried to write, the refused one included. */
+        private final List<String> attempted = new ArrayList<>();
+
+        /** The destination at the far end of {@code list-batches | head -1}: one line, no more. */
+        private final Consumer<String> refuses = line -> {
+            attempted.add(line);
+            if (attempted.size() > TAKES_ONE_LINE) {
+                throw new ReportNotWritten(NOT_WRITTEN, new IOException("Broken pipe"));
+            }
+        };
+
+        @Test
+        void a_refused_report_should_not_be_reported_as_a_listing_that_failed() {
+            final RegisterBatch batch = batch("B01LY00", BatchStatus.PARTIALLY_NOTIFIED);
+            final RegisterNotification owed =
+                    notification(batch.batchId(), LONG_ADDRESS, NotificationStatus.FAILED);
+            when(batches.findByRegisterDate(DATE)).thenReturn(List.of(batch));
+            holding(batch, List.of(record(RecordedFlagState.ON)), List.of(owed));
+            final ListBatchesCli refused =
+                    new ListBatchesCli(batches, notifications, store, refuses);
+
+            try (CapturedLog log = CapturedLog.capturing(ListBatchesCli.class)) {
+                softly.assertThatThrownBy(() -> refused.run(List.of("--date", TYPED_DATE)))
+                        .as("the refusal reaches the caller, which is the one place it can be "
+                                + "answered without a terminal: the destination has already "
+                                + "refused a line, so a verdict written there fails the same way")
+                        .isInstanceOf(ReportNotWritten.class);
+                softly.assertThat(log.events())
+                        .as("and nothing says the date could not be read, because it was read: a "
+                                + "sentence saying otherwise beside a batch line for the same date "
+                                + "leaves support unable to tell which half of the output to "
+                                + "believe")
+                        .noneMatch(event -> event.getLevel() == Level.ERROR);
+            }
+            softly.assertThat(attempted)
+                    .as("the listing as far as the destination took it, and no verdict about the "
+                            + "reads after it")
+                    .containsExactly(batchLine(batch, 1, 1),
+                            recipientLine(batch.batchId(), LONG_MASKED, NotificationStatus.FAILED));
+            verify(batches).findByRegisterDate(DATE);
+            verifyNoMoreInteractions(batches);
+            verify(store).batched(batch.batchId());
+            verifyNoMoreInteractions(store);
         }
     }
 }

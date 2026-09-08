@@ -6,6 +6,8 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Level;
+import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -15,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.assertj.core.api.SoftAssertions;
@@ -1200,6 +1203,87 @@ class GenerateRegisterCliTest {
                             .noneMatch(line -> line.contains(marker));
                 }
             }
+        }
+    }
+
+    /**
+     * The day was regenerated and the destination stopped taking the report part-way through it.
+     *
+     * <p><strong>The summary is written after the day has been written down and asked for.</strong>
+     * A batch's own line goes out as the render is requested and the counts follow at the end, so
+     * {@code startup.sh generate-register --date D | head -1} - or a terminal whose far end has
+     * gone - refuses the summary with the registers already stamped into a batch row and
+     * systemdocgenerator already asked. Caught as though the store had refused, that would tell an
+     * operator the day stands as whatever the run had written down, which is exactly the sentence
+     * that sends them to {@code list-batches} and then to a second regeneration of a day that has
+     * already been generated - and the second run releases nothing, because the batch it would
+     * re-assemble is in flight rather than FAILED, so the day they were told to fix looks untouched
+     * by the command they ran to fix it.
+     *
+     * <p>So the refusal leaves this command untouched, for {@link CliMain} to answer on
+     * {@link CliMain#FAILED} with one log line and no second write to the destination that has just
+     * refused one. What the day did is on the batch line the destination took, and the exit code
+     * says the operator did not get the whole of the answer.
+     */
+    @Nested
+    @DisplayName("a report the destination refused")
+    class AReportRefused {
+
+        /** How many lines the destination takes before it refuses, as {@code head -1} takes one. */
+        private static final int TAKES_ONE_LINE = 1;
+
+        /** What the boundary says of a line it could not write, in this service's own words. */
+        private static final String NOT_WRITTEN =
+                "a command's report line could not be written to standard output";
+
+        /** The summary of the day this case arranges, which is the line that is refused. */
+        private static final String SUMMARY = "date=" + THURSDAY
+                + " released=0 registers=1 batches=1 requested=1 deferred=0";
+
+        /** Every line the report tried to write, the refused one included. */
+        private final List<String> attempted = new ArrayList<>();
+
+        /** The destination at the far end of {@code generate-register | head -1}: one line. */
+        private final Consumer<String> refuses = line -> {
+            attempted.add(line);
+            if (attempted.size() > TAKES_ONE_LINE) {
+                throw new ReportNotWritten(NOT_WRITTEN, new IOException("Broken pipe"));
+            }
+        };
+
+        @Test
+        void a_refused_report_should_not_be_reported_as_a_regeneration_that_failed() {
+            theFlagIsOn();
+            stillWaiting(leedsRegister());
+            final GenerateRegisterCli refused = new GenerateRegisterCli(gate, store, assembler,
+                    service, settings(), clock, refuses);
+
+            try (CapturedLog log = CapturedLog.capturing(GenerateRegisterCli.class)) {
+                softly.assertThatThrownBy(
+                                () -> refused.run(List.of("--" + Args.DATE, THURSDAY.toString())))
+                        .as("the refusal reaches the caller, which is the one place it can be "
+                                + "answered without a terminal: the destination has already "
+                                + "refused a line, so a verdict written there fails the same way")
+                        .isInstanceOf(ReportNotWritten.class);
+                softly.assertThat(log.events())
+                        .as("and nothing says the regeneration did not finish, because it did: the "
+                                + "registers are stamped into a batch and the render is asked for, "
+                                + "and an operator told otherwise runs a second regeneration that "
+                                + "can release nothing")
+                        .noneMatch(event -> event.getLevel() == Level.ERROR);
+            }
+            softly.assertThat(attempted)
+                    .as("the batch line the destination took and the summary it refused, and no "
+                            + "verdict about the day after them")
+                    .hasSize(2);
+            softly.assertThat(attempted.getLast())
+                    .as("the last thing written was the day's own counts, not a sentence about a "
+                            + "regeneration that did not happen")
+                    .isEqualTo(SUMMARY);
+            softly.assertThat(sequence.stream().map(GenerateRegisterCliTest::step).toList())
+                    .as("the day was written down and asked for, and a report the destination "
+                            + "would not take changes neither")
+                    .containsExactly(WRITTEN, REQUESTED);
         }
     }
 }

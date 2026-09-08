@@ -6,6 +6,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Level;
+import java.io.IOException;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -23,6 +25,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
 /**
  * {@code supersede-before --shared-before T}: the rollback lever, and the bound it is never allowed
@@ -247,6 +250,71 @@ class SupersedeBeforeCliTest {
             softly.assertThat(lines)
                     .as("and no count is printed, because none was taken")
                     .noneMatch(line -> line.contains("superseded="));
+        }
+    }
+
+    /**
+     * The period was superseded and the line saying so is what the destination refused.
+     *
+     * <p><strong>The report is written after the work, so a destination that stopped taking lines
+     * is not the supersession failing.</strong> {@code startup.sh supersede-before --shared-before
+     * T | head -0}, or a terminal whose far end has gone, refuses the count this command answers
+     * with - after the write to the register store has been made and cannot be unmade. Caught as
+     * though the store had refused, that would tell an operator mid-rollback that this service
+     * still claims a period it has just given up, and the next thing they do about a rollback they
+     * believe unfinished is run the command again over a wider bound.
+     *
+     * <p>So the refusal leaves this command untouched, for {@link CliMain} to answer on
+     * {@link CliMain#FAILED} with one log line and no second write to the destination that has just
+     * refused one - which is the code a report that did not reach the operator has earned whatever
+     * the store did first.
+     */
+    @Nested
+    @DisplayName("a report the destination refused")
+    class AReportRefused {
+
+        /** How many lines the destination takes, this command's whole report being one line. */
+        private static final int TAKES_NOTHING = 0;
+
+        /** What the boundary says of a line it could not write, in this service's own words. */
+        private static final String NOT_WRITTEN =
+                "a command's report line could not be written to standard output";
+
+        /** Every line the report tried to write, the refused one included. */
+        private final List<String> attempted = new ArrayList<>();
+
+        /** The destination at the far end of a pipe nobody is reading any more. */
+        private final Consumer<String> refuses = line -> {
+            attempted.add(line);
+            if (attempted.size() > TAKES_NOTHING) {
+                throw new ReportNotWritten(NOT_WRITTEN, new IOException("Broken pipe"));
+            }
+        };
+
+        @Test
+        void a_refused_report_should_not_be_reported_as_a_supersession_that_failed() {
+            when(store.supersedeSharedBefore(BOUND)).thenReturn(7);
+            final SupersedeBeforeCli refused = new SupersedeBeforeCli(store, refuses);
+
+            try (CapturedLog log = CapturedLog.capturing(SupersedeBeforeCli.class)) {
+                softly.assertThatThrownBy(() -> refused.run(List.of("--shared-before", TYPED)))
+                        .as("the refusal reaches the caller, which is the one place it can be "
+                                + "answered without a terminal: the destination has already "
+                                + "refused a line, so a verdict written there fails the same way")
+                        .isInstanceOf(ReportNotWritten.class);
+                softly.assertThat(log.events())
+                        .as("and nothing says the period was not superseded, because it was: a "
+                                + "sentence sending an operator back to a rollback that is already "
+                                + "done is a second period superseded, and supersession is not "
+                                + "undone by running the command again")
+                        .noneMatch(event -> event.getLevel() == Level.ERROR);
+            }
+            softly.assertThat(attempted)
+                    .as("the count and the bound, and no verdict about the work after it: the "
+                            + "write was made and only the answer about it was refused")
+                    .containsExactly(reportOf(7));
+            verify(store).supersedeSharedBefore(BOUND);
+            verifyNoMoreInteractions(store);
         }
     }
 }

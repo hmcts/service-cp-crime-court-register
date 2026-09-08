@@ -5,8 +5,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Level;
+import java.io.IOException;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,6 +29,7 @@ import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
 /**
  * {@code notify-register --batch B}: the resend, and the teams it must not tell twice.
@@ -455,6 +459,73 @@ class NotifyRegisterCliTest {
             softly.assertThat(lines)
                     .as("named, and without the store's own sentence about it")
                     .anyMatch(line -> line.contains(BATCH.toString()));
+        }
+    }
+
+    /**
+     * The recipients were re-requested and the tally is what the destination refused.
+     *
+     * <p><strong>The report is written after the resend, so a destination that stopped taking lines
+     * is not the resend failing.</strong> {@code startup.sh notify-register --batch B | head -0},
+     * or a terminal whose far end has gone, refuses the tally - after the notifier has posted for
+     * every row the batch owed one. Caught as though the notifier had refused, that would tell an
+     * operator the recipients were not re-requested when e-mail about children is already on its
+     * way to them, and the ticket's next step is to run the command again: a second copy of the
+     * register to every Youth Offending Team the first attempt reached.
+     *
+     * <p>So the refusal leaves this command untouched, for {@link CliMain} to answer on
+     * {@link CliMain#FAILED} with one log line and no second write to the destination that has just
+     * refused one - which is the code a tally that did not reach the operator has earned, and the
+     * one thing that is true about the invocation either way.
+     */
+    @Nested
+    @DisplayName("a report the destination refused")
+    class AReportRefused {
+
+        /** How many lines the destination takes, this command's whole report being one line. */
+        private static final int TAKES_NOTHING = 0;
+
+        /** What the boundary says of a line it could not write, in this service's own words. */
+        private static final String NOT_WRITTEN =
+                "a command's report line could not be written to standard output";
+
+        /** Every line the report tried to write, the refused one included. */
+        private final List<String> attempted = new ArrayList<>();
+
+        /** The destination at the far end of a pipe nobody is reading any more. */
+        private final Consumer<String> refuses = line -> {
+            attempted.add(line);
+            if (attempted.size() > TAKES_NOTHING) {
+                throw new ReportNotWritten(NOT_WRITTEN, new IOException("Broken pipe"));
+            }
+        };
+
+        @Test
+        void a_refused_report_should_not_be_reported_as_a_resend_that_failed() {
+            final NotificationSummary settled =
+                    new NotificationSummary(3, 0, BatchStatus.NOTIFIED);
+            when(notifier.resendFailed(BATCH)).thenReturn(settled);
+            final NotifyRegisterCli refused = new NotifyRegisterCli(notifier, refuses);
+
+            try (CapturedLog log = CapturedLog.capturing(NotifyRegisterCli.class)) {
+                softly.assertThatThrownBy(() -> refused.run(List.of("--batch", BATCH.toString())))
+                        .as("the refusal reaches the caller, which is the one place it can be "
+                                + "answered without a terminal: the destination has already "
+                                + "refused a line, so a verdict written there fails the same way")
+                        .isInstanceOf(ReportNotWritten.class);
+                softly.assertThat(log.events())
+                        .as("and nothing says the batch was left as it stood, because it was not: "
+                                + "an operator told the recipients were not re-requested runs the "
+                                + "command again, and every team the first attempt reached is sent "
+                                + "a second copy of a document about children")
+                        .noneMatch(event -> event.getLevel() == Level.ERROR);
+            }
+            softly.assertThat(attempted)
+                    .as("the tally, and no verdict about the resend after it: the posts were made "
+                            + "and only the answer about them was refused")
+                    .containsExactly(reportOf(settled));
+            verify(notifier).resendFailed(BATCH);
+            verifyNoMoreInteractions(notifier);
         }
     }
 }

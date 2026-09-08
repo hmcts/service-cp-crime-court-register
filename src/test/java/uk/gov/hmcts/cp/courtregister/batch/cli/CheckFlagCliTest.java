@@ -4,8 +4,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -274,6 +276,65 @@ class CheckFlagCliTest {
                             Stream.of("ON", "OFF", "UNREADABLE"),
                             Stream.of(UnreadableReason.values()).map(UnreadableReason::code))
                     .toList();
+        }
+    }
+
+    /**
+     * The flag was read and the destination refused the one line saying so.
+     *
+     * <p><strong>[A] characterisation, and the fifth command's answer to a question the other four
+     * were defective on.</strong> The review gate found the report's refusal being caught by four
+     * commands' own broad catches and reported as work that had failed. This command has no such
+     * catch to get past: the reader it asks never throws, the only {@code catch} it has is the
+     * parser's own {@link IllegalArgumentException}, and a destination that refuses the verdict
+     * therefore leaves the command already. So this case passed on introduction and no
+     * implementation follows it - what it states is the property the other four were changed to
+     * have, over the command that has it by construction, so that a later {@code catch} added here
+     * cannot quietly take it away.
+     *
+     * <p>Which matters as much here as anywhere: {@code check-flag} is the first step of a cutover
+     * and a rollback, and an operator told the flag could not be read - when it was read, and said
+     * ON - is an operator who stops a cutover that was ready to go.
+     */
+    @Nested
+    @DisplayName("a report the destination refused")
+    class AReportRefused {
+
+        /** How many lines the destination takes, this command's whole report being one line. */
+        private static final int TAKES_NOTHING = 0;
+
+        /** What the boundary says of a line it could not write, in this service's own words. */
+        private static final String NOT_WRITTEN =
+                "a command's report line could not be written to standard output";
+
+        /** Every line the report tried to write, the refused one included. */
+        private final List<String> attempted = new ArrayList<>();
+
+        /** The destination at the far end of a pipe nobody is reading any more. */
+        private final Consumer<String> refuses = line -> {
+            attempted.add(line);
+            if (attempted.size() > TAKES_NOTHING) {
+                throw new ReportNotWritten(NOT_WRITTEN, new IOException("Broken pipe"));
+            }
+        };
+
+        @Test
+        void a_refused_report_should_reach_the_caller_over_a_flag_that_was_read() {
+            when(reader.read()).thenReturn(FlagDecision.ON);
+            final CheckFlagCli refused = new CheckFlagCli(reader, refuses);
+
+            softly.assertThatThrownBy(() -> refused.run(List.of()))
+                    .as("the refusal reaches the caller, which is the one place it can be answered "
+                            + "without a terminal: the destination has already refused a line, so "
+                            + "a verdict written there fails the same way")
+                    .isInstanceOf(ReportNotWritten.class);
+            softly.assertThat(attempted)
+                    .as("the verdict, and no second line saying the flag could not be read: it "
+                            + "was read, and an operator told otherwise stops a cutover that was "
+                            + "ready to go")
+                    .containsExactly(ON_LINE);
+            verify(reader).read();
+            verifyNoMoreInteractions(reader);
         }
     }
 }
