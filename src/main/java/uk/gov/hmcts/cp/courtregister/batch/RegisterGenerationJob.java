@@ -195,39 +195,64 @@ public class RegisterGenerationJob {
      * may not generate - and getting them back is a person's decision about one batch at a time
      * (the release behind {@code generate-register}), not something a later run can undo.
      *
+     * <p><strong>A run that stops part way still reports.</strong> The store can go away between
+     * the read and the stamp and the reconciler's own query can fail, and a run that left through
+     * one of those without writing its line would be the one night that produced no report at all -
+     * the night that stamped batches and asked for renders and then said nothing about how far it
+     * got, which is worse than the silence the report exists to abolish. So the line is written
+     * from what the run had done and the failure is then rethrown: reported <em>and</em> rethrown,
+     * because a failure that is only logged about has not been settled (constitution Principle VI)
+     * and both the schedule and the operations command decide what to do next from the throw.
+     *
      * @return what the run did, including a run the flag stopped
      */
+    // PMD.AvoidCatchingGenericException: what has to be reported is a run that stopped, whatever
+    // stopped it - a store outage arrives as the store's own unchecked type, a refused stamp as
+    // IllegalStateException - and a narrower catch would leave the classes it does not name as the
+    // nights that report nothing. Nothing is swallowed: the same throwable leaves the method.
+    // PMD.OnlyOneReturn: the two exits are the two nights - one the flag stopped and one it allowed
+    // - and each reports where it ends; funnelling them through one would put the report after a
+    // branch that has to be able to say which of the two it is describing.
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
     @Scheduled(cron = "${courtregister.generation.cron}", zone = "${courtregister.generation.zone}")
     @SchedulerLock(name = LOCK_NAME, lockAtMostFor = LOCK_AT_MOST_FOR)
     public RunReport run() {
         final Instant startedAt = clock.instant();
         final GateDecision decision = gate.decide(false);
 
-        final RunReport report;
         if (decision instanceof Skipped) {
-            report = new RunReport(decision, Map.of(), 0, 0, sinceStart(startedAt));
-        } else {
-            // Only from here on is the file service anything readiness should have an opinion
-            // about, and it stops being one however the run ends.
-            runProgress.recordRunStarted();
-            try {
-                report = generate(decision, startedAt);
-            } finally {
-                runProgress.recordRunEnded();
-            }
+            return recorded(new RunReport(decision, Map.of(), 0, 0, sinceStart(startedAt)));
         }
-        record(report);
-        return report;
+        // Only from here on is the file service anything readiness should have an opinion
+        // about, and it stops being one however the run ends.
+        final RunTally tally = new RunTally();
+        runProgress.recordRunStarted();
+        try {
+            generate(tally);
+            return recorded(tally.reportOf(decision, sinceStart(startedAt)));
+        } catch (RuntimeException stopped) {
+            LOG.error("The run did not finish, so the line beside this one describes what it had "
+                            + "done rather than a night that completed. cause={}",
+                    stopped.getClass().getName(), stopped);
+            recorded(tally.reportOf(decision, sinceStart(startedAt)));
+            throw stopped;
+        } finally {
+            // Once, at the end, however the run ended - and only for what the run actually learned.
+            publish(tally);
+            runProgress.recordRunEnded();
+        }
     }
 
     /**
      * The night the flag allowed: read, assemble, request one batch at a time, then chase.
      *
-     * @param decision  what the gate decided, which the report carries unchanged
-     * @param startedAt when the run began, which its duration is measured from
-     * @return what the run did
+     * <p>Everything it learns goes into the tally as it learns it rather than into a report built
+     * at the end, because a run that stopped half way through has still learned the first half and
+     * the report is the only place that says so.
+     *
+     * @param tally what the run has done, filled in as it goes
      */
-    private RunReport generate(final GateDecision decision, final Instant startedAt) {
+    private void generate(final RunTally tally) {
         final List<RegisterRecord> active = store.activeUnbatched();
         // The history the supplementary rule is decided from (design Q27): a key with a batch still
         // in flight is left waiting, and a key whose batches are all terminal may be followed by a
@@ -236,15 +261,31 @@ public class RegisterGenerationJob {
         final List<RegisterBatch> recorded = store.batchesFor(keysOf(active));
         // True because this is the schedule asking. The operations CLI assembles the same way and
         // says false, which is progression's own flag and is written to the batch row.
-        final BatchAssembly assembly = assembler.assemble(active, recorded, true);
+        tally.assembled(active, assembler.assemble(active, recorded, true));
 
-        final Map<BatchStatus, Integer> outcomes = request(assembly);
-        final int deferred = assembly.deferred().size();
-        metrics.oldestRecordedUnbatchedAge(oldestStillWaiting(active, assembly));
-        metrics.deferredKeys(deferred);
+        request(tally);
+        tally.chased(reconciler.reconcile());
+    }
 
-        return new RunReport(decision, outcomes, deferred, reconciler.reconcile(),
-                sinceStart(startedAt));
+    /**
+     * The three gauges the run's own half of the instrument surface carries.
+     *
+     * <p>Published once, at the end of the run, and only where the run got far enough to have read
+     * them: a run that stopped before it assembled does not know that no court centre day was
+     * passed over, and a zero from it would erase the reading that says one has been waiting for
+     * nights. A run that did assemble knows all three - how much of the estate it passed over, how
+     * long the worst of those has waited and how many batches its deadline left behind - whether or
+     * not it got to the end of the requesting.
+     *
+     * @param tally what the run had done when it ended, however it ended
+     */
+    private void publish(final RunTally tally) {
+        final BatchAssembly assembly = tally.assembly();
+        if (assembly != null) {
+            metrics.oldestRecordedUnbatchedAge(oldestStillWaiting(tally.active(), assembly));
+            metrics.deferredKeys(assembly.deferred().size());
+            metrics.pendingAfterDeadline(tally.leftBehind());
+        }
     }
 
     /**
@@ -270,25 +311,18 @@ public class RegisterGenerationJob {
      * tomorrow's run, which will find its registers active and unbatched, and a gauge that only
      * ever moved up would need a run to fail before it could come down again.
      *
-     * @param assembly what the assembler made of the night
-     * @return how many batches ended in each state
+     * @param tally what the run has done, which is where each batch's state is counted
      */
-    private Map<BatchStatus, Integer> request(final BatchAssembly assembly) {
+    private void request(final RunTally tally) {
         final Deadline deadline = Deadline.startingAt(clock.instant(), properties.runDeadline());
-        final Map<BatchStatus, Integer> outcomes = new EnumMap<>(BatchStatus.class);
-        int leftBehind = 0;
 
-        for (final AssembledBatch assembled : assembly.batches()) {
+        for (final AssembledBatch assembled : tally.assembly().batches()) {
             if (deadline.hasPassedAt(clock.instant())) {
-                leftBehind++;
-                count(outcomes, BatchStatus.PENDING);
+                tally.noTimeLeftFor();
             } else {
-                count(outcomes, requested(assembled, deadline));
+                tally.ended(requested(assembled, deadline));
             }
         }
-
-        metrics.pendingAfterDeadline(leftBehind);
-        return outcomes;
     }
 
     /**
@@ -375,8 +409,9 @@ public class RegisterGenerationJob {
      * Principle VII).
      *
      * @param report what the run did
+     * @return that same report, so a caller can write the line and answer with it in one step
      */
-    private static void record(final RunReport report) {
+    private static RunReport recorded(final RunReport report) {
         final Map<BatchStatus, Integer> outcomes = report.outcomes();
         LOG.info("event={} gate={} reason={} batches={} generating={} failed={} pending={} "
                         + "deferred={} reconciled={} duration_ms={}",
@@ -385,6 +420,7 @@ public class RegisterGenerationJob {
                 counted(outcomes, BatchStatus.GENERATING), counted(outcomes, BatchStatus.FAILED),
                 counted(outcomes, BatchStatus.PENDING), report.deferredKeys(),
                 report.reconciled(), report.duration().toMillis());
+        return report;
     }
 
     /**
@@ -414,15 +450,109 @@ public class RegisterGenerationJob {
         };
     }
 
-    private static void count(final Map<BatchStatus, Integer> outcomes, final BatchStatus status) {
-        outcomes.merge(status, 1, Integer::sum);
-    }
-
     private static int counted(final Map<BatchStatus, Integer> outcomes, final BatchStatus status) {
         return outcomes.getOrDefault(status, 0);
     }
 
     private Duration sinceStart(final Instant startedAt) {
         return Duration.between(startedAt, clock.instant());
+    }
+
+    /**
+     * What the run has done so far, as it does it.
+     *
+     * <p>The reason the report is not simply built at the end. A {@link RunReport} is a value and a
+     * run that stops half way through has no end to build one at, so the counts accumulate here
+     * from the moment they are earned and the report is made out of them wherever the run turns
+     * out to finish - the night that completed and the night that fell over are then the same act
+     * of reporting, differing only in whether a failure follows it.
+     *
+     * <p>Mutable and deliberately private to the run: nothing outside {@link RegisterGenerationJob}
+     * holds one, one run holds exactly one, and {@link RunReport}'s own constructor copies the
+     * counts on the way out, so the value a caller is answered with does not describe whatever the
+     * run did next.
+     */
+    private static final class RunTally {
+
+        /** How many batches ended in each state, in the order the states are declared. */
+        private final Map<BatchStatus, Integer> outcomes = new EnumMap<>(BatchStatus.class);
+
+        /** The registers the store called active, for the age of the oldest still waiting. */
+        private List<RegisterRecord> activeRegisters = List.of();
+
+        /** What the assembler made of the night, or {@code null} until it has been asked. */
+        private BatchAssembly nightsAssembly;
+
+        /** How many batches the run deadline left unrequested. */
+        private int batchesLeftBehind;
+
+        /** How many outcomes the reconciler had to fetch rather than receive. */
+        private int outcomesChased;
+
+        /**
+         * Records what the night held, which is everything the deferral readings are taken from.
+         *
+         * @param read what the store called active
+         * @param made what the assembler made of it
+         */
+        private void assembled(final List<RegisterRecord> read, final BatchAssembly made) {
+            this.activeRegisters = read;
+            this.nightsAssembly = made;
+        }
+
+        /**
+         * Counts one batch by the state the requesting leg left it in.
+         *
+         * @param status that state
+         */
+        private void ended(final BatchStatus status) {
+            outcomes.merge(status, 1, Integer::sum);
+        }
+
+        /**
+         * Counts a batch the run had no time left for: PENDING, and left behind.
+         *
+         * <p>The two readings are one event, so they are moved by one call: a batch counted PENDING
+         * without being counted as left behind would be a deadline nothing reads, and the reverse
+         * would be a gauge that does not add up to the night.
+         */
+        private void noTimeLeftFor() {
+            batchesLeftBehind++;
+            ended(BatchStatus.PENDING);
+        }
+
+        /**
+         * Records how many outcomes the reconciler had to fetch.
+         *
+         * @param outcomesFetched what it fetched
+         */
+        private void chased(final int outcomesFetched) {
+            this.outcomesChased = outcomesFetched;
+        }
+
+        private List<RegisterRecord> active() {
+            return activeRegisters;
+        }
+
+        private BatchAssembly assembly() {
+            return nightsAssembly;
+        }
+
+        private int leftBehind() {
+            return batchesLeftBehind;
+        }
+
+        /**
+         * The report for a run that ended here, whether or not it meant to.
+         *
+         * @param decision what the gate decided, which the report carries unchanged
+         * @param duration how long the run took
+         * @return what the run had done
+         */
+        private RunReport reportOf(final GateDecision decision, final Duration duration) {
+            return new RunReport(decision, outcomes,
+                    nightsAssembly == null ? 0 : nightsAssembly.deferred().size(),
+                    outcomesChased, duration);
+        }
     }
 }

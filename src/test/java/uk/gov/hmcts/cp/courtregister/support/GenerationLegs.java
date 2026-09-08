@@ -290,6 +290,24 @@ public final class GenerationLegs implements AutoCloseable {
         when(store.assemble(any(RegisterBatch.class), anyList())).thenReturn(pending());
         renderCommandAnswering(HttpStatus.ACCEPTED.value());
         whateverItAnswers(job::run);
+
+        aNightThatStoppedPartWay();
+    }
+
+    /**
+     * The night the store went away before the run could read what was waiting.
+     *
+     * <p>The one line the run writes about itself rather than about a batch: a run that stopped
+     * part way still reports how far it got, and what stopped it is named beside that report. The
+     * store's refusal carries its own words and the class of the cause, which is what the sweep is
+     * here to hold to counts and bounded codes.
+     */
+    private void aNightThatStoppedPartWay() {
+        readyToGenerate();
+        when(store.activeUnbatched()).thenThrow(new StoreUnavailableException(
+                "the store could not be reached to read what is waiting to be batched",
+                new IllegalStateException("the connection pool is empty")));
+        whateverItAnswers(job::run);
     }
 
     /**
