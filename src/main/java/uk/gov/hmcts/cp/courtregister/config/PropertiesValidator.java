@@ -1,7 +1,11 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.Duration;
 import java.util.Locale;
+import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -154,34 +158,35 @@ public class PropertiesValidator implements InitializingBean {
             " is " + FeatureFlagProperties.LOCAL_TEST + " while ";
 
     /**
-     * What a real Azure App Configuration endpoint looks like, and the estate has no other shape.
+     * The domain every real Azure App Configuration store's host ends with, and the estate has no
+     * other shape.
      *
-     * <p>Matched on the authority rather than searched for anywhere in the string, so that the
-     * question asked is the one that matters - whether the <em>host</em> ends {@code .azconfig.io} -
-     * and a path or a query mentioning it is not mistaken for a store. A value that is not an
-     * endpoint at all matches nothing here, because it names no store either way; what refuses it
-     * is {@link #FLAG_STORE_URL}, under the setting's own name.
+     * <p>Asked of the parsed <em>host</em> rather than searched for anywhere in the value, so that
+     * the question asked is the one that matters and a path or a query mentioning the domain is not
+     * mistaken for a store. A value no host can be read from names no store either way; what
+     * refuses that is {@link #requireAFlagStoreUrl}, under the setting's own name.
      */
-    private static final Pattern REAL_FLAG_STORE = Pattern.compile(
-            "[a-z][a-z0-9+.\\-]*://[^/?#]*\\.azconfig\\.io([:/?#].*)?");
+    private static final String REAL_FLAG_STORE_DOMAIN = ".azconfig.io";
 
     /**
-     * The shape an App Configuration endpoint has to be in for a client to be built from it.
+     * The trailing dot of an absolute DNS name, which names the same host as the relative form.
      *
-     * <p>Presence is not enough, and the refusal belongs here rather than in the SDK.
-     * {@code ConfigurationClientBuilder.endpoint} does {@code new URL(endpoint)} and throws
-     * "'endpoint' must be a valid URL"; the connection-string form fails the same way while parsing
-     * its credential. Both are reached as {@code LiveFeatureFlagConfig.featureFlagReader} is built,
-     * which is during refresh wherever generation is enabled - so a host pasted out of the portal
-     * without its scheme, or a Helm value that lost one, is a pod that never starts, under an Azure
-     * {@code IllegalArgumentException} that names no setting of this service's.
+     * <p>{@code store.azconfig.io.} and {@code store.azconfig.io} resolve identically and the SDK
+     * builds the same client from either, so the dot is removed before the domain is asked about -
+     * one dot, because one is all a root label ever is. Asking the question without removing it read
+     * the absolute spelling of a real store as "not a store", which admitted the published local
+     * identity against the real thing.
+     */
+    private static final String ROOT_LABEL_DOT = ".";
+
+    /**
+     * The two schemes an App Configuration client can be built from.
      *
      * <p>{@code http} and {@code https} and nothing else: App Configuration is reached over HTTP,
-     * the compose stub included, and a scheme no client has a handler for fails in the same place
-     * as no scheme at all. A host is required after it, because that is what a client connects to.
+     * the compose stub included, and a scheme no client has a handler for fails in the same place as
+     * no scheme at all.
      */
-    private static final Pattern FLAG_STORE_URL =
-            Pattern.compile("https?://[^/?#\\s]+([/?#].*)?");
+    private static final Set<String> CLIENT_SCHEMES = Set.of("http", "https");
 
     /** Shared so the wording of a required-setting refusal is one string and not four. */
     private static final String MUST_BE_SET_WHEN = " must be set when ";
@@ -1015,12 +1020,54 @@ public class PropertiesValidator implements InitializingBean {
     /**
      * Whether the configured endpoint is a real Azure App Configuration store.
      *
+     * <p>Parsed rather than matched, because the question is about the host and only a parse can
+     * find one: a pattern has to decide where the authority ends before it can look inside it, and
+     * every spelling it did not anticipate - the absolute DNS form above among them - is read as
+     * "not a store" and admitted. Any scheme, deliberately: an endpoint that names a real store
+     * under a scheme no client can be built from is still a real store, and the credential that
+     * cannot read it is still the wrong credential to have configured.
+     *
      * @param endpoint what the deployment supplied, blank where it supplied nothing
-     * @return true where the host ends {@code .azconfig.io}
+     * @return true where the host, normalised, ends {@code .azconfig.io}
      */
     private static boolean namesARealFlagStore(final String endpoint) {
-        return hasText(endpoint)
-                && REAL_FLAG_STORE.matcher(endpoint.trim().toLowerCase(Locale.ROOT)).matches();
+        return asEndpointUri(endpoint)
+                .map(PropertiesValidator::hostOf)
+                .filter(host -> host.endsWith(REAL_FLAG_STORE_DOMAIN))
+                .isPresent();
+    }
+
+    /**
+     * The endpoint as the URI a client would be built from, or empty where it is not one.
+     *
+     * <p>A host is what a client connects to, so a value that names none is not an endpoint however
+     * it is spelled - and requiring one is also what requires a port that parses, because a port
+     * that is not a number leaves no server authority for a host to be read out of.
+     *
+     * @param endpoint what the deployment supplied, blank where it supplied nothing
+     * @return the parsed endpoint, or empty where no host can be read from it
+     */
+    private static Optional<URI> asEndpointUri(final String endpoint) {
+        Optional<URI> parsed;
+        try {
+            parsed = hasText(endpoint) ? Optional.of(new URI(endpoint.trim())) : Optional.empty();
+        } catch (final URISyntaxException notAUri) {
+            parsed = Optional.empty();
+        }
+        return parsed.filter(uri -> hasText(uri.getHost()));
+    }
+
+    /**
+     * The endpoint's host, in the one form a question about its domain can be asked of.
+     *
+     * @param uri an endpoint a host was read from
+     * @return the host, lower-cased and without the root label's trailing dot
+     */
+    private static String hostOf(final URI uri) {
+        final String host = uri.getHost().toLowerCase(Locale.ROOT);
+        return host.endsWith(ROOT_LABEL_DOT)
+                ? host.substring(0, host.length() - ROOT_LABEL_DOT.length())
+                : host;
     }
 
     /**
@@ -1136,6 +1183,23 @@ public class PropertiesValidator implements InitializingBean {
     /**
      * The endpoint has to be a URL a client can be built from, not merely a value that is set.
      *
+     * <p>Presence is not enough, and the refusal belongs here rather than in the SDK.
+     * {@code ConfigurationClientBuilder.endpoint} does {@code new URL(endpoint)} and throws
+     * "'endpoint' must be a valid URL"; the connection-string form fails the same way while parsing
+     * its credential. Both are reached as {@code LiveFeatureFlagConfig.featureFlagReader} is built,
+     * which is during refresh wherever generation is enabled - so a host pasted out of the portal
+     * without its scheme, or a Helm value that lost one, is a pod that never starts, under an Azure
+     * {@code IllegalArgumentException} that names no setting of this service's.
+     *
+     * <p><strong>Parsed rather than matched</strong>, because the shapes that get past a pattern are
+     * the ones that fail furthest from here. {@code http://foo:bad} looks like a scheme and then
+     * something, and is a port that is not a number: {@code new URL} throws on it where the reader
+     * is built. {@code http://:} looks the same and is worse, because {@code new URL} accepts it -
+     * the client is built on an empty host, every read at 18:00 fails to connect, and an unreadable
+     * flag is a run skipped and counted and indistinguishable from a store outage, which is the
+     * failure this whole validator exists to turn into a refusal. So the endpoint is required to
+     * parse, to carry one of {@link #CLIENT_SCHEMES}, and to name a host.
+     *
      * <p>Asked only where generation is enabled, which is the only case in which the reader is
      * built at all: an intake-only pod contributes no
      * {@code LiveFeatureFlagConfig} and has nothing to refuse.
@@ -1143,13 +1207,20 @@ public class PropertiesValidator implements InitializingBean {
      * @param endpoint what the deployment supplied for the flag store
      */
     private static void requireAFlagStoreUrl(final String endpoint) {
-        if (!FLAG_STORE_URL.matcher(endpoint.trim().toLowerCase(Locale.ROOT)).matches()) {
+        final boolean aClientCouldBeBuilt = asEndpointUri(endpoint)
+                .map(URI::getScheme)
+                .filter(scheme -> CLIENT_SCHEMES.contains(scheme.toLowerCase(Locale.ROOT)))
+                .isPresent();
+        if (!aClientCouldBeBuilt) {
             throw new IllegalStateException(
-                    FEATURE_ENDPOINT + " (" + endpoint + ") must be an http or https URL when "
-                            + GENERATION_ENABLED + " is true - the App Configuration client is"
-                            + " built as this context starts and refuses anything else, so a value"
-                            + " without a scheme is a pod that never starts rather than a flag that"
-                            + " could not be read");
+                    FEATURE_ENDPOINT + " (" + endpoint + ") must be an http or https URL with a"
+                            + " host when " + GENERATION_ENABLED + " is true - set it to the store's"
+                            + " own endpoint with its scheme, as https://<store>.azconfig.io or"
+                            + " http://<stub>:<port> for the local loop. The App Configuration"
+                            + " client is built as this context starts, and a value with no scheme,"
+                            + " no host or a port that is not a number is either a pod that never"
+                            + " starts or a client that cannot reach anything, read as an"
+                            + " unreadable flag every night");
         }
     }
 
