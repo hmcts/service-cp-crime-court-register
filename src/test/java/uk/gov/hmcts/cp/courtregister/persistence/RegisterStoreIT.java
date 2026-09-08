@@ -12,6 +12,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +27,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
@@ -1813,6 +1815,112 @@ class RegisterStoreIT {
                     .containsExactly(outputIdOf(reshare).orElse(null));
         }
 
+        /**
+         * The key's two rows shared at one instant, the register that arrived later sorting first.
+         *
+         * <p>{@code register_time} is the results' own shared moment and the estate is what sets
+         * it, so two shares of one hearing can carry the same one. Statement 1 supersedes an
+         * incumbent whose instant is not <em>after</em> the arriving register's, which says that of
+         * two registers sharing an instant the one that <em>arrived</em> second is the current one,
+         * whatever its identity sorts like.
+         *
+         * <p>A successor search that broke the tie on the identity alone disagrees with that
+         * recorder for one of the two orders, and this is that order: the later row is not seen, so
+         * the release makes the older row active a second time,
+         * {@code idx_output_active_register_key} refuses it - and the release being a branch of the
+         * statement that marks the batch, the mark goes down with the refusal and the batch is left
+         * calling itself in flight under a run that had already given up on it.
+         *
+         * <p>The two identities are therefore stated rather than left to the recorder's own
+         * {@code randomUUID} ({@link RegisterStoreIT#identifiedInOrder}): the order that loses the
+         * register is the one a random pair produces about half the time, and a case that waited
+         * for it would pass and fail by turns.
+         */
+        @Test
+        void a_failure_should_supersede_against_an_equal_time_re_share_that_sorts_first() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                // The same results shared again at the same instant, while the first register is
+                // stamped: the recorder supersedes an incumbent that is unbatched, and this one is
+                // not, so the day holds two RECORDED rows for one key.
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                identifiedInOrder(reshare, first);
+                store.markFailed(monday.batchId(),
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the mark lands: a release that could not place the older row would take "
+                            + "the whole statement with it, and the batch would still be waiting "
+                            + "for a document the run had already stopped asking for")
+                    .contains(new BatchOutcome(FAILED, "PAYLOAD_STORE_UNAVAILABLE", null));
+            softly.assertThat(supersessionOf(first).map(SupersessionPair::supersededBy))
+                    .as("the successor is the register that arrived second, which is the register "
+                            + "the recorder would itself have superseded this one against")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("one SUPERSEDED and one RECORDED, which is the invariant the whole batch "
+                            + "half is written against: at most one active row per key")
+                    .containsExactlyInAnyOrder(SUPERSEDED, RECORDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("and the failed batch holds nothing, because a batch that never left this "
+                            + "service holds no register hostage to a document that cannot exist")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("so the day's one assemblable register is the re-share, and never the "
+                            + "register it replaced at the same instant")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(reshare).orElse(null));
+        }
+
+        /**
+         * The same pair the other way round, so the rule is pinned in both directions.
+         *
+         * <p><strong>[A] characterisation.</strong> This is the order the identity tie-break
+         * happened to agree with, so the statement has answered this way since it landed and
+         * nothing here changes it. It is written beside the case above because the two together are
+         * the rule: one order alone is also satisfied by a search that ranks the key's rows by
+         * identity and nothing else, which is exactly the search that loses the register in the
+         * other order.
+         */
+        @Test
+        void a_failure_should_supersede_against_an_equal_time_re_share_that_sorts_last() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                identifiedInOrder(first, reshare);
+                store.markFailed(monday.batchId(),
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the mark lands, as it does whichever way the pair sorts")
+                    .contains(new BatchOutcome(FAILED, "PAYLOAD_STORE_UNAVAILABLE", null));
+            softly.assertThat(supersessionOf(first).map(SupersessionPair::supersededBy))
+                    .as("and the successor is the same register: which of the two arrived second "
+                            + "is what decides it, and the identity only breaks a tie the arrival "
+                            + "instants leave")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .containsExactlyInAnyOrder(SUPERSEDED, RECORDED);
+            softly.assertThat(stampedRowsOn(MONDAY)).isZero();
+            softly.assertThat(activeUnbatched())
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(reshare).orElse(null));
+        }
+
         @Test
         void a_failure_after_the_render_request_should_keep_the_stamp_on_its_rows() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
@@ -2195,6 +2303,107 @@ class RegisterStoreIT {
             softly.assertThat(activeUnbatched())
                     .as("and it is what the next run assembles, which is the whole of what the "
                             + "release is for")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(reshare).orElse(null));
+        }
+
+        /**
+         * The key's two rows shared at one instant, the register that arrived later sorting first.
+         *
+         * <p>The same disagreement statement 9's own pair is about, in the statement a person
+         * types. {@code register_time} is the results' shared moment and two shares of one hearing
+         * can carry the same one; statement 1 supersedes an incumbent whose instant is not
+         * <em>after</em> the arriving register's, so of two registers sharing an instant the one
+         * that arrived second is the current one, whatever its identity sorts like.
+         *
+         * <p>Where the identity alone breaks the tie and the later row sorts first, the successor is
+         * not seen: unstamping the older row makes it active beside the re-share,
+         * {@code idx_output_active_register_key} refuses the write, and the whole release fails on a
+         * key nothing said was wrong - the day the operator asked to have rendered again is left
+         * exactly as it was, with no register released and no reason given that names the pair.
+         */
+        @Test
+        void a_release_should_supersede_against_an_equal_time_re_share_that_sorts_first() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final List<RegisterRecord> released = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+                // A reason that keeps the stamp, so the re-share arriving at the same instant
+                // supersedes nothing and the key is left holding two RECORDED rows.
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                identifiedInOrder(reshare, first);
+                released.addAll(store.releaseFailed(monday.batchId()));
+            }).as(SEAM).doesNotThrowAnyException();
+
+            softly.assertThat(supersessionOf(first).map(SupersessionPair::supersededBy))
+                    .as("the register the batch failed on is superseded as its stamp is cleared, "
+                            + "and against the register that arrived after it - which is the "
+                            + "register the recorder would itself have superseded it against")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(released)
+                    .as("so it is not answered with: a caller re-assembling it would render the "
+                            + "hearing as it stood before the second share of the same instant")
+                    .isEmpty();
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("one SUPERSEDED and one RECORDED, which is the invariant the whole batch "
+                            + "half is written against: at most one active row per key")
+                    .containsExactlyInAnyOrder(SUPERSEDED, RECORDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("and the stamp is gone, which is the whole of what the person asked for")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("so the day's one assemblable register is the re-share and nothing else")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(reshare).orElse(null));
+        }
+
+        /**
+         * The same pair the other way round, so the rule is pinned in both directions.
+         *
+         * <p><strong>[A] characterisation.</strong> This is the order the identity tie-break
+         * happened to agree with, so the statement has answered this way since it landed and
+         * nothing here changes it. It is written beside the case above for the reason the pair in
+         * {@code Failure} is written as a pair: one order alone is also satisfied by a search that
+         * ranks the key's rows by identity and nothing else, which is the search that loses a
+         * register in the other order.
+         */
+        @Test
+        void a_release_should_supersede_against_an_equal_time_re_share_that_sorts_last() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final List<RegisterRecord> released = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                identifiedInOrder(first, reshare);
+                released.addAll(store.releaseFailed(monday.batchId()));
+            }).as(SEAM).doesNotThrowAnyException();
+
+            softly.assertThat(supersessionOf(first).map(SupersessionPair::supersededBy))
+                    .as("the successor is the same register whichever way the pair sorts: which of "
+                            + "the two arrived second is what decides it, and the identity only "
+                            + "breaks a tie the arrival instants leave")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(released).isEmpty();
+            softly.assertThat(statusesOn(MONDAY))
+                    .containsExactlyInAnyOrder(SUPERSEDED, RECORDED);
+            softly.assertThat(stampedRowsOn(MONDAY)).isZero();
+            softly.assertThat(activeUnbatched())
                     .extracting(RegisterRecord::outputId)
                     .containsExactly(outputIdOf(reshare).orElse(null));
         }
@@ -2676,6 +2885,52 @@ class RegisterStoreIT {
         } finally {
             ProcessedLogTestSupport.jdbcClient().sql("DROP INDEX " + index).update();
         }
+    }
+
+    /**
+     * Writes the identities of two of a key's registers, so an equal-time pair orders one way.
+     *
+     * <p>The identity is the recorder's to mint, so a case about two registers shared at the same
+     * instant would otherwise be asserting whichever way {@code randomUUID} fell - and the two
+     * orders are the two answers a successor search can give. The pair is minted here, sorted, and
+     * written onto the rows the two commands recorded, so each case gets the order it is about on
+     * every run rather than on about half of them.
+     *
+     * <p><strong>Sorted the way Postgres sorts a {@code uuid}</strong>, which is by the sixteen
+     * bytes unsigned and therefore by the printed form. {@link UUID#compareTo(UUID)} compares the
+     * two halves as <em>signed</em> longs, so a value with the high bit set sorts first under it and
+     * last in the database; a pair ordered that way would arrange the opposite of what the case
+     * asked for whenever the bit fell that way.
+     *
+     * <p>Only the identity moves, and only while nothing points at it: {@code superseded_by} is the
+     * one column in the schema that references an {@code output_id}, and it is null on both rows in
+     * every arrangement this is called from - the older row is stamped into a batch, which is what
+     * kept the recorder from superseding it.
+     *
+     * @param lower  the command whose register is to carry the lower of the two identities
+     * @param higher the command whose register is to carry the higher one
+     */
+    private static void identifiedInOrder(
+            final DistributionCommand lower, final DistributionCommand higher) {
+        final List<UUID> pair = Stream.of(UUID.randomUUID(), UUID.randomUUID())
+                .sorted(Comparator.comparing(UUID::toString))
+                .toList();
+        reidentified(lower, pair.getFirst());
+        reidentified(higher, pair.getLast());
+    }
+
+    /** One register's identity, written where the case needs the tie-break to be its own. */
+    private static void reidentified(final DistributionCommand command, final UUID outputId) {
+        ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        UPDATE processed_output
+                           SET output_id = :outputId
+                         WHERE source = :source AND request_id = :requestId
+                        """)
+                .param("outputId", outputId)
+                .param("source", command.source())
+                .param("requestId", command.requestId())
+                .update();
     }
 
     /**
