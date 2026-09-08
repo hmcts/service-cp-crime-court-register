@@ -352,8 +352,13 @@ public class DocumentEventListener {
         try {
             return UUID.fromString(value);
         } catch (final IllegalArgumentException notAnIdentity) {
-            LOG.warn("A public event's {} was not an identity, so the event names no batch.", field,
-                    notAnIdentity);
+            // The field and what refused it, never the value. What the field carried is another
+            // context's and did not parse, so it is unvalidated data this service never asked for
+            // and may be anything at all, including a person's own details (Principle VII). The
+            // exception is named by class for the same reason its message is not written: the
+            // message quotes the value.
+            LOG.warn("A public event's {} was not an identity, so the event names no batch. "
+                    + "cause={}", field, notAnIdentity.getClass().getName());
             return null;
         }
     }
@@ -378,8 +383,9 @@ public class DocumentEventListener {
         try {
             return OffsetDateTime.parse(value).toInstant();
         } catch (final DateTimeParseException notATime) {
-            LOG.warn("A public event's {} was not a date-time, so the outcome carries no instant.",
-                    field, notATime);
+            // The value is left out for the reason given at the other reader.
+            LOG.warn("A public event's {} was not a date-time, so the outcome carries no instant. "
+                    + "cause={}", field, notATime.getClass().getName());
             return null;
         }
     }
