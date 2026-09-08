@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.batch;
 
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
@@ -222,6 +223,19 @@ class RegisterGenerationJobTest {
                 .as(PENDING)
                 .doesNotThrowAnyException();
         return reported.get();
+    }
+
+    /**
+     * Runs the night and hands back whatever stopped it, without ending the case.
+     *
+     * <p>The counterpart of {@link #run()} for the runs that do not finish: a failure has to leave
+     * the run - nothing is swallowed - so the case cannot call the job directly and still assert on
+     * what the run left behind afterwards.
+     *
+     * @return what ended the run, or {@code null} where nothing did
+     */
+    private Throwable whatStoppedTheRun() {
+        return catchThrowable(job::run);
     }
 
     /**
@@ -1140,6 +1154,169 @@ class RegisterGenerationJobTest {
                     .as("the reading that says a night was missed: a register that is never "
                             + "batched moves no counter, because nothing happened to it")
                     .isEqualTo(waited.toSeconds());
+        }
+    }
+
+    /**
+     * The night that stopped before it was over, which still has to be a night somebody can read.
+     *
+     * <p>Every case above is a run that finished, and finishing is not the only thing a run does.
+     * The store can go away between the read and the stamp, {@code markPayloadMinted} can refuse,
+     * the reconciler's own query can fail: each of those leaves the run through
+     * {@link RegisterGenerationJob#run()} without the report ever being written, so the night that
+     * went half way is the one night that produces <em>no</em> line at all. That is worse than the
+     * silence the report exists to abolish, because it is the silence of a night that did
+     * something: batches were stamped, renders were asked for, and the only place a reader could
+     * have seen how far it got is the line that was not written.
+     *
+     * <p>What must still be true when it stops:
+     *
+     * <ul>
+     *   <li>one line, with the same fields, carrying what the run had done when it stopped - which
+     *       for a run that never read anything is a night of zeroes and for one that stopped part
+     *       way through requesting is the batches it had already accounted for;</li>
+     *   <li>a line of its own naming what stopped it, so the report is not read as a night that
+     *       simply had nothing to do;</li>
+     *   <li>the failure still leaves the run, because a reported failure that was also swallowed
+     *       has not been settled (constitution Principle VI);</li>
+     *   <li>the gauges carry what the run learned and nothing it did not: a run that stopped
+     *       while requesting knows how much of the estate it passed over, and a run that stopped
+     *       before it assembled knows nothing at all and must not overwrite last night's reading
+     *       with a zero it has not earned.</li>
+     * </ul>
+     */
+    @Nested
+    @DisplayName("a run that stopped part way")
+    class AnUnfinishedRun {
+
+        /** What a store outage looks like from here: an unchecked refusal, on its own words. */
+        private static final String OUTAGE = "the register store did not answer";
+
+        /** The line a run that stopped before it read anything can still write. */
+        private static final String NOTHING_YET = RUN_EVENT
+                + " gate=proceed reason=flag-on batches=0 generating=0 failed=0 pending=0"
+                + " deferred=0 reconciled=0 duration_ms=0";
+
+        /** The line the mixed night can write once its second batch stops the run. */
+        private static final String AS_FAR_AS_IT_GOT = RUN_EVENT
+                + " gate=proceed reason=flag-on batches=1 generating=1 failed=0 pending=0"
+                + " deferred=2 reconciled=0 duration_ms=60000";
+
+        /** Sets the night up as one the flag allowed and the store then refused. */
+        private void aStoreThatWentAway() {
+            theGateAnswers(new Proceed(false));
+            when(store.activeUnbatched()).thenThrow(new IllegalStateException(OUTAGE));
+        }
+
+        /**
+         * Sets the mixed night up so that its second batch's render request stops the run.
+         *
+         * <p>Part way on purpose: the first batch is already accounted for, the third has not been
+         * looked at, and the two deferred keys were known before any of it. A report that could
+         * only be written at the end would carry none of that.
+         */
+        private void aRunStoppedWhileRequesting() {
+            final List<RegisterBatch> night = aMixedNight();
+            when(service.request(eq(night.get(1)), any()))
+                    .thenThrow(new IllegalStateException(OUTAGE));
+        }
+
+        @Test
+        void a_run_that_stopped_before_it_read_anything_should_still_leave_its_one_line() {
+            aStoreThatWentAway();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                whatStoppedTheRun();
+
+                softly.assertThat(runLines(log))
+                        .as("a night that stopped is still a night, and it is the one night that "
+                                + "produced no line at all - which is the silence the report was "
+                                + "written to abolish")
+                        .containsExactly(NOTHING_YET);
+            }
+        }
+
+        @Test
+        void a_run_that_stopped_part_way_should_leave_the_line_the_night_had_got_to() {
+            aRunStoppedWhileRequesting();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                whatStoppedTheRun();
+
+                softly.assertThat(runLines(log))
+                        .as("one batch was requested, two court centre days were passed over and "
+                                + "nothing was chased; a run has to be able to say how far it got, "
+                                + "because the batches it did stamp are waiting on somebody now")
+                        .containsExactly(AS_FAR_AS_IT_GOT);
+            }
+        }
+
+        @Test
+        void a_run_that_stopped_part_way_should_name_what_stopped_it_in_a_line_of_its_own() {
+            aStoreThatWentAway();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                whatStoppedTheRun();
+
+                softly.assertThat(log.messages())
+                        .as("a night of zeroes and a night that fell over read the same on the "
+                                + "report's own line, so what stopped it has to be said beside it "
+                                + "rather than left to the scheduler's handler")
+                        .anyMatch(line -> line.contains(IllegalStateException.class.getName()));
+            }
+        }
+
+        /**
+         * <strong>[A]</strong> And it still fails, which it already did.
+         *
+         * <p>Green on introduction, because nothing catches the failure today - the run simply
+         * leaves without reporting. It is stated here so that the reporting cannot be built by
+         * swallowing what it reports: a failure that is only logged about has not been settled
+         * (constitution Principle VI), and the scheduler and the operations command both decide
+         * what to do next from the throw.
+         */
+        @Test
+        void a_run_that_stopped_part_way_should_still_fail() {
+            aStoreThatWentAway();
+
+            softly.assertThat(whatStoppedTheRun())
+                    .as("reported and rethrown, not reported instead of thrown")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage(OUTAGE);
+        }
+
+        @Test
+        void a_run_that_stopped_while_requesting_should_still_gauge_what_it_had_assembled() {
+            aRunStoppedWhileRequesting();
+
+            whatStoppedTheRun();
+
+            softly.assertThat(deferredKeys())
+                    .as("the report is the line and the gauges together, and how much of the "
+                            + "estate a run passed over was known before the batch that stopped it "
+                            + "was ever asked for")
+                    .isEqualTo(2);
+        }
+
+        /**
+         * <strong>[A]</strong> And a run that learned nothing publishes nothing.
+         *
+         * <p>Green on introduction and stated so that the case above cannot be satisfied by
+         * publishing the gauges unconditionally: a run that stopped before it assembled does not
+         * know that no court centre was passed over, and a zero from it would erase the reading
+         * that says a court centre has been waiting for nights.
+         */
+        @Test
+        void a_run_that_stopped_before_it_assembled_should_leave_the_gauges_as_they_were() {
+            aNightDeferring(key(), key());
+            run();
+
+            aStoreThatWentAway();
+            whatStoppedTheRun();
+
+            softly.assertThat(deferredKeys())
+                    .as("no reading is better than a reading the run did not take")
+                    .isEqualTo(2);
         }
     }
 
