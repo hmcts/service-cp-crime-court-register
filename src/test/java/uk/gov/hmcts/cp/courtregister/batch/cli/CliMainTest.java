@@ -6,7 +6,6 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -88,8 +87,9 @@ import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
  * stderr and from there an index the whole estate reads - so the line names which argument would
  * not read and the class that refused it, and neither the message nor a throwable carrying it goes
  * anywhere at all (constitution Principle VII). The stream is handed in rather than reached for,
- * and the last group holds that down by reading what {@link System#out} carried while a command
- * wrote.
+ * and the last group holds that down over a destination {@link StandardOutput} owns and nobody
+ * handed in: the boundary's own four properties are {@link StandardOutputTest}'s subject, and the
+ * descriptor it names is read by {@code e2e/CliDispatchIT} out of the built image's stdout.
  *
  * <p>{@code CliDispatchIT} (T067) is the same claim end to end inside the built image, and
  * {@link ArgsTest} is the grammar underneath every {@code --help} case here.
@@ -788,28 +788,23 @@ class CliMainTest {
     }
 
     /**
-     * Where a command's lines go, which is the one stream it was handed.
+     * Where a command's lines go, which is the one consumer it was handed.
+     *
+     * <p>Asked of a second {@link StandardOutput} rather than of the process's own stream. This
+     * group used to take that stream over for the duration of a case, which is the thing
+     * constitution Principle VI forbids and which {@link StandardOutput} was extracted to make
+     * unnecessary: a destination the boundary owns and nobody handed in carries the same claim, and
+     * the boundary's own properties are {@link StandardOutputTest}'s subject. The real descriptor
+     * is read by {@code e2e/CliDispatchIT}, out of the built image's stdout.
      */
     @Nested
     @DisplayName("where the lines go")
     class WhereTheLinesGo {
 
-        private final ByteArrayOutputStream captured = new ByteArrayOutputStream();
-        private final PrintStream capturing = new PrintStream(captured, true,
-                StandardCharsets.UTF_8);
-        private PrintStream restored;
+        /** A destination wired exactly as the process's own is, and handed to nobody. */
+        private final ByteArrayOutputStream elsewhere = new ByteArrayOutputStream();
 
-        @BeforeEach
-        void takeTheProcessStreamOver() {
-            restored = System.out;
-            System.setOut(capturing);
-        }
-
-        @AfterEach
-        void giveItBack() {
-            System.setOut(restored);
-            capturing.close();
-        }
+        private final Consumer<String> notHandedIn = new StandardOutput(elsewhere);
 
         @Test
         void a_report_line_should_reach_the_consumer_it_was_handed_and_nowhere_else() {
@@ -818,16 +813,21 @@ class CliMainTest {
                     CliMain.UNEXPECTED_ARGUMENT, output);
             CliMain.failure(CliMain.CHECK_FLAG, "", "context-unavailable", output);
 
-            final String stream = captured.toString(StandardCharsets.UTF_8);
             softly.assertThat(printed)
                     .as("every line the three shapes wrote reached the consumer")
                     .hasSizeGreaterThan(1);
-            softly.assertThat(printed)
-                    .as("and none of them reached the process stream: it is handed in rather than "
-                            + "reached for, so a test reads exactly what an operator would see and "
-                            + "a command cannot write anywhere else. main is the one place "
-                            + "System.out is named at all")
-                    .noneMatch(stream::contains);
+            softly.assertThat(elsewhere.toString(StandardCharsets.UTF_8))
+                    .as("and none of them reached a destination nobody handed in: the stream is "
+                            + "handed in rather than reached for, so a test reads exactly what an "
+                            + "operator would see and a command cannot write anywhere else")
+                    .isEmpty();
+
+            notHandedIn.accept("flag=ON");
+            softly.assertThat(elsewhere.toString(StandardCharsets.UTF_8))
+                    .as("over a destination that would have carried a line, so the emptiness "
+                            + "above is an observation rather than a stream nothing could have "
+                            + "reached")
+                    .isEqualTo("flag=ON\n");
         }
     }
 }
