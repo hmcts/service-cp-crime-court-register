@@ -248,7 +248,8 @@ public interface RegisterStore {
      * superseded against the re-share as its stamp is cleared, exactly as {@link #releaseFailed}
      * does it: a recording supersedes an incumbent that is unbatched, so a re-share that arrived
      * while the row was stamped left the key holding two rows, and unstamping the older one is what
-     * would make both active.
+     * would make both active. Only a register shared <em>after</em> the released one can supersede
+     * it, for the reason {@link #releaseFailed} gives.
      *
      * @param batchId     the batch that failed
      * @param reason      the bounded reason it is failed under
@@ -290,6 +291,15 @@ public interface RegisterStore {
      * Offending Team the register the estate has already replaced. A re-share that arrives
      * <em>after</em> the release supersedes the released row in the ordinary way, this call having
      * left it active and unbatched.
+     *
+     * <p><strong>The row it is superseded against has to be a later one.</strong> The key can hold
+     * the pair either way round - a first batch that kept its stamp, or one that reached NOTIFIED,
+     * leaves its register beside the re-share rather than superseded by it - so the batch a person
+     * releases may be the one holding the newer row. Superseding that against the register it
+     * replaced would withdraw the current register for good: it would be neither active nor
+     * unbatched, no later run and no command would reach it again, and the row left renderable
+     * would be the one the re-share corrected, with this call answering as though the day held
+     * nothing to release.
      *
      * @param batchId the FAILED batch whose registers are to be released
      * @return the registers whose stamp was cleared and that are still this day's to render, in the

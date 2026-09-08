@@ -95,7 +95,12 @@ asks for these, so they are recorded here with the invariants they keep; three r
   left out of the answer: a recording supersedes an incumbent that is unbatched, so a re-share that
   arrived while the row was stamped left the key holding two rows, and unstamping the older one is
   what would make both active - the invariant is kept by this statement rather than defended by
-  `idx_output_active_register_key`. Statement **9** releases under the same rule and for a
+  `idx_output_active_register_key`. The row it is superseded against has to be a **later** one:
+  the key can hold the pair either way round, because a first batch that kept its stamp or reached
+  NOTIFIED leaves its register beside the re-share rather than superseded by it, so the batch being
+  released may be the one holding the newer row - and superseding that against the register it
+  replaced would withdraw the current register for good while the statement answered as though the
+  day held nothing to release. Statement **9** releases under the same rule and for a
   sharper reason: its release is a branch of the statement that marks the batch, so a collision
   there takes the mark down with it and leaves the batch calling itself in flight under a run that
   had already given up on it.

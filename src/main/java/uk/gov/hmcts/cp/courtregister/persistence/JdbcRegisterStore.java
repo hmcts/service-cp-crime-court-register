@@ -520,6 +520,16 @@ public class JdbcRegisterStore implements RegisterStore {
      * for as the stamp is cleared and the older row is written SUPERSEDED against it, which is what
      * statement 9a does for the release a person types.
      *
+     * <p><strong>And only a row that genuinely came later may be that successor.</strong> The key
+     * can hold the pair either way round: a first batch that failed under one of the four reasons
+     * that keep the stamp leaves its register RECORDED and stamped, so the batch failing here may
+     * be the one holding the <em>newer</em> row with the stale one still beside it. A search that
+     * asked only for another unsuperseded row would then write the current register SUPERSEDED
+     * against the one it replaced - neither active nor unbatched, so no later run and no command
+     * reaches it again, and the row left renderable is the one the re-share corrected. The
+     * comparison is therefore the same direction test statement 1 makes, over the register instant
+     * with the identity behind it so that two registers shared at the same moment still order.
+     *
      * <p>{@code completed_by} is written here for the same reason it is written by statement 6, and
      * it is null for most of these endings: only a {@code generation-failed} event and a reconciled
      * query are somebody else's answer about the render. The other four are this service's own
@@ -548,6 +558,8 @@ public class JdbcRegisterStore implements RegisterStore {
                            AND successor.output_id <> recorded.output_id
                            AND successor.superseded_at IS NULL
                            AND successor.status <> 'SUPERSEDED'
+                           AND (successor.register_time, successor.output_id)
+                                 > (recorded.register_time, recorded.output_id)
                          ORDER BY successor.register_time DESC, successor.output_id DESC
                          LIMIT 1) AS successor_id
                   FROM processed_output recorded
@@ -609,11 +621,22 @@ public class JdbcRegisterStore implements RegisterStore {
      * satisfied rather than defended - and the final {@code SELECT} answers with the rows that are
      * still this day's to render.
      *
-     * <p>The successor is any other row of the key that is unsuperseded and not itself SUPERSEDED,
-     * whatever batch it has reached: what makes the older row unassemblable is that another row
-     * holds the key, and the newest of them is the one named as the replacement. {@code superseded_by}
-     * therefore names a register rather than being left null, which is what tells this apart from a
-     * rollback's supersession (statement 12).
+     * <p>The successor is a <strong>later</strong> row of the key that is unsuperseded and not
+     * itself SUPERSEDED, whatever batch it has reached: what makes the released row unassemblable is
+     * that a register shared after it holds the key, and the newest of those is the one named as the
+     * replacement. {@code superseded_by} therefore names a register rather than being left null,
+     * which is what tells this apart from a rollback's supersession (statement 12).
+     *
+     * <p><strong>Later, because the key can hold the pair either way round.</strong> A first batch
+     * that failed under one of the four reasons that keep the stamp, or one that reached NOTIFIED,
+     * leaves its register beside the re-share rather than superseded by it - so the batch a person
+     * releases may be the one holding the <em>newer</em> row, with the stale or the sent one still
+     * beside it. A search that asked only for another unsuperseded row would write the current
+     * register SUPERSEDED against that one and leave it out of the answer: the command would print a
+     * day it released nothing for and exit 0, while the register the estate shared last is neither
+     * active nor unbatched and no later run reaches it again. The comparison is the same direction
+     * test statement 1 makes, over the register instant with the identity behind it so that two
+     * registers shared at the same moment still order.
      */
     private static final String RELEASE_FAILED = """
             WITH stamped AS (
@@ -626,6 +649,8 @@ public class JdbcRegisterStore implements RegisterStore {
                            AND successor.output_id <> recorded.output_id
                            AND successor.superseded_at IS NULL
                            AND successor.status <> 'SUPERSEDED'
+                           AND (successor.register_time, successor.output_id)
+                                 > (recorded.register_time, recorded.output_id)
                          ORDER BY successor.register_time DESC, successor.output_id DESC
                          LIMIT 1) AS successor_id
                   FROM processed_output recorded
