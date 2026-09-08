@@ -374,6 +374,40 @@ class NotifyRegisterCliTest {
                     .anyMatch(line -> line.contains(CliMain.NOTIFY_REGISTER));
             verifyNoInteractions(notifier);
         }
+
+        /**
+         * What the usage promises, which has to be the rule the resend actually applies.
+         *
+         * <p>The line is printed on {@code --help} and under every refusal, and it is the only
+         * place an operator mid-incident is told which recipients a resend reaches - so it is the
+         * line they reason from about whether a Youth Offending Team may already hold this
+         * register. {@code resendFailed} posts for every row of the batch that is not ACCEPTED: a
+         * PENDING row a pod abandoned between the 202 and the settlement, and a recipient the batch
+         * holds no row for at all, as well as a FAILED one. FAILED is a {@code NotificationStatus}
+         * this codebase counts strictly elsewhere, so a usage promising "the FAILED recipients, and
+         * only those" cannot be read as loose shorthand: it names a narrower set than the command
+         * sends to.
+         *
+         * <p>The half that is true is the half asserted last: an ACCEPTED recipient is never told
+         * twice, which is the reassurance the sentence exists to give.
+         */
+        @Test
+        void the_usage_should_promise_the_rule_the_resend_applies() {
+            final int code = run("--help");
+
+            softly.assertThat(code).isEqualTo(CliMain.SUCCESS);
+            softly.assertThat(lines)
+                    .as("a resend reaches every recipient this service has not had an e-mail "
+                            + "accepted for, which is what the operator has to be told")
+                    .anyMatch(line -> line.contains("no e-mail has been accepted for"));
+            softly.assertThat(lines)
+                    .as("and not the FAILED rows alone: a PENDING row and a recipient with no row "
+                            + "at all are owed one too, so naming the status names the wrong set")
+                    .noneMatch(line -> line.contains("FAILED"));
+            softly.assertThat(lines)
+                    .as("what is true stays said: the teams that were told are not told again")
+                    .anyMatch(line -> line.contains("and only those"));
+        }
     }
 
     /**
