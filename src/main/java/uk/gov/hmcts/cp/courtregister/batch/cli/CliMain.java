@@ -80,7 +80,7 @@ public class CliMain {
     /** Re-assembles and re-requests a register date, optionally one court house of it. */
     public static final String GENERATE_REGISTER = "generate-register";
 
-    /** Re-requests the FAILED recipients of one batch, and only those. */
+    /** Re-requests the recipients of one batch no e-mail has been accepted for, and only those. */
     public static final String NOTIFY_REGISTER = "notify-register";
 
     /** Lists a date's batches, or the records recorded while the flag was off. */

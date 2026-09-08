@@ -13,17 +13,25 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 /**
  * {@code notify-register --batch B}.
  *
- * <p>Re-requests the recipients of one batch whose notification FAILED, and only those. A batch
- * that reached PARTIALLY_NOTIFIED has recipients who already have the register: a resend that
- * treated the batch as a unit would send a second copy of a document about children to a Youth
- * Offending Team that read the first one this morning, which is why the FAILED rows rather than the
- * batch are what this command works on.
+ * <p>Re-requests the recipients of one batch this service has not had an e-mail accepted for, and
+ * only those. A batch that reached PARTIALLY_NOTIFIED has recipients who already have the register:
+ * a resend that treated the batch as a unit would send a second copy of a document about children
+ * to a Youth Offending Team that read the first one this morning, which is why the rows rather than
+ * the batch are what this command works on.
+ *
+ * <p><strong>Not the FAILED rows alone, and the difference matters to the person asking.</strong>
+ * What is owed is every row the batch holds that is not ACCEPTED, under the identity that row
+ * already carries, plus a fresh row for any recipient the batch holds none for
+ * ({@link RegisterNotifierService#resendFailed}). A row left PENDING by a pod that died between
+ * systemdocgenerator's 202 and the settlement is owed an attempt exactly as a FAILED one is, and a
+ * recipient the batch never had a row for has been told nothing at all. What the command will never
+ * do is post for an ACCEPTED row, which is the whole of the reassurance in "and only those".
  *
  * <p>It renders nothing and asks for nothing to be rendered. The batch already has its document -
  * that is what makes its recipients resendable - so the file it was rendered to is the file that is
  * attached again, by the same file-service identifier.
  *
- * <p>A batch with no FAILED recipients is a success that changed nothing, said so in the output
+ * <p>A batch that owes nobody an attempt is a success that changed nothing, said so in the output
  * rather than in the exit code: there is nothing wrong with asking, and an operator working down a
  * list of batches should not have to tell a refusal from a batch that was already fine.
  *
@@ -48,7 +56,8 @@ public class NotifyRegisterCli {
      */
     /* default */ static final String USAGE = "usage: " + CliMain.NOTIFY_REGISTER
             + " --" + Args.BATCH
-            + " B (re-requests the FAILED recipients of one batch, and only those)";
+            + " B (re-requests the recipients of one batch no e-mail has been accepted for, and"
+            + " only those)";
 
     private static final Logger LOG = LoggerFactory.getLogger(NotifyRegisterCli.class);
 
@@ -83,7 +92,7 @@ public class NotifyRegisterCli {
     }
 
     /**
-     * Re-requests the FAILED recipients of the batch the arguments name.
+     * Re-requests the batch's recipients that no e-mail has been accepted for.
      *
      * @param args the arguments that followed {@code notify-register}
      * @return {@link CliMain#SUCCESS}, {@link CliMain#REFUSED} where the arguments were not usable,

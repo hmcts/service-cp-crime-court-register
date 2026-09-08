@@ -30,18 +30,18 @@ import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 /**
  * {@code notify-register --batch B}: the resend, and the teams it must not tell twice.
  *
- * <p>{@code RegisterNotifierServiceTest} says what a resend does to the rows - only the FAILED
- * ones, under the identities they were first attempted with, and the batch settled on the tally
- * afterwards. This says what the command does about it, and the whole of that is: read one batch
- * identity out of the arguments, ask the service, and report what came back. The rule is not
+ * <p>{@code RegisterNotifierServiceTest} says what a resend does to the rows - the ones no e-mail
+ * has been accepted for, under the identities they already carry, and the batch settled on the
+ * tally afterwards. This says what the command does about it, and the whole of that is: read one
+ * batch identity out of the arguments, ask the service, and report what came back. The rule is not
  * restated here on purpose. A command that decided for itself which rows were owed would be a
  * second answer to "has this Youth Offending Team been told" that could disagree with the
  * schedule's, and the disagreement would be a second e-mail about the same children.
  *
  * <p><strong>So the assertions are about the seam and the report, not about notification.</strong>
- * That {@code resendFailed} is what is asked - and never {@code notify}, which mints fresh rows for
- * every recipient of the batch, the teams who read this morning's register included - is the
- * behaviour this class exists to hold down.
+ * That {@code resendFailed} is what is asked is the behaviour this class exists to hold down - the
+ * one call this command may make, whose rule the service owns - together with the usage line that
+ * tells an operator which recipients it reaches.
  *
  * <p><strong>A batch that was already fine is a success.</strong> An operator working down a list
  * of batches from a support ticket should not have to tell a refusal from a batch with nothing
