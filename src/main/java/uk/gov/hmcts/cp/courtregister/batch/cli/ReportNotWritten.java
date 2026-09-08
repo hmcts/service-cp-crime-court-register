@@ -17,6 +17,18 @@ import java.io.UncheckedIOException;
  * a false diagnostic, written to the destination that had just refused a line, and answered on the
  * exit code that means the command declined.
  *
+ * <p><strong>Which is the rule for every command, and for the next one somebody writes.</strong> A
+ * command does its work and then reports it, both inside the one {@code try} whose catch means
+ * "the store refused" - so this type reaching that catch turns a command that succeeded into a
+ * false diagnostic: the recipients not re-requested, the period not superseded, the date not read,
+ * the day's regeneration unfinished, said about writes that had already been made and then written
+ * to the destination that had just refused a line. So each command names this type ahead of its
+ * broad catch and rethrows it, as {@link CliMain#dispatch} does for a context that would not start,
+ * and a command added later has to do the same. A refused report is answered once, by
+ * {@link CliMain#exitCodeFor(String[], java.util.function.Consumer)}, and never by the command
+ * whose work it followed - which is also why {@code CheckFlagCli} needs nothing: it holds no such
+ * catch to get past.
+ *
  * <p><strong>Still an {@link UncheckedIOException}, though.</strong> This narrows the boundary's
  * contract rather than replacing it: what happened is an {@link IOException} on a write, the cause
  * carries it, and a caller that only cares that the report failed can read it as the IO failure it

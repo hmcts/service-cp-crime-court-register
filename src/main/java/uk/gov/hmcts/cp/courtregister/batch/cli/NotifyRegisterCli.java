@@ -143,6 +143,8 @@ public class NotifyRegisterCli {
      * @param batchId the batch an operator carried in from a support ticket
      * @return {@link CliMain#SUCCESS} where a tally was taken, {@link CliMain#FAILED} where none
      *         was
+     * @throws ReportNotWritten where the resend was made and its destination would not take the
+     *                          tally, which is not this command's answer to give
      */
     // PMD.AvoidCatchingGenericException: the notifier refuses an unknown batch through
     // IllegalStateException and the store translates an outage into its own unchecked type; both
@@ -156,6 +158,14 @@ public class NotifyRegisterCli {
                     + " failed=" + settled.failed() + " state=" + settled.outcome()
                     + " disposition=" + settled.disposition().code());
             return verdict(batchId, settled.disposition());
+        } catch (ReportNotWritten notWritten) {
+            // The tally is written after the resend: the posts have been made and it is the line
+            // saying so that the destination refused. Caught below, it would tell an operator the
+            // recipients were not re-requested while the e-mail is on its way to them, and the
+            // ticket's next step is to run the command again - a second copy of a document about
+            // children to every team the first attempt reached. It leaves here for the entry
+            // point, which answers it without a terminal.
+            throw notWritten;
         } catch (RuntimeException notResent) {
             LOG.error("The recipients owed by batch {} could not be re-requested, so the batch is "
                     + "left as it stands. cause={}", batchId, notResent.getClass().getName(),

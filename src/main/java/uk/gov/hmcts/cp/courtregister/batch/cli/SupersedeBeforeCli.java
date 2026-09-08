@@ -130,6 +130,8 @@ public class SupersedeBeforeCli {
      * @param sharedBefore the exclusive bound the operator typed, as this command read it
      * @return {@link CliMain#SUCCESS} where the write was made, {@link CliMain#FAILED} where it was
      *         not
+     * @throws ReportNotWritten where the write was made and its destination would not take the
+     *                          count, which is not this command's answer to give
      */
     // PMD.AvoidCatchingGenericException: the store translates an outage into its own unchecked type
     // and a refused statement arrives as another; both mean the same thing here - the period was
@@ -140,6 +142,13 @@ public class SupersedeBeforeCli {
             final int superseded = store.supersedeSharedBefore(sharedBefore);
             output.accept("superseded=" + superseded + " shared-before=" + sharedBefore);
             return CliMain.SUCCESS;
+        } catch (ReportNotWritten notWritten) {
+            // The count is written after the write it counts: the period is superseded and it is
+            // the line saying so that the destination refused. Caught below, it would tell an
+            // operator mid-rollback that this service still claims a period it has just given up -
+            // and would say it on a second write to the destination that has just refused one. It
+            // leaves here for the entry point, which answers it without a terminal.
+            throw notWritten;
         } catch (RuntimeException notSuperseded) {
             LOG.error("The registers shared before {} could not be superseded, so this service "
                     + "still claims them. cause={}", sharedBefore,

@@ -214,6 +214,8 @@ public class ListBatchesCli {
      * @param listing the reads and the lines they produce
      * @return {@link CliMain#SUCCESS} where the listing was written, {@link CliMain#FAILED} where
      *         it could not be
+     * @throws ReportNotWritten where the rows were read and their destination stopped taking the
+     *                          listing, which is not this command's answer to give
      */
     // PMD.AvoidCatchingGenericException: the store translates an outage into its own unchecked type
     // and a statement can refuse with another; both mean the same thing here - this listing was not
@@ -223,6 +225,14 @@ public class ListBatchesCli {
         try {
             listing.run();
             return CliMain.SUCCESS;
+        } catch (ReportNotWritten notWritten) {
+            // Each row is written as it is read, so a destination that stops taking lines -
+            // `list-batches --date D | head -1`, the everyday invocation - refuses one part-way
+            // through a listing whose reads were all made. Caught below, it would say the rows
+            // could not be read with a batch line for the same date on the screen above it, which
+            // is the one contradiction support cannot resolve from the output. It leaves here for
+            // the entry point, which answers it without a terminal.
+            throw notWritten;
         } catch (RuntimeException notRead) {
             LOG.error("The listing {} could not be read, so no rows are reported for it. cause={}",
                     subject, notRead.getClass().getName(), notRead);

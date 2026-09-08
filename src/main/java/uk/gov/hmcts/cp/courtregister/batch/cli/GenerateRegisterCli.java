@@ -312,6 +312,8 @@ public class GenerateRegisterCli {
      * @param selection the day and the narrowing it is bounded by
      * @return {@link CliMain#SUCCESS} where the day was worked through, {@link CliMain#FAILED}
      *         where it could not be
+     * @throws ReportNotWritten where the day was worked through and its destination stopped taking
+     *                          the report, which is not this command's answer to give
      */
     // PMD.AvoidCatchingGenericException: the store translates an outage into its own unchecked type
     // and refuses a stamp with another; both mean the same thing here - this regeneration did not
@@ -332,6 +334,15 @@ public class GenerateRegisterCli {
                     + " requested=" + requested
                     + " deferred=" + assembly.deferred().size());
             return CliMain.SUCCESS;
+        } catch (ReportNotWritten notWritten) {
+            // A batch's own line goes out as its render is requested and the counts follow at the
+            // end, so a destination that stops taking lines refuses one with registers already
+            // stamped into a batch row and systemdocgenerator already asked. Caught below, it
+            // would say the day stands as whatever this run had written down - which sends an
+            // operator to a second regeneration that can release nothing, the batch it would
+            // re-assemble being in flight rather than FAILED. It leaves here for the entry point,
+            // which answers it without a terminal.
+            throw notWritten;
         } catch (RuntimeException notGenerated) {
             LOG.error("The regeneration of register date {} did not finish, so the day stands as "
                     + "whatever this run had already written down. cause={}",
