@@ -258,6 +258,46 @@ public class CliMain {
 
         LOG.warn("The {} command was refused and changed nothing: its arguments were not usable. "
                 + "reason={}", command, reason);
+        return printRefusal(command, usage, reason, output);
+    }
+
+    /**
+     * A refusal that is not about the arguments, said the same way to the operator.
+     *
+     * <p>The two printed lines are {@link #refusal}'s exactly - the same verdict, the same bounded
+     * reason, the same usage under it - and only the log sentence differs, because that sentence
+     * names a cause. {@code generate-register} declines a run the cutover flag stopped, over
+     * arguments that were read and were usable, and a WARN line saying they were not is what an
+     * incident view indexes: anybody searching it for why the 08:00 regeneration did nothing would
+     * be sent after a typing mistake instead of after the flag.
+     *
+     * @param command the command that declined, by its own name
+     * @param usage   what it takes, printed under the refusal
+     * @param reason  the bounded reason it declined, which here is a gate's own code rather than
+     *                one of this class's three argument codes
+     * @param output  where the two lines are written
+     * @return {@link #REFUSED}
+     */
+    public static int declined(final String command, final String usage, final String reason,
+            final Consumer<String> output) {
+
+        LOG.warn("The {} command declined and changed nothing. reason={}", command, reason);
+        return printRefusal(command, usage, reason, output);
+    }
+
+    /**
+     * The two lines every refusal prints, so that a declining command and a refused argument look
+     * the same to the operator whatever the log says about them.
+     *
+     * @param command the command that declined, by its own name
+     * @param usage   what it takes, printed under the refusal
+     * @param reason  the bounded reason it declined
+     * @param output  where the two lines are written
+     * @return {@link #REFUSED}
+     */
+    private static int printRefusal(final String command, final String usage, final String reason,
+            final Consumer<String> output) {
+
         output.accept(COMMAND + command + OUTCOME_REFUSED + reason);
         output.accept(usage);
         return REFUSED;

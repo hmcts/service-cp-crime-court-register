@@ -257,7 +257,9 @@ public class GenerateRegisterCli {
     private int gated(final Selection selection) {
         final GateDecision decision = gate.decide(selection.ignoreFlag());
         if (decision instanceof Skipped skipped) {
-            return CliMain.refusal(CliMain.GENERATE_REGISTER, USAGE, skipped.reason().code(),
+            // declined rather than refusal: the arguments were read and were usable, and the log
+            // line a refusal writes says otherwise.
+            return CliMain.declined(CliMain.GENERATE_REGISTER, USAGE, skipped.reason().code(),
                     output);
         }
         if (decision instanceof Proceed proceed && proceed.overridden()) {
