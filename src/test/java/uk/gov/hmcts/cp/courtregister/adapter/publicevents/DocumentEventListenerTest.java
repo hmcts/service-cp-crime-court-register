@@ -37,6 +37,8 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
+import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
 
 /**
  * What the listener does with one message off {@code public.event}, and what it refuses to do.
@@ -846,5 +848,59 @@ class DocumentEventListenerTest {
                   },
                   "courtCentreId": "ac21d0f1-8f45-4d9c-9a3e-6b0c5d2e7a11"
                 }""".formatted(BATCH_ID);
+    }
+
+    /**
+     * What this service writes down about a field it could not read.
+     *
+     * <p>The values in a public event are another context's, and a field that should have carried
+     * an identity or a time carried something else: whatever it did carry is data this service
+     * never asked for and cannot vouch for. So the reading is written down - which field, and what
+     * refused to read it - and the value is not, because a value nobody validated may be anything,
+     * including a person's own details, and a log line is the one place it must not turn up
+     * (constitution Principle VII). The same rule the operations commands were held to for what an
+     * operator types, one door along, for what another service publishes.
+     */
+    @Nested
+    @DisplayName("a field this service could not read")
+    class UnreadableFields {
+
+        @Test
+        void a_correlation_that_is_not_an_identity_should_not_be_quoted() throws JMSException {
+            try (CapturedLog log = CapturedLog.capturing(DocumentEventListener.class)) {
+                listener.onPublicEvent(message(DocumentEventListener.DOCUMENT_AVAILABLE,
+                        documentAvailableEnvelope("  \"sourceCorrelationId\": \""
+                                        + PersonalDataMarkers.OPERATOR_TOKEN + "\",\n",
+                                "  \"originatingSource\": \""
+                                        + DocumentEventListener.ORIGINATING_SOURCE + "\"\n")));
+
+                assertThat(log.renderings())
+                        .as("the field is named because a reader needs to know which one, and the "
+                                + "value is not, because another context's unvalidated value may "
+                                + "be anything at all")
+                        .anySatisfy(line -> assertThat(line)
+                                .contains("sourceCorrelationId")
+                                .doesNotContain(PersonalDataMarkers.OPERATOR_TOKEN));
+                assertThat(log.renderings())
+                        .noneMatch(line -> line.contains(PersonalDataMarkers.OPERATOR_TOKEN));
+            }
+        }
+
+        @Test
+        void a_generated_time_that_is_not_a_date_time_should_not_be_quoted() throws JMSException {
+            try (CapturedLog log = CapturedLog.capturing(DocumentEventListener.class)) {
+                listener.onPublicEvent(message(DocumentEventListener.DOCUMENT_AVAILABLE,
+                        ourDocumentAvailable().replace("2026-09-05T18:04:11.412+01:00",
+                                PersonalDataMarkers.OPERATOR_TOKEN)));
+
+                assertThat(log.renderings())
+                        .as("the same rule for the other reader: which field, and what refused it")
+                        .anySatisfy(line -> assertThat(line)
+                                .contains("generatedTime")
+                                .doesNotContain(PersonalDataMarkers.OPERATOR_TOKEN));
+                assertThat(log.renderings())
+                        .noneMatch(line -> line.contains(PersonalDataMarkers.OPERATOR_TOKEN));
+            }
+        }
     }
 }
