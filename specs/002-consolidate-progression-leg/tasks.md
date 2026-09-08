@@ -804,7 +804,21 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       was `reason=context-unavailable`, a throw inside the handler and the JVM's own exit 1 in place
       of the 2 the contract promises. Red at `19e52ff` ("40 tests completed, 6 failed", among them
       "expected: 2 but was: -1"), green at `b390eb6`, and `e2e/CliDispatchIT` proves the code
-      through the built image against `/dev/full` in 35 s.)
+      through the built image against `/dev/full` in 35 s. **The refusal was then found being
+      caught by the commands themselves**, one re-review later, and `f009bc5` / `2a2afb1` closes
+      that: a report is written after the work is done, so the broad catch in
+      `GenerateRegisterCli.generate`, `NotifyRegisterCli.resend`, `ListBatchesCli.listed` and
+      `SupersedeBeforeCli.supersede` was turning a command that had already superseded the rows, or
+      already re-requested the recipients, into a report that its own work had failed, with the true
+      refusal arriving after it. Each now names the type ahead of that catch and rethrows it, the
+      rule is stated once in `ReportNotWritten`'s javadoc, and `check-flag` needed no change because
+      it holds no broad catch to get past. Red at `f009bc5` ("174 tests completed, 4 failed", among
+      them "Expecting no elements of: [[ERROR] The registers shared before 2026-09-04T17:00:00Z
+      could not be superseded, so this service still claims them. cause=...ReportNotWritten] to
+      match given predicate but this element did"), green at `2a2afb1` (`batch.cli.*` classes=42
+      tests=174 failures=0 errors=0, with notify-register's genuine store-outage ERROR lines still
+      printed, which is the other half of the claim). That closes the follow-up `b390eb6`'s body
+      left open rather than widening into.)
 - [x] T066 [US5] `docker/startup.sh` dispatch: a recognised first argument runs `CliMain` with the
       remaining args; otherwise unchanged `exec java -jar`. Green: T064; `scripts/container-smoke.sh`
       gains `startup.sh check-flag` (exit 0 against the compose WireMock).
@@ -951,11 +965,15 @@ no answer has come yet**, so the phase gate is not clean while they stand; each 
 being asked and what happens if approval is withheld. Anything
 else in Phase 7 that arrived test-after is a defect, not a precedent.
 
-Two things in the phase were judged against this list and are deliberately not on it. `c3d8ff7`
+Three things in the phase were judged against this list and are deliberately not on it. `c3d8ff7`
 (T064) is a test task with a recorded red run, and the ten cases of it that were green on
 introduction characterise a property the service already had, with no implementation following them.
 `84ac9cc` (T067) is an **[A]** acceptance task, which the preamble already exempts from a red run;
 its observed run and its two reverted mutations are recorded in its tick line above rather than here.
+`f009bc5`'s fifth case is the same shape as `c3d8ff7`'s ten: a test commit with four failing
+assertions, whose one green-on-introduction case says that `check-flag` reaches the caller with a
+refused report because it holds no broad catch, stated so that a `catch` added there later cannot
+take the property away. No implementation follows it and its passing run is in that commit's body.
 
 1. **`62aa056` "test: compile-safe seams for the operations CLI" landed `config/CliModeConfig`
    finished.** Seven of the eight classes in it are what a seams commit is for - `CliMain.main` and
