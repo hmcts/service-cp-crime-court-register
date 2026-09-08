@@ -1998,6 +1998,81 @@ class RegisterStoreIT {
                     .contains(POST_PENDING);
         }
 
+        /**
+         * The successor is a register that has already been sent, which is the far end of the list.
+         *
+         * <p><strong>[A] characterisation.</strong> Both release statements have admitted RECORDED,
+         * GENERATED and NOTIFIED since the successor search was narrowed to the live half, and no
+         * case reached past the first of the three: with either predicate cut to
+         * {@code IN ('RECORDED')} the whole of this suite went on passing. This case and its
+         * pair in {@code Releasing} state the other two, and neither changes a statement.
+         *
+         * <p>The nearest case before them is
+         * {@code a_register_replaced_by_a_re_share_that_is_itself_batched_should_not_come_back},
+         * whose successor is stamped into a batch in flight - and a batch at GENERATING has not
+         * moved its registers, so the row that search finds is RECORDED like every other one here.
+         *
+         * <p><strong>Which is why this arrangement is not a re-share at all.</strong> A successor
+         * past RECORDED is one some batch took there, and {@code idx_register_batch_live_key}
+         * admits one in-flight batch per court centre and day - so the batch failing here, which
+         * has to be in flight to fail at all, cannot be the second of two. The day reaches the
+         * shape the other way round: the afternoon's results are recorded, batched and sent, and
+         * the morning's own delivery arrives <em>after</em> them. The recorder supersedes an
+         * incumbent that is RECORDED and unbatched, a sent one is neither, so nothing is
+         * superseded and the stale register is recorded RECORDED - waiting to be assembled, which
+         * is what the next run does with it.
+         *
+         * <p>A search that asked only for a RECORDED successor would find nothing beside it, hand
+         * it back active, and have the day rendered again from results the estate corrected before
+         * the document went out - a second document to the same Youth Offending Team, after the
+         * one that corrected it.
+         */
+        @Test
+        void a_failure_should_supersede_against_a_register_that_has_already_been_sent() {
+            final DistributionCommand sent = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final DistributionCommand late = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final AtomicReference<UUID> stale = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(sent, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                walkedToNotified(assembled(MONDAY, mine(store.activeUnbatched())),
+                        PAYLOAD_FILE_ID, DOCUMENT_FILE_ID);
+                // The morning's own delivery arrives after the afternoon's has been sent, so the
+                // recorder finds no incumbent to supersede and the stale register is left RECORDED.
+                record(late, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch morning = assembled(MONDAY, mine(store.activeUnbatched()));
+                stale.set(morning.batchId());
+                store.markFailed(morning.batchId(),
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(statusOf(sent))
+                    .as("the arrangement is the one the claim needs: the row beside the released "
+                            + "one is past RECORDED, so a search that asked only for a RECORDED "
+                            + "successor would see nothing at all")
+                    .contains(NOTIFIED);
+            softly.assertThat(supersessionOf(late).map(SupersessionPair::supersededBy))
+                    .as("and it is still the register that replaced this one: what makes a "
+                            + "successor is that it came later and is live, and a register a Youth "
+                            + "Offending Team has read is as live as one gets")
+                    .contains(outputIdOf(sent).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("one SUPERSEDED and one NOTIFIED, which is the invariant the whole batch "
+                            + "half is written against: at most one active row per key")
+                    .containsExactlyInAnyOrder(SUPERSEDED, NOTIFIED);
+            softly.assertThat(stampedWith(stale.get()))
+                    .as("the batch that never left this service holds nothing, which is also what "
+                            + "says the mark landed: the release is a branch of the statement that "
+                            + "marks the batch, so a refused write would take both down")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("and nothing of this day is waiting, so no run renders it again from "
+                            + "results the estate had already corrected")
+                    .isEmpty();
+        }
+
         @Test
         void a_failure_after_the_render_request_should_keep_the_stamp_on_its_rows() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
@@ -2542,6 +2617,82 @@ class RegisterStoreIT {
             softly.assertThat(statusOf(posting))
                     .as("and the POST row is left exactly as 001 wrote it")
                     .contains(POST_PENDING);
+        }
+
+        /**
+         * The successor is a register systemdocgenerator has already answered for.
+         *
+         * <p><strong>[A] characterisation.</strong> The pair of the {@code Failure} case that
+         * states a sent successor, and green on introduction for the same reason: this statement
+         * has admitted RECORDED, GENERATED and NOTIFIED since the search was narrowed to the live
+         * half, and what was missing was a case reaching past the first of the three.
+         *
+         * <p>The case three above -
+         * {@code a_register_replaced_by_a_re_share_that_is_itself_batched_should_not_come_back} -
+         * gets its successor as far as a batch in flight and no further: {@code markRequested}
+         * moves the batch to GENERATING and leaves its registers RECORDED, so the row that search
+         * finds is RECORDED like every other successor here. This one walks the same batch a step
+         * on, to where the document exists under its correlation, so the row beside the released
+         * one is GENERATED.
+         *
+         * <p>Which is the arrangement the operator's command must not undo. A search that asked
+         * only for a RECORDED successor finds nothing beside the released register, hands it back,
+         * and the next run renders the day a second time from the register the re-share replaced -
+         * and this time both documents exist, so a Youth Offending Team reads the superseded one
+         * after the current one.
+         */
+        @Test
+        void a_release_should_supersede_against_a_re_share_a_document_already_exists_for() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final List<RegisterRecord> released = new ArrayList<>();
+            final AtomicReference<UUID> stale = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                stale.set(monday.batchId());
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                // A reason that keeps the stamp, so the release is the one a person types.
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                // The next run assembles the re-share and systemdocgenerator answers it, so by the
+                // time the release is typed the successor is GENERATED rather than RECORDED.
+                walkedToGenerated(assembled(MONDAY, mine(store.activeUnbatched())),
+                        SECOND_PAYLOAD_FILE_ID, SECOND_DOCUMENT_FILE_ID);
+                released.addAll(store.releaseFailed(stale.get()));
+            }).as(SEAM).doesNotThrowAnyException();
+
+            softly.assertThat(statusOf(reshare))
+                    .as("the arrangement is the one the claim needs: the row beside the released "
+                            + "one is past RECORDED, so a search that asked only for a RECORDED "
+                            + "successor would see nothing at all")
+                    .contains(GENERATED);
+            softly.assertThat(released)
+                    .as("so the register is not answered with: a caller re-assembling it would "
+                            + "render the hearing as it stood before the re-share the day's own "
+                            + "document has already been rendered from")
+                    .isEmpty();
+            softly.assertThat(supersessionOf(first).map(SupersessionPair::supersededBy))
+                    .as("it is superseded against the register that replaced it, whatever state "
+                            + "that one has reached - what makes it the replacement is that it "
+                            + "came later and is still live")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("one SUPERSEDED and one GENERATED, which is the invariant the whole batch "
+                            + "half is written against: at most one active row per key")
+                    .containsExactlyInAnyOrder(SUPERSEDED, GENERATED);
+            softly.assertThat(stampedWith(stale.get()))
+                    .as("and the batch the person released holds nothing now")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("nothing of this day is waiting either: the re-share belongs to the batch "
+                            + "its document was rendered for, and the register it replaced belongs "
+                            + "to nothing")
+                    .isEmpty();
         }
 
         @Test
