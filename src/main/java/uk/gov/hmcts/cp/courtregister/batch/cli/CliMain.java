@@ -67,6 +67,15 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * ({@code logback-cli.xml}, selected by {@link #dispatch}). Without that split a reading would
  * arrive behind nine lines of banner and every INFO line of a context start, and two runs of
  * {@code list-batches} could not be compared by {@code diff} at all.
+ *
+ * <p><strong>And the log is held to the same rule rather than a weaker one.</strong> Sending it to
+ * stderr keeps it off the report; it does not make it private. A command is reached by
+ * {@code kubectl exec}, so its arguments are an operator's own typing, and every reader a value
+ * goes through quotes the token it refused - so an argument that would not read is logged by its
+ * name and by the class that refused it, and neither the reader's message nor a throwable carrying
+ * it is written down at all ({@link #unreadable}, constitution Principle VII). What a command's
+ * lines reach is the index the whole estate reads, which is the same place a delivery's lines
+ * reach.
  */
 public class CliMain {
 
@@ -118,6 +127,17 @@ public class CliMain {
 
     /** An argument was given and its value is not one this command can use. */
     public static final String UNREADABLE_ARGUMENT = "unreadable-argument";
+
+    /**
+     * Written where an unreadable invocation names no one argument of this service's.
+     *
+     * <p>The parser refuses three shapes before any argument has been recognised - a value where a
+     * name was expected, {@code --} on its own, and a name this service does not own given twice -
+     * and the only thing that could be said about which argument it was is the token the operator
+     * typed. So the line says that none was named. Which shape it was is on the log line's
+     * {@code cause}, and the invocation is in front of the person who typed it.
+     */
+    public static final String NO_ARGUMENT_NAMED = "unnamed";
 
     private static final Logger LOG = LoggerFactory.getLogger(CliMain.class);
 
@@ -336,25 +356,40 @@ public class CliMain {
     }
 
     /**
-     * A refusal over arguments the parser itself could not read.
+     * A refusal over an argument the command could not read.
      *
-     * <p>Separate from {@link #refusal} only in that the parser's own refusal is written to the log
-     * with it: what an operator typed is not the report's business twice over, and the throwable is
-     * the only record of which token could not be read. The token is inside that throwable's own
-     * message, so the log is where it stays - stderr in a command's JVM - rather than being printed
-     * back onto the stream the refusal and the usage line are read from.
+     * <p>Separate from {@link #refusal} only in that the log line says which argument it was and
+     * what refused it. The two printed lines are identical: what an operator typed is not the
+     * report's business twice over.
+     *
+     * <p><strong>Nothing the operator typed reaches the log either.</strong> The throwable is not
+     * attached and its message is not written. Every reader one of these values goes through
+     * quotes the token it choked on - {@code Invalid UUID string: ...}, {@code Text '...' could not
+     * be parsed} - so an operator who mistyped an address into {@code --court-house}, or pasted a
+     * credential over {@code --batch}, would have put it in this pod's log and from there in an
+     * index the whole estate reads (constitution Principle VII). A command is reached by
+     * {@code kubectl exec} rather than by a delivery, which makes its arguments the one text on
+     * this surface nobody in the estate has any business reading.
+     *
+     * <p>What a diagnosis needs is on the line instead, and none of it is the operator's: the
+     * command, the argument that would not read - by the name this service owns rather than by the
+     * value it carried - and the class of the reader that refused it. What is given up is which
+     * token it was, and the person who typed it has that in front of them.
      *
      * @param command   the command that declined, by its own name
      * @param usage     what it takes, printed under the refusal
-     * @param notUsable what the parser refused on
+     * @param argument  the argument that would not read, by one of {@link Args}' own names, or
+     *                  {@link #NO_ARGUMENT_NAMED} where the shape of the invocation was refused
+     *                  before any argument was recognised
+     * @param notUsable what refused it, read for its class and for nothing else
      * @param output    where the two lines are written
      * @return {@link #REFUSED}
      */
-    public static int unreadable(final String command, final String usage,
+    public static int unreadable(final String command, final String usage, final String argument,
             final RuntimeException notUsable, final Consumer<String> output) {
 
-        LOG.warn("The {} command could not read what was typed after its name, so it changed "
-                + "nothing. cause={}", command, notUsable.getClass().getName(), notUsable);
+        LOG.warn("The {} command could not read one of its arguments, so it changed nothing. "
+                + "argument={} cause={}", command, argument, notUsable.getClass().getName());
         return refusal(command, usage, UNREADABLE_ARGUMENT, output);
     }
 

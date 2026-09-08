@@ -97,7 +97,8 @@ public class SupersedeBeforeCli {
         try {
             parsed = Args.parse(args);
         } catch (IllegalArgumentException notUsable) {
-            return CliMain.unreadable(CliMain.SUPERSEDE_BEFORE, USAGE, notUsable, output);
+            return CliMain.unreadable(CliMain.SUPERSEDE_BEFORE, USAGE, CliMain.NO_ARGUMENT_NAMED,
+                    notUsable, output);
         }
         if (parsed.askedForHelp()) {
             output.accept(USAGE);
@@ -114,7 +115,8 @@ public class SupersedeBeforeCli {
         try {
             sharedBefore = Instant.parse(typed);
         } catch (DateTimeParseException notAnInstant) {
-            return CliMain.unreadable(CliMain.SUPERSEDE_BEFORE, USAGE, notAnInstant, output);
+            return CliMain.unreadable(CliMain.SUPERSEDE_BEFORE, USAGE, Args.SHARED_BEFORE,
+                    notAnInstant, output);
         }
         return supersede(sharedBefore);
     }

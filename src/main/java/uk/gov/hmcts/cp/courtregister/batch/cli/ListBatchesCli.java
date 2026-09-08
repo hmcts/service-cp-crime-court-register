@@ -118,7 +118,8 @@ public class ListBatchesCli {
         try {
             parsed = Args.parse(args);
         } catch (IllegalArgumentException notUsable) {
-            return CliMain.unreadable(CliMain.LIST_BATCHES, USAGE, notUsable, output);
+            return CliMain.unreadable(CliMain.LIST_BATCHES, USAGE, CliMain.NO_ARGUMENT_NAMED,
+                    notUsable, output);
         }
         if (parsed.askedForHelp()) {
             output.accept(USAGE);
@@ -152,7 +153,7 @@ public class ListBatchesCli {
         try {
             registerDate = LocalDate.parse(typed);
         } catch (DateTimeParseException notADate) {
-            return CliMain.unreadable(CliMain.LIST_BATCHES, USAGE, notADate, output);
+            return CliMain.unreadable(CliMain.LIST_BATCHES, USAGE, Args.DATE, notADate, output);
         }
         return listed("date=" + registerDate, () -> {
             for (final RegisterBatch batch : batches.findByRegisterDate(registerDate)) {

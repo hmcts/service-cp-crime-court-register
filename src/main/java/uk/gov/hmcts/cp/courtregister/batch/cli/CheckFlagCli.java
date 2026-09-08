@@ -92,7 +92,8 @@ public class CheckFlagCli {
         try {
             parsed = Args.parse(args);
         } catch (IllegalArgumentException notUsable) {
-            return CliMain.unreadable(CliMain.CHECK_FLAG, USAGE, notUsable, output);
+            return CliMain.unreadable(CliMain.CHECK_FLAG, USAGE, CliMain.NO_ARGUMENT_NAMED,
+                    notUsable, output);
         }
         if (parsed.askedForHelp()) {
             output.accept(USAGE);

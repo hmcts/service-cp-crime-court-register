@@ -179,20 +179,29 @@ public class GenerateRegisterCli {
     /**
      * Re-assembles and re-requests the register date the arguments name.
      *
+     * <p><strong>The three values are read one at a time, each under its own name.</strong> Every
+     * one of them is interpreted here and before the flag is read, so a mistyped invocation costs
+     * an operator a refusal rather than a run: a bound nobody can read is not the same as no bound,
+     * and the run it would have narrowed is the whole day. Reading them separately is what lets the
+     * refusal say <em>which</em> argument would not read - the one thing about a refused value that
+     * may be written to a log, since the value itself may not
+     * ({@link CliMain#unreadable}, constitution Principle VII).
+     *
      * @param args the arguments that followed {@code generate-register}
      * @return {@link CliMain#SUCCESS}, {@link CliMain#REFUSED} where the flag said no or the
      *         arguments were not usable, or {@link CliMain#FAILED}
      */
-    // PMD.OnlyOneReturn: the six exits are the six things that can happen to an invocation, each
-    // said where it is decided; one exit would carry a verdict past the flag read and the store
-    // reads that must not be made once the arguments have been refused.
+    // PMD.OnlyOneReturn: the eight exits are the eight things that can happen to an invocation,
+    // each said where it is decided - and each unreadable value under the name of the argument it
+    // was given for. One exit would carry a verdict past the flag read and the store reads that
+    // must not be made once the arguments have been refused.
     @SuppressWarnings("PMD.OnlyOneReturn")
     public int run(final List<String> args) {
         final Args parsed;
         try {
             parsed = Args.parse(args);
         } catch (IllegalArgumentException notUsable) {
-            return CliMain.unreadable(CliMain.GENERATE_REGISTER, USAGE, notUsable, output);
+            return unreadable(CliMain.NO_ARGUMENT_NAMED, notUsable);
         }
         if (parsed.askedForHelp()) {
             output.accept(USAGE);
@@ -202,40 +211,66 @@ public class GenerateRegisterCli {
                 Set.of(Args.IGNORE_FLAG))) {
             return refuse(CliMain.UNEXPECTED_ARGUMENT);
         }
-        if (parsed.options().get(Args.DATE) == null) {
+        final Map<String, String> options = parsed.options();
+        if (options.get(Args.DATE) == null) {
             return refuse(CliMain.MISSING_ARGUMENT);
         }
-        final Selection selection;
+        final LocalDate registerDate;
         try {
-            selection = selectionOf(parsed);
-        } catch (DateTimeParseException | IllegalArgumentException notUsable) {
-            return CliMain.unreadable(CliMain.GENERATE_REGISTER, USAGE, notUsable, output);
+            registerDate = LocalDate.parse(options.get(Args.DATE));
+        } catch (DateTimeParseException notADate) {
+            return unreadable(Args.DATE, notADate);
         }
-        return gated(selection);
+        final UUID batchId;
+        try {
+            batchId = batchOf(options.get(Args.BATCH));
+        } catch (IllegalArgumentException notAnIdentity) {
+            return unreadable(Args.BATCH, notAnIdentity);
+        }
+        final Instant recordedBefore;
+        try {
+            recordedBefore = boundOf(options.get(Args.RECORDED_BEFORE));
+        } catch (DateTimeParseException notAnInstant) {
+            return unreadable(Args.RECORDED_BEFORE, notAnInstant);
+        }
+        return gated(new Selection(registerDate, options.get(Args.COURT_HOUSE), batchId,
+                recordedBefore, parsed.flags().contains(Args.IGNORE_FLAG)));
     }
 
     /**
-     * What an operator typed, read into the four things a regeneration is narrowed by.
+     * The one batch an operator named, or the absence of one.
      *
-     * <p>Every value is interpreted here and before the flag is read, so a mistyped invocation
-     * costs an operator a refusal rather than a run: a bound nobody can read is not the same as no
-     * bound, and the run it would have narrowed is the whole day.
-     *
-     * @param parsed the names and values the parser read
-     * @return the day, the narrowing and whether an override was asked for
-     * @throws DateTimeParseException   where the date or the instant is not one
-     * @throws IllegalArgumentException where the batch is not an identity
+     * @param typed the value {@code --batch} carried, or {@code null} where it was not given
+     * @return the batch's identity, or {@code null} for every batch of the day
+     * @throws IllegalArgumentException where the token is not an identity
      */
-    private static Selection selectionOf(final Args parsed) {
-        final Map<String, String> options = parsed.options();
-        final String batch = options.get(Args.BATCH);
-        final String recordedBefore = options.get(Args.RECORDED_BEFORE);
-        return new Selection(
-                LocalDate.parse(options.get(Args.DATE)),
-                options.get(Args.COURT_HOUSE),
-                batch == null ? null : UUID.fromString(batch),
-                recordedBefore == null ? null : Instant.parse(recordedBefore),
-                parsed.flags().contains(Args.IGNORE_FLAG));
+    private static UUID batchOf(final String typed) {
+        return typed == null ? null : UUID.fromString(typed);
+    }
+
+    /**
+     * The instant an operator bounded the run at, or the absence of a bound.
+     *
+     * @param typed the value {@code --recorded-before} carried, or {@code null} where it was not
+     *              given
+     * @return the exclusive bound, or {@code null} for the whole day
+     * @throws DateTimeParseException where the token is not an instant
+     */
+    private static Instant boundOf(final String typed) {
+        return typed == null ? null : Instant.parse(typed);
+    }
+
+    /**
+     * Declines over one argument that would not read, under that argument's own name.
+     *
+     * @param argument  the argument the refused value was given for, or
+     *                  {@link CliMain#NO_ARGUMENT_NAMED} where the parser refused the shape of the
+     *                  invocation before any argument was recognised
+     * @param notUsable what refused it, read for its class and for nothing else
+     * @return {@link CliMain#REFUSED}
+     */
+    private int unreadable(final String argument, final RuntimeException notUsable) {
+        return CliMain.unreadable(CliMain.GENERATE_REGISTER, USAGE, argument, notUsable, output);
     }
 
     /**

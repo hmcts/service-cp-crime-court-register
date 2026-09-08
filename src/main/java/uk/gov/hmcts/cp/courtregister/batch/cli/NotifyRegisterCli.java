@@ -107,7 +107,8 @@ public class NotifyRegisterCli {
         try {
             parsed = Args.parse(args);
         } catch (IllegalArgumentException notUsable) {
-            return CliMain.unreadable(CliMain.NOTIFY_REGISTER, USAGE, notUsable, output);
+            return CliMain.unreadable(CliMain.NOTIFY_REGISTER, USAGE, CliMain.NO_ARGUMENT_NAMED,
+                    notUsable, output);
         }
         if (parsed.askedForHelp()) {
             output.accept(USAGE);
@@ -124,7 +125,8 @@ public class NotifyRegisterCli {
         try {
             batchId = UUID.fromString(typed);
         } catch (IllegalArgumentException notAnIdentity) {
-            return CliMain.unreadable(CliMain.NOTIFY_REGISTER, USAGE, notAnIdentity, output);
+            return CliMain.unreadable(CliMain.NOTIFY_REGISTER, USAGE, Args.BATCH, notAnIdentity,
+                    output);
         }
         return resend(batchId);
     }
