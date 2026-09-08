@@ -308,7 +308,17 @@ jobs:
         with:
           image-ref: ghcr.io/${{ github.repository }}:${{ needs.Artefact-Version.outputs.artefact_version }}
           format: 'table'
-          exit-code: '0'
+          # A finding fails the job. It was '0' -- report-only -- inherited from the
+          # informant-register scaffold, where it had been set that way pending a Spring Boot CVE
+          # fix that has long since shipped. It stayed at '0' here for a second reason: the job
+          # built on a JDK on Ubuntu 26.04, whose base layer carries a pebble binary with 14
+          # fixable HIGH advisories that nothing we deploy contains, so a gate would have blocked
+          # every push on a finding against an image no environment runs. Now that the build uses
+          # a base matching the deployed one, the scan is answerable and can be enforced:
+          # verified at 0 fixable HIGH/CRITICAL in the base image and 0 in the shipped
+          # dependencies. ignore-unfixed stays on, so an advisory with no available fix reports
+          # without blocking a release nobody could unblock.
+          exit-code: '1'
           ignore-unfixed: true
           severity: 'HIGH,CRITICAL'
 
