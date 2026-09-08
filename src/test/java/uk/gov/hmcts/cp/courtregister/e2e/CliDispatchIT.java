@@ -187,6 +187,38 @@ class CliDispatchIT {
     }
 
     /**
+     * What is on the command's own stream, which is the whole of what a runbook step may read.
+     *
+     * <p>{@code CliMain} says its output is "line-oriented and stable" and that "the stream is
+     * handed in rather than reached for, so a test reads what an operator would see". The unit
+     * suites read that handed-in stream and see the report alone; an operator saw the Spring banner
+     * and every INFO line of a context start in front of it, because {@code logback.xml} declares
+     * one {@code ConsoleAppender} with no target and the report is written to the same descriptor.
+     * The container smoke greps rather than compares for that reason, and this suite asked only
+     * that {@code flag=ON} was among the lines.
+     *
+     * <p>So the claim is asserted as it is written: stdout is the report and nothing else. The log
+     * is not silenced - it is the only record of a context that would not start, and of which token
+     * a parser refused - it goes to stderr, where the script's own notice already goes, which is
+     * what the second assertion holds down.
+     */
+    @Test
+    @DisplayName("a command's stdout carries its report and nothing else")
+    void check_flag_should_carry_the_reading_alone_on_the_commands_own_stream() throws Exception {
+        final Container.ExecResult read = APP.execInContainer("./startup.sh", "check-flag");
+
+        assertThat(read.getStdout().lines())
+                .as("the whole of what a runbook step reads, and what `diff` between two runs of a "
+                        + "listing compares: a banner and a context's INFO lines in front of it "
+                        + "are lines an operator has to know to skip")
+                .containsExactly("flag=ON");
+        assertThat(read.getStderr())
+                .as("and the log went somewhere rather than being turned off - a command that "
+                        + "could not start its context has nothing else to say why")
+                .contains("Started CliMain in");
+    }
+
+    /**
      * The third thing an operator does, which is mistype one of the five names.
      *
      * <p>Both {@code docker/startup.sh} and {@code CliMain} say that a name the script does not
