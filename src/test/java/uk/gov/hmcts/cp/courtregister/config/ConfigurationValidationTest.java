@@ -1930,6 +1930,71 @@ class ConfigurationValidationTest {
         }
 
         /**
+         * The same store written in the absolute DNS form, which is the spelling the rule missed.
+         *
+         * <p>A trailing root dot is how a fully qualified name is written, and it names the same
+         * host: {@code store.azconfig.io.} and {@code store.azconfig.io} resolve identically and the
+         * SDK builds the same client from either. So a rule that asks whether the value ends
+         * {@code .azconfig.io} reads the absolute spelling as "not a store" and admits the published
+         * local identity against a real App Configuration store - the one deployment this refusal
+         * exists to prevent, and the one whose failure is invisible until 18:00.
+         *
+         * <p>The upper-case host, the port and the path travel with it, because each of them is
+         * already characterised above on the relative spelling and none of them survives the
+         * absolute one: the question is about the host and the host alone, however the deployment
+         * wrote it.
+         */
+        @ParameterizedTest
+        @ValueSource(strings = {
+            "https://courtregister-ste86.azconfig.io./",
+            "https://COURTREGISTER-STE86.AZCONFIG.IO.",
+            "https://courtregister-ste86.azconfig.io.:443/kv",
+        })
+        void a_real_store_in_its_absolute_dns_form_should_fail_startup(final String endpoint) {
+            generating.withPropertyValues("courtregister.feature.endpoint=" + endpoint,
+                    LOCAL_TEST_PROPERTY).run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.feature.credential is"
+                                        + " local-test while courtregister.feature.endpoint ("
+                                        + endpoint + ") names a real App Configuration store");
+                    });
+        }
+
+        /**
+         * The other half of the same question: a value that names no host at all.
+         *
+         * <p>Neither of these is a URL a client can be built from, and neither is refused by asking
+         * whether the value looks like "a scheme and then something". {@code http://foo:bad} has a
+         * port that is not a number, so {@code new URL} throws
+         * {@code Error at index 0 in: "bad"} inside {@code ConfigurationClientBuilder.endpoint} as
+         * the reader is built - during refresh, wherever generation is enabled - which is a pod that
+         * never starts under an exception naming no setting of this service's. {@code http://:} is
+         * worse, because it is accepted there: the client is built on an empty host, every read at
+         * 18:00 fails to connect, and an unreadable flag is a run skipped and counted and
+         * indistinguishable from a store outage.
+         *
+         * <p>Both belong to this rule rather than to the SDK, and both are refused under the
+         * endpoint's own name - which is also what a value that names no store falls through to when
+         * the credential rule has nothing to say about it.
+         */
+        @ParameterizedTest
+        @ValueSource(strings = {
+            "http://foo:bad",
+            "http://:",
+        })
+        void an_endpoint_naming_no_host_should_fail_startup(final String endpoint) {
+            generating.withPropertyValues("courtregister.feature.endpoint=" + endpoint,
+                    LOCAL_TEST_PROPERTY).run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.feature.endpoint (" + endpoint
+                                        + ") must be an http or https URL with a host when"
+                                        + " courtregister.generation.enabled is true");
+                    });
+        }
+
+        /**
          * <strong>[A] characterisation.</strong> The rule is about the host and says so: the
          * compose stub is reached by a name of the estate's own, and a path or a query that happens
          * to mention the store's domain is not a store. A validator that searched the whole string
