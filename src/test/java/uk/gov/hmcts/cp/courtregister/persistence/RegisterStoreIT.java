@@ -129,6 +129,18 @@ class RegisterStoreIT {
     private static final UUID SECOND_PAYLOAD_FILE_ID =
             UUID.fromString("0c6a4f18-b573-4d29-8e04-95f2a7c31b6e");
 
+    /**
+     * A day's first batch and its supplement, under identities the day-read case fixed.
+     *
+     * <p>The supplement's sorts before the base's, so a read ordered by identity alone would answer
+     * them the other way round. Every other case lets {@link #assembled} mint its own.
+     */
+    private static final UUID BASE_BATCH_ID =
+            UUID.fromString("f2b7a45c-9e10-4d83-8a62-c507b1934ade");
+
+    private static final UUID SUPPLEMENT_BATCH_ID =
+            UUID.fromString("104c8e63-27b5-49f1-a0d8-3e6b95c72f40");
+
     private static final UUID DOCUMENT_FILE_ID =
             UUID.fromString("3a7f1c92-6d84-4b05-9e73-1c2b8a4e07d5");
     private static final UUID SECOND_DOCUMENT_FILE_ID =
@@ -1251,6 +1263,70 @@ class RegisterStoreIT {
                             + "children whose register was never in question")
                     .extracting(RegisterBatch::batchId)
                     .containsExactly(monday.get());
+        }
+
+        /**
+         * The order the read answers in, which the caller that releases a day depends on.
+         *
+         * <p><strong>[A] characterisation.</strong> The statement has ordered by court centre, then
+         * supplementary index, then identity since it landed; nothing here changes it. What was
+         * missing is a case that says so, the port having promised "no particular order" while
+         * {@code GenerateRegisterCli} released the day's FAILED batches in the order this read
+         * answered them - and a key's base batch before its supplement is the order a release has to
+         * take them in, because the successor a release supersedes against has to be a later
+         * register than the one it is unstamping.
+         *
+         * <p>The two identities are fixed and the supplement's sorts <em>before</em> the base's, so
+         * the assertion is about the index rather than about the identity: an order that had lost
+         * {@code supplement_index} would answer the supplement first and could not pass by accident.
+         */
+        @Test
+        void a_keys_supplement_should_come_back_after_the_batch_it_follows() {
+            softly.assertThatCode(() -> {
+                record(seededCommand(HEARING_ONE, MONDAY_SHARED),
+                        document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                store.assemble(dayBatch(BASE_BATCH_ID, null, 0),
+                        mine(store.activeUnbatched()));
+                // Terminal, so the day's live key is free and a supplement is admitted at all;
+                // rejected rather than store-unavailable, so the first batch keeps its own rows.
+                store.markFailed(BASE_BATCH_ID, BatchFailureReason.RENDER_REQUEST_REJECTED, null,
+                        null);
+                record(seededCommand(HEARING_TWO, MONDAY_RESHARED),
+                        document(HEARING_TWO, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                store.assemble(dayBatch(SUPPLEMENT_BATCH_ID, BASE_BATCH_ID, 1),
+                        mine(store.activeUnbatched()));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchesOn(MONDAY))
+                    .as("a key's earlier batches come before its supplements, which is the order a "
+                            + "release has to take them in: the supplement holds the register the "
+                            + "base batch's row was replaced by, and releasing the supplement first "
+                            + "would ask the store to supersede the newer register against the "
+                            + "older one")
+                    .extracting(RegisterBatch::batchId, RegisterBatch::supplementIndex)
+                    .containsExactly(tuple(BASE_BATCH_ID, 0), tuple(SUPPLEMENT_BATCH_ID, 1));
+        }
+
+        /**
+         * One batch of this day at this court centre, under an identity the case chose.
+         *
+         * <p>{@link #assembled} mints its own identity, which is what every other case wants and
+         * exactly what the case above cannot have: the claim is that the index orders the answer
+         * rather than the identity, so the identities have to sort against the index.
+         *
+         * @param batchId         the identity the case fixed
+         * @param supplementOf    the batch it follows, or {@code null} on the day's first
+         * @param supplementIndex nought on the day's first, counting up on each supplement
+         * @return the batch the store is asked to write
+         */
+        private RegisterBatch dayBatch(final UUID batchId, final UUID supplementOf,
+                final int supplementIndex) {
+            return new RegisterBatch(batchId, courtCentre, null, null, MONDAY,
+                    supplementIndex == 0 ? fileName(HEARING_ONE, MONDAY) : SUPPLEMENTARY_FILE_NAME,
+                    null, null, BatchStatus.PENDING, null, null, true, null, null, null, null, null,
+                    null, 0, supplementOf, supplementIndex);
         }
     }
 

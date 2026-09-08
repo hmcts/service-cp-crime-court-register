@@ -158,9 +158,18 @@ public interface RegisterStore {
      * FAILED here would leave the second and third of those unanswerable from the same page, and the
      * day would be re-rendered against a history it could not see.
      *
+     * <p><strong>Court centre, then supplementary index, then identity.</strong> The order is part
+     * of the contract rather than an implementation's convenience, because a caller that releases
+     * the day's FAILED batches takes them in the order this answers them: a key's earlier batches
+     * come before its supplements, which is the order a release has to make - the supplement holds
+     * the register the base batch's row was replaced by, and asking for the supplement first would
+     * ask {@link #releaseFailed} to supersede the newer register against the older one, which it
+     * refuses. The identity breaks the tie the index would otherwise leave to the planner, so two
+     * runs of the same command read the day the same way.
+     *
      * @param registerDate the London register day being asked about
-     * @return every batch recorded for that day, in no particular order; empty where the day holds
-     *         none
+     * @return every batch recorded for that day, by court centre, then supplementary index, then
+     *         identity; empty where the day holds none
      */
     List<RegisterBatch> batchesOn(LocalDate registerDate);
 
