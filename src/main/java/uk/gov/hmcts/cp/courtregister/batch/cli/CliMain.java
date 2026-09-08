@@ -221,6 +221,55 @@ public class CliMain {
     }
 
     /**
+     * Runs one invocation and answers the code the process should end on, the report's own
+     * destination included.
+     *
+     * <p><strong>A report that could not be written is a command that could not finish.</strong>
+     * {@link StandardOutput} refuses to write past a line the destination would not take, because a
+     * listing cut short in silence is read as a complete one, and the answer to that is
+     * {@link #FAILED} - the code that means the command tried and could not, which is exactly what
+     * happened. The three codes keep the meanings stated above: this is not a refusal, since
+     * nothing about the invocation was declined, and it is certainly not a success. Left to reach
+     * the JVM it would have ended the process on 1, the code a runbook step reads as "declined,
+     * changed nothing, do not retry".
+     *
+     * <p><strong>And it is answered here rather than reported.</strong> The report's destination
+     * has already refused a line, so writing a failure line to it is a second write that fails the
+     * same way; what is left is the log, which in a command's JVM is stderr and is the one place a
+     * cut-short report can be said out loud (constitution Principle VI, {@code logback-cli.xml}).
+     *
+     * @param args   the command name followed by its own arguments
+     * @param output where the command's lines are written, one line per call
+     * @return the exit code the process should end on
+     */
+    public int exitCodeFor(final String[] args, final Consumer<String> output) {
+        throw new UnsupportedOperationException(
+                "a report the destination refused is not told apart from a context that would not "
+                        + "start");
+    }
+
+    /**
+     * The same answer over a registry handed in, without a context of this service's own.
+     *
+     * <p>Separate from {@link #exitCodeFor(String[], Consumer)} for the reason {@link #run} is
+     * separate from {@link #dispatch}: the thing being decided - a report that could not be written,
+     * told apart from a command that answered - is decided over a command's own report, and a case
+     * that had to start the store, the file service and the flag to reach one would be asserting
+     * the context instead.
+     *
+     * @param args     the command name followed by its own arguments
+     * @param registry the commands this invocation may reach, by the names above
+     * @param output   where the command's lines are written, one line per call
+     * @return the exit code the process should end on
+     */
+    public int exitCodeFor(final String[] args, final Map<String, Command> registry,
+            final Consumer<String> output) {
+
+        throw new UnsupportedOperationException(
+                "a report the destination refused is not told apart from a command that answered");
+    }
+
+    /**
      * Runs one invocation against a context of this service's own, and closes it either way.
      *
      * <p>Everything the deployed pod has, with {@link CliModeConfig#CLI_PROPERTY} on: the same

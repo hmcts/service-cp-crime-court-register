@@ -30,6 +30,12 @@ import org.testcontainers.utility.MountableFile;
  * the packaged artefact does with them today. It passes on introduction by construction, so its
  * commit narrative carries the observed result rather than a red assertion.
  *
+ * <p><strong>That is true of the cases it was introduced with, and not of every case since.</strong>
+ * A mistyped command name, a command's stdout carrying the report alone and a report the
+ * destination refuses were each written red against what the image actually did and are followed by
+ * their fix, in the ordinary way: what only the built image can prove is also the only place some
+ * of these defects were observable at all.
+ *
  * <p><strong>What only the image can prove.</strong> This service exposes no REST API, so support
  * regenerates a date, resends a batch's failed recipients or reads the cutover flag through
  * {@code kubectl exec ... -- ./startup.sh <command>} and through nothing else (constitution
@@ -257,6 +263,48 @@ class CliDispatchIT {
                         + "with no arguments, which is every deployed pod")
                 .doesNotContain("Running docker java jarfile")
                 .doesNotContain("Started Application");
+    }
+
+    /**
+     * The fourth thing a runbook step does, which is send the report somewhere that stops reading.
+     *
+     * <p>{@code startup.sh list-batches | head -1} is the everyday shape of it, and the descriptor
+     * a report is written to then refuses the next line. What that costs is only observable here:
+     * every JUnit suite over {@code CliMain} is handed a consumer, so the code the <em>process</em>
+     * ends on is the one thing they cannot read, and the code is the whole interface between a
+     * command and the step that ran it. It was the JVM's own 1 - an uncaught throwable out of
+     * {@code main} - which a runbook reads as the refusal it must never retry.
+     *
+     * <p>Asked as {@code > /dev/full} rather than as a pipe, because a pipe's far end has to close
+     * before the write for the failure to be certain, and ENOSPC on the first line is the same
+     * refusal with none of the timing: the command runs, its context starts, the flag is read and
+     * the one line it answers with cannot be written. {@code /dev/full} is part of the device set
+     * Docker gives every container, so this adds one exec to a stack that is already up.
+     *
+     * <p>Two claims, and the second is what the exit code cannot say on its own: the log names the
+     * report rather than a context that would not start. The context did start - the reading
+     * happened - and a diagnosis pointing at a startup that never failed is what sent the last
+     * reader of this line in the wrong direction.
+     */
+    @Test
+    @DisplayName("a report the destination refuses ends the command on 2, not on the JVM's 1")
+    void a_report_that_could_not_be_written_should_end_the_command_on_the_failure_code()
+            throws Exception {
+
+        final Container.ExecResult refused =
+                APP.execInContainer("sh", "-c", "./startup.sh check-flag > /dev/full");
+
+        assertThat(refused.getExitCode())
+                .as("2 is a command that tried and could not, which is what a report nobody could "
+                        + "write is: 1 would tell the step it had declined and changed nothing, "
+                        + "and 1 is what a stack trace out of main leaves behind")
+                .isEqualTo(2);
+        assertThat(refused.getStderr())
+                .as("said once, and about the report: the log is the only place left to say it, "
+                        + "the destination having refused a line, and the context this command ran "
+                        + "in started exactly as it does in every other case here")
+                .contains("could not write its report")
+                .doesNotContain("context would not start");
     }
 
     /**

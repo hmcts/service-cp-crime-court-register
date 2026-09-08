@@ -25,6 +25,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
  * difference between a report a runbook step can read and one it cannot, and none of them is
  * observable through the injected consumer every other suite in this package uses.
  *
+ * <p><strong>One case is no longer one of those, and it is the last.</strong> The type a refused
+ * write is wrapped in moved under the review gate - from a plain {@link UncheckedIOException} to
+ * {@link ReportNotWritten}, so that a destination which stopped taking lines is told apart from a
+ * context that would not start - and that half was driven red-first in the ordinary way. What it
+ * still says about the boundary is unchanged: the write is wrapped rather than swallowed, the cause
+ * is the {@link IOException} the destination refused with, and the line is not in the message.
+ *
  * <p><strong>The descriptor itself is not read here, and cannot be.</strong> A test that captured
  * file descriptor 1 would have to take the process's own stream over, which is the thing
  * constitution Principle VI forbids and this class was written to make unnecessary. So the stream
@@ -125,6 +132,13 @@ class StandardOutputTest {
                 // And the line itself is not in the message: a command's report is bounded, but an
                 // exception's words travel further than a terminal does.
                 .hasMessageNotContaining(FLAG_IS_ON);
+        softly.assertThat(notWritten)
+                .as("and it is this service's own type rather than any IO failure at all: "
+                        + "everything upstream of this boundary catches broadly on purpose, so a "
+                        + "destination that stopped taking lines is told apart from a context that "
+                        + "would not start and from a store that went away by being a type nothing "
+                        + "else here throws")
+                .isInstanceOf(ReportNotWritten.class);
     }
 
     /**

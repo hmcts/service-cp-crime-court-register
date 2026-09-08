@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.batch.cli;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -64,6 +65,13 @@ import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
  * of its own, so an invocation whose argument was never set threw rather than answering. Those two
  * were written red against that and are followed by the fix, in the ordinary way; everything else
  * here passed as written.
+ *
+ * <p><strong>Nor is the last group, which the review gate is the reason for.</strong> A report the
+ * destination stopped taking part-way through - {@code list-batches | head -1}, which is an
+ * everyday invocation - reached the catch {@link CliMain#dispatch} keeps for a context that would
+ * not start, so it was reported as one, to the destination that had just refused a line, and the
+ * process ended on the JVM's own 1 instead of the 2 a command that could not finish answers with.
+ * Those five cases were written red against that and are followed by the fix.
  *
  * <p><strong>The exit code is the whole interface between a command and the step that ran
  * it.</strong> 0 did it, 1 declined and changed nothing, 2 tried and could not, and the three are
@@ -196,6 +204,22 @@ class CliMainTest {
     private static List<ILoggingEvent> serviceLines(final CapturedLog log) {
         return log.events().stream()
                 .filter(event -> event.getLoggerName().startsWith(SERVICE_PACKAGE))
+                .toList();
+    }
+
+    /**
+     * The lines this service wrote at ERROR, as the events rather than as their text.
+     *
+     * <p>Read as events for the same reason {@link #serviceLines} is, and narrowed to one level
+     * because "said once" is a claim about how many times a failure was diagnosed: an assertion
+     * over every level would be counting a command's INFO lines with it.
+     *
+     * @param log the capture, taken at every level
+     * @return every ERROR event this service's own loggers produced
+     */
+    private static List<ILoggingEvent> errorLines(final CapturedLog log) {
+        return serviceLines(log).stream()
+                .filter(event -> event.getLevel() == Level.ERROR)
                 .toList();
     }
 
@@ -828,6 +852,197 @@ class CliMainTest {
                             + "above is an observation rather than a stream nothing could have "
                             + "reached")
                     .isEqualTo("flag=ON\n");
+        }
+    }
+
+    /**
+     * A destination that stopped taking lines part-way through a report.
+     *
+     * <p><strong>{@code startup.sh list-batches | head -1} is the everyday case.</strong> The
+     * descriptor the report is written to stops taking lines the moment {@code head} has had its
+     * one, and {@link StandardOutput} refuses to write past that rather than counting it and
+     * carrying on - a listing cut short in silence is read as a complete one. What is left to
+     * decide is what the process then ends on and what is said about it, and both were wrong: the
+     * refusal reached {@link CliMain#dispatch}'s catch for a context that would not start, so an
+     * operator was told {@code reason=context-unavailable} about a context that had started and run
+     * the command; the handler then wrote that report to the destination which had just refused a
+     * line, which threw again; and the process ended on the JVM's own 1 - the code this class
+     * reserves for "declined, changed nothing, do not retry" - rather than on the 2 a command that
+     * could not finish answers with.
+     *
+     * <p>So the claim is the three codes' own meanings, kept: a report that could not be written is
+     * {@link CliMain#FAILED}, it is said once through SLF4J and not to the destination that
+     * refused it, and nothing further is written there at all.
+     */
+    @Nested
+    @DisplayName("a report the destination stopped taking")
+    class AReportTheDestinationRefused {
+
+        /** How many lines the destination takes before it refuses, as {@code head -1} takes one. */
+        private static final int TAKES_ONE_LINE = 1;
+
+        /** What the boundary says a line it could not write, in this service's own words. */
+        private static final String NOT_WRITTEN =
+                "a command's report line could not be written to standard output";
+
+        /** The first line of a listing, as {@code list-batches} writes it. */
+        private static final String FIRST_LINE = "batch=" + BATCH + " state=NOTIFIED records=3";
+
+        /** The second, which is the one the destination refuses. */
+        private static final String SECOND_LINE = "batch=" + BATCH + " recipient=y***@***.uk";
+
+        /** Every line the report tried to write, the refused one included. */
+        private final List<String> attempted = new ArrayList<>();
+
+        /**
+         * The destination at the far end of {@code list-batches | head -1}: one line, then no more.
+         */
+        private final Consumer<String> stopsAfterOneLine = line -> {
+            attempted.add(line);
+            if (attempted.size() > TAKES_ONE_LINE) {
+                throw new ReportNotWritten(NOT_WRITTEN, new IOException("Broken pipe"));
+            }
+        };
+
+        /**
+         * The five names, each registered to a command that writes two lines of a report.
+         *
+         * <p>Two lines because that is the shape of every listing this image has, and because a
+         * report that failed on its first line could be mistaken for a command that had not started
+         * writing one: the failure has to arrive part-way through, with the work already done and
+         * some of the answer already on the terminal.
+         *
+         * @return the registry one invocation may reach
+         */
+        private Map<String, CliMain.Command> registryReportingTwoLines() {
+            final Map<String, CliMain.Command> registry = new LinkedHashMap<>();
+            CliMain.COMMANDS.forEach(name -> registry.put(name, args -> {
+                asked.add(name);
+                stopsAfterOneLine.accept(FIRST_LINE);
+                stopsAfterOneLine.accept(SECOND_LINE);
+                return CliMain.SUCCESS;
+            }));
+            return registry;
+        }
+
+        /**
+         * Runs one invocation over a report the destination refuses, and answers with its code.
+         *
+         * <p>The call is made inside {@code assertThatCode(...).doesNotThrowAnyException()} for the
+         * reason {@link UnknownName#dispatched} is: the exit code is the whole interface between a
+         * command and the step that ran it, so an invocation whose report could not be written is
+         * answered rather than thrown on, and one that threw is recorded as an assertion rather
+         * than ending the case.
+         *
+         * @param args the invocation, which in every case here names a command
+         * @return the exit code, or {@link #NOT_ANSWERED} where it threw instead
+         */
+        private int answered(final String... args) {
+            final AtomicInteger code = new AtomicInteger(NOT_ANSWERED);
+            softly.assertThatCode(() -> code.set(cli.exitCodeFor(args,
+                            registryReportingTwoLines(), stopsAfterOneLine)))
+                    .as("a report that could not be written is an answer this entry point has, "
+                            + "because the alternative is a stack trace out of main and the exit "
+                            + "code a JVM gives one")
+                    .doesNotThrowAnyException();
+            return code.get();
+        }
+
+        @Test
+        void a_report_that_could_not_be_written_should_end_the_command_on_the_failure_code() {
+            final int code = answered(CliMain.LIST_BATCHES);
+
+            softly.assertThat(code)
+                    .as("2, which is this class's own code for a command that tried and could not: "
+                            + "the listing was read and half of it is on the terminal, and a step "
+                            + "that saw the JVM's 1 instead would read it as the refusal it must "
+                            + "never retry")
+                    .isEqualTo(CliMain.FAILED);
+            softly.assertThat(asked)
+                    .as("and the command did run, so this is a report that failed rather than an "
+                            + "invocation that was declined before anything was read")
+                    .containsExactly(CliMain.LIST_BATCHES);
+        }
+
+        @Test
+        void nothing_further_should_be_written_to_a_destination_that_has_already_refused() {
+            answered(CliMain.LIST_BATCHES);
+
+            softly.assertThat(attempted)
+                    .as("the report's own two lines and not one write more: a failure line written "
+                            + "to the destination that had just refused one is a second write that "
+                            + "fails the same way, and the second throw is what ended the process "
+                            + "on the JVM's code instead of on this command's")
+                    .containsExactly(FIRST_LINE, SECOND_LINE);
+            softly.assertThat(attempted)
+                    .as("and no verdict was attempted there either, least of all one about a "
+                            + "context that had started and run the command")
+                    .noneMatch(line -> line.contains("outcome=failed")
+                            || line.contains("context-unavailable"));
+        }
+
+        @Test
+        void the_failure_should_be_said_once_and_not_as_a_context_that_would_not_start() {
+            try (CapturedLog log = CapturedLog.everythingAndAllOf(SERVICE_PACKAGE)) {
+                answered(CliMain.LIST_BATCHES);
+
+                softly.assertThat(errorLines(log))
+                        .as("once, and through SLF4J: the destination has refused a line, so the "
+                                + "log is the only place a cut-short report can be said out loud - "
+                                + "and a second sentence about the same failure is a second "
+                                + "diagnosis for an incident view to chase")
+                        .hasSize(1);
+                softly.assertThat(errorLines(log))
+                        .as("naming the command and the class that refused the write, which is "
+                                + "what a diagnosis needs and the whole of what it needs")
+                        .allMatch(event -> event.getFormattedMessage().contains(
+                                CliMain.LIST_BATCHES)
+                                && event.getFormattedMessage().contains(
+                                        "cause=" + IOException.class.getName()));
+                softly.assertThat(log.messages())
+                        .as("and never as a context that would not start: it had started, and the "
+                                + "command ran in it - a false diagnosis sends the person reading "
+                                + "the index at 18:30 after a startup that never failed")
+                        .noneMatch(line -> line.contains("context would not start"));
+            }
+        }
+
+        @Test
+        void a_usage_the_destination_refused_should_be_answered_the_same_way() {
+            final AtomicInteger code = new AtomicInteger(NOT_ANSWERED);
+
+            softly.assertThatCode(() -> code.set(cli.exitCodeFor(new String[] {MISTYPED},
+                            stopsAfterOneLine)))
+                    .as("the same answer where there is no registry to hand in, which is the entry "
+                            + "point a runbook step actually reaches")
+                    .doesNotThrowAnyException();
+
+            softly.assertThat(code.get())
+                    .as("the five names are a report too, and an operator who got one of them "
+                            + "before the pipe closed has not been told what this image offers: "
+                            + "2 rather than the 1 a refusal answers with, because what could not "
+                            + "be done here is the printing")
+                    .isEqualTo(CliMain.FAILED);
+            softly.assertThat(attempted)
+                    .as("and the usage stopped where the destination did, with no context having "
+                            + "been built and nothing written past the refusal")
+                    .containsExactly(USAGE, "  " + CliMain.GENERATE_REGISTER);
+        }
+
+        @Test
+        void a_report_that_was_written_should_still_be_answered_with_the_command_s_own_code() {
+            final int code = cli.exitCodeFor(new String[] {CliMain.CHECK_FLAG},
+                    registryAnswering(CliMain.REFUSED), output);
+
+            softly.assertThat(code)
+                    .as("the classification is the only thing added: a command that answered is "
+                            + "answered with its own code, and an entry point that normalised a "
+                            + "refusal into a failure would have a runbook step retrying the "
+                            + "cutover flag")
+                    .isEqualTo(CliMain.REFUSED);
+            softly.assertThat(attempted)
+                    .as("and the destination that would have refused was never written to")
+                    .isEmpty();
         }
     }
 }
