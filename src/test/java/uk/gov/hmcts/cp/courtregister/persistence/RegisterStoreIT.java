@@ -56,6 +56,7 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
+import uk.gov.hmcts.cp.courtregister.domain.ProcessedOutputClaim;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
@@ -252,6 +253,18 @@ class RegisterStoreIT {
     private static final String GENERATED = "GENERATED";
     private static final String NOTIFIED = "NOTIFIED";
     private static final String FAILED = "FAILED";
+
+    /** The state increment 001 writes an output row in before it POSTs the register. */
+    private static final String POST_PENDING = "PENDING";
+
+    /**
+     * The digest a POST row carries, which is of the bytes that were sent rather than of a document.
+     *
+     * <p>Any lower-case SHA-256 will do - {@code ProcessedOutputClaim} refuses anything else - and
+     * this one is deliberately none of the digests the recorder writes.
+     */
+    private static final String POST_DIGEST =
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
     /** The refusal every port call makes until T015 replaces it with a statement. */
     private static final String PENDING = "T015 implements the register store; this is its red run";
@@ -1921,6 +1934,70 @@ class RegisterStoreIT {
                     .containsExactly(outputIdOf(reshare).orElse(null));
         }
 
+        /**
+         * The other row of the key is 001's record of a POST, which is not a register at all.
+         *
+         * <p>Increment 001's {@code ProcessedOutputRepository} writes a PENDING, POSTED or FAILED
+         * row into this same table for every register it sends to progression, and it fills the
+         * three columns a successor search matches a key on - the hearing the request names, the
+         * court centre and register day the claim names - and a register instant with them. During a
+         * rolling deployment a pod on the previous release goes on writing them, so a key genuinely
+         * holds one beside a register this pod recorded.
+         *
+         * <p>A search that admitted every row of the key but a SUPERSEDED one takes that POST for
+         * the register that replaced this one. The register is then written SUPERSEDED against a row
+         * that is not a replacement for anything: it is neither active nor unbatched, so no later
+         * run and no {@code generate-register} reaches it again, and the day's document is lost with
+         * it. Only the three states the recorder leaves a live register in - RECORDED, GENERATED and
+         * NOTIFIED - can be a replacement, which is a closed list because
+         * {@code processed_output_status_chk} bounds the column and the other statuses in it are
+         * SUPERSEDED, which is by definition not live, and 001's own three.
+         */
+        @Test
+        void a_failure_should_give_its_register_back_though_a_post_row_shares_the_key() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            // The previous release POSTs the same hearing's register to progression: a rolling
+            // deployment has both writers live over one queue, and this is the row it leaves.
+            final DistributionCommand posting = postedToProgression(HEARING_ONE, MONDAY);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markFailed(monday.batchId(),
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(registerTimeOf(posting).orElse(null))
+                    .as("the arrangement is the one a successor search can act on: the POST row is "
+                            + "the later row of the key, so nothing but its status keeps it out")
+                    .isAfter(MONDAY_SHARED);
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the batch is finished under the bounded code the run report counts it by")
+                    .contains(new BatchOutcome(FAILED, "PAYLOAD_STORE_UNAVAILABLE", null));
+            softly.assertThat(statusOf(first))
+                    .as("the register is handed back RECORDED: a POST to progression is not a "
+                            + "register that could replace one, so there is nothing here to "
+                            + "supersede it against")
+                    .contains(RECORDED);
+            softly.assertThat(supersessionOf(first))
+                    .as("and nothing is written against it, because a supersession names the "
+                            + "register that replaced this one and no register did")
+                    .contains(new SupersessionPair(null, null));
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("the stamp is released, because a batch that never left this service holds "
+                            + "no register hostage to a document that cannot exist")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("so the day's register is the next run's to re-assemble, which is the whole "
+                            + "of what a releasing reason is for")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(first).orElse(null));
+            softly.assertThat(statusOf(posting))
+                    .as("and the POST row is left exactly as 001 wrote it")
+                    .contains(POST_PENDING);
+        }
+
         @Test
         void a_failure_after_the_render_request_should_keep_the_stamp_on_its_rows() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
@@ -2408,6 +2485,65 @@ class RegisterStoreIT {
                     .containsExactly(outputIdOf(reshare).orElse(null));
         }
 
+        /**
+         * The same POST row {@code Failure} is about, in the statement a person types.
+         *
+         * <p>Increment 001 writes a PENDING, POSTED or FAILED row into this table for every register
+         * it sends to progression, on the same three key columns and with a register instant beside
+         * them, and a rolling deployment has that writer live at the same time as this one.
+         *
+         * <p>Where the successor search admits it, the release supersedes the register against a
+         * POST and answers with nothing: the operator's command prints a day it released nothing
+         * for and exits 0, while the register the day is owed a document from has been withdrawn for
+         * good - not active, not unbatched, and reachable by no later run. Only RECORDED, GENERATED
+         * and NOTIFIED can be a replacement.
+         */
+        @Test
+        void a_release_should_give_its_register_back_though_a_post_row_shares_the_key() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand posting = postedToProgression(HEARING_ONE, MONDAY);
+            final List<RegisterRecord> released = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                // A reason that keeps the stamp, so the release is the one a person types.
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+                released.addAll(store.releaseFailed(monday.batchId()));
+            }).as(SEAM).doesNotThrowAnyException();
+
+            softly.assertThat(registerTimeOf(posting).orElse(null))
+                    .as("the arrangement is the one a successor search can act on: the POST row is "
+                            + "the later row of the key, so nothing but its status keeps it out")
+                    .isAfter(MONDAY_SHARED);
+            softly.assertThat(released)
+                    .as("the day's register is answered with, for the caller to re-assemble: a POST "
+                            + "to progression is not a register that replaced it, so there is "
+                            + "nothing here to leave it out of the answer for")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(first).orElse(null));
+            softly.assertThat(statusOf(first))
+                    .as("it is RECORDED again, which is what makes it assemblable")
+                    .contains(RECORDED);
+            softly.assertThat(supersessionOf(first))
+                    .as("and nothing is written against it, because a supersession names the "
+                            + "register that replaced this one and no register did")
+                    .contains(new SupersessionPair(null, null));
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("the stamp is gone, which is the whole of what the person asked for")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("so the next run assembles it, under a fresh batch identity")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(first).orElse(null));
+            softly.assertThat(statusOf(posting))
+                    .as("and the POST row is left exactly as 001 wrote it")
+                    .contains(POST_PENDING);
+        }
+
         @Test
         void a_failed_batchs_registers_should_be_given_back_in_the_order_the_batch_held_them() {
             final List<RegisterRecord> released = new ArrayList<>();
@@ -2843,6 +2979,48 @@ class RegisterStoreIT {
                 new RunClaim(command.source(), command.requestId(), "runner-1", UUID.randomUUID(),
                         "msg-1"));
         return command;
+    }
+
+    /**
+     * Increment 001's own row for a POST to progression, on a key this case's registers hold.
+     *
+     * <p>Written through {@link ProcessedOutputRepository} rather than as an insert of this suite's
+     * invention, so the row is exactly the shape the previous release writes - and that shape is the
+     * point: it fills the three columns a successor search matches a key on, the hearing the request
+     * names and the court centre and register day the claim names, and it carries a register
+     * instant, the instant of the claim being the nearest thing a POST has to one. What it is not is
+     * a register. During a rolling deployment a pod on the previous release goes on writing these
+     * against a schema that has already moved, so a key can hold one beside a register this pod
+     * recorded.
+     *
+     * <p>The register instant the 001 statement writes is {@code now()}, which is after every
+     * register instant this suite records; the cases that use this assert that rather than assume
+     * it, because a row that was not the later one of the key could not be a successor at all.
+     *
+     * <p>The request is seeded here rather than through {@link #seededCommand}, because the POST's
+     * write is fenced on the run claim and that helper does not hand its claim back.
+     *
+     * @param hearingId    the hearing whose register was POSTed
+     * @param registerDate the register day the POST names, which is the day the register falls on
+     * @return the command the POST row is evidence about, so a case can read the row back
+     */
+    private DistributionCommand postedToProgression(
+            final UUID hearingId, final LocalDate registerDate) {
+        final DistributionCommand posting = new DistributionCommand(
+                ProcessedLogTestSupport.SOURCE,
+                UUID.randomUUID(),
+                hearingId,
+                registerDate,
+                registerDate.atStartOfDay(LONDON).toInstant(),
+                "Hearing_Resulted");
+        final RunClaim claim = new RunClaim(posting.source(), posting.requestId(), "runner-001",
+                UUID.randomUUID(), "msg-001");
+        ProcessedLogTestSupport.repository(LEASE).insertNew(
+                posting, RequestFingerprint.of(posting), claim);
+        new ProcessedOutputRepository(ProcessedLogTestSupport.jdbcClient()).claimPending(claim,
+                new ProcessedOutputClaim(UUID.randomUUID(), courtCentre, OU_CODE, registerDate,
+                        fileName(hearingId, registerDate), POST_DIGEST, Map.of()));
+        return posting;
     }
 
     /**
@@ -3475,6 +3653,26 @@ class RegisterStoreIT {
                 .param("source", command.source())
                 .param("requestId", command.requestId())
                 .query(String.class)
+                .optional();
+    }
+
+    /**
+     * The register instant a row carries, read back out of the column.
+     *
+     * <p>So that a case saying one row of a key is later than another says it of the column the
+     * successor search reads, rather than of the fixture it hoped had written one.
+     */
+    private static Optional<Instant> registerTimeOf(final DistributionCommand command) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT register_time
+                          FROM processed_output
+                         WHERE source = :source AND request_id = :requestId
+                        """)
+                .param("source", command.source())
+                .param("requestId", command.requestId())
+                .query((rs, rowNumber) ->
+                        instant(rs.getObject("register_time", OffsetDateTime.class)))
                 .optional();
     }
 
