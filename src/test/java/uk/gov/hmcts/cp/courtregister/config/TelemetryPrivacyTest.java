@@ -30,6 +30,8 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -532,17 +534,33 @@ class TelemetryPrivacyTest {
     @DisplayName("the shipped logging configuration")
     class ShippedConfiguration {
 
-        @Test
+        /**
+         * Both shipped configurations, because there are two and they are read by one index.
+         *
+         * <p>{@code logback.xml} is the pod's. {@code logback-cli.xml} is the one
+         * {@code CliMain.dispatch} starts a command's JVM under, and it differs from the pod's in
+         * one line - the appender's target, so that a command's report has stdout to itself. Every
+         * claim above is about what reaches a log index, and a command's lines reach the same one,
+         * so a second configuration that dropped the MDC or lowered a level would be outside a rule
+         * that named only the first file.
+         */
+        @ParameterizedTest
+        @ValueSource(strings = {"logback.xml", "logback-cli.xml"})
         @DisplayName("emits the MDC, without which the correlation fields are thrown away")
-        void should_ship_a_logging_configuration_that_carries_the_correlation_fields()
-                throws Exception {
+        void should_ship_a_logging_configuration_that_carries_the_correlation_fields(
+                final String configuration) throws Exception {
             final String logback = Files.readString(
-                    Path.of("src", "main", "resources", "logback.xml"));
+                    Path.of("src", "main", "resources", configuration));
 
             assertThat(logback)
                     .as("without the MDC provider the identifiers are put in place and then thrown "
                             + "away, and every line above becomes uncorrelated")
                     .contains("<mdc/>");
+            assertThat(logback)
+                    .as("and a level below INFO here is how the whole-payload rules above stop "
+                            + "being true, whichever of the two a JVM starts under")
+                    .doesNotContain("DEBUG")
+                    .doesNotContain("TRACE");
         }
 
         @Test

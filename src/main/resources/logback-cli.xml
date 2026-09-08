@@ -1,0 +1,45 @@
+<configuration>
+    <!--
+      The application's own configuration with one thing changed: the appender's target.
+
+      A command's stdout is its report. It is what a runbook step greps, what `diff` compares
+      between two runs of `list-batches`, and what an operator pastes into a ticket, so the pod's
+      log cannot share the descriptor with it - a banner and nine INFO lines in front of `flag=ON`
+      are lines an operator has to know to skip, and a full stack trace out of a context that would
+      not start is the answer to a question nobody asked. The log itself is not turned off: it is
+      the only record of why a context refused to start and of which token a parser could not read,
+      so it goes to stderr, where `docker/startup.sh` already writes its own one line.
+
+      Selected by `CliMain.dispatch` through `logging.config`, so it applies to the JVM one command
+      runs in and to nothing else: a deployed pod is unchanged and keeps writing its JSON stream to
+      stdout, where the estate's collector reads it.
+
+      The encoder is `logback.xml`'s, field for field. A command's lines are read by the same eyes
+      and the same index as a pod's, and a second format would make one of the two unreadable.
+    -->
+    <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+            <providers>
+                <timestamp>
+                    <fieldName>timestamp</fieldName>
+                    <pattern>yyyy-MM-dd' 'HH:mm:ss.SSS</pattern>
+                </timestamp>
+                <!-- Lets keep the message to the left so its easier to find without scrolling -->
+                <message/>
+                <loggerName/>
+                <threadName/>
+                <logLevel/>
+                <!-- MDC after the fixed columns so timestamp leads every line in a terminal -->
+                <mdc/>
+                <pattern>
+                    <pattern>{"exception": "%xException{full}"}</pattern>
+                </pattern>
+            </providers>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="JSON"/>
+    </root>
+</configuration>

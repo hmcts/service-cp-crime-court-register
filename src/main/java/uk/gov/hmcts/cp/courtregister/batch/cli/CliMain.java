@@ -9,6 +9,7 @@ import java.util.function.IntSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
+import org.springframework.boot.Banner;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -61,7 +62,11 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * line-oriented and stable, and carries bounded codes, counts and identifiers only: no defendant,
  * no register content, and recipient addresses masked wherever a command has cause to mention one
  * (constitution Principle VII). The stream is handed in rather than reached for, so a test reads
- * what an operator would see.
+ * what an operator would see - and stdout carries the report and nothing else, because a command's
+ * JVM starts with no banner and with its log stream on stderr
+ * ({@code logback-cli.xml}, selected by {@link #dispatch}). Without that split a reading would
+ * arrive behind nine lines of banner and every INFO line of a context start, and two runs of
+ * {@code list-batches} could not be compared by {@code diff} at all.
  */
 public class CliMain {
 
@@ -130,6 +135,23 @@ public class CliMain {
      */
     private static final String CLI_MODE = "--" + CliModeConfig.CLI_PROPERTY + "=true";
 
+    /**
+     * The log configuration a command's JVM starts under, which is the pod's with one target
+     * changed.
+     *
+     * <p>Stdout belongs to the command's report: a runbook step greps it, {@code diff} compares two
+     * runs of a listing by it, and an operator pastes it into a ticket. The shipped
+     * {@code logback.xml} appends to stdout too, so without this a reading is preceded by a banner
+     * and every INFO line of a context start, and a context that will not start answers with a
+     * stack trace rather than with the bounded line below. This sends that stream to stderr, where
+     * {@code docker/startup.sh} already writes its own one line, and leaves a deployed pod's
+     * logging exactly as it is.
+     *
+     * <p>Passed as a command-line property for the same reason {@link #CLI_MODE} is: it has to win
+     * over anything the deployment set.
+     */
+    private static final String CLI_LOGGING = "--logging.config=classpath:logback-cli.xml";
+
     /** What a command reports when this context could not be built at all. */
     private static final String NO_CONTEXT = "context-unavailable";
 
@@ -192,7 +214,9 @@ public class CliMain {
      */
     // PMD.AvoidCatchingGenericException: a context that will not start throws whatever the bean
     // that refused threw, and every one of them means the same thing here - this command could not
-    // be run - so the operator is told that rather than shown a stack trace on their terminal.
+    // be run - so the report an operator's stdout carries is that one bounded line. The throwable
+    // is not swallowed: it goes to the log, which in a command's JVM is stderr, so a runbook step
+    // that reads stdout is unaffected and the person diagnosing it still has the whole cause.
     @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
     public int dispatch(final String[] args, final Consumer<String> output) {
         final String name = args == null || args.length == 0 ? null : args[0];
@@ -206,7 +230,12 @@ public class CliMain {
             return REFUSED;
         }
         try (ConfigurableApplicationContext context = new SpringApplicationBuilder(
-                Application.class).web(WebApplicationType.NONE).run(CLI_MODE)) {
+                Application.class)
+                .web(WebApplicationType.NONE)
+                // The banner is nine lines of stdout in front of the report, and a command is
+                // not a pod anybody is watching start.
+                .bannerMode(Banner.Mode.OFF)
+                .run(CLI_MODE, CLI_LOGGING)) {
             return run(args, registryOf(context, output), output);
         } catch (RuntimeException notStarted) {
             LOG.error("The {} command could not be run because this service's own context would "
@@ -310,8 +339,10 @@ public class CliMain {
      * A refusal over arguments the parser itself could not read.
      *
      * <p>Separate from {@link #refusal} only in that the parser's own refusal is written to the log
-     * with it: what an operator typed is not the terminal's business twice over, and the throwable
-     * is the only record of which token could not be read.
+     * with it: what an operator typed is not the report's business twice over, and the throwable is
+     * the only record of which token could not be read. The token is inside that throwable's own
+     * message, so the log is where it stays - stderr in a command's JVM - rather than being printed
+     * back onto the stream the refusal and the usage line are read from.
      *
      * @param command   the command that declined, by its own name
      * @param usage     what it takes, printed under the refusal
