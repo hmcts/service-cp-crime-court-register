@@ -551,6 +551,20 @@ public class JdbcRegisterStore implements RegisterStore {
      * write - taking this whole statement, and with it the failure mark, down with it. The identity
      * stays as the last tie-break, for two rows the database clock could not separate.
      *
+     * <p><strong>And only a register may be that successor at all.</strong> Since V2 this table is
+     * also increment 001's submission log, and {@link ProcessedOutputRepository} writes a row for
+     * every register POSTed to progression on these same three key columns, with the instant of the
+     * claim in {@code register_time}. That row is the record of a POST rather than a register that
+     * could replace one, and a rolling deployment has the writer of it live against a schema that
+     * has already moved. So the predicate names the states the recorder leaves a live register in -
+     * RECORDED, GENERATED and NOTIFIED - rather than excluding the ones it does not: a search that
+     * admitted every row of the key but a SUPERSEDED one would write this register SUPERSEDED
+     * against a POST, leaving it neither active nor unbatched and reachable by no later run and no
+     * command, with nothing to say the day had lost its document. The three are the whole of the
+     * live half, and closed rather than open-ended: {@code processed_output_status_chk} bounds the
+     * column at seven statuses, this store writes four of them and SUPERSEDED is the one of those
+     * four that is by definition not live, and PENDING, POSTED and FAILED are 001's.
+     *
      * <p>{@code completed_by} is written here for the same reason it is written by statement 6, and
      * it is null for most of these endings: only a {@code generation-failed} event and a reconciled
      * query are somebody else's answer about the render. The other four are this service's own
@@ -578,7 +592,7 @@ public class JdbcRegisterStore implements RegisterStore {
                            AND successor.register_date = recorded.register_date
                            AND successor.output_id <> recorded.output_id
                            AND successor.superseded_at IS NULL
-                           AND successor.status <> 'SUPERSEDED'
+                           AND successor.status IN ('RECORDED', 'GENERATED', 'NOTIFIED')
                            AND (successor.register_time, successor.created_at,
                                 successor.output_id)
                                > (recorded.register_time, recorded.created_at,
@@ -646,11 +660,25 @@ public class JdbcRegisterStore implements RegisterStore {
      * satisfied rather than defended - and the final {@code SELECT} answers with the rows that are
      * still this day's to render.
      *
-     * <p>The successor is a <strong>later</strong> row of the key that is unsuperseded and not
-     * itself SUPERSEDED, whatever batch it has reached: what makes the released row unassemblable is
-     * that a register shared after it holds the key, and the newest of those is the one named as the
-     * replacement. {@code superseded_by} therefore names a register rather than being left null,
-     * which is what tells this apart from a rollback's supersession (statement 12).
+     * <p>The successor is a <strong>later</strong> register of the key that is unsuperseded,
+     * whatever batch it has reached: what makes the released row unassemblable is that a register
+     * shared after it holds the key, and the newest of those is the one named as the replacement.
+     * {@code superseded_by} therefore names a register rather than being left null, which is what
+     * tells this apart from a rollback's supersession (statement 12).
+     *
+     * <p><strong>A register, which is narrower than a row.</strong> Since V2 this table is also
+     * increment 001's submission log, and {@link ProcessedOutputRepository} writes a row for every
+     * register POSTed to progression on these same three key columns, with the instant of the claim
+     * in {@code register_time}; a rolling deployment has that writer live against a schema that has
+     * already moved. So the predicate names the states the recorder leaves a live register in -
+     * RECORDED, GENERATED and NOTIFIED - rather than excluding the ones it does not: a search that
+     * admitted every row of the key but a SUPERSEDED one would supersede this register against a
+     * POST, leave it out of the answer, and hand the operator a day it released nothing for while
+     * the register that day is owed a document from is reachable by no later run. The three are the
+     * whole of the live half, and closed rather than open-ended:
+     * {@code processed_output_status_chk} bounds the column at seven statuses, this store writes
+     * four of them and SUPERSEDED is the one of those four that is by definition not live, and
+     * PENDING, POSTED and FAILED are 001's.
      *
      * <p><strong>Later, because the key can hold the pair either way round.</strong> A first batch
      * that failed under one of the four reasons that keep the stamp, or one that reached NOTIFIED,
@@ -683,7 +711,7 @@ public class JdbcRegisterStore implements RegisterStore {
                            AND successor.register_date = recorded.register_date
                            AND successor.output_id <> recorded.output_id
                            AND successor.superseded_at IS NULL
-                           AND successor.status <> 'SUPERSEDED'
+                           AND successor.status IN ('RECORDED', 'GENERATED', 'NOTIFIED')
                            AND (successor.register_time, successor.created_at,
                                 successor.output_id)
                                > (recorded.register_time, recorded.created_at,

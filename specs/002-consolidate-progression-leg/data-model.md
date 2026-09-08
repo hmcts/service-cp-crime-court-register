@@ -50,11 +50,14 @@ processed_output (hearing_id)`; and V3's `idx_output_active_register_key` below.
 Invariants (asserted by `RegisterStoreIT`):
 - At most one **active** row (RECORDED, unsuperseded) per `(hearing_id, court_centre_id, register_date)`.
 - A row with a `batch_id` is never superseded and never edited except by `mark*` for its own batch.
-- `superseded_by` points to a row with the same `hearing_id` and batch key that is **later in the
-  order the table persists**, which is `(register_time, created_at, output_id)`: the register instant
-  the estate shared, then the instant this database took the row, then the identity as the last
-  deterministic tie-break. The instant alone is not enough - the estate can share one hearing twice
-  at one instant, and the recorder settles that pair by arrival (statement 1's `<=`).
+- `superseded_by` points to a **register** with the same `hearing_id` and batch key that is **later
+  in the order the table persists**, which is `(register_time, created_at, output_id)`: the register
+  instant the estate shared, then the instant this database took the row, then the identity as the
+  last deterministic tie-break. The instant alone is not enough - the estate can share one hearing
+  twice at one instant, and the recorder settles that pair by arrival (statement 1's `<=`). A
+  register and not merely a row of the key: 001's PENDING/POSTED/FAILED rows share the key and carry
+  a `register_time` of their own, and a supersession against one of those names a replacement that
+  does not exist (statements 9 and 9a).
 
 **Enforcement of "at most one active row" (V3).** The recorder keeps the invariant by reading the
 hearing's active row and superseding what it finds, and a read is what two re-shares of one hearing
@@ -116,6 +119,21 @@ asks for these, so they are recorded here with the invariants they keep; three r
   and leaves the batch calling itself in flight under a run that had already given up on it. Both
   directions of the equal-instant pair are pinned per statement, in `RegisterStoreIT`'s `Failure` and
   `Releasing` (`..._an_equal_time_re_share_that_sorts_first` / `..._that_sorts_last`).
+  **And the successor has to be a register, which is fewer rows than the key holds.** This table is
+  also 001's submission log: `ProcessedOutputRepository` writes a PENDING, POSTED or FAILED row for
+  every register POSTed to progression, on the same `(hearing_id, court_centre_id, register_date)`
+  and with the instant of the claim in `register_time`, and a rolling deployment has that writer
+  live against a schema that has already moved. Both statements therefore name the states a live
+  register is in - **`status IN ('RECORDED', 'GENERATED', 'NOTIFIED')`** - rather than excluding the
+  ones it is not (`<> 'SUPERSEDED'`, which is what they said and what admitted 001's three): the
+  list is closed by `processed_output_status_chk`, which bounds the column at seven, of which the
+  recorder writes four and SUPERSEDED is the one of those that is by definition not live. Against a
+  POST row the register is written SUPERSEDED, unstamped, left out of the answer and reachable by no
+  later run and no command - neither statement collides with `idx_output_active_register_key` on the
+  way, a POST row being outside that partial index, so the day's document is lost silently and
+  `generate-register` prints a day it released nothing for and exits 0. Pinned per statement by
+  `Failure`/`Releasing.a_..._should_give_its_register_back_though_a_post_row_shares_the_key`, whose
+  POST row is written through `claimPending` itself rather than as a shape the suite invented.
 - Statement **11**, `recordedWhileOff()` - the registers automatic batching passed over. Statement
   2's predicate with its fourth test turned round, and deliberately one predicate with it: RECORDED,
   unsuperseded and unbatched in both, `recorded_flag_state <> 'ON'` the only difference (research

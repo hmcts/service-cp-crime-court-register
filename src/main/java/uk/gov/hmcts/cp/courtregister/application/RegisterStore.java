@@ -262,6 +262,13 @@ public interface RegisterStore {
      * sharpened here by the release being a branch of the statement that marks the batch, so a
      * refusal takes the mark with it.
      *
+     * <p><strong>And only a register, which the store holds fewer of than it holds rows.</strong>
+     * The same table carries increment 001's record of what was POSTed to progression, on the same
+     * key and with a moment of its own beside it, and one of those is not a register that could
+     * replace anything. Which rows may be a replacement is stated as the states a live register is
+     * in - recorded, generated or notified - rather than as the states it is not, for the reason
+     * {@link #releaseFailed} gives.
+     *
      * @param batchId     the batch that failed
      * @param reason      the bounded reason it is failed under
      * @param sdgReason   systemdocgenerator's own words, for support only, or {@code null} where it
@@ -323,6 +330,19 @@ public interface RegisterStore {
      * unstamps the older row into a second active register for the key and loses the whole write to
      * the index. The identity is the last tie-break and nothing more, for two rows the store's clock
      * could not separate.
+     *
+     * <p><strong>And it has to be a register, which is narrower than a row of the key.</strong> The
+     * store's table is also increment 001's record of what was POSTed to progression: one such row
+     * exists for every register that leg sent, it carries the same hearing, court centre and
+     * register day, and it carries a moment of its own that can outrank a register's. It is
+     * evidence about a POST and not a register that could replace one. Which rows may be a
+     * replacement is therefore stated as the states a live register is in - recorded, generated or
+     * notified - and not as the states it is not: a rule written the second way admits whatever the
+     * next release adds to the column, and here that was the whole of 001's submission log. Where a
+     * POST row is taken for the successor the register is withdrawn against it, this call answers
+     * with nothing, and the operator is told the day released nothing while the register it is owed
+     * a document from is reachable by no later run - the loss this ordering rule exists to prevent,
+     * arrived at from a row that was never a register.
      *
      * @param batchId the FAILED batch whose registers are to be released
      * @return the registers whose stamp was cleared and that are still this day's to render, in the
