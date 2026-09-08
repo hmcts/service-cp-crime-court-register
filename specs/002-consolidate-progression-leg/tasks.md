@@ -64,7 +64,7 @@ The accepted types are `feat`, `fix`, `chore`, `docs`, `test`, `refactor`, `buil
 (`config` is not one of them; a configuration change is a `chore` or a `build`).
 **Every task that lands a P-fix flips that row of `doc/DEFECT-FIXES.md` (status → FIXED, pinning
 test confirmed) in the same commit.** Every phase ends with a `./gradlew build` that is green and a
-Codex review (new session) whose findings are fixed before the next phase starts. From Phase 3 on,
+review gate (new session) whose findings are fixed before the next phase starts. From Phase 3 on,
 review-gate fixes also land as a red test commit followed by an implementation commit; no further
 exceptions of this kind are pre-approved. **Never two committing agents at once.**
 
@@ -136,7 +136,8 @@ exceptions of this kind are pre-approved. **Never two committing agents at once.
       plan's test matrix; P3 and P4 carry the sign-off-before-cutover marker. Update the register header
       counts.
 
-**Checkpoint**: build green, compose up, goldens present, register carries the P rows. Codex review 1.
+**Checkpoint**: build green, compose up, goldens present, register carries the P rows.
+Review gate 1.
 
 **Checkpoint note - T005 closed (2026-09-07)**: T005 is **done** and its box is ticked. The check
 was run read-only against **SIT** rather than an STE stack, which is the one departure from the task
@@ -242,7 +243,7 @@ two days:
       Landed untested; `adapter/stub/StubGenerationAdaptersTest` now pins all four stubs, the
       per-mode selection and the ON-by-default answer as an [A] characterisation.
 
-**Checkpoint**: `./gradlew build` green; V2 applies on a fresh and on a V1 database. Codex review 2.
+**Checkpoint**: `./gradlew build` green; V2 applies on a fresh and on a V1 database. review gate 2.
 
 **Approved TDD exceptions (Phase 2)**. Principle II is non-negotiable and these are recorded, not
 excused: the pieces of behaviour listed below were pinned after the code, or in the same commit as
@@ -329,7 +330,7 @@ re-share supersedes; schema-invalid fails SCHEMA_INVALID with no row.
       progression WireMock; re-share ⇒ supersession; schema-invalid ⇒ dead-letter, no row. Record the
       first observed result.
 
-**Checkpoint**: US1 independently demonstrable via quickstart step 1. Codex review 3.
+**Checkpoint**: US1 independently demonstrable via quickstart step 1. review gate 3.
 
 ---
 
@@ -365,8 +366,8 @@ CLI refuses without `--ignore-flag`.
 - [x] T030 [US4] `batch/FeatureFlagGate` + `inbound` flag-state attachment (`RecordedFlagState` on the
       command context, stamped by `RegisterStore.record`). Green: T027, T028.
 
-**Checkpoint**: `check-flag` semantics proven at unit level; wiring to the job lands in Phase 5. Codex
-review 4 (folded into review 5 if Phase 5 follows immediately).
+**Checkpoint**: `check-flag` semantics proven at unit level; wiring to the job lands in Phase 5.
+Review gate 4 (folded into gate 5 if Phase 5 follows immediately).
 
 ---
 
@@ -467,7 +468,7 @@ GENERATED / FAILED with reason; grace period → reconciler.
       seeded, because the shared stack holds other suites' active registers and a night is entitled to
       batch them. The green run of both suites is recorded in `f562e52`.)
 
-**Checkpoint**: batches render end to end against stubs; quickstart steps 2–3 work. Codex review 5.
+**Checkpoint**: batches render end to end against stubs; quickstart steps 2–3 work. review gate 5.
 
 ### Approved TDD exceptions (Phase 5)
 
@@ -555,7 +556,7 @@ PARTIALLY_NOTIFIED; resend ⇒ NOTIFIED.
 
 **Checkpoint**: the whole downstream leg works against stubs; seven P rows FIXED (P1, P2, P3, P4,
 P5, P9 and the appended P10, as `doc/DEFECT-FIXES.md` counts them; the phase was planned as six,
-before P10 was appended under review). Codex review 6.
+before P10 was appended under review). Review gate 6.
 
 ### Approved TDD exceptions (Phase 6)
 
@@ -563,7 +564,7 @@ Three. They are recorded here rather than argued for in a commit body, which is 
 them was argued for until this entry existed. Approver: **design owner, 2026-09-07**. Anything else
 in Phase 6 that arrived test-after is a defect, not a precedent.
 
-This block said "one" until the first Codex review of Phase 6 found the second, and "two" until the
+This block said "one" until the first review gate of Phase 6 found the second, and "two" until the
 second review found the third, so the claim of completeness it made was wrong for as long as each of
 those stood: an exception block is only worth reading if it is exhaustive, and the entries below were
 missing from it rather than judged and allowed.
@@ -740,8 +741,9 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       the other way round had the current register written SUPERSEDED against the one it replaced
       and dropped from the answer, so no run and no command reached it again. `fdaf331` adds the
       case that pins the order `batchesOn` answers a day in, exception 6 below.
-      **The Codex gate found the same two statements defective a third time, and two more defects in
-      the commands' own code**, each a red/green pair. `1609e80` / `3fae1a2` ranks a key's registers
+      **The phase gate found the same two statements defective a third and a fourth time, and three
+      more defects in the commands' own code**, each a red/green pair. `1609e80` / `3fae1a2` ranks a
+      key's registers
       by `(register_time, created_at, output_id)` - predicate and ORDER BY, in `markFailed`'s
       `stamped` CTE and in RELEASE_FAILED - so an equal-instant register that arrived later is the
       successor whatever its identity sorts like, which is the rule statement 1's `incumbent` `<=`
@@ -777,7 +779,32 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       as it now stands. And `07e325b` / `baa0c32` puts the report's destination behind
       `batch/cli/StandardOutput`, a UTF-8 writer over `java.io.FileDescriptor.out` flushed per line,
       so no compiled source in the service names a process stream while the report still reaches the
-      descriptor a runbook greps - exception 9 below.)
+      descriptor a runbook greps - exception 9 below.
+      **The gate's re-review found the successor search too wide as well as wrongly ordered**, and
+      `605e6a2` / `382629b` closes it: both searches admitted any row that was not SUPERSEDED, which
+      includes increment 001's own PENDING, POSTED and FAILED records of a POST to progression, so a
+      POST row sharing the key could be written into `superseded_by` as the register that replaced a
+      released one and the day's register was answered with nothing to re-assemble. Silently, in
+      both statements: a POST row is outside `idx_output_active_register_key`, so nothing refused
+      the write. They now name the states this store leaves a live register in,
+      `status IN ('RECORDED', 'GENERATED', 'NOTIFIED')`, a list closed by
+      `processed_output_status_chk` and by which statements write which state. Red at `605e6a2`
+      against a real Postgres ("67 tests completed, 2 failed", among them "Expecting actual:
+      Optional[SupersessionPair[supersededAt=2026-09-08T09:47:56.378295Z, supersededBy=
+      a0288f7e-66c2-4501-aed1-66369726b63c]] to contain: SupersessionPair[supersededAt=null,
+      supersededBy=null]"), green at `382629b` (RegisterStoreIT classes=14 tests=67,
+      RegisterBatchRepositoryIT classes=8 tests=34, 0 failures each; whole suite classes=510
+      tests=3153 failures=0 errors=0), with the rule in the port javadoc for both methods and in
+      data-model.md, whose `superseded_by` invariant had described any row on the key.
+      **And a report nobody could write was being reported as a context that would not start**:
+      `19e52ff` / `b390eb6` gives the boundary's refusal its own type, `ReportNotWritten`, which
+      `dispatch` lets past the catch that means the context could not be built, so a broken pipe
+      (`startup.sh list-batches | head -1`, the everyday case) is answered on the failure code with
+      one log line and no second write to the destination that just refused one - where before it
+      was `reason=context-unavailable`, a throw inside the handler and the JVM's own exit 1 in place
+      of the 2 the contract promises. Red at `19e52ff` ("40 tests completed, 6 failed", among them
+      "expected: 2 but was: -1"), green at `b390eb6`, and `e2e/CliDispatchIT` proves the code
+      through the built image against `/dev/full` in 35 s.)
 - [x] T066 [US5] `docker/startup.sh` dispatch: a recognised first argument runs `CliMain` with the
       remaining args; otherwise unchanged `exec java -jar`. Green: T064; `scripts/container-smoke.sh`
       gains `startup.sh check-flag` (exit 0 against the compose WireMock).
@@ -815,7 +842,11 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       quickstart's generation-enabled `bootRun` block, which could never have started as written -
       the `workload-identity` default with none of the three projected variables present.)
 - [x] T067 [A] [US5] `CliDispatchIT` (container) - `generate-register --help` and `check-flag` exit 0
-      inside the built image. Record. (**first observed run: GREEN**, both cases, at `84ac9cc`:
+      inside the built image. Record. (**The two introduction cases are the [A] ones; the three
+      added later were each driven from a failure first** - the mistyped name (`7e282ca`), stdout
+      carrying the report alone (`fe4750d`) and, at the phase gate, the code a report nobody could
+      write ends on (`19e52ff`, exit 1 rather than 2 through the built image against `/dev/full`).
+      **first observed run: GREEN**, both cases, at `84ac9cc`:
       "check-flag reads the one lever through the deployed reader and exits 0 PASSED" and
       "generate-register --help prints what the command takes and exits 0 PASSED", BUILD SUCCESSFUL
       in 28s, over an image Testcontainers builds from the repo's own Dockerfile and starts with no
@@ -898,19 +929,26 @@ lines above and in the exceptions block below rather than here.
   (`7e282ca` / `674753b`), the artefact the image is built from made unambiguous (`b544003`), and a
   command's report given stdout to itself (`fe4750d` / `294d93e`), with `58769d2` and `e2ee872`
   beside them; `88ec762` is where this record was brought level with the two rounds.
-- **The Codex gate**, `1609e80` to `baa0c32`, 8 commits, four red/green pairs: the successor's
-  ordering rule on both release statements (`1609e80` / `3fae1a2`, T065), an operator's own typing
-  swept out of a command's log (`9e02bd7` / `c0bf9bb`, T065), the flag store's endpoint read by
-  parsing rather than by its shape (`35d3277` / `5bf982f`, outside Phase 7's own tasks) and the
-  report's destination behind one boundary (`07e325b` / `baa0c32`, T065). Two exceptions come with
-  them, 8 and 9 below.
+- **The phase gate**, `1609e80` to `b390eb6`, 13 commits: five red/green pairs, one
+  refactor/characterisation pair and one documentation commit. The pairs are the successor's
+  ordering rule over `(register_time, created_at, output_id)` on both release statements
+  (`1609e80` / `3fae1a2`, T065), an operator's own typing swept out of a command's log
+  (`9e02bd7` / `c0bf9bb`, T065), the flag store's endpoint read by parsing rather than by its shape
+  (`35d3277` / `5bf982f`, outside Phase 7's own tasks), only a register admitted as the register
+  that replaced one, where 001's POST rows on the same key had been (`605e6a2` / `382629b`, T065),
+  and a report the destination refused told apart from a context that would not start
+  (`19e52ff` / `b390eb6`, T065 and T067). The sixth is `07e325b` / `baa0c32`, the report's
+  destination behind one boundary, which is an extraction pinned before and after rather than
+  driven red and is exception 9 below; `f199fd1` is where this record was brought level with the
+  gate's first eight commits. Two exceptions come with them, 8 and 9 below.
 
 ### Approved TDD exceptions (Phase 7)
 
 Five approved, and four more recorded below awaiting approval - 6 and 7 written down at review
-round 2, 8 and 9 at the Codex gate. They are recorded here rather than argued for in a commit body.
-Approver for 1 to 5: **design owner, 2026-09-07**; 6 to 9 have not been put to the design owner yet,
-and each says below what is being asked of them and what happens if approval is withheld. Anything
+round 2, 8 and 9 at the phase gate. They are recorded here rather than argued for in a commit body.
+Approver for 1 to 5: **design owner, 2026-09-07**. 6 to 9 **have been put to the design owner and
+no answer has come yet**, so the phase gate is not clean while they stand; each says below what is
+being asked and what happens if approval is withheld. Anything
 else in Phase 7 that arrived test-after is a defect, not a precedent.
 
 Two things in the phase were judged against this list and are deliberately not on it. `c3d8ff7`
@@ -1080,7 +1118,7 @@ its observed run and its two reverted mutations are recorded in its tick line ab
      lower-cased value, unconditionally on the master switch - where one canonical endpoint had
      stood for all of it. Green on introduction, 128 tests 0 failures, with four mutations quoted in
      its body. The `REAL_FLAG_STORE` pattern it characterised no longer exists: `5bf982f` (the
-     Codex gate) replaced it with a `java.net.URI` parse and `namesARealFlagStore`, which keeps the
+     phase gate) replaced it with a `java.net.URI` parse and `namesARealFlagStore`, which keeps the
      authority-only, normalised, unconditional reading those cases state and adds the absolute-DNS
      and upper-case spellings to them.
    All three are the shape the Phase 3, 5 and 6 blocks record for the same thing: behaviour that
@@ -1111,7 +1149,7 @@ its observed run and its two reverted mutations are recorded in its tick line ab
    fails against a `build/libs` holding two jars - the run quoted above, landed as a test commit -
    with `packagedJar`'s check and the script's clearing step following it.
    **Awaiting approval: recorded 2026-09-08.**
-8. **Two mirror [A] characterisations inside `1609e80`, from the Codex gate.** That commit records a
+8. **Two mirror [A] characterisations inside `1609e80`, from the phase gate.** That commit records a
    red run - two of its four cases fail against both release statements as they stood - and the two
    that do not are the same arrangements with the two identities the other way round:
    `Failure.a_failure_should_supersede_against_an_equal_time_re_share_that_sorts_last` and
@@ -1178,7 +1216,7 @@ it**: `batchesOn`, `releaseFailed`, `recordedWhileOff`, `supersedeSharedBefore` 
 `findByRegisterDate` were left as seams instead of landing untested, and each got its integration
 red run against a real Postgres (`RegisterStoreIT`, `RegisterBatchRepositoryIT`, `903d33b`) before
 `e43cca3` implemented it - and both statements that were later found defective were re-driven the
-same way, `ba7670d` / `6fb6fb3`, `8745144` / `7245d9c`, `ce76e21` / `6c8334a` and, at the Codex
+same way, `ba7670d` / `6fb6fb3`, `8745144` / `7245d9c`, `ce76e21` / `6c8334a` and, at the phase
 gate, `1609e80` / `3fae1a2`.
 
 **Review 8's other fixes are red/green pairs and are recorded on the tick lines they belong to**,
@@ -1190,7 +1228,7 @@ can be built from, under the setting's own name rather than as an Azure `Illegal
 during refresh. Four documentation-only corrections landed with them (`58769d2`, `e2ee872`,
 `fdaf331`'s port contract, and this file), each named in its own commit body.
 
-**The Codex gate's fixes are recorded the same way**: three of its four pairs on the tick lines
+**The phase gate's fixes are recorded the same way**: three of its four pairs on the tick lines
 above - the successor's ordering rule and the two changes to the commands' own code, all three
 T065's - and the fourth outside Phase 7's own tasks, as `507263d` / `c22509c` was.
 `35d3277` / `5bf982f` replaces both endpoint patterns in `config/PropertiesValidator` with a
@@ -1229,7 +1267,7 @@ exist; every requirement they carried does, and the endpoint refusal's wording c
       the `RunReport` fields; gauges published; documented in the metrics section of the Confluence
       page (note for the page owner in the PR description).
 
-**Checkpoint**: Codex review 8.
+**Checkpoint**: review gate 8.
 
 ---
 
@@ -1246,7 +1284,7 @@ exist; every requirement they carried does, and the endpoint refusal's wording c
 - [ ] T076 Spec checklists: `checklists/requirements.md` re-validated against the delivered behaviour;
       add `checklists/consolidation-audit.md` recording T069's result and the goldens' provenance.
 - [ ] T077 [A] Final `./gradlew build` (PMD, Checkstyle 0 warnings, JaCoCo gate) green on the branch;
-      Codex review 9 (whole increment) PASS; report token use per phase.
+      review gate 9 (whole increment) PASS; report token use per phase.
 
 ---
 
