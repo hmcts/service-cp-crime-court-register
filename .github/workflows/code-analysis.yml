@@ -15,31 +15,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: pmd/pmd-github-action@d9c1f3c5940cbf5923f1354e83fa858b4496ebaa # v2
-        id: pmd
-        continue-on-error: true
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
         with:
-          rulesets: '.github/pmd-ruleset.xml'
-          sourcePath: 'src/main/java'
-          analyzeModifiedFilesOnly: false
-          # Pinned to the same PMD the Gradle build runs (gradle/pmd.gradle) so the two
-          # analyses cannot disagree: an unpinned action floats to newer PMD releases whose
-          # new rules fail CI on code the build's own gate accepts.
-          version: '7.22.0'
+          gradle-version: current
 
-      - name: Fail build if there are violations
+      # PMD runs through the build's own gate (gradle/pmd.gradle), not the standalone PMD CLI
+      # action it replaced. The Gradle task hands PMD the compiled classes as its auxclasspath,
+      # so PMD can resolve the enum a switch selects on and can therefore tell an exhaustive
+      # switch from a partial one. The CLI action has no way to pass an auxclasspath: type
+      # resolution silently fails, every switch reads as non-exhaustive, and
+      # TooFewBranchesForSwitch fires on the two-arm switch expressions this service routes with
+      # by design (.claude/rules/design_rules.md) -- three false positives on code the build's
+      # own gate accepts. Version and ruleset were already identical; the auxclasspath was the
+      # whole difference, so running the build's task is what actually makes the two agree.
+      # pmdMain fails the job on a real violation by itself (ignoreFailures = false), so no
+      # separate violation-counting step is needed.
+      - name: PMD (main sources)
+        run: ./gradlew pmdMain
+
+      - name: Upload PMD report
         if: always()
-        run: |
-          VIOLATIONS="${{ steps.pmd.outputs.violations }}"
-          if [ -n "$VIOLATIONS" ] && [ "$VIOLATIONS" != "0" ]; then
-            echo "PMD found $VIOLATIONS violations"
-            exit 1
-          fi
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pmd-report
+          path: build/reports/pmd/
+          if-no-files-found: ignore
