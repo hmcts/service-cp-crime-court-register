@@ -65,7 +65,22 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * its own. So a FAILED batch whose key still has a batch in flight, and one holding a register the
  * narrowing excludes, are left carrying their stamps and named on their own line under the reason -
  * which is where an operator learns that a batch they asked about has to wait rather than that
- * nothing happened.
+ * nothing happened. Both are decided from what this run itself would do with the rows, which is
+ * everything about the ordering this command controls.
+ *
+ * <p><strong>What it does not control is the schedule running beside it.</strong> The 18:00 run
+ * holds a ShedLock ({@code RegisterGenerationJob}) and this command holds nothing: the deployed
+ * pod's scheduler is untouched by {@code courtregister.cli=true}, which only keeps the JVM
+ * <em>this</em> command runs in from firing a run of its own. So a command whose release lands
+ * inside the schedule's own run has handed those rows to
+ * {@link RegisterStore#activeUnbatched()} while the schedule is reading it, and the schedule may
+ * batch them - as system-generated, outside the bound this command was given - before this run
+ * assembles. This run then either meets {@code idx_register_batch_live_key} or stamps fewer rows
+ * than it asked for, so the store refuses the batch and the command reports
+ * {@code outcome=failed reason=generation-failed} and exits {@link CliMain#FAILED} over a day that
+ * has already been rendered and e-mailed. The command is therefore not run inside the 18:00 window:
+ * a regeneration is an 08:00 job, and where the two have overlapped the day's batches are read with
+ * {@code list-batches --date D} before anything is asked for again.
  *
  * <p><strong>A register is handed to the assembler once.</strong> A row released from its failed
  * batch is answered by {@link RegisterStore#activeUnbatched()} as well, and the store cannot tell a
@@ -330,8 +345,17 @@ public class GenerateRegisterCli {
      * release is not undoable: the moment the stamp is off, the rows are what
      * {@link RegisterStore#activeUnbatched()} answers, so any row this run then drops belongs to
      * the 18:00 schedule instead - batched as system-generated, and outside the bound the operator
-     * stated. The two ways that happens are decided before the release rather than discovered after
-     * it, and the batch left alone is named on its own line under the reason it was left.
+     * stated. The two ways <em>this run</em> can do that are decided before the release rather than
+     * discovered after it, and the batch left alone is named on its own line under the reason it was
+     * left. The third way is the schedule running beside this command, which no ordering here
+     * reaches - see the class note.
+     *
+     * <p>The day's batches are taken in the order the store answers them, which is part of that
+     * port's contract rather than this method's to arrange:
+     * {@link RegisterStore#batchesOn(java.time.LocalDate)} answers by court centre, then
+     * supplementary index, then identity, so a key's base batch is released before its supplement -
+     * the other way round would ask the store to supersede the newer register against the one it
+     * replaced, which it refuses.
      *
      * @param narrowed  the day's batches this run may release
      * @param day       every batch the day holds, which is where a key's other batches are

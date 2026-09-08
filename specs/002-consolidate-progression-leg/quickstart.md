@@ -80,7 +80,10 @@ three documented exit codes.
 docker compose up -d app
 curl -s localhost:8082/actuator/health/readiness      # {"status":"UP"}
 
-# 2. run the job now instead of waiting for 18:00 London (flag is ON in the WireMock stub)
+# 2. run the job now instead of waiting for 18:00 London (flag is ON in the WireMock stub).
+#    On a deployed stack this is never run inside the 18:00 window: the schedule holds a ShedLock
+#    and the command holds nothing, so a release that lands inside the night's own run hands those
+#    rows to it and this command then fails on the stamp over a day already rendered.
 docker compose exec app ./startup.sh generate-register --date "$(date +%F)"
 #    date=<D> released=0 registers=0 batches=0 requested=0 deferred=0
 
