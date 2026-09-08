@@ -257,8 +257,10 @@ public interface RegisterStore {
      * superseded against the re-share as its stamp is cleared, exactly as {@link #releaseFailed}
      * does it: a recording supersedes an incumbent that is unbatched, so a re-share that arrived
      * while the row was stamped left the key holding two rows, and unstamping the older one is what
-     * would make both active. Only a register shared <em>after</em> the released one can supersede
-     * it, for the reason {@link #releaseFailed} gives.
+     * would make both active. Only a register that came <em>after</em> the released one can
+     * supersede it, under the order {@link #releaseFailed} states, and for the reason it gives -
+     * sharpened here by the release being a branch of the statement that marks the batch, so a
+     * refusal takes the mark with it.
      *
      * @param batchId     the batch that failed
      * @param reason      the bounded reason it is failed under
@@ -309,6 +311,18 @@ public interface RegisterStore {
      * unbatched, no later run and no command would reach it again, and the row left renderable
      * would be the one the re-share corrected, with this call answering as though the day held
      * nothing to release.
+     *
+     * <p><strong>Later means the order the store persists, which is
+     * {@code (registerTime, the moment the row was taken, identity)}.</strong> The register instant
+     * is the results' own shared moment and the estate sets it, so one hearing can be shared twice
+     * at one instant; the recorder settles such a pair by arrival - it supersedes an incumbent whose
+     * instant is not <em>after</em> the arriving register's - so the register that arrived second is
+     * the current one however the two identities sort. This call reads the same rule as a ranking
+     * and must therefore rank by arrival too: a tie broken on the identity alone agrees with the
+     * recorder in one of the two orders and, in the other, does not see the successor at all,
+     * unstamps the older row into a second active register for the key and loses the whole write to
+     * the index. The identity is the last tie-break and nothing more, for two rows the store's clock
+     * could not separate.
      *
      * @param batchId the FAILED batch whose registers are to be released
      * @return the registers whose stamp was cleared and that are still this day's to render, in the

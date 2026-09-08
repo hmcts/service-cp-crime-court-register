@@ -205,6 +205,17 @@ public class JdbcRegisterStore implements RegisterStore {
      * is the invariant the whole batch half is written against; a predicate that only handled the
      * ordinary direction would leave two.
      *
+     * <p><strong>The {@code <=} is one reading of a total order, and statements 9 and 9a read the
+     * same order the other way.</strong> It is what makes a register that arrives later the current
+     * one where the two instants are equal - the estate sets {@code register_time}, so two shares of
+     * one hearing can carry the same one - and "arrives later" is exactly what the database clock
+     * already wrote on the row: {@code created_at}, which V1 defaults to {@code now()} and V2
+     * backfilled {@code register_time} from for the pre-002 rows. The persisted order over a key's
+     * registers is therefore {@code (register_time, created_at, output_id)}, the identity being the
+     * last deterministic tie-break for two rows written inside one clock tick, and the successor
+     * search both release statements make is that triple. This predicate keeps its {@code <=}: it is
+     * the same rule asked of one incumbent rather than read as a ranking.
+     *
      * <p><strong>The supersession runs before the insert, and that order is the statement's to
      * keep.</strong> {@code idx_output_active_register_key} (V3) admits one active row per key, and
      * the row being replaced still holds that key until the update takes it out of the index: an
@@ -527,8 +538,18 @@ public class JdbcRegisterStore implements RegisterStore {
      * asked only for another unsuperseded row would then write the current register SUPERSEDED
      * against the one it replaced - neither active nor unbatched, so no later run and no command
      * reaches it again, and the row left renderable is the one the re-share corrected. The
-     * comparison is therefore the same direction test statement 1 makes, over the register instant
-     * with the identity behind it so that two registers shared at the same moment still order.
+     * comparison is therefore statement 1's own direction test, read as the total order that
+     * statement states: {@code (register_time, created_at, output_id)}.
+     *
+     * <p><strong>All three of it, because the estate can share one hearing twice at one
+     * instant.</strong> {@code register_time} is the results' own moment, so an equal-time pair is
+     * ordinary rather than exotic, and {@code created_at} is the instant this database took the row
+     * - which is precisely what statement 1's {@code <=} means by later. A tie broken on the
+     * identity alone would disagree with the recorder for one of the two orders: the successor
+     * whose identity sorts lower is not seen at all, the older row is made active a second time
+     * beside the register that replaced it, and {@code idx_output_active_register_key} refuses that
+     * write - taking this whole statement, and with it the failure mark, down with it. The identity
+     * stays as the last tie-break, for two rows the database clock could not separate.
      *
      * <p>{@code completed_by} is written here for the same reason it is written by statement 6, and
      * it is null for most of these endings: only a {@code generation-failed} event and a reconciled
@@ -558,9 +579,13 @@ public class JdbcRegisterStore implements RegisterStore {
                            AND successor.output_id <> recorded.output_id
                            AND successor.superseded_at IS NULL
                            AND successor.status <> 'SUPERSEDED'
-                           AND (successor.register_time, successor.output_id)
-                                 > (recorded.register_time, recorded.output_id)
-                         ORDER BY successor.register_time DESC, successor.output_id DESC
+                           AND (successor.register_time, successor.created_at,
+                                successor.output_id)
+                               > (recorded.register_time, recorded.created_at,
+                                  recorded.output_id)
+                         ORDER BY successor.register_time DESC,
+                                  successor.created_at DESC,
+                                  successor.output_id DESC
                          LIMIT 1) AS successor_id
                   FROM processed_output recorded
                   JOIN failed ON failed.batch_id = recorded.batch_id
@@ -634,9 +659,19 @@ public class JdbcRegisterStore implements RegisterStore {
      * beside it. A search that asked only for another unsuperseded row would write the current
      * register SUPERSEDED against that one and leave it out of the answer: the command would print a
      * day it released nothing for and exit 0, while the register the estate shared last is neither
-     * active nor unbatched and no later run reaches it again. The comparison is the same direction
-     * test statement 1 makes, over the register instant with the identity behind it so that two
-     * registers shared at the same moment still order.
+     * active nor unbatched and no later run reaches it again. The comparison is statement 1's own
+     * direction test, read as the total order that statement states:
+     * {@code (register_time, created_at, output_id)}.
+     *
+     * <p><strong>All three of it, because the estate can share one hearing twice at one
+     * instant.</strong> {@code register_time} is the results' own moment, so an equal-time pair is
+     * ordinary rather than exotic, and {@code created_at} is the instant this database took the row
+     * - which is precisely what statement 1's {@code <=} means by later. A tie broken on the
+     * identity alone would disagree with the recorder for one of the two orders: the successor whose
+     * identity sorts lower is not seen at all, unstamping the older row makes it active beside the
+     * register that replaced it, and {@code idx_output_active_register_key} refuses the write - so
+     * the whole regeneration fails on a key nothing said was wrong. The identity stays as the last
+     * tie-break, for two rows the database clock could not separate.
      */
     private static final String RELEASE_FAILED = """
             WITH stamped AS (
@@ -649,9 +684,13 @@ public class JdbcRegisterStore implements RegisterStore {
                            AND successor.output_id <> recorded.output_id
                            AND successor.superseded_at IS NULL
                            AND successor.status <> 'SUPERSEDED'
-                           AND (successor.register_time, successor.output_id)
-                                 > (recorded.register_time, recorded.output_id)
-                         ORDER BY successor.register_time DESC, successor.output_id DESC
+                           AND (successor.register_time, successor.created_at,
+                                successor.output_id)
+                               > (recorded.register_time, recorded.created_at,
+                                  recorded.output_id)
+                         ORDER BY successor.register_time DESC,
+                                  successor.created_at DESC,
+                                  successor.output_id DESC
                          LIMIT 1) AS successor_id
                   FROM processed_output recorded
                   JOIN register_batch failed ON failed.batch_id = recorded.batch_id

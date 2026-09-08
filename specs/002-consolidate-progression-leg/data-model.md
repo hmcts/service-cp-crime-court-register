@@ -50,7 +50,11 @@ processed_output (hearing_id)`; and V3's `idx_output_active_register_key` below.
 Invariants (asserted by `RegisterStoreIT`):
 - At most one **active** row (RECORDED, unsuperseded) per `(hearing_id, court_centre_id, register_date)`.
 - A row with a `batch_id` is never superseded and never edited except by `mark*` for its own batch.
-- `superseded_by` points to a row with the same `hearing_id` and batch key and a later `register_time`.
+- `superseded_by` points to a row with the same `hearing_id` and batch key that is **later in the
+  order the table persists**, which is `(register_time, created_at, output_id)`: the register instant
+  the estate shared, then the instant this database took the row, then the identity as the last
+  deterministic tie-break. The instant alone is not enough - the estate can share one hearing twice
+  at one instant, and the recorder settles that pair by arrival (statement 1's `<=`).
 
 **Enforcement of "at most one active row" (V3).** The recorder keeps the invariant by reading the
 hearing's active row and superseding what it finds, and a read is what two re-shares of one hearing
@@ -100,10 +104,18 @@ asks for these, so they are recorded here with the invariants they keep; three r
   NOTIFIED leaves its register beside the re-share rather than superseded by it, so the batch being
   released may be the one holding the newer row - and superseding that against the register it
   replaced would withdraw the current register for good while the statement answered as though the
-  day held nothing to release. Statement **9** releases under the same rule and for a
-  sharper reason: its release is a branch of the statement that marks the batch, so a collision
-  there takes the mark down with it and leaves the batch calling itself in flight under a run that
-  had already given up on it.
+  day held nothing to release. **Later is the whole of `(register_time, created_at, output_id)`**,
+  which is statement 1's `<=` read as a total order rather than asked of one incumbent: the estate
+  sets `register_time`, so one hearing can be shared twice at one instant, and the row that arrived
+  second is then the current one - which is what the database clock wrote in `created_at`. A tie
+  broken on the identity alone agrees with the recorder in one of the two orders and, in the other,
+  does not see the successor at all: the older row is unstamped into a second active register for the
+  key, `idx_output_active_register_key` refuses the write, and the release fails on a key nothing
+  said was wrong. Statement **9** releases under the same rule and for a sharper reason: its release
+  is a branch of the statement that marks the batch, so a collision there takes the mark down with it
+  and leaves the batch calling itself in flight under a run that had already given up on it. Both
+  directions of the equal-instant pair are pinned per statement, in `RegisterStoreIT`'s `Failure` and
+  `Releasing` (`..._an_equal_time_re_share_that_sorts_first` / `..._that_sorts_last`).
 - Statement **11**, `recordedWhileOff()` - the registers automatic batching passed over. Statement
   2's predicate with its fourth test turned round, and deliberately one predicate with it: RECORDED,
   unsuperseded and unbatched in both, `recorded_flag_state <> 'ON'` the only difference (research
