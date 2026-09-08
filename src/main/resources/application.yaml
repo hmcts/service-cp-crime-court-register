@@ -468,6 +468,17 @@ management:
           # (spec FR-011). Both are reported as their own components, outside every group.
           include: db,intakeStartup,fileServiceRun
   health:
+    db:
+      # Switched off so `db` means the register store's pool and nothing else. The
+      # auto-configuration collects every DataSource on the context and, finding two on a
+      # generation-enabled pod, contributes `db` as a composite over both - so the platform file
+      # service being unreachable reported `db` DOWN at any hour and rolled a pod whose intake half
+      # was working, and every health poll asked another team's database for a connection. That is
+      # the harm FR-011 and `fileServiceRun` exist to prevent, arriving through the component next
+      # to them. `StoreHealth` contributes `db` over the primary pool instead, keeping the name the
+      # readiness group above and every dashboard already use; the file service is reported by
+      # `fileServiceRun`, which asks about it only while a run is on.
+      enabled: false
     jms:
       # Spring Boot auto-configures a `jms` health indicator as soon as a ConnectionFactory is on the
       # context, and it goes DOWN whenever the broker is quiet or briefly unreachable. That indicator

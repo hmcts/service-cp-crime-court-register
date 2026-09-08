@@ -39,9 +39,14 @@ public class GenerationHealth {
      * The file-service pool, asked whether it can still hand out a connection.
      *
      * <p>Spring Boot's own datasource contributor, built by hand rather than auto-configured,
-     * because the pool it probes is {@code defaultCandidate = false} and so is invisible to the
-     * auto-configuration that collects datasources by type - which is what keeps the processed log's
-     * own {@code db} component named {@code db} when generation is switched on.
+     * because what the auto-configuration would contribute is not this: it collects the context's
+     * datasource beans and, finding two, reports them as one composite {@code db}. That is what it
+     * did until the readiness cases of T071 caught it, and {@code defaultCandidate = false} on the
+     * pool did not prevent it - the flag that would is {@code autowire-candidate}, and setting that
+     * would hide the pool from the qualified injection below. The auto-configured contributor is
+     * switched off in {@code application.yaml} and {@link StoreHealth} contributes {@code db} over
+     * the register store's pool alone, so this probe is the only thing that ever asks the file
+     * service, and only while a run is on.
      *
      * <p>It is not a bean. A {@link HealthIndicator} on the context is a health component, and this
      * one would be a second file-service entry in the aggregate: polled every few seconds, holding a
