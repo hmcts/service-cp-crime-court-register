@@ -663,7 +663,15 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       T065" and then "expected: [d65c68fe-1b79-4899-a206-43841a1fce9b] but was: []";
       `a_flag_that_says_off_should_refuse_with_its_own_code_and_change_nothing` on "expected: 1 but
       was: -1" and on Expecting actual "" to contain "flag-off". Green at `98c8a10`:
-      generate-register 26 tests, 0 failures, 0 errors.)
+      generate-register 26 tests, 0 failures, 0 errors.
+      **Four red/green pairs landed on this command after the tick, under reviews 7 and 8**, each
+      quoting its own red assertion in its commit narrative: `261231e` / `c011bb1` (a narrowed
+      regeneration reckons its history from the whole day), `b08a077` / `210695c` (a batch this run
+      would not re-assemble is withheld rather than released), `2bbda7d` / `8805d47` (a run the flag
+      stopped is logged as the decline it is, through `CliMain.declined`, rather than as arguments
+      that were not usable) and `ed312b2` / `22a953a` (which instant `--recorded-before` is read
+      against - a characterisation and the wording it corrected). `9a96898` adds the case that reads
+      the summary line itself, exception 6 below.)
 - [x] T063 [P] [US5] `batch/cli/NotifyRegisterCliTest`, `ListBatchesCliTest`, `SupersedeBeforeCliTest`,
       `CheckFlagCliTest` - behaviours per spec US5 and FR-016; outputs are stable, line-oriented, PII-free
       (addresses masked in `list-batches`).
@@ -677,7 +685,18 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       "Wanted but not invoked: registerNotifierService.resendFailed(6f1d0c62-...)" and
       "registerStore.supersedeSharedBefore(2026-09-04T17:00:00Z)". Green at `98c8a10`:
       notify-register 13, list-batches 25, supersede-before 13, check-flag 13, each 0 failures and
-      0 errors.)
+      0 errors.
+      **`notify-register`'s output contract then changed, at `879c9a3` / `f4b638a` (review 7)**, and
+      the outputs this task calls stable are stable from there rather than from `98c8a10`: the
+      report line now ends `disposition=<code>` and the exit code is taken from it - SETTLED and
+      ALREADY_NOTIFYING 0, CLAIM_LOST and INCOMPLETE 2 - because a tally that came back is the batch
+      as it stood rather than what this call did, and a runbook step that read exit 0 over a batch
+      left unsettled would not run the one command that recovers it. `67a6aa8` / `f1b5c9b`
+      (review 8) then corrected what the usage line promises: the command re-requests the
+      recipients no e-mail has been accepted for, which is every non-ACCEPTED row and a fresh row
+      for a recipient the batch holds none for, rather than "the FAILED recipients". `3c7e11e` /
+      `fea8459` moved where a batch with no court house sorts in `list-batches`, which is the other
+      output this task pins.)
 - [x] T064 [P] [US5] `config/HttpSurfaceTest` (extend) - still zero controllers with generation enabled.
       (`config/CliModeConfigTest` lands with it, because "zero controllers" and "no consumer, no
       schedule, no listener" are one property's job, and it is the suite that boots the same
@@ -710,7 +729,17 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       `e43cca3` (classes=22 tests=88 failures=0 errors=0), which also cleared the branch's one open
       `pmdMain` violation, the four repeated `"T065"` literals. Until they landed,
       `generate-register`, `list-batches --date` and `supersede-before` refused at the store rather
-      than at the argument. What this commit landed uncharacterised is exception 2 below.)
+      than at the argument. What this commit landed uncharacterised is exception 2 below.
+      **Two of those five statements were then found defective and fixed, each with its own
+      integration red run against a real Postgres**, which is why the "closed against a real
+      Postgres afterwards" above is the beginning of their record rather than the end of it:
+      `releaseFailed` at `ba7670d` / `6fb6fb3` and `markFailed`'s releasing branch at `8745144` /
+      `7245d9c` (review 7), which supersede a released register the estate has already replaced
+      instead of handing it back; and both statements again at `ce76e21` / `6c8334a` (review 8),
+      which bound that supersession to a register shared *after* the one being released - the pair
+      the other way round had the current register written SUPERSEDED against the one it replaced
+      and dropped from the answer, so no run and no command reached it again. `fdaf331` adds the
+      case that pins the order `batchesOn` answers a day in, exception 6 below.)
 - [x] T066 [US5] `docker/startup.sh` dispatch: a recognised first argument runs `CliMain` with the
       remaining args; otherwise unchanged `exec java -jar`. Green: T064; `scripts/container-smoke.sh`
       gains `startup.sh check-flag` (exit 0 against the compose WireMock).
@@ -763,9 +792,11 @@ dispatched by `docker/startup.sh`, no HTTP endpoint.
       ("could not find the following element(s): [\"flag=ON\"]" and the usage line) with both exit
       codes still 0, so the failure is on the printed line rather than on the dispatch. `eb4b411`
       adds `test.dependsOn(bootJar)` so the suite has the jar the image copies under a plain
-      `./gradlew test` rather than skipping on an assumption - exception 5 below - and
-      `./gradlew build --dry-run` schedules `:bootJar` at position 12 ahead of `:test` at 26, so no
-      cycle is introduced.)
+      `./gradlew test` rather than skipping on an assumption - exception 5 below, which is where the
+      `build --dry-run` scheduling evidence lives, that commit having recorded a
+      `test --tests '*CliDispatchIT'` listing instead. Two more cases landed on this suite under
+      review 8: a mistyped command name answered with the five names and exit 2 (`7e282ca` /
+      `674753b`), and stdout carrying the report and nothing else (`fe4750d` / `294d93e`).)
 
 **Checkpoint**: the compose block of quickstart.md **has now been run**, and running it is what
 rewrote it (`782b1e6`, which renumbered its steps and is the last commit of the phase). What that
@@ -797,8 +828,9 @@ of this phase the Build stage still owes. Codex review 7.
 
 ### Approved TDD exceptions (Phase 7)
 
-Five, and they are recorded here rather than argued for in a commit body. Approver: **design owner,
-2026-09-07**. Anything else in Phase 7 that arrived test-after is a defect, not a precedent.
+Five approved, and two more recorded below awaiting approval. They are recorded here rather than
+argued for in a commit body. Approver for 1 to 5: **design owner, 2026-09-07**. Anything else in
+Phase 7 that arrived test-after is a defect, not a precedent.
 
 Two things in the phase were judged against this list and are deliberately not on it. `c3d8ff7`
 (T064) is a test task with a recorded red run, and the ten cases of it that were green on
@@ -938,18 +970,68 @@ its observed run and its two reverted mutations are recorded in its tick line ab
    pair.** It adds `test.dependsOn(bootJar)`, so `e2e/CliDispatchIT` has the fat jar the image
    copies under a plain `./gradlew test` rather than skipping on an assumption.
    **Why no red run was recorded**: task ordering is not behaviour a test can pin - a case asserting
-   the jar is there would be asserting the thing the dependency arranges - so the commit records
-   verification evidence in its place: `./gradlew build --dry-run` schedules `:bootJar` at position
-   12, ahead of `:test` at 26, `:check` at 30 and `:build` at 31, so no cycle is introduced, and the
-   six gates are green. That is the shape the preamble grants Phase 1 infrastructure; the grant does
-   not reach Phase 7, which is why it is written down here.
+   the jar is there would be asserting the thing the dependency arranges - so verification evidence
+   stands in its place. What that commit records is `./gradlew test --tests '*CliDispatchIT'`
+   scheduling `:bootJar` ahead of `:test`, with the five-line task listing under it, and the six
+   gates green. **The `build --dry-run` evidence is this record's and not that commit's** - no
+   commit in the phase mentions `--dry-run` - and it was re-taken here rather than left as written:
+   `./gradlew build --dry-run` schedules 28 tasks, `:bootJar` 9th, ahead of `:test` 23rd, `:check`
+   27th and `:build` 28th, so no cycle is introduced. The positions first written down here (12, 26,
+   30, 31) were the output's line numbers rather than the tasks' positions, three preamble lines
+   ahead of each. That is the shape the preamble grants Phase 1 infrastructure; the grant does not
+   reach Phase 7, which is why it is written down here.
    **Approved: design owner, 2026-09-07.**
+
+6. **Three [A] characterisations of behaviour Phase 7 already had, from review 8.** Each is
+   labelled **[A]** in its own javadoc, each records a passing run rather than a red one, and each
+   quotes at least one reverted mutation in its commit body:
+   - **`fdaf331`** pins the order `RegisterStore.batchesOn` answers a day in, which the port
+     disclaimed ("in no particular order") while `GenerateRegisterCli.released` depended on it - a
+     key's base batch has to be released before its supplement. The statement is unchanged and the
+     contract now states the order. Mutation: `BATCHES_ON_DAY` ordered `court_centre_id, batch_id`
+     answers the supplement first, 3 tests completed 1 failed.
+   - **`9a96898`** reads the summary line `generate-register` answers a day with, which
+     quickstart.md quotes verbatim and the checkpoint above records as observed, and which no test
+     read. Mutations: `released=` printed as `freed=`, and `batches=` printed from
+     `registers.size()`.
+   - **`4601dfa`** is review 7's and was not written down when it landed: it characterises how
+     `PropertiesValidator.REAL_FLAG_STORE` recognises a real flag store - the authority only, on a
+     trimmed and lower-cased value, unconditionally on the master switch - where one canonical
+     endpoint had stood for all of it. Green on introduction, 128 tests 0 failures, with four
+     mutations quoted in its body.
+   All three are the shape the Phase 3, 5 and 6 blocks record for the same thing: behaviour that
+   already existed, stated by cases that pass on introduction, with non-vacuity shown by mutation
+   because there is no red run to show.
+   **Awaiting approval: recorded 2026-09-08.**
+7. **`b544003` "build(image): make the artefact the image is built from unambiguous" has no test
+   pair.** It clears `build/libs/*.jar` in `scripts/container-smoke.sh` before the image is built
+   and makes `CliDispatchIT.packagedJar` refuse more than one candidate instead of choosing between
+   them, which is what let a stale jar be smoke-tested while the script printed PASS.
+   **Why no red run was recorded**: one half is a shell step and the other is the suite's own
+   fixture - a case asserting the jar is unambiguous would be asserting the thing the check
+   arranges. **Verification evidence stands in its place, and it is empirical**: with a second jar
+   put in `build/libs` by hand, `./gradlew test --tests '*CliDispatchIT' -Dtest.noFailFast=true`
+   fails before the image is built - "more than one packaged jar in .../build/libs
+   [service-cp-crime-court-register-0.0.1.jar, service-cp-crime-court-register-0.0.999.jar]" - and
+   is green again with the extra jar removed. Same shape as exception 5, and the same reason it is
+   written down: the preamble grants that exemption to Phase 1 infrastructure and not to Phase 7.
+   **Awaiting approval: recorded 2026-09-08.**
 
 **The five store statements T065 held back are the Phase 6 rule working rather than an exception to
 it**: `batchesOn`, `releaseFailed`, `recordedWhileOff`, `supersedeSharedBefore` and
 `findByRegisterDate` were left as seams instead of landing untested, and each got its integration
 red run against a real Postgres (`RegisterStoreIT`, `RegisterBatchRepositoryIT`, `903d33b`) before
-`e43cca3` implemented it.
+`e43cca3` implemented it - and both statements that were later found defective were re-driven the
+same way, `ba7670d` / `6fb6fb3`, `8745144` / `7245d9c` and `ce76e21` / `6c8334a`.
+
+**Review 8's other fixes are red/green pairs and are recorded on the tick lines they belong to**,
+not here: the successor guard on both release statements (T065), the summary line and the flag-off
+log sentence (T062), `notify-register`'s usage promise (T063), the entrypoint's answer to a mistyped
+name and stdout carrying the report alone (T067), and one outside Phase 7's own tasks -
+`507263d` / `c22509c`, which refuses a `courtregister.feature.endpoint` no App Configuration client
+can be built from, under the setting's own name rather than as an Azure `IllegalArgumentException`
+during refresh. Four documentation-only corrections landed with them (`58769d2`, `e2ee872`,
+`fdaf331`'s port contract, and this file), each named in its own commit body.
 
 ---
 
