@@ -1676,6 +1676,67 @@ class RegisterStoreIT {
                     .containsExactly(outputIdOf(reshare).orElse(null));
         }
 
+        /**
+         * The pair the other way round, which is the arrangement the successor search can invert.
+         *
+         * <p>The case above fails the batch holding the <em>older</em> of the key's two rows, so
+         * the row it finds beside it is genuinely the register that replaced it. A day can hold the
+         * pair the other way just as easily: a first batch that failed under one of the four
+         * reasons that keep the stamp leaves its register RECORDED and stamped, the hearing is
+         * shared again, and the re-share is assembled into a batch of its own - so the batch that
+         * now fails on a releasing reason is holding the <em>newer</em> row, and the only other row
+         * of the key is the stale one the first batch is still holding.
+         *
+         * <p>A search that asked only for another unsuperseded row of the key would answer with
+         * that stale row and supersede the current register against it. The register the estate
+         * shared last would then be neither active nor unbatched, so no run and no
+         * {@code generate-register} would ever reach it again, and the row left renderable would be
+         * the one the re-share replaced - which is the harm the supersession above exists to
+         * prevent, done to the wrong row.
+         */
+        @Test
+        void a_failure_holding_the_re_share_should_give_it_back_rather_than_supersede_it() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final AtomicReference<UUID> supplement = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                // A reason that keeps the stamp, so the first register is still this batch's.
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                // The failed batch is terminal, so the re-share is assembled into one of its own -
+                // and it is that batch which now fails on a reason that releases.
+                final RegisterBatch second = assembled(MONDAY, mine(store.activeUnbatched()));
+                supplement.set(second.batchId());
+                store.markFailed(second.batchId(),
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(supersessionOf(reshare))
+                    .as("the register the estate shared last is not superseded against the one it "
+                            + "replaced: a supersession the wrong way round withdraws the current "
+                            + "register for good and leaves the stale one as the day's")
+                    .contains(new SupersessionPair(null, null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("both rows are RECORDED, which is what the arrangement started with: the "
+                            + "older one is a failed batch's to keep and the newer one is the "
+                            + "day's to render")
+                    .containsExactlyInAnyOrder(RECORDED, RECORDED);
+            softly.assertThat(stampedWith(supplement.get()))
+                    .as("and the batch that never left this service holds nothing")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("so the next run picks the re-share up, under a fresh batch identity")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(reshare).orElse(null));
+        }
+
         @Test
         void a_failure_after_the_render_request_should_keep_the_stamp_on_its_rows() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
@@ -2001,6 +2062,65 @@ class RegisterStoreIT {
                     .isEmpty();
             softly.assertThat(statusesOn(MONDAY))
                     .containsExactlyInAnyOrder(SUPERSEDED, RECORDED);
+        }
+
+        /**
+         * The one arrangement in which the row beside the released one is older rather than newer.
+         *
+         * <p>Both cases above release the batch holding the key's older row, so the row found
+         * beside it is the re-share that replaced it. A day reaches the opposite shape through the
+         * ordinary path: a first batch is notified, the hearing is shared again - the recording
+         * predicate supersedes an incumbent that is RECORDED and unbatched, and a notified row is
+         * neither - and the re-share is assembled into a batch of its own, which then fails under
+         * one of the four reasons that keep the stamp. The release an operator then types is
+         * against the batch holding the <em>newer</em> row, and the only other row of the key is the
+         * register that was sent this morning.
+         *
+         * <p>A search that asked only for another unsuperseded row would answer with that sent one
+         * and supersede the re-share against it, then leave it out of the answer - so the command
+         * would print a day it released nothing for and exit 0, while the register the estate
+         * shared to correct the sent one has been withdrawn for good and no run will reach it again.
+         */
+        @Test
+        void a_released_re_share_should_come_back_though_an_earlier_register_was_sent() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final List<RegisterRecord> released = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                walkedToNotified(monday, PAYLOAD_FILE_ID, DOCUMENT_FILE_ID);
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch second = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(second.batchId(), SECOND_PAYLOAD_FILE_ID);
+                store.markFailed(second.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+                released.addAll(store.releaseFailed(second.batchId()));
+            }).as(SEAM).doesNotThrowAnyException();
+
+            softly.assertThat(released)
+                    .as("the re-share is the day's register to render again: the row beside it was "
+                            + "sent this morning and is what the re-share corrects, not what "
+                            + "replaced it")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(reshare).orElse(null));
+            softly.assertThat(supersessionOf(reshare))
+                    .as("so nothing is written against it: a supersession the wrong way round "
+                            + "would leave the command reporting a release it had silently "
+                            + "withdrawn the register for")
+                    .contains(new SupersessionPair(null, null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("the sent register stays NOTIFIED, carrying what reached the Youth "
+                            + "Offending Team, and the re-share is RECORDED again")
+                    .containsExactlyInAnyOrder(NOTIFIED, RECORDED);
+            softly.assertThat(activeUnbatched())
+                    .as("and it is what the next run assembles, which is the whole of what the "
+                            + "release is for")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(reshare).orElse(null));
         }
 
         @Test
