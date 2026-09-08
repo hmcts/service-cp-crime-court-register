@@ -12,11 +12,20 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 /**
  * {@code supersede-before --shared-before T}.
  *
- * <p>The rollback lever's other half. Records that were recorded before an instant are marked
- * superseded, so no run - the schedule's or an operator's - will ever batch them again. It is what
- * is used when the legacy has taken a period back over: the registers this service recorded for
- * those hearings are about to be sent by something else, and a document sent twice to a Youth
- * Offending Team is worse than one sent once by the older system.
+ * <p>The rollback lever's other half. The registers shared before an instant that are still this
+ * service's to claim - RECORDED, unsuperseded and unbatched - are marked superseded, so no run
+ * batches them again. It is what is used when the legacy has taken a period back over: the
+ * registers this service recorded for those hearings are about to be sent by something else, and a
+ * document sent twice to a Youth Offending Team is worse than one sent once by the older system.
+ *
+ * <p><strong>What it does not reach, and why one run of it may not be enough.</strong> A register
+ * already stamped into a batch is left alone - it is the renderer's, and what becomes of it is that
+ * batch's ending to decide - so a period whose batches are not all terminal is not settled by one
+ * command. Both a failure on a releasing reason and the release behind {@code generate-register}
+ * unstamp such a row back to RECORDED and unbatched, and neither can consult a rollback, because
+ * nothing in the store records that a period was taken back. So this command is run again after any
+ * release of that period's batches, and the count it prints is what says whether it had anything
+ * left to take; {@code list-batches --date D} is how the period's open batches are found first.
  *
  * <p>Supersession rather than deletion, and never a rewrite: the rows stay, carrying what was
  * recorded and when, because the register store is the audit of what this service decided and a

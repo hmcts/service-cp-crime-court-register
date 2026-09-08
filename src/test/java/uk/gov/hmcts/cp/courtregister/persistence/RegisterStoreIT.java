@@ -2491,12 +2491,17 @@ class RegisterStoreIT {
      * under - because the period the legacy has resumed is a period of hearings rather than a period
      * of this pod's writes.
      *
-     * <p><strong>What it leaves alone is the whole of its risk.</strong> A stamped row has been
-     * handed to the renderer and unstamping it is not something the schema offers; a superseded row
-     * is already accounted for and must not be restamped over the pair that says which register
-     * replaced which; and a row shared at or after the bound is outside the period a person named.
-     * The flag state is deliberately <em>not</em> one of the exclusions: a rollback supersedes the
-     * period, and a row recorded while the flag was off is in that period too.
+     * <p><strong>What it leaves alone is the whole of its risk.</strong> A stamped row is the
+     * renderer's, so what becomes of it is its batch's ending to decide rather than a period's; a
+     * superseded row is already accounted for and must not be restamped over the pair that says
+     * which register replaced which; and a row shared at or after the bound is outside the period a
+     * person named. The flag state is deliberately <em>not</em> one of the exclusions: a rollback
+     * supersedes the period, and a row recorded while the flag was off is in that period too.
+     *
+     * <p>The stamped row it leaves is also the one thing this write does not settle: a batch failed
+     * or released afterwards unstamps its rows back into {@code activeUnbatched()}, period or no
+     * period, so a rollback over a day whose batches are still open is made again after any release
+     * of them.
      */
     @Nested
     @DisplayName("superseding the registers shared before an instant")
@@ -2562,8 +2567,9 @@ class RegisterStoreIT {
             }).as(SEAM).doesNotThrowAnyException();
 
             softly.assertThat(superseded.get())
-                    .as("the renderer has been asked about this register, and unstamping it is not "
-                            + "something the schema offers")
+                    .as("this register is the renderer's: systemdocgenerator has been asked about "
+                            + "its batch, so what becomes of it is that batch's ending to decide "
+                            + "and not a period's")
                     .isZero();
             softly.assertThat(statusOf(stamped))
                     .as("so the row says exactly what it said before the command")

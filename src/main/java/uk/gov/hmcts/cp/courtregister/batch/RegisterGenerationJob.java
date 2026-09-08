@@ -192,7 +192,8 @@ public class RegisterGenerationJob {
      * <p>The flag is read before anything else and its answer ends the run: a skipped run touches
      * neither the store, the assembler, the service nor the reconciler, because a run that read the
      * store first would already have stamped {@code batch_id} onto rows the flag says this service
-     * may not generate, and unstamping them is not something the schema offers.
+     * may not generate - and getting them back is a person's decision about one batch at a time
+     * (the release behind {@code generate-register}), not something a later run can undo.
      *
      * @return what the run did, including a run the flag stopped
      */

@@ -743,13 +743,22 @@ public class JdbcRegisterStore implements RegisterStore {
      * legacy has taken back over is a period of hearings, not a period of this pod's writes. Strictly
      * before it, because the caller states the bound and this statement never widens it.
      *
-     * <p>Statement 2's first three predicates and not its fourth. A stamped row has been handed to
-     * the renderer and unstamping it is not something the schema offers; a row already superseded is
-     * not superseded twice, which would restamp {@code superseded_at} over the pair that says which
-     * register replaced which; and a GENERATED or NOTIFIED row is not rewritten to say a register
-     * that was sent was never claimed. Whether the flag was on when a row arrived is deliberately
-     * outside the predicate: a rollback supersedes the period, and a row recorded while the flag was
-     * off is in that period too.
+     * <p>Statement 2's first three predicates and not its fourth. A stamped row is the renderer's -
+     * systemdocgenerator has been asked about its batch and a document may exist under it, so what
+     * becomes of the row is that batch's ending to decide and not a period's; a row already
+     * superseded is not superseded twice, which would restamp {@code superseded_at} over the pair
+     * that says which register replaced which; and a GENERATED or NOTIFIED row is not rewritten to
+     * say a register that was sent was never claimed. Whether the flag was on when a row arrived is
+     * deliberately outside the predicate: a rollback supersedes the period, and a row recorded while
+     * the flag was off is in that period too.
+     *
+     * <p><strong>So this write is not final over a day whose batches are still open.</strong>
+     * Statements 9 and 9a both unstamp a RECORDED row back to unbatched, and neither can consult a
+     * rollback - nothing in the schema records that a period was taken back - so a batch failed or
+     * released after this ran hands its registers back into {@code ACTIVE_UNBATCHED} with their
+     * recorded flag state unchanged, register instants inside the period included. The rollback is
+     * therefore run again after any release of that period's batches, and the count is what says
+     * whether it had anything left to take.
      *
      * <p><strong>{@code superseded_by} is left null, and that is the honest answer.</strong> Every
      * other supersession here names the register that replaced this one, because there is one; a

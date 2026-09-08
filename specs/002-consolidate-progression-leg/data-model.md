@@ -113,11 +113,16 @@ asks for these, so they are recorded here with the invariants they keep; three r
 - Statement **12**, `supersedeSharedBefore(instant)` - the rollback lever's other half. Bounded
   strictly before the instant on `register_time`, the register's own shared instant, because the
   period the legacy has taken back over is a period of hearings and not of this pod's writes. It
-  takes statement 2's first three predicates and not its fourth: a stamped row has been handed to
-  the renderer and unstamping it is not something the schema offers, a superseded row is not
-  superseded twice, and a GENERATED or NOTIFIED row is not rewritten to say a register that was sent
-  was never claimed. Whether the flag was on when a row arrived is outside the predicate: a rollback
-  supersedes the period, and a row recorded while the flag was off is in that period too.
+  takes statement 2's first three predicates and not its fourth: a stamped row is the renderer's,
+  so what becomes of it is its batch's ending to decide rather than a period's, a superseded row is
+  not superseded twice, and a GENERATED or NOTIFIED row is not rewritten to say a register that was
+  sent was never claimed. Whether the flag was on when a row arrived is outside the predicate: a
+  rollback supersedes the period, and a row recorded while the flag was off is in that period too.
+  The stamped row it leaves is the one thing the write does not settle: statements 9 and 9a both
+  unstamp a RECORDED row back to unbatched and neither can consult a rollback, nothing in the schema
+  recording that a period was taken back - so a rollback over a day whose batches are still open is
+  run again after any release of them, and the count it answers with is what says whether it had
+  anything left to take.
 - `RegisterBatchRepository` statement **12**, `findByRegisterDate(registerDate)` - the read behind
   `list-batches --date D`, ordered court house then identity, which is what makes the output stable
   across two runs; a court house the hearing venue never named sorts last.

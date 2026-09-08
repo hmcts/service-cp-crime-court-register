@@ -70,7 +70,8 @@ import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
  * <ul>
  *   <li><strong>the flag first, and its answer ends the run.</strong> A run that read the store
  *       before it read the flag would have stamped {@code batch_id} onto rows the flag says this
- *       service may not generate, and unstamping them is not something the schema offers. The
+ *       service may not generate, and getting them back is a person's decision about one batch at a
+ *       time rather than something a later run can undo. The
  *       skipped run therefore touches nothing at all - not the store, not the assembler, not the
  *       service and not the reconciler - which is what the first nested class asserts as
  *       interactions rather than as outcomes;</li>

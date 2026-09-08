@@ -357,11 +357,22 @@ public interface RegisterStore {
      *
      * <p><strong>Only rows that are still this service's to claim.</strong> RECORDED, unsuperseded
      * and unbatched, exactly as {@link #activeUnbatched} reads active - so a row already stamped
-     * into a batch is left alone (the renderer has been asked about it, and unstamping it is not
-     * something the schema offers), a row already superseded is not superseded twice, and a
-     * GENERATED or NOTIFIED row is not rewritten to say a register that was sent was never claimed.
-     * Whether the flag was on when a row arrived is not part of the predicate: a rollback supersedes
-     * the period, and a row recorded while the flag was off is in that period too.
+     * into a batch is left alone (it is the renderer's: systemdocgenerator has been asked about that
+     * batch and a document may exist under it, so what happens to the row is that batch's ending to
+     * decide and not a period's), a row already superseded is not superseded twice, and a GENERATED
+     * or NOTIFIED row is not rewritten to say a register that was sent was never claimed. Whether
+     * the flag was on when a row arrived is not part of the predicate: a rollback supersedes the
+     * period, and a row recorded while the flag was off is in that period too.
+     *
+     * <p><strong>Which leaves the rollback one thing it does not settle.</strong> A stamped row
+     * belongs to a batch that may still be failed or released afterwards, and both
+     * {@link #markFailed} on a releasing reason and {@link #releaseFailed} unstamp such a row back
+     * to RECORDED and unbatched - back into {@link #activeUnbatched}, its recorded flag state
+     * unchanged - even where its register instant falls inside a period this call has already taken
+     * back. Nothing in the store records that a period was rolled back, so no statement here can
+     * refuse it. A rollback of a period whose batches are not all terminal is therefore not final
+     * on its own: this call is made again after any release of that period's batches, and the count
+     * it answers with is what says whether it had anything left to take.
      *
      * <p>Supersession rather than deletion: the rows stay, carrying what was recorded and when,
      * because the register store is the audit of what this service decided and a rollback is
