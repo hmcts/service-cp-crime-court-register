@@ -61,9 +61,10 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * <p><strong>What a command prints is read by a person under pressure.</strong> Output is
  * line-oriented and stable, and carries bounded codes, counts and identifiers only: no defendant,
  * no register content, and recipient addresses masked wherever a command has cause to mention one
- * (constitution Principle VII). The stream is handed in rather than reached for, so a test reads
- * what an operator would see - and stdout carries the report and nothing else, because a command's
- * JVM starts with no banner and with its log stream on stderr
+ * (constitution Principle VII). The stream is handed in rather than reached for - every method here
+ * takes a {@link Consumer} and {@link StandardOutput} is the one class that owns the descriptor
+ * behind it - so a test reads what an operator would see. And stdout carries the report and nothing
+ * else, because a command's JVM starts with no banner and with its log stream on stderr
  * ({@code logback-cli.xml}, selected by {@link #dispatch}). Without that split a reading would
  * arrive behind nine lines of banner and every INFO line of a context start, and two runs of
  * {@code list-batches} could not be compared by {@code diff} at all.
@@ -209,10 +210,14 @@ public class CliMain {
      * 0 did it, 1 declined, 2 could not - so it is set here rather than returned: a JVM that
      * returned from {@code main} exits 0 whatever the command answered.
      *
+     * <p>The report's destination is taken from {@link StandardOutput}, which is where this
+     * service's one write to a file descriptor lives and why a command's protocol output is not the
+     * diagnostics constitution Principle VI sends through SLF4J.
+     *
      * @param args the command name followed by its own arguments
      */
     public static void main(final String[] args) {
-        System.exit(new CliMain().dispatch(args, System.out::println));
+        System.exit(new CliMain().dispatch(args, StandardOutput.ofProcess()));
     }
 
     /**
