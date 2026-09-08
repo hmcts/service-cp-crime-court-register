@@ -1288,21 +1288,439 @@ exist; every requirement they carried does, and the endpoint refusal's wording c
 
 ## Phase 8: User Stories 6 and 7 - register, audit, observability (Priority: P2)
 
-- [ ] T068 [P] [US6] `doc/DEFECT-FIXES.md` - confirm P1–P5, P9 FIXED with their pinning tests named
-      verbatim; P3/P4 sign-off markers; P6/P7 RETIRED with the retirement-PR pointer; P8 MOOT; header
-      counts updated (36 C rows + 9 P rows).
-- [ ] T069 [P] [US6] `differential/DifferentialAuditTest` (extend) - the 001 document corpus is
+- [x] T068 [P] [US6] `doc/DEFECT-FIXES.md` - confirm P1-P5, P9 and the appended P10 FIXED with
+      their pinning tests named verbatim; P3/P4/P10 sign-off markers; P6/P7 RETIRED with the
+      retirement-PR pointer; P8 MOOT; header counts updated (36 C rows + 10 P rows).
+      (`5d1520a`. Documentation only, so no red run was available and none is owed - the footing
+      Phase 7's own documentation commits were recorded on - and the runs are this task's evidence,
+      read rather than trusted. Every pinning test the rows name was run by name: "BUILD SUCCESSFUL
+      - 454 cases across the ten classes, 0 failures, 0 errors, 0 skipped", over
+      `RegisterNotifierServiceTest`, `DocumentOutcomeSinkTest`, `GenerationReconcilerTest`,
+      `RecipientSetTest`, `RegisterGenerationServiceTest`, `ConfigurationValidationTest`,
+      `DefendantTypeResolverTest`, `RegisterStoreIT`, `SchemaMigrationV2IT` and
+      `SchemaMigrationV3IT`. Pre-commit read, quoted in that body: "./gradlew -q compileJava
+      compileTestJava checkstyleMain checkstyleTest pmdMain pmdTest / (no output; exit 0)".
+      **The counts were already right and this task's own text was the stale side of the
+      discrepancy**: the table holds thirty-six C rows and ten P rows, counted, and the header said
+      so. "9 P rows" above was written before P10 was appended under review at `523cab5`, and it is
+      corrected here - the correction the register asked for and could not make, only the stage
+      whose task says so being permitted to edit this file.
+      **No row moved status and no sign-off marker was softened.** P1-P5, P9 and P10 stay FIXED, P6
+      and P7 RETIRED against progression's retirement PR (design §10.6), P8 MOOT; P3, P4 and P10
+      keep their markers verbatim and no content-affecting change was found carrying none.
+      **Three rows were stale and are corrected.** P3's absolute that a stamped row is "never
+      touched by another batch or by supersession" now states the exception Phase 6 and 7 gave it:
+      the two failure reasons that say the batch never left this service, and the operator's
+      release, hand the stamp back, and where the estate re-shared the hearing in flight the release
+      unstamps the row and only then supersedes it against its successor, because unstamping alone
+      would collide with `idx_output_active_register_key` and take the whole mark down with it. P8
+      named the V2 pair as though it were the whole of the store's indexing, and now names V3's
+      partial unique `idx_output_active_register_key` and `SchemaMigrationV3IT`; it is an invariant
+      rather than a read path, so the disposition stays MOOT. P10 had two wrong claims about the
+      recorded goldens: all six base fixtures carry the absent-respondents shape rather than five
+      of six, and `defendantType` is empty in the three base fixtures that produce a document at all
+      (the other three recorded skipped with no document to type) because `getCourtApplicationId`
+      reads element zero of `prosecutionCasesOrApplications`, always the prosecution case, rather
+      than because none of them names a court application - every one does.
+      Three halves delivered after their row was written and named by class or not at all are now
+      named by case: P2's GENERATION_TIMED_OUT, which fails the batch through the store rather than
+      the sink because a batch nothing can be learned about has no outcome to apply; P4's one
+      `register_notification` row per address, which `RecipientSetTest` cannot prove; and P9's
+      run-time half. P9 also gained a sentence the row did not have - a refusal that may answer
+      differently is asked again under the same identity inside the shared attempt budget before any
+      row is failed, and the row keeps the last status that came back - judged a strengthening of
+      P9's own claim rather than a departure from it, so it earns no row of its own; if the review
+      gate disagrees it needs a P-number. Every commit hash the P rows cite resolves under
+      `git cat-file -e`, `5b424c1` included, whose unreachability from any branch is what P3 claims
+      and is a different claim from absence; and P3's unescaped pipe inside a code span is escaped,
+      so the table stops rendering an eighth column.)
+- [x] T069 [P] [US6] `differential/DifferentialAuditTest` (extend) - the 001 document corpus is
       unchanged by 002 (digest equality), and every `PdfPayloadMapper` golden is reproduced; the
-      `RegisteredDefectFixes` table gains the P numbers.
-- [ ] T070 [P] [US7] `config/TelemetryPrivacyTest` (extend) - recipient e-mail addresses, recipient
+      `RegisteredDefectFixes` table gains the P numbers **a comparison of answers can carry, which
+      is P10 alone** (this task said "the P numbers" until the tick below explained the singular).
+      (`1fe0285`, an **[A]** characterisation: six cases, all green on introduction, with no
+      implementation commit following. Before it the audit asserted one thing only - that each of
+      381 recorded 001 legacy runs, put through the real chain, differs from its recording only
+      where a C row of `doc/DEFECT-FIXES.md` claims the difference (383 cases with the corpus-size
+      pin and the citation check) - and it never read the progression goldens at all, nor said that
+      the recordings it compares against are the bytes T004 recorded.
+      **Observed run, GREEN on introduction** (the preamble exempts an [A] task from a red run
+      and asks for the initial observed result instead): `./gradlew test --tests
+      '*DifferentialAuditTest' --tests '*RegisteredDefectFixesRejectionTest' --tests
+      '*PdfPayloadMapperTest' --tests '*DefendantTypeResolverTest' --rerun-tasks` - "BUILD
+      SUCCESSFUL, 619 tests, 0 failures, 0 errors, 0 skipped", with `DifferentialAuditTest` alone at
+      389 tests and all six cases named PASSED in that body. The recomputed manifest digest is
+      `20fcb12324bf674d3b141b4fa822076f2ff56be1aad43531000d575aa649d924`, which is `INDEX.json`'s
+      own `corpusDigest`; all 177 goldens digest to their recorded `outputSha256`; all 168 payload
+      goldens reproduce from their recorded inputs as one digest over the set; and the 52 recorded
+      refusals are refused here too, with the refusal text deliberately not compared because it is a
+      `javax.json` message on one side and a Jackson one on the other.
+      **Non-vacuity by four reverted mutations, applied one at a time and quoted in that body**:
+      `PdfPayloadMapper.DASH` "-" to "~" fails the goldens leg naming all 168 (389 tests, 1 failed,
+      so only that leg broke); one byte of a recorded input fails three cases, each naming its own
+      thing, which is the per-file pass earning its place; `DefendantTypeResolver.APPLICANT_TYPE`
+      "Applicant" to "Applicants" gives "[the two shapes progression's rule cannot read are the
+      whole of what this port answers differently] Expected size: 2 but was: 4"; and the P10
+      predicate's own required answer changed to "Appellant" gives "Expected size: 1 but was: 0", so
+      the attribution refuses and not only the count.
+      **Only P10 could be registered honestly, and that is a finding rather than an omission.** P1
+      to P5, P8 and P9 are batch, store and notifier rows whose fixes are batch states, marks,
+      unions or startup refusals rather than values in a document or answers from a rule, which is
+      why each names its own pinning test elsewhere; P8 is MOOT and P6 and P7 are RETIRED in
+      progression's own tree with nothing here to pin. `RegisteredDefectFixes` gains
+      `progressionLegRows()` and a `ProgressionRow` table read exactly as the C claims are, and the
+      citation check that refuses an unregistered deviation is widened from `^(C\d+) ` to
+      `^([CP]\d+) `. The audit's summary now carries the P row beside the C rows: "P10
+      (defendant-type resolution throws on permitted shapes) - 2 actual difference(s)". The empty
+      string and no answer at all are mapped to each other rather than reported, because that is
+      what `DefendantTypeResolverTest` already states in those words.)
+- [x] T070 [P] [US7] `config/TelemetryPrivacyTest` (extend) - recipient e-mail addresses, recipient
       names and `sdg_reason` free text never at INFO or above; batch and notification ids are.
-- [ ] T071 [P] [US7] `e2e/ReadinessPolicyIT` (extend) - broker down: ready; file-service DB down outside
-      a run: ready; during a run: not ready.
-- [ ] T072 [US7] Run report: one structured log line per run (`event=register_generation_run`) with
+      (`81d2b87`, an **[A]** characterisation, and **no leak was found**: the downstream leg is
+      already hardened against all three values, deliberately and with the reasoning written down,
+      so the commit records a passing run rather than a red one. A ninth group, "a register
+      generated, and the teams told about it", drives the whole downstream leg over a batch and a
+      recipient made of markers, and holds `sdg_reason` to the graded rule - forbidden at INFO and
+      above and in every label, asserted present at DEBUG, where two statements deliberately keep
+      it. **Passing run**: "`TelemetryPrivacyTest` classes=7 tests=32 failures=0 errors=0; whole
+      suite classes=517 tests=3182 skipped=0 failures=0 errors=0".
+      Coverage is by construction rather than by a list: all 62 log statements in the nine classes
+      that write one are enumerated out of the sources by `support/LogStatement`, and one case
+      insists the drive reached every one of them, so a statement added later is a failing test
+      rather than a silent gap. The meters are enumerated the same way off `GenerationMetrics`' own
+      name constants, with every label value held to a bounded vocabulary derived from that class
+      and the enumerations it codes. `FileServicePayloadStore` is in the list for the opposite
+      reason and is asserted to write no line at all.
+      **Non-vacuity by two reverted mutations, quoted in that body**: `RegisterNotifierService`'s
+      "was not accepted" WARN given ` address={}` fails one case and only that one - "[a recipient's
+      e-mail address reached the log index, and the index is read by the whole estate] Expecting no
+      elements of: [...] to match given predicate but this element did" - and
+      `GenerationReconciler`'s `sdg_reason` line raised from DEBUG to INFO fails the graded case and
+      only that one, on "[the generator's reason is free text about a document whose every defendant
+      is a child; it goes to sdg_reason, not to the index]".
+      **The positive half is a batch id, a notification id and a bounded reason code**, and not a
+      court centre id: nothing in either leg writes `courtCentreId`, `courtCentreOuCode` or
+      `courtHouse` to any line at any level, and `GenerationMetrics`' own javadoc forbids a court
+      centre id as a label, so the case pins `BatchFailureReason.RENDER_REQUEST_FAILED` rather than
+      claim a reading nothing takes. **`courtregister_generation_latency` is declared and recorded
+      by nothing** - no production code calls `GenerationMetrics.generationLatency` - so the suite
+      asserts the unmoved set rather than exempt the meter from the scan, and whoever wires the
+      timer up is told by it to fold the timer into the drive. It carries no label, so it is an
+      alerting gap and not a privacy one, and it is carried in the open items below. Two shared
+      test-support files changed, each for one reason stated in that body: `CapturedLog` gained a
+      public `rendering(event)` and `PersonalDataMarkers` gained `GENERATOR_REASON`.)
+- [ ] T071 [P] [US7] `e2e/ReadinessPolicyIT` (extend) - broker down: ready; file-service DB down
+      outside a run: ready; during a run: not ready.
+      **Not done, and deliberately not ticked: the second claim is false against the service as it
+      stands, and the code is what looks wrong.** All three cases were written and run, and nothing
+      was committed - the branch is untouched by this task, `git status --short` clean at `81d2b87`,
+      and the finished work is preserved as `T071-readiness-three-cases.patch` in the stage's
+      scratchpad (507 lines; `git apply --check` passes), holding all three cases, the
+      `PostgresTestSupport.refuseConnectionsTo` / `allowConnectionsTo` fixture and the nested
+      file-service pool configuration. Nothing was committed because the fix is a production-wiring
+      decision that is not the test stage's to make, and a `test(readiness)` commit carrying a red
+      suite would leave the branch failing `./gradlew build` for the next stage.
+      Gate read green before each attempt: "./gradlew -q compileJava compileTestJava checkstyleMain
+      checkstyleTest pmdMain pmdTest" with no findings. Run of exactly that class: `./gradlew test
+      --tests 'uk.gov.hmcts.cp.courtregister.e2e.ReadinessPolicyIT' -Dtest.noFailFast=true` - "8
+      tests completed, 1 failed". Green are the two new [A] cases, "a broker outage fails no
+      readiness probe at all, not merely the first" and "a run that cannot write its payload stops
+      claiming the pod can do its one job", beside the five cases the suite already had. **The
+      failing assertion**, on the case
+      `should_keep_readiness_up_while_the_file_service_database_is_down_outside_a_run`:
+      "org.awaitility.core.ConditionTimeoutException: Condition with Lambda expression in
+      uk.gov.hmcts.cp.courtregister.e2e.ReadinessPolicyIT was not fulfilled within 2 minutes."
+      **Why**, from a throwaway diagnostic in the same suite, reverted: "db=DOWN[dataSource=UP{...}
+      fileServiceDataSource=DOWN{error=org.springframework.jdbc.CannotGetJdbcConnectionException:
+      Failed to obtain JDBC Connection} ] fileServiceRun=UP{run=idle, fileservice=not-probed}" - the
+      component decided correctly and never asked, and is defeated by `db`, which on a
+      generation-enabled pod has become a composite over both pools. Confirmed against the real
+      deployed wiring rather than the suite's hand-declared bean, by a throwaway
+      `TempDbCompositeProbeIT` over `GenerationStackSupport` with
+      `courtregister.generation.enabled=true` (since deleted): "PROBE-OUTAGE-STATUS DOWN" with no
+      run in progress.
+      **The mechanism** (spring-boot-jdbc 4.1.0): `DataSourceHealthContributorAutoConfiguration`
+      collects every `DataSource`-typed bean through
+      `SimpleAutowireCandidateResolver.resolveAutowireCandidates`, which filters on the bean
+      definition's `autowire-candidate` flag and not on `defaultCandidate`, so
+      `@Bean(defaultCandidate = false)` removes the pool from unqualified injection points - which
+      is why `@ConditionalOnMissingBean` still backs off and the component is still named `db` - and
+      not from that enumeration. **Two harms, both of them ones the design explicitly refused**: an
+      unreachable file service rolls a pod whose intake half is working perfectly, and this service
+      asks the file-service pool for a connection on every health poll, holding a connection to
+      another team's database open all day for an answer that cannot matter until 18:00 - which is
+      the harm `FileServiceRunHealthIndicator`'s own javadoc describes and `application.yaml`'s
+      readiness block spells out the opposite of. Blast radius is deployed environments with
+      `COURTREGISTER_GENERATION_ENABLED=true` only: a default local run and every
+      `@ActiveProfiles("test")` context has one datasource, which is the other reason it went
+      unnoticed. Claims 1 and 3 agree with the service and are green. No `doc/DEFECT-FIXES.md` row
+      moves for this: it is a defect in 002's own code rather than a progression one, which is the
+      judgement Phase 7's exception 2 records for the `CliMain.dispatch` NullPointerException. The
+      fix, the pair it lands as and the mutations it still owes are in the open items below.
+- [x] T072 [US7] Run report: one structured log line per run (`event=register_generation_run`) with
       the `RunReport` fields; gauges published; documented in the metrics section of the Confluence
-      page (note for the page owner in the PR description).
+      page (the note for the page owner is recorded below rather than in a PR description, the
+      branch having no PR yet).
+      (Three commits, and **most of the line predates this task**: `6d7aca8` gave every run,
+      skipped ones included, one INFO line carrying all five `RunReport` components, `eaf1413` added
+      `deferred`, and the three gauges the design names were published by the run and already pinned
+      by name and label in `GenerationMetricsTest`. What the task still owed was that almost none of
+      the line was held down - one case looked for "deferred=1" and nothing pinned the other nine
+      fields, the skipped night's line or the arithmetic - and that a run which stopped part way
+      wrote no line at all.
+      **`23e4daf`**, an **[A]** characterisation of the delivered line: seven cases in a new
+      [A]-labelled `TheLine`, all green on introduction, with no implementation commit following.
+      Observed run: "./gradlew test --tests '*RegisterGenerationJobTest' BUILD SUCCESSFUL, 39 tests,
+      0 failures, 0 errors". Non-vacuity by five mutations, each run with `-Dtest.noFailFast=true`
+      and reverted before the commit: "pending={}" renamed "unrequested={}" (39 tests, 4 failed, the
+      arithmetic case on "expected: 1 but was: 3"); the duration printed with `toSeconds()` under
+      the `duration_ms` name ("...reconciled=4 duration_ms=180" against "...duration_ms=180000");
+      `record(report)` moved inside the branch that generated, so only a run that went ahead leaves
+      a line ("Expecting actual: [] to contain exactly [event=register_generation_run gate=skipped
+      reason=flag-off batches=0 generating=0 failed=0 pending=0 deferred=0 reconciled=0
+      duration_ms=0]"); `metrics.oldestRecordedUnbatchedAge(...)` dropped ("expected: 93600.0 but
+      was: 0.0"); and `reasonOf` answering FLAG_ON for every Proceed ('to contain entries:
+      ["reason"="overridden"]' against a line reading "reason"="flag-on").
+      **`0aa2cc5` is the red half** for the night that stopped part way: "./gradlew test --tests
+      '*RegisterGenerationJobTest' -Dtest.noFailFast=true, 45 tests completed, 4 failed" -
+      `a_run_that_stopped_before_it_read_anything_should_still_leave_its_one_line` and
+      `a_run_that_stopped_part_way_should_leave_the_line_the_night_had_got_to` each on "Expecting
+      actual: [] to contain exactly (and in same order): [event=register_generation_run gate=proceed
+      reason=flag-on ...] but could not find the following elements: [the same]",
+      `a_run_that_stopped_part_way_should_name_what_stopped_it_in_a_line_of_its_own` on "Expecting
+      any elements of: [] to match given predicate but none did.", and
+      `a_run_that_stopped_while_requesting_should_still_gauge_what_it_had_assembled` on "expected:
+      2.0 but was: 0.0". Two cases of that commit are green on introduction, labelled **[A]** in
+      their own javadoc with no implementation following, and they bound the fix rather than drive
+      it: the failure still leaves the run, so the reporting cannot be built by swallowing what it
+      reports (Principle VI); and a run that learned nothing publishes nothing, so the gauge case
+      cannot be satisfied by publishing zeroes the run has not earned.
+      **`4021608` is the green half**: "./gradlew test --tests '*RegisterGenerationJobTest' BUILD
+      SUCCESSFUL, 45 tests, 0 failures, 0 errors - the four red assertions quoted in 0aa2cc5 now
+      pass, and the two [A] cases beside them still do". The counts accumulate in a private
+      `RunTally` as the run earns them, `run()` writes the line wherever the run turns out to end,
+      and the failure path adds an ERROR naming the class of what stopped it before rethrowing:
+      reported and rethrown, because a failure only logged about has not been settled and both the
+      schedule and the operations command decide what to do next from the throw. T070's completeness
+      claim caught the new ERROR immediately - "[a statement the drive never reached is a statement
+      outside every claim above] Expecting empty but was: [\"RegisterGenerationJob.java:234\"]" - so
+      `GenerationLegs.theNightlyRun` gained `aNightThatStoppedPartWay` and the new line sits inside
+      the sweep that holds every line to counts and bounded codes. Whole build: "BUILD SUCCESSFUL in
+      7m 22s, 3195 tests, 0 failures, 0 errors, 0 skipped, PMD and Checkstyle clean".
+      Checked as the task asked: a run that fails part way now reports; the counts add up, since
+      `RegisterGenerationService` can only answer PENDING, GENERATING or FAILED and the case asserts
+      `batches` equals both the assembler's answer and the three named counts summed, so a fourth
+      state reaching the report shows up as a total that no longer adds up; nothing on the line is
+      free text or anything a register carries, matched against an
+      event/gate/reason/nine-numeric-fields pattern where `reason` is `[a-z-]+` only; and the run
+      publishes exactly `OLDEST_RECORDED_UNBATCHED_AGE`, `DEFERRED_KEYS` and
+      `PENDING_AFTER_DEADLINE`, read through the `GenerationMetrics` constants. Gates read green
+      before each of the three commits: "./gradlew -q compileJava compileTestJava checkstyleMain
+      checkstyleTest pmdMain pmdTest exit 0, no output"; one intermediate read was red on 12 PMD
+      violations in the new nested class and was re-read green before the commit.)
 
-**Checkpoint**: review gate 8.
+**The note the metrics section of the Confluence page needs (T072's third clause).** It is written
+down here rather than left in a PR description, because the branch has no PR yet and a note that
+lives only in a workflow report has not been handed over. The page owner pastes it; nothing in this
+repository edits that page, and T074 carries the handover.
+
+- **The run report is two things, not one**: a single structured log line and three gauges. Both are
+  emitted for every run, including a run the flag stopped and a run that failed part way.
+- **The line**, one at INFO per run, from `batch/RegisterGenerationJob`, fields in this order.
+  `event`, always `register_generation_run`, which is what an index filter or an alert query keys
+  on. `gate`, `proceed` or `skipped`. `reason`, one of four bounded codes: `flag-on`, `overridden`
+  (an operator overrode a flag that had not said ON), `flag-off`, `flag-unreadable` (the flag could
+  not be read and the run failed closed). `batches`, the total the run accounted for, always equal
+  to `generating` + `failed` + `pending`. `generating`, batches whose render the generator accepted.
+  `failed`, batches the requesting leg failed. `pending`, batches left for the next run, the
+  deadline having run out or the batch not having stamped. `deferred`, court centre days the
+  assembler passed over because a batch of theirs is still in flight - they produce no batch and no
+  document tonight and appear in none of the counts above, which is why the field exists.
+  `reconciled`, outcomes the grace-period reconciler had to fetch rather than receive, so a
+  sustained non-zero reading is the event subscription to investigate and not the renderer.
+  `duration_ms`, measured on the run's own clock against the configured run deadline.
+- Every value on the line is a count, a duration or a bounded code. No court centre, batch,
+  recipient, defendant or generator reason text is ever on it (constitution Principle VII).
+- **A run that stops part way writes the same line with what it had done when it stopped**, and a
+  separate ERROR beside it naming the class of what stopped it; the failure is then rethrown, so the
+  schedule and the operations command still see it. A line showing small counts alongside such an
+  ERROR is a night that was cut short, not a quiet night. `courtregister_pending_after_deadline`
+  from such a run reads what the run had counted at that point rather than a finished count:
+  deliberate, because it is at least about tonight rather than stale from yesterday.
+- **The three gauges the run publishes**, once at the end of every run that got as far as
+  assembling, none of them labelled. `courtregister_oldest_recorded_unbatched_age`, seconds the
+  oldest register still waiting to be batched has waited, which is the reading that says a night was
+  missed, because a register that is never batched moves no counter.
+  `courtregister_deferred_keys`, court centre days the run passed over, the companion of the age
+  gauge: that says how long the worst has waited, this says how much of the estate is waiting.
+  `courtregister_pending_after_deadline`, batches the run ended without asking the renderer for,
+  which is the reading that says the night is no longer finishing inside its hour - the one failure
+  a nightly flow can have repeatedly without anything ever failing. A run that stopped before it
+  assembled publishes none of them, so the previous run's reading stands rather than being
+  overwritten with a zero it did not earn.
+- The rest of the generation surface is named by its own constants in `config/GenerationMetrics` and
+  pinned by `config/GenerationMetricsTest`, which is the list to read the section against: four more
+  unlabelled gauges (`oldest_generating_age`, `oldest_pending_age`, `oldest_generated_age`,
+  `flag_read_ok`), the counters `batches_total{outcome}`,
+  `generation_request_total{response_code}`, `generation_reconciled_total`,
+  `generation_skipped_total{reason}`, `notifications_total{status,response_code}`,
+  `notifications_ignored_total{reason}` and `public_events_ignored_total{reason}`, and the
+  `generation_latency` timer. Every label value is drawn from a bounded enumeration; no batch id,
+  court centre id or recipient address is ever a label, which is both a cardinality explosion and,
+  on a register whose every defendant is a youth, a privacy breach. `generation_latency` is declared
+  and recorded by nothing, so it has no series to document yet (open item 10 below).
+
+**Checkpoint**: review gate 8. **What Phase 8 verified, and by which run**: `./gradlew build` green
+on the branch at `4021608` - "BUILD SUCCESSFUL in 7m 22s, 3195 tests, 0 failures, 0 errors, 0
+skipped, PMD and Checkstyle clean" - with the six gates read green before each of the phase's seven
+commits. The register's ten P rows were confirmed against 454 cases run by name (T068, `5d1520a`);
+both oracles are now held to their recordings on every build, the 001 corpus by manifest digest and
+all 177 goldens by the `outputSha256` they were recorded under (T069, `1fe0285`); the batch and
+notification legs are held to the privacy rule over all 62 log statements they can write and every
+meter they can move, with no leak found (T070, `81d2b87`); and the run report's line, its ten
+fields, its arithmetic and its three gauges are pinned, including the night that stops part way
+(T072, `23e4daf` / `0aa2cc5` / `4021608`).
+
+**T071 is not done, and the gate has a defect to rule on rather than a task to tick.** The readiness
+policy's second claim is false against the service as it stands: on a generation-enabled pod an
+unreachable file service takes readiness DOWN outside a run, through `db`'s composite over both
+pools, and rolls the intake half over a database nothing will touch until 18:00. The failing
+assertion, the mechanism, the blast radius and the three available fixes are on T071's line above
+and in the open items below. Nothing else in the phase is outstanding.
+
+**One phase-gate finding of Phase 7's was closed here**, `29cbc9d` "test(store): state the
+successors a release may pick past RECORDED". Both release statements admit `RECORDED`, `GENERATED`
+and `NOTIFIED` as the states this store leaves a live register in, and no case reached past the
+first of the three: with both predicates cut to `IN ('RECORDED')` the whole of `RegisterStoreIT`
+stayed green. Two **[A]** characterisations close that, one per statement, each labelled [A] in its
+own javadoc and green on introduction - "RegisterStoreIT classes=14 tests=69 failures=0 errors=0",
+up from 67 - with non-vacuity shown by that same narrowing, applied to both statements together and
+reverted before the commit: "69 tests completed, 2 failed", exactly those two and nothing else, the
+release case on "Expecting actual: [\"RECORDED\", \"GENERATED\"] to contain exactly in any order:
+[\"SUPERSEDED\", \"GENERATED\"]" and the failure case on the `NOTIFIED` mirror of it, both also
+answering with, or leaving waiting, the register the estate had already replaced. No production code
+changed in it, so the statements are unchanged and the Phase 6 rule requiring an integration red run
+for a change to one is not engaged. A design fact it established, recorded so the next reader does
+not go looking for the missing case: `markFailed`'s successor search can never see a GENERATED row,
+because a successor past RECORDED is one some batch took there, `idx_register_batch_live_key` admits
+one in-flight batch per court centre and register day, and `markFailed` needs its own batch in
+flight to fail at all - so the only reachable state past RECORDED for that statement is NOTIFIED, by
+way of a batch that has settled, which is why its case is a late delivery rather than a re-share.
+Naming the three live states rather than excluding the dead ones is what keeps the list closed
+against `processed_output_status_chk`, so the port javadoc for `markFailed` is wider than reachable
+rather than mistaken.
+
+**No approved TDD exceptions (Phase 8), and the absence is a judgement rather than an omission** -
+an exception block is only worth reading if it is exhaustive, so what was judged against it is named
+here instead. Phase 8 produced no test-after production behaviour. Its one implementation commit,
+`4021608`, is the green half of `0aa2cc5`'s four failing assertions, and what the fix carried beyond
+them is bounded by that commit's own two [A] cases: the gauges are published only where the run got
+as far as assembling, and the failure still leaves the run. The one ordering the fix changed that no
+assertion distinguishes - a completing run publishing its gauges after the reconciler rather than
+before it - moves no value any case or any meter can read, so it is stated in the commit body rather
+than claimed as an exception.
+
+The [A] work of five commits was judged against that list and is deliberately not on it, all of it
+the shape `c3d8ff7`'s ten cases and `f009bc5`'s fifth case have: an [A] case with no implementation
+commit following it, whose observed run and reverted mutations are recorded on its own tick line
+rather than in an exceptions entry. They are `1fe0285`'s six cases (T069), `81d2b87`'s ninth group
+(T070), `23e4daf`'s seven cases and the two beside `0aa2cc5`'s four red ones (T072), and `29cbc9d`'s
+two (the checkpoint above). `5d1520a` is documentation only and owes no pair, which is the footing
+Phase 7's own three documentation commits were recorded on.
+
+**What Phase 8 leaves open.** Each item names where it belongs, so that nothing is carried only in a
+workflow report. Items 1 to 6 are T071's and the gate's; 7 to 10 came out of T070's drive; 11 to 14
+are decisions rather than defects.
+
+1. **The `db` composite.** Decide and implement the fix, then land the pair: the red half already
+   exists in the saved patch, as `ReadinessPolicyIT`'s case
+   `should_keep_readiness_up_while_the_file_service_database_is_down_outside_a_run`.
+   Three options, none free. (a) `autowireCandidate = false` beside
+   `defaultCandidate = false` on `FileServiceDataSourceConfig.fileServiceDataSource` -
+   `SimpleAutowireCandidateResolver` does honour that flag, but it also removes the bean from the
+   `@Qualifier` injection `GenerationHealth.probe()` uses, so that must become an explicit
+   `beanFactory.getBean(DATA_SOURCE, DataSource.class)`. (b) Stop registering the pool as a
+   `DataSource`-typed bean at all: build it inside the configuration, expose only the qualified
+   `JdbcClient` and the probe, and own the pool's lifecycle. (c)
+   `management.health.db.enabled=false` plus a hand-built `db` contributor over the processed log's
+   pool alone.
+2. **`GenerationHealth.probe()`'s javadoc is factually wrong** whichever fix lands: "the pool it
+   probes is `defaultCandidate = false` and so is invisible to the auto-configuration that collects
+   datasources by type". The name `db` survives; the invisibility does not.
+   `FileServiceDataSourceConfig`'s class javadoc makes a narrower version of the same claim about
+   the auto-configurations' conditions, and that half is true.
+3. **Nothing asserts what `db` covers on a generation-enabled pod**, which is why every generation
+   end-to-end suite is green over this defect: they all assert on batches, documents and e-mails and
+   none of them reads the health endpoint. Characterise it whichever fix lands.
+4. **T071's third case is green but confounded** by the same defect: readiness would go DOWN through
+   `db`'s composite even with `fileServiceRun` out of the group. Its unconfounded half is the
+   component assertion, which passed with `fileServiceRun` DOWN and details exactly
+   `{run=in-progress, fileservice=down}`. Re-record that case's evidence after a fix.
+5. **Two mutations are owed** when T071's two green cases land, [A] mutation evidence belonging in a
+   commit body and no commit having been made: drop `fileServiceRun` from the readiness `include:`
+   line in `application.yaml`, and case 3 must fail; add `servicebus` to it, and case 1 must fail.
+6. **`PostgresTestSupport.refuseConnectionsTo` / `allowConnectionsTo`** is worth folding into the
+   fixture on its own merits - `ALTER DATABASE ... ALLOW_CONNECTIONS false` plus
+   `pg_terminate_backend` is the only way this build can stage an outage of one database inside the
+   shared server, and `FileServicePayloadStoreIT` and the generation suites may want it. Note also
+   that no deployment manifest ships in this repository, so T071's sustained-outage window is not
+   grounded in a real `failureThreshold` times `periodSeconds`; the constant's javadoc says so.
+7. **`DocumentEventListener` echoes another context's raw token at WARN**, which is the defect class
+   the phase gate already fixed once in `CliMain.unreadable`: `uuid()` (line 355) and `instant()`
+   (line 381) attach the parser's exception, and those messages quote the token - "Invalid UUID
+   string: <the event's sourceCorrelationId / payloadFileServiceId / documentFileServiceId>" and
+   "Text '<the event's generatedTime / failedTime>' could not be parsed at index 0". There the text
+   was an operator's typing; here it is a public topic the whole estate publishes to. It is outside
+   T070's claim, since none of the three named values can reach those fields (`reason` is read via
+   `text()` and never parsed), so it was not fixed red-first without a register row. The fix is the
+   same shape: report the field by the name this service owns and the refusing reader's class, and
+   drop the throwable. Measured while T070 was written: Jackson 3 redacts the source in a parse
+   failure, so the envelope parse at `DocumentEventListener:191` does not quote the event body and a
+   `generation-failed` body carrying `sdg_reason` is safe there.
+8. **`RegisterGenerationService:220` puts an English sentence in a `reason=` slot**, logging
+   `unavailable.getMessage()`. Not a leak - the phrase is bounded and written in
+   `FileServicePayloadStore`, which documents exactly that - but the suite's own stated rule is that
+   `reason=` carries a bounded code, and `PAYLOAD_STORE_UNAVAILABLE` is already the batch's reason.
+9. **The bounded-reason sweep is delivery-path only** (`reasonsIn` / `BOUNDED_REASONS`) and could be
+   extended over the two legs now that `GenerationLegs` drives them, which would catch item 8 by
+   construction. Deliberately outside T070, whose claim is the three named values.
+10. **`courtregister_generation_latency` is declared and recorded by nothing.** An alerting gap
+    rather than a privacy one, since it carries no label; `TelemetryPrivacyTest` asserts the unmoved
+    set so that whoever wires the timer up is told to fold it into the drive.
+11. **Neither the run report's line nor its new ERROR carries `requestId` or `hearingId`**, which
+    Principle VII asks of every log line about processing. A run is not a delivery and has neither,
+    and this is how the line has been since `6d7aca8` rather than anything T072 changed. The gate
+    rules: either the principle is read as scoped to per-delivery lines, or the run's line gains a
+    run correlation id of its own.
+12. **The severity of a refused report (`CliMain.reported`, `CliMain.java:302`) is the design
+    owner's to set**, and the behaviour is unchanged pending it. It breaks no stated rule: Principle
+    VI's ERROR-plus-metric clause is conditional on a failure path taking one of the two settlement
+    outcomes, and a command reached by `kubectl exec` takes neither and can carry neither id, while
+    what does bind - that nothing is swallowed - is satisfied, the refusal being answered on exit 2
+    and said once. For keeping ERROR: the level and the exit code agree throughout `CliMain` (every
+    WARN path answers REFUSED and 1, every ERROR path FAILED and 2), the line is the only surviving
+    record that a listing somebody may already be acting on is incomplete, and the pod cannot tell a
+    deliberate `| head -1` from a listing killed part way through. For moving it to WARN: the write
+    has already happened and the remedy is to re-run without the pipe, the path increments no metric
+    so it is attention with no signal behind it, and an ERROR that fires on correct operator
+    behaviour trains the estate's readers to discount this service's ERRORs. Smallest change either
+    way: none, plus one sentence in `reported`'s javadoc recording the level as deliberate, since
+    `CliMainTest.errorLines` already pins it in effect; or `LOG.error` to `LOG.warn` with
+    `CliMainTest.errorLines` and its one case retargeted at `Level.WARN`, which under the loop is a
+    red test commit followed by a one-word fix. Two things belong with the ruling: `wired`'s
+    not-wired ERROR is as everyday as this one (`check-flag` against an intake-only pod is an
+    ordinary first step of a cutover), so a ruling against everyday ERRORs reaches it too; and if
+    ERROR is kept on Principle VI grounds, the same sentence pairs an ERROR with a metric an alert
+    fires on, which this path has none of, so the consistent third option is ERROR plus a counter.
+13. **The shipped default of `courtregister.cli` when nothing sets it at all is pinned nowhere.**
+    Carried from Phase 7's exception 1 as a follow-up for T075 or Phase 8 and still open: both
+    `CliModeConfigTest` and `HttpSurfaceTest` set the property explicitly, so `NOT_CLI` flipped from
+    `"false"` to `"true"` leaves both green. It now belongs to T075, which names it.
+14. **The 127-member batch's header still comes from progression's `stream().findAny()`** and this
+    port reproduces it bug for bug. Nothing is wrong - the golden reproduces - but if the
+    header-from-any-member behaviour is ever judged a defect it has no register row of its own.
+    `PROVENANCE.md` calls it "the P4 shape", though P4's fix is the recipient union and not the
+    header.
 
 ---
 
@@ -1313,11 +1731,45 @@ exist; every requirement they carried does, and the endpoint refusal's wording c
       `.claude/agents/spec-validator.md`; update `.claude/agents/software-engineer.md` rules (record
       not POST; the flag; ids before calls). Docs-only, exempt from the loop.
 - [ ] T074 [P] `README.md` Status → 002 complete; `CLAUDE.md` unchanged unless a rule moved; the
-      constitution's Sync Impact Report `⚠ pending` items → `✅`.
+      constitution's Sync Impact Report `⚠ pending` items → `✅`. Two handovers and four register
+      corrections land here or with the owner of the file in question, which this task decides.
+      **The handovers**: the metrics-section note for the Confluence page, written out under T072
+      above, and nothing in this repository edits that page. **The register corrections T068
+      identified and could not make**, all in `doc/DEFECT-FIXES.md`, which only the register's own
+      stage may edit: the shared header cites "constitution v3.0.0 Principle I" in two places while
+      the constitution is at v3.0.1 (the bump was a PATCH that completed the commit-type list and
+      changed no principle, so the citation is defensible as historical and was left alone rather
+      than edited out of scope); four prose lines in that file's C-half header (lines 7 and 23-25)
+      run to 101-128 columns and predate T068, which did not reflow them because they belong to the
+      C rows' half; P10's status cell says "FIXED - pinning tests passing" without naming the task
+      that landed it, where every other FIXED row names one, and the behaviour arrived at T022 by
+      way of the two Phase 3 exceptions, which a reader will want the pointer to; and the P-row
+      reconciliation should note that P10 is now cited from test code as well as from its pinning
+      tests, `RegisteredDefectFixes.progressionLegRows()` carrying it and the differential audit's
+      own summary counting two differences against it.
 - [ ] T075 [P] `scripts/container-smoke.sh` - readiness UP < 60 s with generation enabled against the
-      compose stubs; `check-flag` exit 0.
+      compose stubs; `check-flag` exit 0. **Both were already recorded green in Phase 7** at
+      `441d653` ("PASS: readiness reported UP within the 60s budget" and "PASS: startup.sh
+      check-flag printed flag=ON and exited 0", the second through the deployed reader rather than a
+      STUB override), so what this task owes is the re-run on the branch as it now stands, plus the
+      one case Phase 7's exception 1 left open and Phase 8 did not close: the shipped default of
+      `courtregister.cli` when nothing sets it at all. The host-side `bootRun` block of
+      quickstart.md is the other thing still owed from Phase 7's checkpoint.
 - [ ] T076 Spec checklists: `checklists/requirements.md` re-validated against the delivered behaviour;
       add `checklists/consolidation-audit.md` recording T069's result and the goldens' provenance.
+      **T069 has already delivered what that file has to record, and turned it from a check taken
+      once into an assertion on every build**: the 001 corpus reproduces by manifest digest
+      (`20fcb12324bf674d3b141b4fa822076f2ff56be1aad43531000d575aa649d924`, which is `INDEX.json`'s
+      own `corpusDigest`), all 177 goldens digest to their recorded `outputSha256`, all 168 payload
+      goldens reproduce from their recorded inputs, the 52 recorded refusals are refused here too
+      under C29's rule, and the one attributed deviation is P10's two shapes. `1fe0285`'s body
+      mis-cites that evidence as T075's; it is this task's. Two more things belong in the same
+      checklist: `PROVENANCE.md`'s "Verification" section could now cite the audit rather than the
+      one-off `diff -r`, which is worth asking about first because that file is a recording
+      artefact; and P6 and P7's RETIRED status depends on progression's retirement PR actually
+      merging, which nothing in this repository can assert, so the residue checklist (design §10.6)
+      needs them tracked to conclusion with the owner-and-trigger shape C18, C28 and C34 carry
+      rather than assumed.
 - [ ] T077 [A] Final `./gradlew build` (PMD, Checkstyle 0 warnings, JaCoCo gate) green on the branch;
       review gate 9 (whole increment) PASS; report token use per phase.
 
