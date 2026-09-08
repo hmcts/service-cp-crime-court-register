@@ -89,17 +89,97 @@ public final class PostgresTestSupport {
      * @return the JDBC URL of the new, empty database
      */
     public static String createEmptyDatabase(final String name) {
+        onTheServer(name, "CREATE DATABASE " + name);
+        return urlFor(name);
+    }
+
+    /**
+     * The JDBC URL of one database inside the shared container.
+     *
+     * @param name the database; must be a plain identifier
+     * @return its JDBC URL
+     */
+    public static String urlFor(final String name) {
+        requirePlainIdentifier(name);
+        return "jdbc:postgresql://" + container().getHost() + ':'
+                + container().getFirstMappedPort() + '/' + name;
+    }
+
+    /**
+     * Opens and closes one connection to a database inside the shared container.
+     *
+     * <p>For a suite that has to show an outage it staged is a real one. Nothing is caught: however
+     * the server refused is the answer, and a fixture that turned a refusal into a boolean would
+     * leave a case asserting that something went wrong without saying what.
+     *
+     * @param name the database to connect to
+     * @throws SQLException however the server refused
+     */
+    public static void connectTo(final String name) throws SQLException {
+        DriverManager.getConnection(urlFor(name), username(), password()).close();
+    }
+
+    /**
+     * Refuses every connection to one database in the shared container, and severs the ones it has.
+     *
+     * <p>The narrowest outage this container allows, and it exists because {@link #pause()} is too
+     * wide for one question. There is one Postgres per JVM, so the file-service database and the
+     * processed log are in the same server: a suite that froze the container to take the file
+     * service away would take the processed log with it, and readiness would then be DOWN for the
+     * wrong reason. From a pool's point of view this is the same outage - the server is there and
+     * will not let it in, which is what a database taken out of service looks like to a client -
+     * and it reaches exactly one of the two databases.
+     *
+     * <p>Two statements, because either alone leaves the outage half-made. The first refuses what
+     * comes next; the second ends what is already open, and a pool holding an idle connection would
+     * otherwise answer a health probe over it quite happily.
+     *
+     * @param name the database to take out of service
+     */
+    public static void refuseConnectionsTo(final String name) {
+        onTheServer(name,
+                "ALTER DATABASE " + name + " WITH ALLOW_CONNECTIONS false",
+                // The name is a validated plain identifier, so it cannot carry a quote and this
+                // literal cannot be anything but a database name.
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '"
+                        + name + '\'');
+    }
+
+    /**
+     * Lets connections back into a database, whether or not they were refused.
+     *
+     * <p>Idempotent deliberately, for the reason {@link #unpause()} is: the suites that stage this
+     * outage undo it from an {@code @AfterEach}, so a failing assertion cannot leave the rest of
+     * the build talking to a database that will not answer.
+     *
+     * @param name the database to put back in service
+     */
+    public static void allowConnectionsTo(final String name) {
+        onTheServer(name, "ALTER DATABASE " + name + " WITH ALLOW_CONNECTIONS true");
+    }
+
+    /**
+     * Runs statements against the container's own database, which is never the one being altered.
+     *
+     * @param name       the database the statements are about, validated before any of them runs
+     * @param statements the statements, in order
+     */
+    private static void onTheServer(final String name, final String... statements) {
+        requirePlainIdentifier(name);
+        try (Connection connection = DriverManager.getConnection(jdbcUrl(), username(), password());
+             Statement statement = connection.createStatement()) {
+            for (final String sql : statements) {
+                statement.execute(sql);
+            }
+        } catch (SQLException failed) {
+            throw new IllegalStateException("could not administer the database " + name, failed);
+        }
+    }
+
+    private static void requirePlainIdentifier(final String name) {
         if (!name.matches("[a-z][a-z0-9_]{0,62}")) {
             throw new IllegalArgumentException("not a plain database identifier: " + name);
         }
-        try (Connection connection = DriverManager.getConnection(jdbcUrl(), username(), password());
-             Statement statement = connection.createStatement()) {
-            statement.execute("CREATE DATABASE " + name);
-        } catch (SQLException failed) {
-            throw new IllegalStateException("could not create the database " + name, failed);
-        }
-        return "jdbc:postgresql://" + container().getHost() + ':'
-                + container().getFirstMappedPort() + '/' + name;
     }
 
     /**
