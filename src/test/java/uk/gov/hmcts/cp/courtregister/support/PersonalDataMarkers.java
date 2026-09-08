@@ -14,6 +14,13 @@ import tools.jackson.databind.node.ObjectNode;
  * contexts — and they have to be looking for the same values. Two lists of markers is how one suite
  * comes to sweep for a field the other one has stopped setting, with both of them green.
  *
+ * <p>A third kind of text belongs here for the same reason, and it arrives by a different door:
+ * what an operator types at the operations commands. {@link #OPERATOR_TOKEN} is that one, swept for
+ * by the CLI cases of {@code config/TelemetryPrivacyTest} and by
+ * {@code batch/cli/CliMainTest} - a command is reached by {@code kubectl exec} rather than by a
+ * delivery, so its arguments are somebody's own typing, and the rule about text this service did not
+ * write is the same rule whoever wrote it.
+ *
  * <p>The markers are deliberately implausible strings. A suite looking for the word "name" would
  * fail on a field called {@code loggerName}; a suite looking for a value nothing else in this
  * repository can produce fails only when that value really was written down.
@@ -60,6 +67,23 @@ public final class PersonalDataMarkers {
      * one.
      */
     public static final String RECIPIENT_EMAIL = "recipient.marker.zqx7@example.gov.uk";
+
+    /**
+     * What an operator mistypes, or pastes, into one of a command's arguments.
+     *
+     * <p>Shaped as a contact detail because that is the shape of the accident: a support call
+     * dictates a court house and an address goes in instead, or a credential is pasted over
+     * {@code --batch} out of the wrong window. It is neither a defendant's data nor a recipient's,
+     * and it is still the one thing on the operations surface this service must not write down -
+     * every reader that refuses one of these values quotes the token it choked on, and a command's
+     * log stream reaches the same estate-wide index every other line does.
+     *
+     * <p>Short on purpose, and the length is load-bearing: {@code UUID.fromString} answers anything
+     * over 36 characters with "UUID string too large" and quotes only what is shorter, so a longer
+     * marker would leave every {@code --batch} case passing without the token ever having been in
+     * reach of a log line.
+     */
+    public static final String OPERATOR_TOKEN = "zqx7.marker@example.invalid";
 
     /** Every marker that names or describes a person, and must never appear at any level. */
     public static final List<String> PERSONAL = List.of(

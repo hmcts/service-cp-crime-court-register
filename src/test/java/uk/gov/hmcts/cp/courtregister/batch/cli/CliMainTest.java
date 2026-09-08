@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.batch.cli;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -45,6 +46,7 @@ import uk.gov.hmcts.cp.courtregister.config.GenerationProperties.SourceMode;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
+import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
 
 /**
  * The one entry point operations reach this service through: what it dispatches, and what it says.
@@ -77,13 +79,17 @@ import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
  * terminal is pasted into tickets and the list of what this image offers is the whole of what a
  * person who mistyped needs.
  *
- * <p><strong>What reaches the terminal is bounded, and the stack trace is the log's
- * business.</strong> The refusal, the parser refusal and the failure are the three shapes every
- * command reports through, so they are asserted here once: a bounded reason, the identity the
- * attempt was about, the command's own usage under a refusal - and never the thrower's words or a
- * stack trace, which the cases below find in the log instead (constitution Principle VII). The
- * stream is handed in rather than reached for, and the last group holds that down by reading what
- * {@link System#out} carried while a command wrote.
+ * <p><strong>What reaches the terminal is bounded, and so is what reaches the log.</strong> The
+ * refusal, the parser refusal and the failure are the three shapes every command reports through,
+ * so they are asserted here once: a bounded reason, the identity the attempt was about, the
+ * command's own usage under a refusal, and never the thrower's words. The log is held to the same
+ * rule and not to a weaker one: a command's arguments are an operator's own typing, every reader
+ * that refuses one of them quotes the token it choked on, and a command's log stream is this pod's
+ * stderr and from there an index the whole estate reads - so the line names which argument would
+ * not read and the class that refused it, and neither the message nor a throwable carrying it goes
+ * anywhere at all (constitution Principle VII). The stream is handed in rather than reached for,
+ * and the last group holds that down by reading what {@link System#out} carried while a command
+ * wrote.
  *
  * <p>{@code CliDispatchIT} (T067) is the same claim end to end inside the built image, and
  * {@link ArgsTest} is the grammar underneath every {@code --help} case here.
@@ -173,6 +179,23 @@ class CliMainTest {
                 .map(String::strip)
                 .filter(line -> CASE_LABEL.matcher(line).matches())
                 .flatMap(line -> Stream.of(line.substring(0, line.length() - 1).split("\\|")))
+                .toList();
+    }
+
+    /**
+     * The lines this service itself wrote, as the events rather than as their text.
+     *
+     * <p>Read as events because one of the claims below is about what is <em>attached</em> to a
+     * line and not about what it says: a throwable reaches a log index as its whole rendered trace,
+     * and the only way to assert that none was attached is to ask the event. Narrowed to this
+     * service's own loggers so the claim is about lines this repository writes.
+     *
+     * @param log the capture, taken at every level
+     * @return every event this service's own loggers produced
+     */
+    private static List<ILoggingEvent> serviceLines(final CapturedLog log) {
+        return log.events().stream()
+                .filter(event -> event.getLoggerName().startsWith(SERVICE_PACKAGE))
                 .toList();
     }
 
@@ -480,6 +503,11 @@ class CliMainTest {
 
     /**
      * How every command says it declined, which is the same way.
+     *
+     * <p>The two cases about an argument that would not read go through a command rather than
+     * through the helper directly, because which argument it was is something only the command
+     * knows: the helper is handed the name, and a case that made one up would be asserting its own
+     * fixture.
      */
     @Nested
     @DisplayName("how a command declines")
@@ -487,6 +515,12 @@ class CliMainTest {
 
         /** One command's usage, as the command itself would pass it. */
         private static final String COMMAND_USAGE = "usage: check-flag (no arguments)";
+
+        /** The one lever's reader, which an invocation refused at the argument never reaches. */
+        private final FeatureFlagReader reader = mock(FeatureFlagReader.class);
+
+        /** The notifier, which an invocation refused at the argument never reaches either. */
+        private final RegisterNotifierService notifier = mock(RegisterNotifierService.class);
 
         @Test
         void a_refusal_should_say_which_command_declined_why_and_what_it_takes() {
@@ -506,8 +540,7 @@ class CliMainTest {
 
         @Test
         void a_parser_refusal_should_be_said_the_same_way_under_its_own_reason() {
-            final int code = CliMain.unreadable(CliMain.CHECK_FLAG, COMMAND_USAGE,
-                    new IllegalArgumentException("--date was given more than once"), output);
+            final int code = new CheckFlagCli(reader, output).run(List.of("flag"));
 
             softly.assertThat(code)
                     .as("the parser could not read what was typed, which is still a refusal: "
@@ -518,33 +551,60 @@ class CliMainTest {
                             + "reasons stay a vocabulary rather than a message")
                     .containsExactly(
                             "command=check-flag outcome=refused reason=unreadable-argument",
-                            COMMAND_USAGE);
+                            CheckFlagCli.USAGE);
+            verifyNoInteractions(reader);
         }
 
         @Test
-        void the_parser_s_own_words_should_reach_the_log_and_not_the_terminal() {
-            final IllegalArgumentException notUsable =
-                    new IllegalArgumentException("an argument is written --name, and this one is "
-                            + "not: yot.coordinator@example.gov.uk");
-
+        void what_an_operator_typed_should_reach_neither_the_terminal_nor_the_log() {
             try (CapturedLog log = CapturedLog.everythingAndAllOf(SERVICE_PACKAGE)) {
-                CliMain.unreadable(CliMain.NOTIFY_REGISTER, COMMAND_USAGE, notUsable, output);
+                final int code = new NotifyRegisterCli(notifier, output)
+                        .run(List.of("--" + Args.BATCH, PersonalDataMarkers.OPERATOR_TOKEN));
 
+                softly.assertThat(code)
+                        .as("the refusal has to have happened for the silence below to mean "
+                                + "anything")
+                        .isEqualTo(CliMain.REFUSED);
                 softly.assertThat(printed)
                         .as("what an operator typed is not the terminal's business twice over, and "
                                 + "a token they mistyped may be anything at all - an address among "
                                 + "them (constitution Principle VII)")
-                        .noneMatch(line -> line.contains("example.gov.uk"));
+                        .noneMatch(line -> line.contains(PersonalDataMarkers.OPERATOR_TOKEN));
                 softly.assertThat(printed)
                         .as("and no stack trace: the terminal carries codes, counts and "
                                 + "identifiers, and a trace on it is a line an operator has to "
                                 + "scroll past to find the verdict")
                         .noneMatch(line -> line.contains("java.lang") || line.contains("\tat "));
                 softly.assertThat(log.renderings())
-                        .as("the throwable is the only record of which token could not be read, so "
-                                + "it is written down rather than swallowed - in the log, where a "
-                                + "diagnosis reads it")
-                        .anyMatch(line -> line.contains(notUsable.getClass().getName()));
+                        .as("nor the log, which is this pod's stderr and from there an index the "
+                                + "whole estate reads: every reader that refuses one of these "
+                                + "values quotes the token it choked on, so neither the message "
+                                + "nor a throwable carrying it may be written down")
+                        .isNotEmpty()
+                        .noneMatch(line -> line.contains(PersonalDataMarkers.OPERATOR_TOKEN));
+                softly.assertThat(serviceLines(log))
+                        .as("and no throwable is attached at all, because a rendered trace reaches "
+                                + "a log index exactly as a message does and carries the same "
+                                + "token inside it")
+                        .isNotEmpty()
+                        .allMatch(event -> event.getThrowableProxy() == null);
+            }
+        }
+
+        @Test
+        void an_unreadable_argument_should_be_logged_by_its_name_and_by_what_refused_it() {
+            try (CapturedLog log = CapturedLog.everythingAndAllOf(SERVICE_PACKAGE)) {
+                new NotifyRegisterCli(notifier, output)
+                        .run(List.of("--" + Args.BATCH, PersonalDataMarkers.OPERATOR_TOKEN));
+
+                softly.assertThat(log.messages())
+                        .as("which argument would not read is what a diagnosis needs, and the name "
+                                + "is this service's own text rather than the operator's - so it "
+                                + "is the half of the pair that may be written down, beside the "
+                                + "class of the reader that refused and nothing it said")
+                        .anyMatch(line -> line.contains("argument=" + Args.BATCH)
+                                && line.contains(
+                                        "cause=" + IllegalArgumentException.class.getName()));
             }
         }
 

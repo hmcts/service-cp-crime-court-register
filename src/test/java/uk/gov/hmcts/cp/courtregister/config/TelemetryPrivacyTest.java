@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -17,12 +18,16 @@ import com.azure.messaging.servicebus.ServiceBusReceivedMessageContext;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -31,6 +36,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -40,12 +47,25 @@ import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.application.DistributionPipeline;
+import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.HearingPayloadSource;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
 import uk.gov.hmcts.cp.courtregister.application.NowSubscriptionsSource;
+import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
+import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
+import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmission;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.application.SubmissionReceipt;
+import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
+import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
+import uk.gov.hmcts.cp.courtregister.batch.cli.Args;
+import uk.gov.hmcts.cp.courtregister.batch.cli.CheckFlagCli;
+import uk.gov.hmcts.cp.courtregister.batch.cli.CliMain;
+import uk.gov.hmcts.cp.courtregister.batch.cli.GenerateRegisterCli;
+import uk.gov.hmcts.cp.courtregister.batch.cli.ListBatchesCli;
+import uk.gov.hmcts.cp.courtregister.batch.cli.NotifyRegisterCli;
+import uk.gov.hmcts.cp.courtregister.batch.cli.SupersedeBeforeCli;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
 import uk.gov.hmcts.cp.courtregister.domain.ContractViolation;
@@ -59,6 +79,8 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.inbound.CourtRegisterMessageListener;
 import uk.gov.hmcts.cp.courtregister.inbound.DistributionCommandParser;
 import uk.gov.hmcts.cp.courtregister.inbound.ServiceBusConsumerConfig;
+import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
+import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
 import uk.gov.hmcts.cp.courtregister.support.NowSubscriptionFixtures;
@@ -105,6 +127,13 @@ import uk.gov.hmcts.cp.courtregister.support.StoreGateTestSupport;
  * contexts, over a success leg and four failure legs. The markers themselves live in
  * {@link uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers} so the two suites cannot come to
  * sweep for different values.
+ *
+ * <p><strong>The delivery path is not the only way text this service did not write gets in.</strong>
+ * The operations commands are the other one, and the text they are handed is an operator's own
+ * typing rather than a producer's message: a court house dictated over the phone, a batch identity
+ * copied out of a support ticket. Those lines reach the same index as every line above, so the last
+ * group holds the five commands to the same rule, over a marker of its own
+ * ({@link PersonalDataMarkers#OPERATOR_TOKEN}).
  *
  * <p>Every assertion is made against a capture of <em>everything</em>, at TRACE, including the
  * rendered text of any exception attached to a line. A stack trace reaches a log index exactly as a
@@ -497,6 +526,139 @@ class TelemetryPrivacyTest {
                 }
             });
         }
+    }
+
+    // --- text an operator typed ------------------------------------------------------------------
+
+    /**
+     * What the operations commands may write down about what was typed at them.
+     *
+     * <p>The five commands are reached by {@code kubectl exec} rather than by a delivery, so the
+     * text they are handed is somebody's own typing: a court house dictated over the phone, a batch
+     * identity copied out of a support ticket, an instant a half-remembered runbook step composed.
+     * Every value one of them reads is read by a JDK parser that quotes the token it choked on -
+     * {@code Invalid UUID string: ...}, {@code Text '...' could not be parsed} - and a command's
+     * log stream is this pod's stderr, which reaches the index every claim above is about. So a
+     * contact detail typed where a court house belongs, or a credential pasted over
+     * {@code --batch}, is one refusal away from being published.
+     *
+     * <p>The sweep is over all five commands and both halves of every refusal - the grammar
+     * underneath them and each value a command interprets - because the rule is not one command's:
+     * it is what this image's whole operations surface may say about text it did not write. What a
+     * diagnosis needs instead is on the line and asserted by {@code batch/cli/CliMainTest}: which
+     * argument would not read, by the name this service owns, and the class of the reader that
+     * refused it.
+     */
+    @Nested
+    @DisplayName("an argument an operator typed")
+    class TheOperationsCommands {
+
+        private final FeatureFlagGate gate = mock(FeatureFlagGate.class);
+        private final RegisterStore store = mock(RegisterStore.class);
+        private final BatchAssembler assembler = mock(BatchAssembler.class);
+        private final RegisterGenerationService generation =
+                mock(RegisterGenerationService.class);
+        private final RegisterNotifierService notifier = mock(RegisterNotifierService.class);
+        private final RegisterBatchRepository batches = mock(RegisterBatchRepository.class);
+        private final RegisterNotificationRepository notifications =
+                mock(RegisterNotificationRepository.class);
+        private final FeatureFlagReader reader = mock(FeatureFlagReader.class);
+
+        @ParameterizedTest(name = "{0}")
+        @MethodSource("uk.gov.hmcts.cp.courtregister.config.TelemetryPrivacyTest"
+                + "#invocationsAnOperatorGetsWrong")
+        @DisplayName("is written nowhere: not to the terminal, and not to the log either")
+        void should_never_write_down_a_token_an_operator_typed(final String shape,
+                final String command, final List<String> typed) {
+
+            final List<String> printed = new ArrayList<>();
+
+            try (CapturedLog log = CapturedLog.everything()) {
+                final int code = commands(printed::add).get(command).run(typed);
+
+                assertThat(code)
+                        .as("the refusal has to have happened for the silence below to mean "
+                                + "anything: %s", shape)
+                        .isEqualTo(CliMain.REFUSED);
+                assertThat(printed)
+                        .as("an operator's terminal is pasted into tickets, and what they typed is "
+                                + "not the report's business twice over")
+                        .noneMatch(line -> line.contains(PersonalDataMarkers.OPERATOR_TOKEN));
+                assertThat(log.renderings())
+                        .as("and the log is shipped to an index the whole estate reads, which is "
+                                + "the same rule and not a weaker one: %s", shape)
+                        .isNotEmpty()
+                        .noneMatch(line -> line.contains(PersonalDataMarkers.OPERATOR_TOKEN));
+            }
+        }
+
+        /**
+         * The five commands over doubled collaborators, by the names the registry knows them by.
+         *
+         * <p>Built the way {@code CliMain.registryOf} builds them, so a command added to the image
+         * is one line from being inside this claim. None of the doubles is reached: every
+         * invocation below is refused at the argument, before a store, a flag or a notifier is
+         * asked anything.
+         *
+         * @param output where the command's lines are written, one line per call
+         * @return the five commands, by name
+         */
+        private Map<String, CliMain.Command> commands(final Consumer<String> output) {
+            return Map.of(
+                    CliMain.GENERATE_REGISTER, new GenerateRegisterCli(gate, store, assembler,
+                            generation, generationSettings(), Clock.systemUTC(), output)::run,
+                    CliMain.NOTIFY_REGISTER, new NotifyRegisterCli(notifier, output)::run,
+                    CliMain.LIST_BATCHES,
+                            new ListBatchesCli(batches, notifications, store, output)::run,
+                    CliMain.SUPERSEDE_BEFORE, new SupersedeBeforeCli(store, output)::run,
+                    CliMain.CHECK_FLAG, new CheckFlagCli(reader, output)::run);
+        }
+
+        /**
+         * The settings a deployed command works to, which are the ones {@code application.yaml}
+         * ships.
+         *
+         * @return generation enabled, at the court's hour, in the court's zone
+         */
+        private static GenerationProperties generationSettings() {
+            return new GenerationProperties(true, "0 0 18 * * MON-FRI", "Europe/London", false,
+                    Duration.ofMinutes(60), Duration.ofMinutes(70), Duration.ofMinutes(10),
+                    GenerationProperties.COMPLETION_EVENT,
+                    GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE,
+                    GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE);
+        }
+    }
+
+    /**
+     * The invocations an operator gets wrong, one for every value the five commands read and two
+     * for the grammar underneath all of them.
+     *
+     * <p>Each puts {@link PersonalDataMarkers#OPERATOR_TOKEN} where the mistake goes: in a value a
+     * command interprets, in the name position - which is where a pasted token lands when a runbook
+     * step is half-typed - and as a name nobody owns given twice, which is the one refusal the
+     * parser makes that has a name in its hands.
+     *
+     * @return each shape, beside the command it was typed at and the tokens that make it
+     */
+    static Stream<Arguments> invocationsAnOperatorGetsWrong() {
+        final String token = PersonalDataMarkers.OPERATOR_TOKEN;
+        final String aDate = "2026-08-20";
+        return Stream.of(
+                arguments("generate-register's register date", CliMain.GENERATE_REGISTER,
+                        List.of("--" + Args.DATE, token)),
+                arguments("generate-register's batch", CliMain.GENERATE_REGISTER,
+                        List.of("--" + Args.DATE, aDate, "--" + Args.BATCH, token)),
+                arguments("generate-register's bound", CliMain.GENERATE_REGISTER,
+                        List.of("--" + Args.DATE, aDate, "--" + Args.RECORDED_BEFORE, token)),
+                arguments("notify-register's batch", CliMain.NOTIFY_REGISTER,
+                        List.of("--" + Args.BATCH, token)),
+                arguments("list-batches' register date", CliMain.LIST_BATCHES,
+                        List.of("--" + Args.DATE, token)),
+                arguments("supersede-before's bound", CliMain.SUPERSEDE_BEFORE,
+                        List.of("--" + Args.SHARED_BEFORE, token)),
+                arguments("a token where a name belongs", CliMain.CHECK_FLAG, List.of(token)),
+                arguments("a name nobody owns, given twice", CliMain.LIST_BATCHES,
+                        List.of("--" + token, "--" + token)));
     }
 
     // --- secrets ---------------------------------------------------------------------------------

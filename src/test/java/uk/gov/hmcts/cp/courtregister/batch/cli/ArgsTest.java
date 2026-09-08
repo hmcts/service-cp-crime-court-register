@@ -16,6 +16,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
 
 /**
  * The one parser the five commands read an invocation through, and the shapes it will not guess at.
@@ -35,6 +36,13 @@ import org.junit.jupiter.params.provider.MethodSource;
  * ({@link CliMain#REFUSED}, via the command's own {@code unreadable}). Every refusal below is
  * therefore asserted as a refusal - {@link IllegalArgumentException} out of {@link Args#parse} -
  * and not as a value the command would then have worked from.
+ *
+ * <p><strong>And what a refusal is allowed to say is part of the grammar.</strong> A refusal here
+ * is thrown, and a throw is handled by whoever catches it: a command turns it into a bounded report
+ * line and a log line, and a future handler may write the message down whole. The token it refused
+ * on is an operator's own text - an address dictated over the phone, a credential pasted over an
+ * argument - so the message names the argument where this service owns the name and says nothing at
+ * all where it does not (constitution Principle VII).
  *
  * <p><strong>What the parser does not do is as much of the claim as what it does.</strong> It
  * interprets no value: {@code --date last-tuesday} parses, because the refusal for a date that is
@@ -75,6 +83,28 @@ class ArgsTest {
                 arguments("an option given again as a bare switch",
                         List.of("--date", TYPED_DATE, "--date")),
                 arguments("help given twice", List.of("--help", "--help")));
+    }
+
+    /**
+     * The same shapes again, with the token an operator got wrong put where the mistake goes.
+     *
+     * <p>Once in a name position, which is where a pasted token lands when a runbook step is
+     * half-typed, and once as a name nobody owns given twice - the two refusals that have an
+     * operator's own text in their hands.
+     *
+     * @return each shape, beside the tokens that make it, one of them the marker
+     */
+    static Stream<Arguments> shapesItRefusesOverATokenAnOperatorTyped() {
+        return Stream.of(
+                arguments("a value where a name was expected",
+                        List.of(PersonalDataMarkers.OPERATOR_TOKEN)),
+                arguments("a value after a complete option",
+                        List.of("--date", TYPED_DATE, PersonalDataMarkers.OPERATOR_TOKEN)),
+                arguments("one dash rather than two",
+                        List.of("-" + PersonalDataMarkers.OPERATOR_TOKEN)),
+                arguments("a name nobody owns, given twice",
+                        List.of("--" + PersonalDataMarkers.OPERATOR_TOKEN,
+                                "--" + PersonalDataMarkers.OPERATOR_TOKEN)));
     }
 
     /**
@@ -207,6 +237,31 @@ class ArgsTest {
                             + "meant - here, which register date is e-mailed")
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("--" + Args.DATE);
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @MethodSource("uk.gov.hmcts.cp.courtregister.batch.cli.ArgsTest"
+                + "#shapesItRefusesOverATokenAnOperatorTyped")
+        void what_it_refused_on_should_not_be_in_the_message_it_refused_with(final String shape,
+                final List<String> typed) {
+
+            softly.assertThatThrownBy(() -> Args.parse(typed))
+                    .as("a refusal's message is written down by whatever handles it, and one of "
+                            + "the handlers is a log line in a command's JVM - so a message "
+                            + "carrying the token is the token published to an index the whole "
+                            + "estate reads (constitution Principle VII): " + shape)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageNotContaining(PersonalDataMarkers.OPERATOR_TOKEN);
+        }
+
+        @Test
+        void a_name_this_parser_owns_should_still_be_named_where_it_was_given_twice() {
+            softly.assertThatThrownBy(() -> Args.parse(List.of("--batch", "--batch")))
+                    .as("the seven names are this service's own text, fixed by research §13, and "
+                            + "which argument was doubled is the whole of what a reader can act "
+                            + "on: the rule is about what followed a name, not about the name")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("--" + Args.BATCH);
         }
     }
 
