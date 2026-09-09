@@ -344,9 +344,10 @@ public class GenerationReconciler {
      * <p>A query that could not be answered is not a generation that failed. systemdocgenerator
      * being unreachable says nothing about the render, so the batch keeps its grace and is asked
      * again by the next run rather than being failed on the strength of an outage here; nothing is
-     * counted, because nothing was learned and nothing was decided. The exception is reported with
-     * its cause rather than dropped - it is the reading that says the query API, and not the
-     * broker, is what tonight's stuck batches are waiting on.
+     * counted, because nothing was learned and nothing was decided. The class of what refused is
+     * reported rather than dropped - it is the reading that says the query API, and not the
+     * broker, is what tonight's stuck batches are waiting on - and only the class: nothing
+     * attaches a throwable to a line in this service, which a sweep holds by construction.
      *
      * @param batch   the overdue batch, as the read returned it
      * @param silence what this batch is ended as if systemdocgenerator has no record of its payload

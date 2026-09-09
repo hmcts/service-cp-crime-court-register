@@ -122,8 +122,8 @@ public record LogStatement(String loggerName, String pattern, String where) {
     }
 
     /**
-     * Every WARN or ERROR in the production sources that attaches an exception whose words this
-     * service did not write, as {@code file:line catches <the types caught>}.
+     * Every line in the production sources that attaches a throwable, as
+     * {@code file:line catches <the types caught>}, at every level the privacy rule governs.
      *
      * <p><strong>The claim this makes is by construction, and it is the only kind worth making
      * about a whole class of defect.</strong> Five times a statement wrote a bounded reason and
@@ -152,7 +152,7 @@ public record LogStatement(String loggerName, String pattern, String where) {
      * @return one entry per offending statement, empty where the sweep's claim holds
      * @throws IOException if a source cannot be read
      */
-    public static List<String> exceptionsAttachedOutsideOwnWording() throws IOException {
+    public static List<String> attachmentsInProductionSources() throws IOException {
         final List<String> attached = new ArrayList<>();
         try (java.util.stream.Stream<Path> sources = Files.walk(SOURCE_ROOT)) {
             for (final Path source : sources.filter(each -> each.toString().endsWith(".java"))

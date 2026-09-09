@@ -957,17 +957,20 @@ class TelemetryPrivacyTest {
          *
          * <p>So the shape is refused rather than the instances pinned, and refused across all of
          * {@code src/main/java} rather than the swept legs alone, because the operations commands
-         * write to the same index. What may still be attached is an exception this service raises
-         * and words itself; a wrapper does not qualify, because a cause chain renders recursively
-         * and the wrapper's own wording does not stop what is underneath it reaching the line.
+         * write to the same index. <strong>Nothing may be attached, this service's own exceptions
+         * included.</strong> Two narrower rules were tried and each was defeated within one
+         * review: a list of this service's types let three wrappers through, since a cause chain
+         * renders recursively, and deriving the answer from the constructors fell to
+         * {@code initCause}, which every exception inherits. A line carries the class of what was
+         * caught, and a cause belongs at DEBUG where the principle allows it.
          */
         @Test
-        @DisplayName("no line anywhere attaches an exception this service did not write")
-        void should_attach_no_exception_whose_words_are_not_this_services() throws Exception {
-            assertThat(LogStatement.exceptionsAttachedOutsideOwnWording())
-                    .as("each of these renders the message of whatever it caught, so the bounded "
-                            + "reason beside it buys nothing; name the class and drop the "
-                            + "throwable, as the five before them were fixed")
+        @DisplayName("no line anywhere attaches a throwable, whoever raised it")
+        void should_attach_no_throwable_to_any_line() throws Exception {
+            assertThat(LogStatement.attachmentsInProductionSources())
+                    .as("each of these renders the message of whatever it caught, and no rule "
+                            + "about which exceptions are safe survived contact with a review; "
+                            + "name the class and drop the throwable")
                     .isEmpty();
         }
 
