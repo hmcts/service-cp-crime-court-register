@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -338,7 +339,7 @@ public class RegisterGenerationJob {
             if (deadline.hasPassedAt(clock.instant())) {
                 tally.noTimeLeftFor(registers);
             } else {
-                tally.ended(requested(assembled, deadline), registers);
+                tally.ended(requested(assembled, deadline, tally), registers);
             }
         }
     }
@@ -363,8 +364,15 @@ public class RegisterGenerationJob {
      * up in, so the batch is counted PENDING and the night carries on to the court centres behind
      * it. That isolation is defect fix P5's other half: one court centre's trouble is not a night's.
      *
+     * <p><strong>A batch whose render was asked for is counted where the call was made.</strong>
+     * The requesting leg announces that to the tally as it makes the call, so a store that will not
+     * write the batch's ending down - which takes the whole run out through a throw - cannot make a
+     * render that did leave this service disappear from the night's account.
+     *
      * @param assembled the batch the assembler decided on, beside the registers it groups
      * @param deadline  the run's requesting bound
+     * @param progress  the night's own account, told as the render is asked for and before
+     *                  anything is concluded about it
      * @return what this batch ended the requesting leg as, which for a batch that could not be
      *         written down is PENDING under no reason at all: nothing was asked of the renderer and
      *         there is no row for a reason to have been written to
@@ -376,7 +384,8 @@ public class RegisterGenerationJob {
     // so where it is decided; funnelling them through one would turn a verdict into a flag carried
     // past the call that must not be made once it exists.
     @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
-    private BatchOutcome requested(final AssembledBatch assembled, final Deadline deadline) {
+    private BatchOutcome requested(final AssembledBatch assembled, final Deadline deadline,
+            final RenderProgress progress) {
         final RegisterBatch batch;
         try {
             batch = store.assemble(assembled.batch(), assembled.records());
@@ -386,7 +395,7 @@ public class RegisterGenerationJob {
                     assembled.batch().batchId(), notStamped.getClass().getName(), notStamped);
             return new BatchOutcome(assembled.batch().batchId(), BatchStatus.PENDING, null, false);
         }
-        return service.request(batch, deadline, RenderProgress.NONE);
+        return service.request(batch, deadline, progress);
     }
 
     /**
@@ -653,8 +662,12 @@ public class RegisterGenerationJob {
      * holds one, one run holds exactly one, and {@link RunReport}'s own constructor copies the
      * counts on the way out, so the value a caller is answered with does not describe whatever the
      * run did next.
+     *
+     * <p>It is the night's {@link RenderProgress} for the same reason it is the night's counts: the
+     * requesting leg announces each call as it makes it, and what a run does with that is add it to
+     * the account it is already keeping.
      */
-    private static final class RunTally {
+    private static final class RunTally implements RenderProgress {
 
         /** How many batches ended in each state, in the order the states are declared. */
         private final Map<BatchStatus, Integer> outcomes = new EnumMap<>(BatchStatus.class);
@@ -687,8 +700,19 @@ public class RegisterGenerationJob {
         /** How many registers are waiting under the days the assembler passed over. */
         private int registersWaiting;
 
-        /** How many batches the run asked systemdocgenerator to render. */
-        private int rendersRequested;
+        /**
+         * The batches the run asked systemdocgenerator to render, each named once.
+         *
+         * <p>Identities rather than a counter, because two things say a render was asked for and
+         * they say it about the same batch: the requesting leg announces the call as it makes it
+         * ({@link #recordRenderAsked}) and the outcome it answers with carries the same fact
+         * ({@link BatchOutcome#renderRequested()}). Both are wanted - the announcement is the only
+         * one that survives a store failure after the call, and the outcome is the only one a batch
+         * the run counted normally is read from - and a set is what makes the pair one request
+         * rather than two. A batch asked for three times inside the retry budget is one request for
+         * the same reason.
+         */
+        private final Set<UUID> rendersAsked = new LinkedHashSet<>();
 
         /** How many batches the run deadline left unrequested. */
         private int batchesLeftBehind;
@@ -726,11 +750,33 @@ public class RegisterGenerationJob {
          * report a renderer refusing documents nobody sent it. A batch that could not be written
          * down at all arrives here PENDING and unsent, which is the same answer for the same cause.
          *
+         * <p>The batch will already have been announced by the leg that made the call, so this
+         * names the same identity again rather than adding to a count - which is what a set is for.
+         *
          * @param outcome   what the requesting leg answered about this batch
          * @param registers how many registers it groups
          */
         private void ended(final BatchOutcome outcome, final int registers) {
-            account(outcome.status(), registers, outcome.renderRequested());
+            if (outcome.renderRequested()) {
+                recordRenderAsked(outcome.batchId());
+            }
+            account(outcome.status(), registers);
+        }
+
+        /**
+         * Records that the renderer has been asked about a batch, however that turns out.
+         *
+         * <p>The half of the count that does not depend on an outcome coming back. A batch is
+         * announced here before the request is made and its ending is written down after the answer
+         * arrives, and the store can go away in between: this is then all the run will ever learn
+         * about a render that is nonetheless being made, and a night reporting none would be read
+         * as a night that asked systemdocgenerator for nothing.
+         *
+         * @param batchId the batch whose render was asked for
+         */
+        @Override
+        public void recordRenderAsked(final UUID batchId) {
+            rendersAsked.add(batchId);
         }
 
         /**
@@ -744,7 +790,7 @@ public class RegisterGenerationJob {
          */
         private void noTimeLeftFor(final int registers) {
             batchesLeftBehind++;
-            account(BatchStatus.PENDING, registers, false);
+            account(BatchStatus.PENDING, registers);
         }
 
         /**
@@ -752,15 +798,10 @@ public class RegisterGenerationJob {
          *
          * @param status    what the requesting leg left the batch as
          * @param registers how many registers it groups
-         * @param asked     whether the renderer was asked about it
          */
-        private void account(final BatchStatus status, final int registers,
-                final boolean asked) {
+        private void account(final BatchStatus status, final int registers) {
             outcomes.merge(status, 1, Integer::sum);
             rowOutcomes.merge(status, registers, Integer::sum);
-            if (asked) {
-                rendersRequested++;
-            }
         }
 
         /**
@@ -800,7 +841,7 @@ public class RegisterGenerationJob {
         private RunReport reportOf(final GateDecision decision, final RunReport.Settled settled,
                 final Duration duration) {
 
-            return new RunReport(decision, outcomes, rendersRequested, rowOutcomes,
+            return new RunReport(decision, outcomes, rendersAsked.size(), rowOutcomes,
                     nightsAssembly == null ? 0 : nightsAssembly.deferred().size(),
                     registersWaiting, settled, outcomesChased, duration);
         }

@@ -25,7 +25,10 @@ import java.util.Map;
  * <p><strong>What the run asked for is not what came of it, and this reports both.</strong>
  * {@link #requested} counts the batches whose payload was written and whose render was asked for,
  * which is where the nightly job's leg ends: the outcome of a render arrives afterwards, on the
- * public-event topic or from the grace-period reconciler. {@link #settled} is the other side of
+ * public-event topic or from the grace-period reconciler. It is counted at the call rather than off
+ * the verdict, so a batch whose render left and whose mark the store then refused is still one
+ * render here - and is in none of the {@link #outcomes}, which is a divergence to be read rather
+ * than a total that does not add up. {@link #settled} is the other side of
  * that, and it is read rather than reasoned about - see {@link Settled}, which says exactly what
  * its four counts are and, as importantly, what they are not. What <em>this</em> run settled about
  * earlier nights' batches is {@link #reconciled}.
@@ -56,8 +59,9 @@ import java.util.Map;
  *                     a run does and the reason a skipped run is a success
  * @param outcomes     how many batches ended in each state; empty for a skipped run
  * @param requested    how many batches this run asked systemdocgenerator to render - the payload
- *                     written and the request away - whatever the renderer then answered; zero for
- *                     a skipped run
+ *                     written and the request away - whatever the renderer then answered and
+ *                     whatever the run afterwards managed to write down about it; zero for a
+ *                     skipped run
  * @param rowOutcomes  how many registers this run stamped into a batch, under the state that
  *                     batch's requesting leg ended in; empty for a skipped run
  * @param deferredKeys how many court-centre days the assembler passed over because a batch of

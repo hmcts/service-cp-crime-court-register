@@ -155,7 +155,7 @@ public class RegisterGenerationService {
     public BatchOutcome request(final RegisterBatch batch, final Deadline deadline,
             final RenderProgress progress) {
         return assemble(batch)
-                .map(assembled -> storeAndRequest(batch, assembled, deadline))
+                .map(assembled -> storeAndRequest(batch, assembled, deadline, progress))
                 .orElseGet(() -> failed(batch, BatchFailureReason.ASSEMBLY_FAILED, false));
     }
 
@@ -208,10 +208,11 @@ public class RegisterGenerationService {
      * @param batch     the batch being asked about
      * @param assembled its payload and the metadata that goes beside it
      * @param deadline  the run's requesting bound
+     * @param progress  told where the render is asked for, which is past both of these writes
      * @return what the batch ended the requesting leg as
      */
     private BatchOutcome storeAndRequest(final RegisterBatch batch, final Assembled assembled,
-            final Deadline deadline) {
+            final Deadline deadline, final RenderProgress progress) {
 
         final UUID payloadFileId = UUID.randomUUID();
         store.markPayloadMinted(batch.batchId(), payloadFileId);
@@ -226,7 +227,7 @@ public class RegisterGenerationService {
                     unavailable.getMessage());
             return failed(batch, BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, false);
         }
-        return askForRender(batch, payloadFileId, deadline);
+        return askForRender(batch, payloadFileId, deadline, progress);
     }
 
     /**
@@ -247,14 +248,24 @@ public class RegisterGenerationService {
      * ({@code BatchOutcome.renderRequested}), and counting the second would report a renderer
      * refusing a document it was never sent.
      *
+     * <p><strong>And it is announced as well as carried, because the outcome can fail to
+     * arrive.</strong> The verdict is returned only after the batch's ending has been written down,
+     * and the store can go away on that write: {@link #renderAccepted} and {@link #failed} both
+     * leave through a throw then, and a caller counting the outcomes it was handed would report a
+     * night that sent nothing while this render was away. So {@link RenderProgress} is told the
+     * moment before the call is made, once per batch - a batch retried inside the budget is one
+     * render and not three - and the flag that says the request left this service is set in the
+     * same statement, because they are the same fact about the same batch.
+     *
      * @param batch         the batch being asked about
      * @param payloadFileId the id the payload was stored under, which is what is rendered
      * @param deadline      the run's requesting bound
+     * @param progress      told the moment before the renderer is asked, and once per batch
      * @return GENERATING where the request was accepted, and FAILED under its bounded reason
      *         otherwise
      */
     private BatchOutcome askForRender(final RegisterBatch batch, final UUID payloadFileId,
-            final Deadline deadline) {
+            final Deadline deadline, final RenderProgress progress) {
 
         final RenderRequest request = new RenderRequest(payloadFileId, batch.batchId(),
                 TEMPLATE_IDENTIFIER, CONVERSION_FORMAT, ORIGINATING_SOURCE);
@@ -266,14 +277,18 @@ public class RegisterGenerationService {
                 return overran(batch, attempt, sent);
             }
             try {
+                if (!sent) {
+                    // Said here rather than after the answer, and once for the batch rather than
+                    // once per attempt: from the next statement on, the request has left this
+                    // service whatever comes back and whatever this service manages to write down.
+                    sent = true;
+                    progress.recordRenderAsked(batch.batchId());
+                }
                 // A scheduled run is nobody's request: no message named a user, so the call is made
                 // under the configured system identity.
                 renderer.requestRender(request, CallerIdentity.SYSTEM);
                 return renderAccepted(batch, payloadFileId);
             } catch (GenerationFailedException notAccepted) {
-                // The call was made and this is what came of it, so the request left this service
-                // whatever the answer was - refused, or nothing at all.
-                sent = true;
                 count(notAccepted.responseCode());
                 if (notAccepted.classification() != FailureClassification.TRANSIENT) {
                     LOG.error("systemdocgenerator refused the render request for batch {}, so it "

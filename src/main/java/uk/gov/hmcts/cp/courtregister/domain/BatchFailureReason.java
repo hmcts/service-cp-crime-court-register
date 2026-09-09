@@ -18,7 +18,9 @@ package uk.gov.hmcts.cp.courtregister.domain;
  * inside the run's budget <em>and</em> of a batch the run reached with too little budget left to
  * start a single attempt, which asked systemdocgenerator nothing at all. So that fact is carried by
  * {@code BatchOutcome.renderRequested}, set where the call is made, and the run report's
- * {@code requested} count reads it from there. A predicate over these constants answered it for a
+ * {@code requested} count reads it from there - and from the announcement the requesting leg makes
+ * at the call itself, because an outcome is only returned once the batch's ending has been written
+ * down and the store can go away on that write. A predicate over these constants answered it for a
  * while and overcounted exactly the second case, reporting a renderer that had refused a document
  * it was never sent.
  */

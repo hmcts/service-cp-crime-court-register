@@ -23,6 +23,13 @@ import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
  * which of those happened, so it says so where the call is made, and a report built on it cannot
  * tell an operator that the renderer refused a document it was never sent.
  *
+ * <p><strong>It is not the only thing that says so, and it cannot be.</strong> This is returned
+ * only once the batch's ending has been written down, so a store that goes away on that write
+ * takes the verdict with it and a run counting outcomes alone would report a night that sent
+ * nothing.
+ * {@link RenderProgress} is told at the call for that reason, and a run reconciles the two by the
+ * batch identity they both name.
+ *
  * @param batchId         the batch this is about
  * @param status          where the batch stood when the requesting leg let go of it
  * @param failureReason   the bounded reason where it failed, and {@code null} where it did not
