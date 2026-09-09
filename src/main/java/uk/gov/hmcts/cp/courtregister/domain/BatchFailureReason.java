@@ -9,9 +9,18 @@ package uk.gov.hmcts.cp.courtregister.domain;
  * available to support and is never logged at INFO, because it is another system's text about a
  * document whose every defendant is a child (constitution Principle VII).
  *
- * <p>The six are six different investigations. Two of them say the batch never left this service,
- * two say the renderer refused to start, and two say it started and did not finish - and only the
- * first pair leaves the batch's rows RECORDED for the next run to re-assemble.
+ * <p>The six are six different investigations. Two of them say no payload was ever stored to render
+ * from, two say the renderer refused to start, and two say it started and did not finish - and only
+ * the first pair leaves the batch's rows RECORDED for the next run to re-assemble.
+ *
+ * <p><strong>What none of them says is whether the render request left this service.</strong>
+ * {@link #RENDER_REQUEST_FAILED} is the ending of a request that was made and answered nothing
+ * inside the run's budget <em>and</em> of a batch the run reached with too little budget left to
+ * start a single attempt, which asked systemdocgenerator nothing at all. So that fact is carried by
+ * {@code BatchOutcome.renderRequested}, set where the call is made, and the run report's
+ * {@code requested} count reads it from there. A predicate over these constants answered it for a
+ * while and overcounted exactly the second case, reporting a renderer that had refused a document
+ * it was never sent.
  */
 public enum BatchFailureReason {
 
@@ -55,26 +64,5 @@ public enum BatchFailureReason {
      */
     public boolean isGeneratorAttributed() {
         return this == GENERATION_FAILED || this == GENERATION_TIMED_OUT;
-    }
-
-    /**
-     * Whether the render request had left this service by the time a batch ended this way.
-     *
-     * <p>The two that had not are the pair the class comment above calls "the batch never left this
-     * service": {@link #PAYLOAD_STORE_UNAVAILABLE} is a payload that was never written, so there
-     * was nothing to ask about, and {@link #ASSEMBLY_FAILED} is a payload that was never built. The
-     * other four all follow a request that was made - refused by the renderer, undeliverable within
-     * the deadline, failed, or never answered.
-     *
-     * <p>Asked by the run report, which counts the batches a run asked systemdocgenerator to
-     * render. Without this the report would have to read a batch refused by another system and a
-     * batch this service could not write down as the same night, since both end FAILED - and
-     * "the renderer is rejecting our documents" and "our file service is down" are not the same
-     * investigation.
-     *
-     * @return true where a request had been made, and false where the batch never left here
-     */
-    public boolean wasRenderRequested() {
-        return this != PAYLOAD_STORE_UNAVAILABLE && this != ASSEMBLY_FAILED;
     }
 }

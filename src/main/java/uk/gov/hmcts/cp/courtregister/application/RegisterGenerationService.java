@@ -152,7 +152,7 @@ public class RegisterGenerationService {
     public BatchOutcome request(final RegisterBatch batch, final Deadline deadline) {
         return assemble(batch)
                 .map(assembled -> storeAndRequest(batch, assembled, deadline))
-                .orElseGet(() -> failed(batch, BatchFailureReason.ASSEMBLY_FAILED));
+                .orElseGet(() -> failed(batch, BatchFailureReason.ASSEMBLY_FAILED, false));
     }
 
     /**
@@ -220,7 +220,7 @@ public class RegisterGenerationService {
             LOG.error("The payload for batch {} was not stored, so no render is asked for and its "
                     + "registers stay RECORDED for the next run. reason={}", batch.batchId(),
                     unavailable.getMessage());
-            return failed(batch, BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE);
+            return failed(batch, BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, false);
         }
         return askForRender(batch, payloadFileId, deadline);
     }
@@ -235,6 +235,14 @@ public class RegisterGenerationService {
      * hangs to its timeout and then a read that hangs to its own is the longest single thing this
      * class does.
      *
+     * <p><strong>Whether the call was made is tracked here and carried on the outcome</strong>, not
+     * inferred afterwards from the reason. Both the first check below and the exhausted budget end
+     * the batch RENDER_REQUEST_FAILED, and only this loop knows the difference between a batch that
+     * was sent and answered nothing and a batch this run reached with too little left to start a
+     * single attempt. The run report counts the renders a night asked for
+     * ({@code BatchOutcome.renderRequested}), and counting the second would report a renderer
+     * refusing a document it was never sent.
+     *
      * @param batch         the batch being asked about
      * @param payloadFileId the id the payload was stored under, which is what is rendered
      * @param deadline      the run's requesting bound
@@ -247,10 +255,11 @@ public class RegisterGenerationService {
         final RenderRequest request = new RenderRequest(payloadFileId, batch.batchId(),
                 TEMPLATE_IDENTIFIER, CONVERSION_FORMAT, ORIGINATING_SOURCE);
         final int maxAttempts = retryPolicy.maxAttempts();
+        boolean sent = false;
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             if (!retryPolicy.attemptFitsBefore(clock.instant(), deadline.expiresAt())) {
-                return overran(batch, attempt);
+                return overran(batch, attempt, sent);
             }
             try {
                 // A scheduled run is nobody's request: no message named a user, so the call is made
@@ -258,20 +267,23 @@ public class RegisterGenerationService {
                 renderer.requestRender(request, CallerIdentity.SYSTEM);
                 return renderAccepted(batch, payloadFileId);
             } catch (GenerationFailedException notAccepted) {
+                // The call was made and this is what came of it, so the request left this service
+                // whatever the answer was - refused, or nothing at all.
+                sent = true;
                 count(notAccepted.responseCode());
                 if (notAccepted.classification() != FailureClassification.TRANSIENT) {
                     LOG.error("systemdocgenerator refused the render request for batch {}, so it "
                             + "is failed {} without being asked again.", batch.batchId(),
                             notAccepted.reason());
-                    return failed(batch, notAccepted.reason());
+                    return failed(batch, notAccepted.reason(), sent);
                 }
                 if (attempt < maxAttempts) {
                     final Duration wait = retryPolicy.waitAfter(attempt, Optional.empty());
                     if (!clock.instant().plus(wait).isBefore(deadline.expiresAt())) {
-                        return overran(batch, attempt);
+                        return overran(batch, attempt, sent);
                     }
                     if (!waitFor(batch, wait)) {
-                        return failed(batch, BatchFailureReason.RENDER_REQUEST_FAILED);
+                        return failed(batch, BatchFailureReason.RENDER_REQUEST_FAILED, sent);
                     }
                 }
             }
@@ -279,7 +291,7 @@ public class RegisterGenerationService {
         LOG.error("The render request for batch {} was not delivered in {} attempts, so it is "
                 + "failed {} and its registers go back to the next run.", batch.batchId(),
                 maxAttempts, BatchFailureReason.RENDER_REQUEST_FAILED);
-        return failed(batch, BatchFailureReason.RENDER_REQUEST_FAILED);
+        return failed(batch, BatchFailureReason.RENDER_REQUEST_FAILED, sent);
     }
 
     /**
@@ -336,15 +348,21 @@ public class RegisterGenerationService {
      * refused three times is a systemdocgenerator question. The bounded reason is the same, because
      * what the batch is owed is the same - re-assembly by the next run.
      *
+     * <p>It says how many attempts had been made, and the outcome says whether any of them was: a
+     * run that reached this batch with less budget left than one attempt costs at worst has asked
+     * systemdocgenerator nothing, and a run that ran out between attempts has asked it already.
+     *
      * @param batch    the batch that was not asked for
      * @param attempts how many attempts had been made when the budget ran out
+     * @param sent     whether a request had already left this service
      * @return the failed outcome
      */
-    private BatchOutcome overran(final RegisterBatch batch, final int attempts) {
+    private BatchOutcome overran(final RegisterBatch batch, final int attempts,
+            final boolean sent) {
         LOG.error("The run deadline would not hold another render attempt for batch {}, so it is "
                 + "failed {} after {} attempts.", batch.batchId(),
                 BatchFailureReason.RENDER_REQUEST_FAILED, attempts);
-        return failed(batch, BatchFailureReason.RENDER_REQUEST_FAILED);
+        return failed(batch, BatchFailureReason.RENDER_REQUEST_FAILED, sent);
     }
 
     /**
@@ -355,15 +373,21 @@ public class RegisterGenerationService {
      * could not ask for, so none of them is generator-attributed and none of them carries another
      * system's words ({@link BatchFailureReason#isGeneratorAttributed()}).
      *
+     * <p><strong>Whether the renderer had been asked is passed in rather than read off the
+     * reason</strong>, because two of the four cannot be read that way. RENDER_REQUEST_FAILED is
+     * the ending of a request that was made and answered nothing and of a batch no attempt could be
+     * started for, and the caller is the only thing that knows which of those it is.
+     *
      * @param batch  the batch that failed
      * @param reason the bounded reason it is failed under
+     * @param sent   whether the render request had left this service by then
      * @return the failed outcome, for the run report
      */
-    private BatchOutcome failed(final RegisterBatch batch, final BatchFailureReason reason) {
+    private BatchOutcome failed(final RegisterBatch batch, final BatchFailureReason reason,
+            final boolean sent) {
         store.markFailed(batch.batchId(), reason, null, null);
         metrics.batchCompleted(BatchStatus.FAILED);
-        return new BatchOutcome(batch.batchId(), BatchStatus.FAILED, reason,
-                reason.wasRenderRequested());
+        return new BatchOutcome(batch.batchId(), BatchStatus.FAILED, reason, sent);
     }
 
     /**

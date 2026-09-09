@@ -23,7 +23,6 @@ import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.RunProgress;
 import uk.gov.hmcts.cp.courtregister.domain.AssembledBatch;
 import uk.gov.hmcts.cp.courtregister.domain.BatchAssembly;
-import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CourtCentreDay;
 import uk.gov.hmcts.cp.courtregister.domain.Deadline;
@@ -718,30 +717,19 @@ public class RegisterGenerationJob {
         /**
          * Counts one batch, and the registers inside it, by what the requesting leg left it as.
          *
-         * <p>A render is counted as requested where the renderer accepted it and where it answered
-         * with anything else, but never where the batch never left this service
-         * ({@link BatchFailureReason#wasRenderRequested()}): a payload that was never written was
-         * never asked about, and counting it would report a renderer refusing documents nobody sent
-         * it. A batch that could not be written down at all arrives here PENDING with no reason,
-         * which is the same answer for the same cause.
+         * <p>A render is counted as requested where the requesting leg says it made the call, which
+         * that leg carries on the outcome ({@code BatchOutcome.renderRequested}) rather than leaving
+         * to be read off the reason here. The reason cannot answer it: RENDER_REQUEST_FAILED is what
+         * a request that was made and answered nothing ends under and what a batch the run had too
+         * little budget left to start an attempt for ends under, and counting the second would
+         * report a renderer refusing documents nobody sent it. A batch that could not be written
+         * down at all arrives here PENDING and unsent, which is the same answer for the same cause.
          *
          * @param outcome   what the requesting leg answered about this batch
          * @param registers how many registers it groups
          */
         private void ended(final BatchOutcome outcome, final int registers) {
-            account(outcome.status(), registers, askedTheRenderer(outcome));
-        }
-
-        /**
-         * Whether this run got as far as asking the renderer about the batch.
-         *
-         * @param outcome what the requesting leg answered
-         * @return true where a request was made
-         */
-        private static boolean askedTheRenderer(final BatchOutcome outcome) {
-            return outcome.status() == BatchStatus.GENERATING
-                    || outcome.failureReason() != null
-                    && outcome.failureReason().wasRenderRequested();
+            account(outcome.status(), registers, outcome.renderRequested());
         }
 
         /**
