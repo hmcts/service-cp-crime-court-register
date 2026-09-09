@@ -62,36 +62,21 @@ public record LogStatement(String loggerName, String pattern, String where) {
 
     private static final char NEWLINE_ESCAPE = 'n';
 
-    /** The braces a block is counted by, named so an {@code if} carries no literal. */
-    private static final char BLOCK_OPENS = '{';
 
-    private static final char BLOCK_CLOSES = '}';
 
-    /** The quote a character literal is written in, named so an {@code if} carries no literal. */
-    private static final char CHARACTER_QUOTE = '\'';
 
-    /** How many characters a text block's delimiter takes. */
-    private static final int TEXT_BLOCK_DELIMITER = 3;
 
     private static final char TAB_ESCAPE = 't';
 
+
+    /** The five level names, as they are written after {@code LOG.}. */
+    private static final List<String> LEVELS =
+            List.of("error", "warn", "info", "debug", "trace");
 
     /** The five calls this repository writes a line with. */
     private static final List<String> CALLS =
             List.of("LOG.error(", "LOG.warn(", "LOG.info(", "LOG.debug(", "LOG.trace(");
 
-    /**
-     * The levels this sweep reads, which is all of them.
-     *
-     * <p>The list has been wrong twice by being short. It read WARN and ERROR while Principle VII
-     * governs INFO and above, and then INFO, WARN and ERROR on the reasoning that DEBUG is where
-     * the principle allows a cause. It does not: what DEBUG permits is a payload dump "behind
-     * {@code DEBUG} <strong>and</strong> an explicit local-only profile guard", and secrets,
-     * connection strings and tokens "MUST NOT appear anywhere in output" - no level named, because
-     * no level is exempt. A library's exception message can carry any of those, so the level it is
-     * attached at does not decide the question and the sweep no longer asks.
-     */
-    private static final List<String> ATTACHABLE_LEVELS = CALLS;
 
     /**
      * What the suite matches a captured event against: the logger and the pattern it wrote.
@@ -173,265 +158,149 @@ public record LogStatement(String loggerName, String pattern, String where) {
      *
      * <p>A scan is a claim about every line in the repository, and a claim that large is worth
      * nothing if the scan quietly stops matching: this is how a suite hands it source it wrote and
-     * asserts what it finds, including the two shapes that defeated the first version of it.
+     * asserts what it finds, including every shape that has defeated a previous version of it.
      *
      * @param source   the source text
      * @param fileName what to call it in an entry
      * @return one entry per offending statement in it
      */
     public static List<String> attachmentsIn(final String source, final String fileName) {
-        final boolean[] codeAt = codePositionsIn(source);
-        final List<CatchBlock> catches = catchBlocksIn(codeAt, source);
         final List<String> attached = new ArrayList<>();
-        for (final String call : ATTACHABLE_LEVELS) {
-            int at = source.indexOf(call);
-            while (at >= 0) {
-                if (!codeAt[at]) {
-                    at = source.indexOf(call, at + 1);
-                    continue;
-                }
-                final String last = lastArgumentOf(source, at + call.length());
-                final CatchBlock enclosing = innermostAround(catches, at);
-                if (enclosing != null && unwrapped(last).equals(nameOf(source, enclosing))) {
-                    attached.add(fileName + ":" + lineOf(source, at)
-                            + " catches " + String.join(" | ", typesOf(source, enclosing)));
-                }
-                at = source.indexOf(call, at + 1);
-            }
+        final javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        final javax.tools.SimpleJavaFileObject unit =
+                new javax.tools.SimpleJavaFileObject(java.net.URI.create("string:///" + fileName),
+                        javax.tools.JavaFileObject.Kind.SOURCE) {
+                    @Override
+                    public CharSequence getCharContent(final boolean ignoreEncodingErrors) {
+                        return source;
+                    }
+                };
+        final com.sun.source.util.JavacTask task = (com.sun.source.util.JavacTask) compiler
+                .getTask(null, null, diagnostic -> {}, null, null, List.of(unit));
+        try {
+            final com.sun.source.util.SourcePositions where =
+                    com.sun.source.util.Trees.instance(task).getSourcePositions();
+            // One source per call, so one unit: the loop is the API's shape rather than a
+            // repetition, and the scanner is built for the unit it walks.
+            final com.sun.source.tree.CompilationUnitTree parsed =
+                    task.parse().iterator().next();
+            new AttachmentScanner(parsed, where, fileName, attached).scan(parsed, null);
+        } catch (IOException notParsed) {
+            throw new IllegalStateException("the sweep could not parse " + fileName, notParsed);
         }
         return attached;
     }
 
-    /** Every {@code catch} block in a source, outermost first. */
-    private static List<CatchBlock> catchBlocksIn(final boolean[] codeAt, final String source) {
-        final List<CatchBlock> blocks = new ArrayList<>();
-        final java.util.regex.Matcher clauses = java.util.regex.Pattern
-                .compile("catch\\s*\\(([^)]*)\\)\\s*\\{").matcher(source);
-        while (clauses.find()) {
-            if (!codeAt[clauses.start()]) {
-                continue;
-            }
-            int depth = 0;
-            int at = clauses.end() - 1;
-            while (at < source.length()) {
-                if (codeAt[at] && source.charAt(at) == BLOCK_OPENS) {
-                    depth++;
-                } else if (codeAt[at] && source.charAt(at) == BLOCK_CLOSES) {
-                    depth--;
-                    if (depth == 0) {
-                        break;
-                    }
-                }
-                at++;
-            }
-            blocks.add(new CatchBlock(clauses.start(), at, clauses.end()));
-        }
-        return blocks;
-    }
-
     /**
-     * Which positions of a source are code, so a brace inside a string or a comment counts for
-     * nothing.
+     * The walk that decides what is attached, over the compiler's own tree.
      *
-     * <p>The reason this is not an optimisation. A block matcher that counted every brace could be
-     * closed early by one written in a comment or a literal - {@code // }} on the line above a
-     * warning ends the enclosing catch as far as the matcher can see, and the statement below it
-     * then belongs to no catch and is swept up by nothing. A defeating case is one line long and
-     * cost the whole claim, which is what this exists to stop and what
-     * {@code LogStatementSweepTest} pins.
+     * <p><strong>Written against a parse rather than the text, because the text defeated six
+     * versions of this.</strong> Each fix recognised one more way of spelling the same argument -
+     * a cast, then brackets, then a cast inside brackets - and the shapes are unbounded, so the
+     * scan was always one review behind. A tree has no spellings: {@code failed},
+     * {@code (failed)}, {@code ((Throwable) failed)} and {@code failed.getCause()} are four
+     * arrangements of one fact, that the argument came from the caught exception.
      *
-     * <p>A text block is its own state, entered and left on the three quotes read as one token.
-     * Treating the delimiter as three ordinary quotes was the version this replaced and it does
-     * not work: the toggle opens, closes and opens again, so the block is entered correctly and
-     * then left by the first quote in its content - a lone quote inside one, which a payload
-     * fixture may perfectly well contain, and every brace after it counts as code.
-     *
-     * @param source the source text
-     * @return one flag per character, true where that character is code
+     * <p><strong>What counts as attaching it is what the expression evaluates to, not whether the
+     * caught name appears in it.</strong> Mentioning the exception is ordinary and safe - a bounded
+     * violation code, a classification, a response code, a type name - and a rule that flagged
+     * every mention reported four such lines the first time it was run, which is how a sweep
+     * teaches its readers to ignore it. What is attached is the throwable itself, reached through
+     * any number of brackets and casts, or a throwable taken off it: {@code getCause} is the one
+     * accessor on {@link Throwable} that answers another one.
      */
-    private static boolean[] codePositionsIn(final String source) {
-        final boolean[] codeAt = new boolean[source.length()];
-        boolean inString = false;
-        boolean inTextBlock = false;
-        boolean inChar = false;
-        boolean inLineComment = false;
-        boolean inBlockComment = false;
-        boolean escaped = false;
-        int at = 0;
-        while (at < source.length()) {
-            final char character = source.charAt(at);
-            final char next = at + 1 < source.length() ? source.charAt(at + 1) : '\0';
-            int step = 1;
-            if (inLineComment) {
-                inLineComment = character != '\n';
-            } else if (inBlockComment) {
-                if (character == '*' && next == '/') {
-                    inBlockComment = false;
-                    step = 2;
+    private static final class AttachmentScanner
+            extends com.sun.source.util.TreeScanner<Void, Void> {
+
+        private final com.sun.source.tree.CompilationUnitTree unit;
+        private final String fileName;
+        private final List<String> attached;
+        private final java.util.Deque<com.sun.source.tree.CatchTree> open =
+                new java.util.ArrayDeque<>();
+        private final com.sun.source.util.SourcePositions where;
+
+        private AttachmentScanner(final com.sun.source.tree.CompilationUnitTree unit,
+                final com.sun.source.util.SourcePositions where, final String fileName,
+                final List<String> attached) {
+            this.unit = unit;
+            this.where = where;
+            this.fileName = fileName;
+            this.attached = attached;
+        }
+
+        @Override
+        public Void visitCatch(final com.sun.source.tree.CatchTree node, final Void ignored) {
+            open.push(node);
+            try {
+                return super.visitCatch(node, ignored);
+            } finally {
+                open.pop();
+            }
+        }
+
+        @Override
+        public Void visitMethodInvocation(
+                final com.sun.source.tree.MethodInvocationTree node, final Void ignored) {
+            if (!open.isEmpty() && isALogCall(node) && !node.getArguments().isEmpty()) {
+                final com.sun.source.tree.ExpressionTree last =
+                        node.getArguments().getLast();
+                final com.sun.source.tree.CatchTree enclosing = open.peek();
+                final String caught = enclosing.getParameter().getName().toString();
+                if (isAttachment(last, caught)) {
+                    attached.add(fileName + ":" + lineOf(node) + " catches " + typesOf(enclosing));
                 }
-            } else if (escaped) {
-                escaped = false;
-            } else if ((inString || inChar) && character == ESCAPE) {
-                escaped = true;
-            } else if (inTextBlock) {
-                if (character == QUOTE && isTripleQuoteAt(source, at)) {
-                    inTextBlock = false;
-                    step = TEXT_BLOCK_DELIMITER;
-                }
-            } else if (inString) {
-                inString = character != QUOTE;
-            } else if (inChar) {
-                inChar = character != CHARACTER_QUOTE;
-            } else if (character == '/' && next == '/') {
-                inLineComment = true;
-                step = 2;
-            } else if (character == '/' && next == '*') {
-                inBlockComment = true;
-                step = 2;
-            } else if (character == QUOTE && isTripleQuoteAt(source, at)) {
-                inTextBlock = true;
-                step = TEXT_BLOCK_DELIMITER;
-            } else if (character == QUOTE) {
-                inString = true;
-            } else if (character == CHARACTER_QUOTE) {
-                inChar = true;
+            }
+            return super.visitMethodInvocation(node, ignored);
+        }
+
+        /** Whether the call is one of this repository's five logging calls. */
+        private static boolean isALogCall(final com.sun.source.tree.MethodInvocationTree node) {
+            return node.getMethodSelect() instanceof com.sun.source.tree.MemberSelectTree select
+                    && "LOG".equals(select.getExpression().toString())
+                    && LEVELS.contains(select.getIdentifier().toString());
+        }
+
+        /**
+         * Whether the expression hands the caught throwable to the line.
+         *
+         * <p>Three arrangements, and the tree makes them one question. Brackets and casts are
+         * written round the same object and are unwrapped. A bare name is the object. And
+         * {@code getCause} is the one accessor on {@link Throwable} that answers another
+         * throwable, so a chain of them is still somebody's message.
+         *
+         * @param expression the final argument
+         * @param caught     the name the enclosing catch bound
+         * @return true where what is passed is the throwable or one taken off it
+         */
+        private static boolean isAttachment(
+                final com.sun.source.tree.ExpressionTree expression, final String caught) {
+            final boolean attachment;
+            if (expression instanceof com.sun.source.tree.ParenthesizedTree brackets) {
+                attachment = isAttachment(brackets.getExpression(), caught);
+            } else if (expression instanceof com.sun.source.tree.TypeCastTree cast) {
+                attachment = isAttachment(cast.getExpression(), caught);
+            } else if (expression instanceof com.sun.source.tree.IdentifierTree name) {
+                attachment = caught.equals(name.getName().toString());
+            } else if (expression instanceof com.sun.source.tree.MethodInvocationTree call
+                    && call.getMethodSelect()
+                            instanceof com.sun.source.tree.MemberSelectTree select
+                    && "getCause".equals(select.getIdentifier().toString())) {
+                attachment = isAttachment(select.getExpression(), caught);
             } else {
-                codeAt[at] = true;
+                attachment = false;
             }
-            at += step;
+            return attachment;
         }
-        return codeAt;
-    }
 
-    /**
-     * One argument with the casts and brackets written around it taken off.
-     *
-     * <p>The comparison this feeds used to be character for character against the caught name,
-     * which anything at all defeats: {@code (Throwable) failed} attaches the same object and reads
-     * as a different argument. Casts and redundant brackets are what a compiler ignores here, so
-     * they are what this takes off, repeatedly, until the argument is whatever was written at the
-     * centre of them.
-     *
-     * @param argument the argument as written
-     * @return the expression at the centre of it
-     */
-    private static String unwrapped(final String argument) {
-        String bare = argument.strip();
-        boolean changed = true;
-        while (changed) {
-            final String before = bare;
-            if (bare.startsWith("(")) {
-                final int closing = bare.indexOf(')');
-                final String inside = closing < 0 ? "" : bare.substring(1, closing).strip();
-                if (closing >= 0 && inside.matches("[\\w.<>\\[\\] ]+")) {
-                    bare = bare.substring(closing + 1).strip();
-                }
-            }
-            changed = !bare.equals(before);
+        /** Every type the catch declares, a multi-catch giving more than one. */
+        private static String typesOf(final com.sun.source.tree.CatchTree enclosing) {
+            return enclosing.getParameter().getType().toString().replace("|", " | ")
+                    .replaceAll(" +", " ").strip();
         }
-        return bare;
-    }
 
-    /**
-     * Whether a text block's delimiter starts here.
-     *
-     * <p>A text block is the shape that defeated the first version of this lexer: its content is
-     * ordinary source to a scanner that only knows single quotes, so a JSON fragment inside one -
-     * {@code "end": "}"} is the case that found it - closed the string on its first quote and let
-     * every brace after it count. Reading the delimiter as one token puts the whole block in a
-     * state that ends only at the matching three.
-     *
-     * @param source the source text
-     * @param at     the index of the first quote
-     * @return true where three quotes start at that index
-     */
-    private static boolean isTripleQuoteAt(final String source, final int at) {
-        return source.startsWith("\"\"\"", at);
-    }
-
-    private static CatchBlock innermostAround(final List<CatchBlock> blocks, final int at) {
-        return blocks.stream()
-                .filter(block -> block.from() < at && at < block.to())
-                .reduce((outer, inner) -> inner)
-                .orElse(null);
-    }
-
-    /**
-     * One {@code catch} block's extent: where the clause starts, where the body ends, and where
-     * the clause itself ends so the declaration can be read back off it.
-     *
-     * @param from       the index of the {@code catch} keyword
-     * @param to         the index of the closing brace of its body
-     * @param clauseEnds the index just past the opening brace of its body
-     */
-    private record CatchBlock(int from, int to, int clauseEnds) {
-    }
-
-    /** The name a catch binds, read off its own clause. */
-    private static String nameOf(final String source, final CatchBlock block) {
-        final String clause = source.substring(block.from(), block.clauseEnds());
-        final String inside = clause.substring(clause.indexOf('(') + 1, clause.lastIndexOf(')'));
-        return inside.strip().substring(inside.strip().lastIndexOf(' ') + 1);
-    }
-
-    /** Every type a catch declares, a multi-catch giving more than one. */
-    private static List<String> typesOf(final String source, final CatchBlock block) {
-        final String clause = source.substring(block.from(), block.clauseEnds());
-        final String inside = clause.substring(clause.indexOf('(') + 1, clause.lastIndexOf(')'))
-                .replace("final ", "").strip();
-        final String declared = inside.substring(0, inside.lastIndexOf(' ')).strip();
-        return java.util.Arrays.stream(declared.split("\\|")).map(String::strip).toList();
-    }
-
-    private static int lineOf(final String source, final int at) {
-        return source.substring(0, at).split("\\n", -1).length;
-    }
-
-    /**
-     * The last argument of one call, read by balancing brackets from its opening one.
-     *
-     * @param text from the source
-     * @param from the index just past the opening bracket
-     * @return the final argument as written, or an empty string where the call has none
-     */
-    private static String lastArgumentOf(final String text, final int from) {
-        int depth = 1;
-        int at = from;
-        boolean inString = false;
-        boolean escaped = false;
-        final List<StringBuilder> arguments = new ArrayList<>(List.of(new StringBuilder()));
-        while (depth > 0 && at < text.length()) {
-            final char character = text.charAt(at);
-            at++;
-            if (escaped) {
-                escaped = false;
-                arguments.getLast().append(character);
-                continue;
-            }
-            if (character == ESCAPE) {
-                escaped = true;
-                arguments.getLast().append(character);
-                continue;
-            }
-            if (character == QUOTE) {
-                inString = !inString;
-            }
-            if (!inString) {
-                if (character == '(' || character == '<') {
-                    depth++;
-                } else if (character == ')' || character == '>') {
-                    depth--;
-                    if (depth == 0) {
-                        break;
-                    }
-                } else if (character == ',' && depth == 1) {
-                    arguments.add(new StringBuilder());
-                    continue;
-                }
-            }
-            arguments.getLast().append(character);
+        private long lineOf(final com.sun.source.tree.Tree node) {
+            return unit.getLineMap().getLineNumber(where.getStartPosition(unit, node));
         }
-        return arguments.getLast().toString().strip();
     }
 
     /**
