@@ -247,7 +247,7 @@ class GenerateRegisterCliTest {
                     call.getArgument(2)));
             return groupingOf(registers);
         });
-        when(service.request(any(), any())).thenAnswer(call -> {
+        when(service.request(any(), any(), any())).thenAnswer(call -> {
             final RegisterBatch batch = call.getArgument(0);
             renders.add(new Render(batch, call.getArgument(1)));
             sequence.add(REQUESTED + batch.batchId());

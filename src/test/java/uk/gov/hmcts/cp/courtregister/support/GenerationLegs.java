@@ -39,6 +39,7 @@ import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
@@ -363,37 +364,38 @@ public final class GenerationLegs implements AutoCloseable {
     private void aBatchThatHoldsNoRegisters() {
         reset(store);
         when(store.batched(BATCH_ID)).thenReturn(List.of());
-        whateverItAnswers(() -> generation.request(pending(), deadline()));
+        whateverItAnswers(() -> generation.request(pending(), deadline(), RenderProgress.NONE));
     }
 
     private void aPayloadTheFileServiceWouldNotTake() {
         aBatchOfOneRegister();
         payloadStoreRefusing();
-        whateverItAnswers(() -> generation.request(pending(), deadline()));
+        whateverItAnswers(() -> generation.request(pending(), deadline(), RenderProgress.NONE));
     }
 
     private void aRenderTheGeneratorRefusedOutright() {
         aBatchOfOneRegister();
         renderCommandAnswering(HttpStatus.BAD_REQUEST.value());
-        whateverItAnswers(() -> generation.request(pending(), deadline()));
+        whateverItAnswers(() -> generation.request(pending(), deadline(), RenderProgress.NONE));
     }
 
     private void aRenderNothingAnswered() {
         aBatchOfOneRegister();
         renderCommandFaulting();
-        whateverItAnswers(() -> generation.request(pending(), deadline()));
+        whateverItAnswers(() -> generation.request(pending(), deadline(), RenderProgress.NONE));
     }
 
     private void aRenderThatWouldNotFitTheBudget() {
         aBatchOfOneRegister();
         renderCommandAnswering(HttpStatus.SERVICE_UNAVAILABLE.value());
-        whateverItAnswers(() -> generation.request(pending(), new Deadline(clock.instant())));
+        whateverItAnswers(() -> generation.request(pending(), new Deadline(clock.instant()),
+                RenderProgress.NONE));
     }
 
     private void aRenderTheGeneratorAccepted() {
         aBatchOfOneRegister();
         renderCommandAnswering(HttpStatus.ACCEPTED.value());
-        whateverItAnswers(() -> generation.request(pending(), deadline()));
+        whateverItAnswers(() -> generation.request(pending(), deadline(), RenderProgress.NONE));
     }
 
     private void aWaitBetweenAttemptsThatWasInterrupted() {
@@ -404,7 +406,7 @@ public final class GenerationLegs implements AutoCloseable {
                 payloadFileStore, renderer, MAPPER, retryPolicy(), waited -> {
                     throw new InterruptedException("the run's thread was asked to stop");
                 }, metrics, clock);
-        whateverItAnswers(() -> interruptible.request(pending(), deadline()));
+        whateverItAnswers(() -> interruptible.request(pending(), deadline(), RenderProgress.NONE));
         Thread.interrupted();
     }
 

@@ -41,6 +41,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import uk.gov.hmcts.cp.courtregister.application.BatchOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties.SourceMode;
@@ -58,6 +59,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 import uk.gov.hmcts.cp.courtregister.domain.RunReport;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
@@ -399,11 +401,11 @@ class RegisterGenerationJobTest {
         when(store.assemble(any(), any())).thenAnswer(call -> call.getArgument(0));
         when(store.assemble(eq(unstampable), any())).thenThrow(new IllegalStateException(
                 "batch " + unstampable.batchId() + " was asked for 2 registers and stamped 1"));
-        when(service.request(eq(generating), any())).thenAnswer(call -> {
+        when(service.request(eq(generating), any(), any())).thenAnswer(call -> {
             clock.advance(Duration.ofMinutes(1));
             return requested(generating, BatchStatus.GENERATING, null);
         });
-        when(service.request(eq(failing), any())).thenAnswer(call -> {
+        when(service.request(eq(failing), any(), any())).thenAnswer(call -> {
             clock.advance(Duration.ofMinutes(2));
             return requested(failing, BatchStatus.FAILED,
                     BatchFailureReason.RENDER_REQUEST_REJECTED);
@@ -585,15 +587,15 @@ class RegisterGenerationJobTest {
         final RegisterBatch outOfBudget = batch();
         final RegisterBatch unanswered = batch();
         aNightHolding(outOfBudget, unanswered);
-        when(service.request(eq(outOfBudget), any())).thenAnswer(call -> neverRequested(
+        when(service.request(eq(outOfBudget), any(), any())).thenAnswer(call -> neverRequested(
                 outOfBudget, BatchFailureReason.RENDER_REQUEST_FAILED));
-        when(service.request(eq(unanswered), any())).thenAnswer(call -> requested(unanswered,
+        when(service.request(eq(unanswered), any(), any())).thenAnswer(call -> requested(unanswered,
                 BatchStatus.FAILED, BatchFailureReason.RENDER_REQUEST_FAILED));
     }
 
     /** Every request is accepted, and each answers about the batch it was given. */
     private void everyRequestIsAccepted() {
-        when(service.request(any(), any()))
+        when(service.request(any(), any(), any()))
                 .thenAnswer(call -> requested(call.getArgument(0), BatchStatus.GENERATING, null));
     }
 
@@ -738,7 +740,7 @@ class RegisterGenerationJobTest {
             order.verify(gate).decide(false);
             order.verify(store).activeUnbatched();
             order.verify(assembler).assemble(any(), any(), anyBoolean());
-            order.verify(service).request(any(), any());
+            order.verify(service).request(any(), any(), any());
         }
 
         @Test
@@ -844,9 +846,9 @@ class RegisterGenerationJobTest {
 
             final InOrder order = inOrder(store, service);
             order.verify(store).assemble(eq(first), any());
-            order.verify(service).request(eq(first), any());
+            order.verify(service).request(eq(first), any(), any());
             order.verify(store).assemble(eq(second), any());
-            order.verify(service).request(eq(second), any());
+            order.verify(service).request(eq(second), any(), any());
         }
 
         /**
@@ -891,8 +893,8 @@ class RegisterGenerationJobTest {
 
             final RunReport report = run();
 
-            verify(service, never()).request(eq(unstampable), any());
-            verify(service).request(eq(following), any());
+            verify(service, never()).request(eq(unstampable), any(), any());
+            verify(service).request(eq(following), any(), any());
             softly.assertThat(reported(report, RunReport::outcomes))
                     .as("PENDING rather than FAILED, because there is no batch row to have failed: "
                             + "the registers are where the next run will look for them")
@@ -929,8 +931,8 @@ class RegisterGenerationJobTest {
             run();
 
             final InOrder order = inOrder(service);
-            order.verify(service).request(eq(first), any());
-            order.verify(service).request(eq(second), any());
+            order.verify(service).request(eq(first), any(), any());
+            order.verify(service).request(eq(second), any(), any());
         }
 
         @Test
@@ -938,20 +940,20 @@ class RegisterGenerationJobTest {
             final RegisterBatch failing = batch();
             final RegisterBatch following = batch();
             aNightHolding(failing, following);
-            when(service.request(eq(failing), any())).thenReturn(requested(failing,
+            when(service.request(eq(failing), any(), any())).thenReturn(requested(failing,
                     BatchStatus.FAILED, BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE));
-            when(service.request(eq(following), any()))
+            when(service.request(eq(following), any(), any()))
                     .thenReturn(requested(following, BatchStatus.GENERATING, null));
 
             run();
 
-            verify(service).request(eq(following), any());
+            verify(service).request(eq(following), any(), any());
         }
 
         @Test
         void every_batch_should_be_measured_against_the_deadline_the_run_started_with() {
             aNightHolding(batch(), batch());
-            when(service.request(any(), any())).thenAnswer(call -> {
+            when(service.request(any(), any(), any())).thenAnswer(call -> {
                 clock.advance(Duration.ofMinutes(5));
                 return requested(call.getArgument(0), BatchStatus.GENERATING, null);
             });
@@ -959,7 +961,7 @@ class RegisterGenerationJobTest {
             run();
 
             final ArgumentCaptor<Deadline> deadlines = ArgumentCaptor.forClass(Deadline.class);
-            verify(service, times(2)).request(any(), deadlines.capture());
+            verify(service, times(2)).request(any(), deadlines.capture(), any());
             softly.assertThat(deadlines.getAllValues())
                     .as("computed once, at the moment requesting began: a bound re-derived per "
                             + "batch grows by whatever the batch before it took, and a run that "
@@ -980,7 +982,7 @@ class RegisterGenerationJobTest {
             final RegisterBatch first = batch();
             final RegisterBatch stranded = batch();
             aNightHolding(first, stranded);
-            when(service.request(eq(first), any())).thenAnswer(call -> {
+            when(service.request(eq(first), any(), any())).thenAnswer(call -> {
                 clock.advance(RUN_DEADLINE.plusMinutes(1));
                 return requested(first, BatchStatus.GENERATING, null);
             });
@@ -993,7 +995,7 @@ class RegisterGenerationJobTest {
 
             run();
 
-            verify(service, never()).request(eq(stranded), any());
+            verify(service, never()).request(eq(stranded), any(), any());
         }
 
         @Test
@@ -1114,7 +1116,7 @@ class RegisterGenerationJobTest {
         void the_report_should_count_the_batches_by_how_the_run_left_them() {
             final RegisterBatch failing = batch();
             aNightHolding(batch(), failing, batch());
-            when(service.request(any(), any())).thenAnswer(call -> {
+            when(service.request(any(), any(), any())).thenAnswer(call -> {
                 final RegisterBatch asked = call.getArgument(0);
                 return failing.equals(asked)
                         ? requested(asked, BatchStatus.FAILED,
@@ -1133,7 +1135,7 @@ class RegisterGenerationJobTest {
         @Test
         void the_report_should_say_how_long_the_run_took() {
             aNightHolding(batch());
-            when(service.request(any(), any())).thenAnswer(call -> {
+            when(service.request(any(), any(), any())).thenAnswer(call -> {
                 clock.advance(Duration.ofMinutes(7));
                 return requested(call.getArgument(0), BatchStatus.GENERATING, null);
             });
@@ -1435,9 +1437,9 @@ class RegisterGenerationJobTest {
             final RegisterBatch neverAsked = batch();
             final RegisterBatch refused = batch();
             aNightHolding(neverAsked, refused);
-            when(service.request(eq(neverAsked), any())).thenAnswer(call -> neverRequested(
+            when(service.request(eq(neverAsked), any(), any())).thenAnswer(call -> neverRequested(
                     neverAsked, BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE));
-            when(service.request(eq(refused), any())).thenAnswer(call -> requested(refused,
+            when(service.request(eq(refused), any(), any())).thenAnswer(call -> requested(refused,
                     BatchStatus.FAILED, BatchFailureReason.RENDER_REQUEST_REJECTED));
 
             try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
@@ -1818,6 +1820,22 @@ class RegisterGenerationJobTest {
                 + " rows_failed=0 rows_pending=0 rows_deferred=" + WAITING_ROWS
                 + NOTHING_SETTLED_YET + " reconciled=0 duration_ms=60000";
 
+        /**
+         * The line a night whose one render left and whose store then refused can still write.
+         *
+         * <p>One render away and no batch accounted for, which is the divergence worth reading:
+         * the requesting leg never answered about this batch, so it is under none of the three
+         * states and its registers are in none of the row counts, and the count of what was sent
+         * is the only field on the line that says the night reached systemdocgenerator at all. A
+         * line reporting {@code requested=0} here would have an operator concluding that nothing
+         * was asked for on the one night a document is coming back to a service that has no idea
+         * it asked.
+         */
+        private static final String A_RENDER_AWAY_AND_NOTHING_ACCOUNTED = RUN_EVENT
+                + " gate=proceed reason=flag-on batches=0 requested=1 generating=0 failed=0"
+                + " pending=0 deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0"
+                + " rows_deferred=0" + NOTHING_SETTLED_YET + " reconciled=0 duration_ms=0";
+
         /** Sets the night up as one the flag allowed and the store then refused. */
         private void aStoreThatWentAway() {
             theGateAnswers(new Proceed(false));
@@ -1833,7 +1851,7 @@ class RegisterGenerationJobTest {
          */
         private void aRunStoppedWhileRequesting() {
             final List<RegisterBatch> night = aMixedNight();
-            when(service.request(eq(night.get(1)), any()))
+            when(service.request(eq(night.get(1)), any(), any()))
                     .thenThrow(new IllegalStateException(OUTAGE));
         }
 
@@ -1906,6 +1924,74 @@ class RegisterGenerationJobTest {
                     .as("reported and rethrown, not reported instead of thrown")
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessage(OUTAGE);
+        }
+
+        /**
+         * Sets a night up whose one batch's render is asked for and whose store then goes away.
+         *
+         * <p>The requesting leg is doubled here as it behaves: it tells the run the call has been
+         * made, at the moment it makes it, and then the write that would have recorded what came of
+         * the call refuses - so the leg leaves through a throw and the outcome the run counts a
+         * batch from never arrives. Which of the two marks refused is invisible from here, and that
+         * is the point of the arrangement: whether the render was accepted or refused, the run was
+         * told the same thing by the same call and must count the same one render.
+         *
+         * @param statement which write the store would not take, in its own bounded words
+         */
+        private void aRenderThatLeftBeforeTheStoreRefused(final String statement) {
+            final RegisterBatch asked = batch();
+            aNightHolding(asked);
+            when(service.request(eq(asked), any(), any())).thenAnswer(call -> {
+                call.getArgument(2, RenderProgress.class).recordRenderAsked(asked.batchId());
+                throw new StoreUnavailableException(
+                        "the store could not be reached to " + statement,
+                        new IllegalStateException("the connection pool is empty"));
+            });
+        }
+
+        @Test
+        void a_render_the_store_then_failed_to_record_should_still_be_on_the_line_as_requested() {
+            aRenderThatLeftBeforeTheStoreRefused("mark a batch requested");
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                whatStoppedTheRun();
+
+                softly.assertThat(runLines(log))
+                        .as("the render was accepted and the mark that would have recorded it was "
+                                + "not written, so no outcome came back for this batch; the "
+                                + "document is being rendered either way, and a night that "
+                                + "reported nothing sent would be the one night this count is "
+                                + "read on")
+                        .containsExactly(A_RENDER_AWAY_AND_NOTHING_ACCOUNTED);
+            }
+        }
+
+        @Test
+        void a_render_the_store_then_failed_to_fail_should_still_be_on_the_line_as_requested() {
+            aRenderThatLeftBeforeTheStoreRefused("fail a batch");
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                whatStoppedTheRun();
+
+                softly.assertThat(runLines(log))
+                        .as("the same one render, refused by systemdocgenerator this time and "
+                                + "failed on a row the store would not take: what the night sent "
+                                + "cannot depend on which of the two marks was the one that could "
+                                + "not be written")
+                        .containsExactly(A_RENDER_AWAY_AND_NOTHING_ACCOUNTED);
+            }
+        }
+
+        @Test
+        void a_render_the_store_then_refused_should_still_stop_the_run() {
+            aRenderThatLeftBeforeTheStoreRefused("mark a batch requested");
+
+            softly.assertThat(whatStoppedTheRun())
+                    .as("counting the render changes nothing about the failure: a store outage is "
+                            + "reported and rethrown, because the schedule and the operations "
+                            + "command decide what to do next from the throw")
+                    .isInstanceOf(StoreUnavailableException.class)
+                    .hasMessage("the store could not be reached to mark a batch requested");
         }
 
         @Test

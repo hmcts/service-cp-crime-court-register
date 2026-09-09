@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
@@ -499,6 +500,10 @@ public class GenerateRegisterCli {
      * there. The bound is computed once, at the moment requesting begins, and is the same run
      * deadline the schedule works to: a regeneration cannot outlive it by re-deriving it per batch.
      *
+     * <p>Nothing is told about the renders as they are asked for ({@link RenderProgress#NONE}): the
+     * command writes a line per batch as it goes and its own count is of the batches it walked, so
+     * there is no run report here for a render to be counted into.
+     *
      * @param assembly what the assembler made of the day
      * @return how many batches were asked for
      */
@@ -507,7 +512,8 @@ public class GenerateRegisterCli {
         int requested = 0;
         for (final AssembledBatch assembled : assembly.batches()) {
             final RegisterBatch stored = store.assemble(assembled.batch(), assembled.records());
-            final BatchStatus status = service.request(stored, deadline).status();
+            final BatchStatus status =
+                    service.request(stored, deadline, RenderProgress.NONE).status();
             output.accept("batch=" + stored.batchId() + " state=" + status
                     + " records=" + assembled.records().size());
             requested++;

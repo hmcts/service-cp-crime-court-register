@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
@@ -55,6 +56,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 import uk.gov.hmcts.cp.courtregister.domain.RenderRequest;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.pipeline.PdfPayloadMapper;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
@@ -156,6 +158,9 @@ class RegisterGenerationServiceTest {
     private final PayloadFileStore payloadFileStore = mock(PayloadFileStore.class);
     private final DocumentRenderer renderer = mock(DocumentRenderer.class);
 
+    /** What the run is told as the call is made, which is where the night's count comes from. */
+    private final RecordingProgress progress = new RecordingProgress();
+
     private RecordingPause pause;
     private AdjustableClock clock;
 
@@ -245,7 +250,7 @@ class RegisterGenerationServiceTest {
     private BatchOutcome request(final RegisterGenerationService service,
             final RegisterBatch requested, final Deadline deadline) {
         final AtomicReference<BatchOutcome> answered = new AtomicReference<>();
-        softly.assertThatCode(() -> answered.set(service.request(requested, deadline)))
+        softly.assertThatCode(() -> answered.set(service.request(requested, deadline, progress)))
                 .as(PENDING)
                 .doesNotThrowAnyException();
         return answered.get();
@@ -253,6 +258,21 @@ class RegisterGenerationServiceTest {
 
     private BatchOutcome request() {
         return request(batch(), farDeadline());
+    }
+
+    /**
+     * Asks for a render and hands back whatever left the requesting leg, without ending the case.
+     *
+     * <p>The counterpart of {@link #request(RegisterBatch, Deadline)} for the calls that do not
+     * answer: a store that will not write the batch's ending down is not something this leg can
+     * turn into an outcome, so the failure travels out of it and a case about that cannot call the
+     * service directly and still assert on what the run had been told.
+     *
+     * @param requested the batch being asked about
+     * @return what stopped the request, or {@code null} where nothing did
+     */
+    private Throwable whatStoppedTheRequest(final RegisterBatch requested) {
+        return catchThrowable(() -> service().request(requested, farDeadline(), progress));
     }
 
     /** The payload id the service minted, as the batch row was told it. */
@@ -753,6 +773,115 @@ class RegisterGenerationServiceTest {
     }
 
     /**
+     * The call was made and the store would not write down what came of it.
+     *
+     * <p>The night the outcome cannot be the only informant. Both endings an answered call has are
+     * written down before the verdict is returned - the mark that records an accepted request, and
+     * the mark that fails a refused one - and each of those writes can be the moment the store goes
+     * away. The verdict never reaches the run then, so a run counting only the outcomes it was
+     * handed would report a night that sent the renderer nothing while a render was away and a
+     * document was on its way back to it. The count is what an operator reads to decide whether
+     * systemdocgenerator has work in flight, and the reading that matters is the one taken on the
+     * night something else broke.
+     *
+     * <p>So the call is announced where it is made, and the failure still leaves: a store outage is
+     * not this leg's to settle (constitution Principle VI), and the run reports what it had done
+     * and rethrows.
+     */
+    @Nested
+    @DisplayName("a store that would not answer once the request had left")
+    class WhenTheStoreFailsAfterTheCall {
+
+        /** What a store outage looks like from here: a bounded phrase, and the driver's cause. */
+        private static StoreUnavailableException outage(final String statement) {
+            return new StoreUnavailableException("the store could not be reached to " + statement,
+                    new IllegalStateException("the connection pool is empty"));
+        }
+
+        @Test
+        void an_accepted_render_should_be_announced_before_the_mark_that_could_not_be_written() {
+            doThrow(outage("mark a batch requested")).when(store).markRequested(any(), any());
+
+            final Throwable stopped = whatStoppedTheRequest(batch());
+
+            verify(renderer).requestRender(any(), any());
+            softly.assertThat(progress.announced)
+                    .as("systemdocgenerator has the request and will render this batch whatever "
+                            + "this service manages to write down about it, so the render is the "
+                            + "run's to count from the moment the call is made rather than from "
+                            + "the outcome that never arrives")
+                    .containsExactly(BATCH_ID);
+            softly.assertThat(stopped)
+                    .as("and the outage still leaves: a batch whose mark was not written is not a "
+                            + "batch this leg can answer for, and nothing about that changes "
+                            + "because the run has been told the call was made")
+                    .isInstanceOf(StoreUnavailableException.class)
+                    .hasMessage("the store could not be reached to mark a batch requested");
+        }
+
+        @Test
+        void a_refused_render_should_be_announced_before_the_mark_that_could_not_be_written() {
+            doThrow(refusal()).when(renderer).requestRender(any(), any());
+            doThrow(outage("fail a batch")).when(store).markFailed(any(), any(), any(), any());
+
+            final Throwable stopped = whatStoppedTheRequest(batch());
+
+            verify(renderer).requestRender(any(), any());
+            softly.assertThat(progress.announced)
+                    .as("a refusal is an answer to a request that left this service, so the night "
+                            + "asked systemdocgenerator for this document; the count is of what "
+                            + "was sent and not of what was accepted, which is what generating "
+                            + "already says")
+                    .containsExactly(BATCH_ID);
+            softly.assertThat(stopped)
+                    .as("and the outage still leaves, from the failing mark exactly as from the "
+                            + "requesting one")
+                    .isInstanceOf(StoreUnavailableException.class)
+                    .hasMessage("the store could not be reached to fail a batch");
+        }
+
+        @Test
+        void three_attempts_at_one_batch_should_be_announced_as_one_render() {
+            doThrow(transientFailure()).when(renderer).requestRender(any(), any());
+
+            request();
+
+            verify(renderer, times(MAX_ATTEMPTS)).requestRender(any(), any());
+            softly.assertThat(progress.announced)
+                    .as("one batch, one document, one register: the count is the documents the "
+                            + "renderer was sent, and a night reported as three renders because "
+                            + "the retry budget was spent on one would have an operator looking "
+                            + "for two documents that were never asked for")
+                    .containsExactly(BATCH_ID);
+        }
+
+        /**
+         * The bound in the other direction, and it is green on introduction.
+         *
+         * <p>Deliberately not labelled <strong>[A]</strong>: it states a property the pair must not
+         * break rather than one it introduces, and it is the red half's own pair - the announcement
+         * has to be made at the call and not before the guard that decides whether a call is made
+         * at all. A batch this leg is handed with less budget left than one attempt's worst case
+         * asks systemdocgenerator nothing, and announcing it would put the whole failure back the
+         * other way round: a night reporting a render nobody sent.
+         */
+        @Test
+        void a_budget_too_small_for_one_attempt_should_announce_no_render_at_all() {
+            final Deadline noRoomForAnAttempt =
+                    Deadline.startingAt(NOW, CHEAP_ATTEMPT.dividedBy(2));
+
+            request(batch(), noRoomForAnAttempt);
+
+            verifyNoInteractions(renderer);
+            softly.assertThat(progress.announced)
+                    .as("nothing was sent, so there is nothing for the night to count; the "
+                            + "announcement belongs after the guard that decides whether an "
+                            + "attempt is started and never before it")
+                    .isEmpty();
+        }
+    }
+
+    /**
      * Defect fix P5, which is about what a run leaves behind rather than about what it does.
      *
      * <p>progression's {@code CourtRegisterHandler.processRequests} catches the stream exception,
@@ -839,6 +968,24 @@ class RegisterGenerationServiceTest {
                                 + "never one of them")
                         .noneMatch(line -> line.contains(PersonalDataMarkers.CHILD_NAME));
             }
+        }
+    }
+
+    /**
+     * The run's own accounting, reduced to what it is told: the batches announced, in order.
+     *
+     * <p>A list rather than a set, because what is asserted is how many times the leg spoke as well
+     * as which batch it spoke about: a batch announced once per attempt would be counted three
+     * times by a caller that trusted the announcement, and the list is what says it was announced
+     * once.
+     */
+    private static final class RecordingProgress implements RenderProgress {
+
+        private final List<UUID> announced = new ArrayList<>();
+
+        @Override
+        public void recordRenderAsked(final UUID batchId) {
+            announced.add(batchId);
         }
     }
 

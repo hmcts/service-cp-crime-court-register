@@ -18,6 +18,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import uk.gov.hmcts.cp.courtregister.application.BatchOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.RunProgress;
@@ -385,7 +386,7 @@ public class RegisterGenerationJob {
                     assembled.batch().batchId(), notStamped.getClass().getName(), notStamped);
             return new BatchOutcome(assembled.batch().batchId(), BatchStatus.PENDING, null, false);
         }
-        return service.request(batch, deadline);
+        return service.request(batch, deadline, RenderProgress.NONE);
     }
 
     /**

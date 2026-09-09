@@ -147,9 +147,13 @@ public class RegisterGenerationService {
      * @param batch    the assembled batch, already durable at PENDING
      * @param deadline the run's requesting bound; an attempt whose own worst case does not fit
      *                 inside what is left is not started
+     * @param progress told the moment the renderer is asked about this batch, so a caller counting
+     *                 the renders a night sent does not have to wait for an outcome to learn that
+     *                 one left
      * @return what the batch ended the requesting leg as, for the run report
      */
-    public BatchOutcome request(final RegisterBatch batch, final Deadline deadline) {
+    public BatchOutcome request(final RegisterBatch batch, final Deadline deadline,
+            final RenderProgress progress) {
         return assemble(batch)
                 .map(assembled -> storeAndRequest(batch, assembled, deadline))
                 .orElseGet(() -> failed(batch, BatchFailureReason.ASSEMBLY_FAILED, false));
