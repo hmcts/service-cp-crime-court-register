@@ -2113,10 +2113,14 @@ on T072's line above. **The gate then ran a second round and a third**, and the 
 what `git rev-list --count` answers rather than a tally of the pairs, because the two
 mistaken-message commits, their two reverts, the record commits and the merge are commits too, and a
 range that
-counted only the remediation pairs would not match the range it names. `41009d0..HEAD` is **19
-commits**, first-parent and whole-DAG alike; `e4a4c7e..HEAD` is **20 first-parent** and **34 across
-the DAG**, the difference being the fourteen commits the merge at `41009d0` brought in from `main`.
-Of the 19, seven are the third round's (`7d4ec00..HEAD`), and the rest are the second's.
+counted only the remediation pairs would not match the range it names. **Every count here names a
+fixed commit rather than `HEAD`**, because a count written against `HEAD` is false the moment the
+commit carrying it is made - the record commit is inside the range it counts, which is the
+off-by-one the third round found in the sentence this one replaces. Measured to `9f773de`, the last
+commit of the third round: `41009d0..9f773de` is **22 commits**, first-parent and whole-DAG alike;
+`e4a4c7e..9f773de` is **23 first-parent** and **37 across the DAG**, the difference being the
+fourteen the merge at `41009d0` brought in from `main`. Of the 22, ten are the third round's
+(`7d4ec00..9f773de`) and twelve the second's.
 **What Phase 8 verified, and
 by which run**: `./gradlew build` green on the branch at `4021608` - "BUILD SUCCESSFUL in 7m 22s,
 3195 tests, 0 failures, 0 errors, 0 skipped, PMD and Checkstyle clean" - and green again after the
@@ -2213,7 +2217,8 @@ line, `0849f13` / `136eb81`) and is a different finding from gate finding 2, the
 and is a different finding from gate finding 4, the sweep's ambiguous key (`0aa967f`); and
 second-round finding 5 is the merge, recorded above. Twelve commits close the second round,
 `41009d0..7d4ec00`, of which eight are its four remediation pairs and the rest are the record, the
-mistaken-message commit `266906f` and its revert `f686493`.
+mistaken-message commit `266906f` and its revert `f686493`; ten close the third,
+`7d4ec00..9f773de`.
 
 **Second-round finding 3 is closed by a red-first pair**, `d150b6c` "test(metrics): take the round
 trip's reading at the mark that earned it" then `dcaec4b` "fix(metrics): record the round trip at
@@ -2513,7 +2518,7 @@ stated.
 - **`7c67bae` is a revert and not a change**, backing out a commit that landed under another
   commit's message; the content it removed lands again at `02597f2` unchanged.
 
-**The gate ran a third round, of five findings, closed in the seven commits `7d4ec00..HEAD`,
+**The gate ran a third round, of five findings, closed in the ten commits `7d4ec00..9f773de`,
 and it needs no exceptions block either.** Three were code and each is a red/green pair.
 **A render whose store write then failed was reported as never requested** (`0c8216f` /
 `9ed1db8`): the count was taken from the outcome the batch returned, and a store failure after
@@ -2532,10 +2537,31 @@ The other two findings were the record's own: the merge, now tracked as a deviat
 Complexity Tracking with the design owner's approval of 2026-09-09, and the range counts, which are
 corrected in the checkpoint above and measured with `git rev-list --count` rather than tallied.
 
+**The gate then ran a fourth round of four findings, and the first of them refused this record's
+own judgement.** Open item 29 had deferred twelve statements of one defect class to Phase 9 on the
+ground that each needed a red case; the gate answered that the failing sweep is the red case, for
+the whole set at once, and that a privacy gate cannot close while known statements in the swept
+legs attach unvalidated text. That is the better reading and it is what the branch does now:
+`1b80955` adds `LogStatement.exceptionsAttachedOutside`, a sweep over all of `src/main/java` that
+allows through only exceptions this service raises and words itself, and it is red on thirteen
+statements; `9f773de` fixes all thirteen and the sweep is green. The claim is made by construction,
+so a fourteenth statement of that shape fails on the day it is written.
+**The gate corrected this record's inventory with it**: `CliMain:302` had been called safe because
+`ReportNotWritten` is this service's own type, and it is not, because that type wraps an
+`IOException` whose message renders through the cause chain. Two safe, thirteen unsafe.
+**Its third finding was an off-by-one no reader would have caught**: a count written against `HEAD`
+is false the moment the commit carrying it is made, because the record commit is inside the range it
+counts. Every count in this file now names a fixed commit.
+**Its fourth was the second half of the constitution's own rule about a deviation**: the merge's
+justification belongs in the pull request description as well as in Complexity Tracking, and no
+pull request exists yet. `specs/002-consolidate-progression-leg/pull-request.md` now holds that
+description, deviation section and all, so the obligation cannot go unmet in a body composed at the
+moment of raising.
+
 **The gate's second round needs no exceptions block either, and none of its four stages reported
 test-after production behaviour**, so there is still no "### Approved TDD exceptions (Phase 8)"
 block and this is where one would have gone. What puts each of the twelve commits of
-`41009d0..7d4ec00` outside it:
+`41009d0..7d4ec00` outside it, and the ten of `7d4ec00..9f773de` with them:
 
 - **The settled snapshot is a pair**, `5b515a7` then `1e71f88`: eight failing assertions over the
   real job, quoted on T072's line, then the green run. The seam is declarations only -
@@ -2856,7 +2882,21 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     all, which is correct by the field's meaning and is now reachable only through configuration
     `PropertiesValidator` refuses.
 
-29. **Twelve log statements attach an exception this service did not author, and they are one
+29. **CLOSED by `1b80955` / `9f773de`, and the deferral this item first recorded was refused by
+    the review gate, rightly.** It had said the set should wait for Phase 9 because each statement
+    needed a red case in front of it. The gate's answer is the better one and is now what the
+    branch does: **the failing sweep is the red case**, for the whole set at once, so nothing was
+    deferred and nothing landed unpinned. `LogStatement.exceptionsAttachedOutside` reads every
+    `LOG.warn` and `LOG.error` in `src/main/java`, keeps those whose final argument is the name
+    bound by an enclosing `catch`, and allows through only the exceptions this service raises and
+    words itself. It listed thirteen, all thirteen are fixed, and the claim now holds by
+    construction: a fourteenth is a failing test on the day it is written.
+    **The gate also corrected the inventory this item first carried**: `CliMain:302` was called
+    safe because `ReportNotWritten` is this service's own type, and it is not, because that type
+    wraps an `IOException` and a cause chain renders recursively. Two safe and thirteen unsafe, not
+    three and twelve. The original text follows, for what it recorded about the shape.
+
+    **Twelve log statements attach an exception this service did not author, and they are one
     change rather than twelve.** The gate's third round found the fifth instance of the class - the
     snapshot read's own WARN, introduced by the fix that closed its first finding - and the sweep
     that followed it (`a5a5b6b`'s body carries the table) replaces the reading that had missed it.
