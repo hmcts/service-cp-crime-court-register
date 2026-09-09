@@ -168,8 +168,8 @@ public class NotifyRegisterCli {
             throw notWritten;
         } catch (RuntimeException notResent) {
             LOG.error("The recipients owed by batch {} could not be re-requested, so the batch is "
-                    + "left as it stands. cause={}", batchId, notResent.getClass().getName(),
-                    notResent);
+                    + "left as it stands. cause={}", batchId,
+                    notResent.getClass().getName());
             return CliMain.failure(CliMain.NOTIFY_REGISTER, "batch=" + batchId, NOT_RESENT, output);
         }
     }

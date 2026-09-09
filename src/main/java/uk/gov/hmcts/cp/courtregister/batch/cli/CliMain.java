@@ -302,7 +302,7 @@ public class CliMain {
             LOG.error("The {} command's report could not be written to its destination, so it is "
                     + "cut short and this line is the whole of what is left of it. Nothing further "
                     + "was written there, and whatever the command did stands. cause={}", command,
-                    notWritten.getCause().getClass().getName(), notWritten);
+                    notWritten.getCause().getClass().getName());
             code = FAILED;
         }
         return code;
@@ -381,7 +381,7 @@ public class CliMain {
         } catch (RuntimeException notStarted) {
             LOG.error("The {} command could not be run because this service's own context would "
                     + "not start, so nothing was read, assembled or sent. cause={}", name,
-                    notStarted.getClass().getName(), notStarted);
+                    notStarted.getClass().getName());
             return failure(name, "", NO_CONTEXT, output);
         }
     }
@@ -634,7 +634,7 @@ public class CliMain {
         } catch (BeansException notOnThisContext) {
             LOG.error("The {} command is not wired on this context, so nothing was read, assembled "
                     + "or sent: the downstream half is not deployed here. cause={}", command,
-                    notOnThisContext.getClass().getName(), notOnThisContext);
+                    notOnThisContext.getClass().getName());
             return failure(command, "", NOT_WIRED, output);
         }
     }

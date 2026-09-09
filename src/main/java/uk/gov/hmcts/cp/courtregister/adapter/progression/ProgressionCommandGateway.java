@@ -244,7 +244,8 @@ public class ProgressionCommandGateway {
             // safe to keep: a transport exception is raised instead of a response, so it carries the
             // endpoint and the socket error and never a register body.
             LOG.warn("The add-court-register attempt did not reach a verdict, so the outcome is "
-                    + "unknown; retrying. attempt={}", attempt, unreachable);
+                    + "unknown; retrying. attempt={} cause={}", attempt,
+                    unreachable.getClass().getName());
             outcome = Outcome.retryable(Optional.empty(), OptionalInt.empty());
         }
         return outcome;

@@ -235,7 +235,7 @@ public class ListBatchesCli {
             throw notWritten;
         } catch (RuntimeException notRead) {
             LOG.error("The listing {} could not be read, so no rows are reported for it. cause={}",
-                    subject, notRead.getClass().getName(), notRead);
+                    subject, notRead.getClass().getName());
             return CliMain.failure(CliMain.LIST_BATCHES, subject, NOT_LISTED, output);
         }
     }

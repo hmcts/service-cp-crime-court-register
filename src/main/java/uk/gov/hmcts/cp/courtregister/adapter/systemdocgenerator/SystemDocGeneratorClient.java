@@ -173,7 +173,8 @@ public class SystemDocGeneratorClient implements DocumentRenderer {
             // cannot carry that. It is safe to keep: a transport exception is raised instead of a
             // response, so it names the endpoint and the socket error and never a register.
             LOG.warn("The generate-document request reached no verdict, so whether the render was "
-                    + "asked for is unknown. batchId={}", request.batchId(), unreachable);
+                    + "asked for is unknown. batchId={} cause={}", request.batchId(),
+                    unreachable.getClass().getName());
             throw new GenerationFailedException(
                     FailureClassification.TRANSIENT, BatchFailureReason.RENDER_REQUEST_FAILED);
         }
@@ -197,7 +198,8 @@ public class SystemDocGeneratorClient implements DocumentRenderer {
             // stays GENERATING and the reconciler decides what to do about a renderer that will not
             // answer.
             LOG.warn("The systemdocgenerator document query reached no verdict, so nothing is known "
-                    + "about the render. payloadFileId={}", payloadFileId, unreachable);
+                    + "about the render. payloadFileId={} cause={}", payloadFileId,
+                    unreachable.getClass().getName());
             throw new GenerationFailedException(
                     FailureClassification.TRANSIENT, BatchFailureReason.RENDER_REQUEST_FAILED);
         }

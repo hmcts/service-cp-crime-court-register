@@ -152,7 +152,7 @@ public class SupersedeBeforeCli {
         } catch (RuntimeException notSuperseded) {
             LOG.error("The registers shared before {} could not be superseded, so this service "
                     + "still claims them. cause={}", sharedBefore,
-                    notSuperseded.getClass().getName(), notSuperseded);
+                    notSuperseded.getClass().getName());
             return CliMain.failure(CliMain.SUPERSEDE_BEFORE, "shared-before=" + sharedBefore,
                     NOT_SUPERSEDED, output);
         }

@@ -153,8 +153,9 @@ public class NotificationNotifyClient implements RegisterNotifier {
             // transport exception is raised instead of a response, so it names the endpoint and the
             // socket error - and the endpoint carries the notification id, never the address.
             LOG.warn("The send-email-notification command reached no verdict, so whether the e-mail "
-                    + "was asked for is unknown. notificationId={} batchId={}",
-                    notification.notificationId(), notification.batchId(), unreachable);
+                    + "was asked for is unknown. notificationId={} batchId={} cause={}",
+                    notification.notificationId(), notification.batchId(),
+                    unreachable.getClass().getName());
             throw new NotificationFailedException(FailureClassification.TRANSIENT);
         }
         return new NotificationOutcome(NotificationStatus.ACCEPTED, status);

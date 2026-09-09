@@ -347,7 +347,7 @@ public class GenerateRegisterCli {
         } catch (RuntimeException notGenerated) {
             LOG.error("The regeneration of register date {} did not finish, so the day stands as "
                     + "whatever this run had already written down. cause={}",
-                    selection.registerDate(), notGenerated.getClass().getName(), notGenerated);
+                    selection.registerDate(), notGenerated.getClass().getName());
             return CliMain.failure(CliMain.GENERATE_REGISTER, "date=" + selection.registerDate(),
                     NOT_GENERATED, output);
         }

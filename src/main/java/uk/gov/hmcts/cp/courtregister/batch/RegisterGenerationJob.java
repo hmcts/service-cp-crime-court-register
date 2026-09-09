@@ -251,7 +251,7 @@ public class RegisterGenerationJob {
         } catch (RuntimeException stopped) {
             LOG.error("The run did not finish, so the line beside this one describes what it had "
                             + "done rather than a night that completed. cause={}",
-                    stopped.getClass().getName(), stopped);
+                    stopped.getClass().getName());
             recorded(tally.reportOf(decision, settled(tally), sinceStart(startedAt)));
             throw stopped;
         } finally {
@@ -392,7 +392,7 @@ public class RegisterGenerationJob {
         } catch (RuntimeException notStamped) {
             LOG.error("Batch {} could not be written down, so no render is asked for and its "
                             + "registers are left for the next run. cause={}",
-                    assembled.batch().batchId(), notStamped.getClass().getName(), notStamped);
+                    assembled.batch().batchId(), notStamped.getClass().getName());
             return new BatchOutcome(assembled.batch().batchId(), BatchStatus.PENDING, null, false);
         }
         return service.request(batch, deadline, progress);
