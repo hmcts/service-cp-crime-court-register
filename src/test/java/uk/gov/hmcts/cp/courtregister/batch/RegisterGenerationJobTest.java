@@ -1538,6 +1538,63 @@ class RegisterGenerationJobTest {
         }
 
         /**
+         * <strong>[A]</strong> All three of the notifying leg's endings, and the P1 one included.
+         *
+         * <p>Green on introduction: the classification is read off the state machine rather than
+         * listed, so the three endings are already exactly the states GENERATED may move to and
+         * this states which three they are. It is worth stating because the pair above only ever
+         * drove two states through the count, NOTIFIED and GENERATED, and the two it did not are
+         * the two a reader would most easily leave out - PARTIALLY_NOTIFIED, because some of the
+         * recipients are still resendable, and NOTIFIED_NOBODY, because there was nobody to tell at
+         * all (defect fix P1). Both are the notifying leg finished with a batch, and a
+         * {@code notified} count that left them out would report a night's registers as still
+         * waiting on an e-mail nobody is going to send.
+         *
+         * <p>The distinction between the three is kept where it belongs and is deliberately not on
+         * this line: the row carries it and {@code courtregister_batches_total} by outcome counts
+         * it, and a count of batches cannot say which ending each reached without becoming three
+         * more fields.
+         *
+         * <p><strong>Non-vacuity by a reverted mutation.</strong> With
+         * {@code RegisterGenerationJob.hasBeenNotifiedAbout} narrowed from the state machine's own
+         * answer to {@code status == BatchStatus.NOTIFIED} - the list a reader writes out by hand -
+         * this case fails and only this case: 54 tests completed, 1 failed, all three of its
+         * assertions - "[every ending the notifying leg can reach is the notifying leg finished
+         * with the batch: told everybody, told some, and had nobody to tell] expected: 3 but was:
+         * 1", "[and the registers behind all three, which is every register the night got out]
+         * expected: 6 but was: 3", and "[a batch that was notified was generated first, so a count
+         * of documents that fell as the night progressed would be unreadable] expected: 3 but was:
+         * 1", the last of those because the document count is derived from this predicate and a
+         * narrowing of it takes both counts down together. Mutation reverted.
+         */
+        @Test
+        void every_ending_the_notifying_leg_can_reach_should_count_as_notified() {
+            final List<RegisterBatch> night = aNightThatIsAlreadySettling();
+            theStoreSaysTheyAreNow(nowHeldAt(night.get(0), BatchStatus.NOTIFIED),
+                    nowHeldAt(night.get(1), BatchStatus.PARTIALLY_NOTIFIED),
+                    nowHeldAt(night.get(2), BatchStatus.NOTIFIED_NOBODY));
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "notified"))
+                        .as("every ending the notifying leg can reach is the notifying leg "
+                                + "finished with the batch: told everybody, told some, and had "
+                                + "nobody to tell")
+                        .isEqualTo(3);
+                softly.assertThat(onTheLine(fields, "rows_notified"))
+                        .as("and the registers behind all three, which is every register the "
+                                + "night got out")
+                        .isEqualTo(NOTIFIED_ROWS + GENERATED_ROWS + STILL_RENDERING_ROWS);
+                softly.assertThat(onTheLine(fields, "generated"))
+                        .as("a batch that was notified was generated first, so a count of "
+                                + "documents that fell as the night progressed would be unreadable")
+                        .isEqualTo(3);
+            }
+        }
+
+        /**
          * A snapshot the store refused, which must cost the line its four counts and nothing else.
          *
          * <p>The report is read from the night's own generation and not the other way round: the
