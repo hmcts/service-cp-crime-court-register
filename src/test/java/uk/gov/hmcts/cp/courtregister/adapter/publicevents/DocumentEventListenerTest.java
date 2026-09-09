@@ -121,6 +121,19 @@ class DocumentEventListenerTest {
      */
     private static final String PROGRESSION_SOURCE = "COURT_REGISTER";
 
+    /**
+     * The most of {@link PersonalDataMarkers#OPERATOR_TOKEN} a JSON parser will quote back.
+     *
+     * <p>A parse failure reports an unquoted token by reading identifier characters and stopping at
+     * the first one that is not, so a body carrying the marker where a value belongs is refused
+     * with "Unrecognized token 'zqx7'" - the marker's own first segment and no more of it. That is
+     * still the body's own text in a log line, and it is all that can reach one by this route: a
+     * case that swept for the whole marker would pass while a fragment of somebody's typing sat in
+     * the index. Derived from the marker rather than written out, so the two cannot drift apart.
+     */
+    private static final String QUOTED_BACK = PersonalDataMarkers.OPERATOR_TOKEN.substring(0,
+            PersonalDataMarkers.OPERATOR_TOKEN.indexOf('.'));
+
     /** The single-quoted event names inside the shipped {@code CPPNAME} selector. */
     private static final Pattern SELECTOR_EVENT_NAME = Pattern.compile("'([^']+)'");
 
@@ -900,6 +913,97 @@ class DocumentEventListenerTest {
                                 .doesNotContain(PersonalDataMarkers.OPERATOR_TOKEN));
                 assertThat(log.renderings())
                         .noneMatch(line -> line.contains(PersonalDataMarkers.OPERATOR_TOKEN));
+            }
+        }
+    }
+
+    /**
+     * What this service writes down about a message it cannot take at its word.
+     *
+     * <p>The same rule as the fields above, one level out, and the two halves fail differently.
+     * A body that would not parse is another context's text and the parser quotes what it choked
+     * on: Jackson redacts the <em>source location</em> of a failure, which is not the same thing
+     * as redacting the body, because an unquoted token is reported as
+     * "Unrecognized token '&lt;the token&gt;'". And an envelope's own {@code _metadata.name} is
+     * whatever the publisher put there - a message that disagrees with its own header has already
+     * shown it is not what it claims, so its name is arbitrary text and may be anything at all,
+     * a person's name or an address included (constitution Principle VII).
+     *
+     * <p>What is written instead is what this service owns on each side: the event the header
+     * named, which the filter before the parse has already narrowed to one of the two constants
+     * this class declares; the class that refused the body; and, where the envelope's name is one
+     * of those two constants as well, the name itself. That last one is the reading a genuine
+     * mismatch is diagnosed from, and the third case below is what keeps it.
+     */
+    @Nested
+    @DisplayName("a message this service could not take at its word")
+    class UnreadableMessages {
+
+        @Test
+        void a_body_that_would_not_parse_should_not_be_quoted() throws JMSException {
+            try (CapturedLog log = CapturedLog.capturing(DocumentEventListener.class)) {
+                listener.onPublicEvent(message(DocumentEventListener.DOCUMENT_AVAILABLE,
+                        ourDocumentAvailable().replace("\"" + DOCUMENT_FILE_ID + "\"",
+                                PersonalDataMarkers.OPERATOR_TOKEN)));
+
+                assertThat(log.renderings())
+                        .as("the event is named because a reader needs to know which announcement "
+                                + "was dropped, and the body is not, because a body that would "
+                                + "not parse is unvalidated text this service never asked for")
+                        .anySatisfy(line -> assertThat(line)
+                                .contains(DocumentEventListener.DOCUMENT_AVAILABLE)
+                                .doesNotContain(QUOTED_BACK));
+                assertThat(log.renderings()).noneMatch(line -> line.contains(QUOTED_BACK));
+            }
+        }
+
+        @Test
+        void an_envelope_naming_something_else_should_not_be_quoted() throws JMSException {
+            try (CapturedLog log = CapturedLog.capturing(DocumentEventListener.class)) {
+                listener.onPublicEvent(message(DocumentEventListener.DOCUMENT_AVAILABLE,
+                        ourDocumentAvailable().replace(DocumentEventListener.DOCUMENT_AVAILABLE,
+                                PersonalDataMarkers.OPERATOR_TOKEN)));
+
+                assertThat(log.renderings())
+                        .as("the header's own name is one of the two this subscription takes and "
+                                + "is written down; the envelope's is arbitrary text from another "
+                                + "context and may be anything at all, a name or an address "
+                                + "included")
+                        .anySatisfy(line -> assertThat(line)
+                                .contains(DocumentEventListener.DOCUMENT_AVAILABLE)
+                                .doesNotContain(PersonalDataMarkers.OPERATOR_TOKEN));
+                assertThat(log.renderings())
+                        .noneMatch(line -> line.contains(PersonalDataMarkers.OPERATOR_TOKEN));
+            }
+        }
+
+        /**
+         * <strong>[A]</strong> - a characterisation of the one reading a genuine mismatch is
+         * diagnosed from, green on introduction, with no implementation commit following it.
+         *
+         * <p>Both sides of a crossed pair are this class's own two constants, so both may be
+         * written down. It is here so that the case above cannot be satisfied by dropping the
+         * envelope's side of the line altogether: that would take a real mismatch's only reading
+         * with it, this subscription counting no metric for a message whose header and envelope
+         * disagree.
+         */
+        @Test
+        void a_crossed_pair_should_still_name_the_event_on_each_side() throws JMSException {
+            try (CapturedLog log = CapturedLog.capturing(DocumentEventListener.class)) {
+                listener.onPublicEvent(message(DocumentEventListener.DOCUMENT_AVAILABLE,
+                        generationFailed(DocumentEventListener.ORIGINATING_SOURCE)));
+                listener.onPublicEvent(message(DocumentEventListener.GENERATION_FAILED,
+                        ourDocumentAvailable()));
+
+                assertThat(log.renderings())
+                        .as("a document-available header over a generation-failed envelope, and "
+                                + "the same crossing the other way round; each side is one of the "
+                                + "two events this subscription takes, so an operator can still "
+                                + "tell which way round it happened")
+                        .hasSize(2)
+                        .allSatisfy(line -> assertThat(line)
+                                .contains(DocumentEventListener.DOCUMENT_AVAILABLE)
+                                .contains(DocumentEventListener.GENERATION_FAILED));
             }
         }
     }
