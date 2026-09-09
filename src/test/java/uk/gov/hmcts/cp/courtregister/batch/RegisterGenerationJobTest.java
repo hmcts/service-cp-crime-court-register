@@ -62,6 +62,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RunReport;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
+import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
 
 /**
  * The night, in the order it happens.
@@ -1732,6 +1733,34 @@ class RegisterGenerationJobTest {
                         .as("nothing is swallowed, so what refused the read is named where the "
                                 + "line says the read is missing")
                         .anyMatch(line -> line.contains(IllegalStateException.class.getName()));
+            }
+        }
+
+        /**
+         * The other half of that claim, and the half the line's own bounded fields cannot make.
+         *
+         * <p>Naming the class of what refused the read is this service's own bounded fact. The
+         * exception's message is not: it is written by a driver or a pool, it carries whatever
+         * that library chose to put in it, and a store failure is exactly the moment a connection
+         * string or a fragment of a statement turns up in one. So the class is written down and
+         * the throwable is not attached, which is the same rule the two field readers and the two
+         * message readers of the public-event listener were held to (constitution Principle VII).
+         */
+        @Test
+        void the_words_of_whatever_refused_the_snapshot_should_not_reach_the_log() {
+            aNightThatIsAlreadySettling();
+            when(store.batchesNamed(any())).thenThrow(
+                    new IllegalStateException(PersonalDataMarkers.OPERATOR_TOKEN));
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                softly.assertThat(log.renderings())
+                        .as("the class is the bounded fact and the message is the library's own "
+                                + "words, so a rendering that carries the message carries whatever "
+                                + "the library put in it")
+                        .anyMatch(line -> line.contains(IllegalStateException.class.getName()))
+                        .noneMatch(line -> line.contains(PersonalDataMarkers.OPERATOR_TOKEN));
             }
         }
 
