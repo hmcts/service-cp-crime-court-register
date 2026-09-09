@@ -49,6 +49,7 @@ import uk.gov.hmcts.cp.courtregister.domain.DocumentStatus;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.GenerationFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
@@ -1051,6 +1052,50 @@ class GenerationReconcilerTest {
                     .as("a batch that reached no outcome has no round trip to close; it keeps its "
                             + "grace and the reading waits with it")
                     .isEqualTo(ABSENT);
+        }
+
+        /**
+         * The reading is telemetry and the pass is work, and the first may not cost the second.
+         *
+         * <p>Both instants are read back out of the store after the mark, so a store that goes
+         * away between them refuses the reading - and this loop is the last thing a night's stuck
+         * batches have. The read returns them oldest first, which are the ones a Youth Offending
+         * Team has been waiting longest for, so a reading that ended the pass would leave every
+         * batch behind the first unreadable one waiting another grace period for a reason that has
+         * nothing to do with it. The ending is already written by then in any case: what is lost is
+         * a sample, and it is said out loud rather than dropped.
+         *
+         * <p>The same rule as {@code DocumentOutcomeSinkImpl}'s, because it is the same reading
+         * taken for the one ending that does not pass through the sink.
+         */
+        @Test
+        void a_reading_that_cannot_be_taken_should_not_stop_the_batches_behind_it() {
+            final RegisterBatch unreadable = overdue();
+            final RegisterBatch behindIt = overdue();
+            generatingSince(unreadable, behindIt);
+            saysNothingAbout(unreadable);
+            saysNothingAbout(behindIt);
+            when(batches.findById(unreadable.batchId())).thenThrow(new StoreUnavailableException(
+                    "the store could not be reached to read a settled batch back",
+                    new IllegalStateException("the connection pool is empty")));
+            when(batches.findById(behindIt.batchId()))
+                    .thenReturn(Optional.of(failedAfterBeingRequested(behindIt)));
+
+            final int completed = reconcile();
+
+            softly.assertThat(completed)
+                    .as("both batches were given up on: the first one's reading was lost and its "
+                            + "ending was not, and the second was never the reading's to hold up")
+                    .isEqualTo(2);
+            softly.assertThat(roundTripsTimed())
+                    .as("one sample, off the one row that could be read back; nothing is invented "
+                            + "for the row that could not")
+                    .isEqualTo(1);
+            softly.assertThatCode(() -> verify(store).markFailed(behindIt.batchId(),
+                            BatchFailureReason.GENERATION_TIMED_OUT, null, CompletedBy.RECONCILER))
+                    .as("and the batch behind the unreadable one was ended, which is the whole of "
+                            + "what a pass that carried on means")
+                    .doesNotThrowAnyException();
         }
     }
 
