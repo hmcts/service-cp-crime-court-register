@@ -2116,11 +2116,12 @@ range that
 counted only the remediation pairs would not match the range it names. **Every count here names a
 fixed commit rather than `HEAD`**, because a count written against `HEAD` is false the moment the
 commit carrying it is made - the record commit is inside the range it counts, which is the
-off-by-one the third round found in the sentence this one replaces. Measured to `9f773de`, the last
-commit of the third round: `41009d0..9f773de` is **22 commits**, first-parent and whole-DAG alike;
-`e4a4c7e..9f773de` is **23 first-parent** and **37 across the DAG**, the difference being the
-fourteen the merge at `41009d0` brought in from `main`. Of the 22, ten are the third round's
-(`7d4ec00..9f773de`) and twelve the second's.
+off-by-one the fourth round found in the sentence this one replaces. Measured to `1c203b9`:
+`41009d0..1c203b9` is **24 commits**, first-parent and whole-DAG alike; `e4a4c7e..1c203b9` is
+**25 first-parent** and **39 across the DAG**, the difference being the fourteen the merge at
+`41009d0` brought in from `main`. The rounds divide as **12** for the second
+(`41009d0..7d4ec00`), **8** for the third (`7d4ec00..cf53977`) and **4** for the fourth
+(`cf53977..1c203b9`).
 **What Phase 8 verified, and
 by which run**: `./gradlew build` green on the branch at `4021608` - "BUILD SUCCESSFUL in 7m 22s,
 3195 tests, 0 failures, 0 errors, 0 skipped, PMD and Checkstyle clean" - and green again after the
@@ -2217,8 +2218,8 @@ line, `0849f13` / `136eb81`) and is a different finding from gate finding 2, the
 and is a different finding from gate finding 4, the sweep's ambiguous key (`0aa967f`); and
 second-round finding 5 is the merge, recorded above. Twelve commits close the second round,
 `41009d0..7d4ec00`, of which eight are its four remediation pairs and the rest are the record, the
-mistaken-message commit `266906f` and its revert `f686493`; ten close the third,
-`7d4ec00..9f773de`.
+mistaken-message commit `266906f` and its revert `f686493`; eight close the third,
+`7d4ec00..cf53977`, and four the fourth, `cf53977..1c203b9`.
 
 **Second-round finding 3 is closed by a red-first pair**, `d150b6c` "test(metrics): take the round
 trip's reading at the mark that earned it" then `dcaec4b` "fix(metrics): record the round trip at
@@ -2518,7 +2519,7 @@ stated.
 - **`7c67bae` is a revert and not a change**, backing out a commit that landed under another
   commit's message; the content it removed lands again at `02597f2` unchanged.
 
-**The gate ran a third round, of five findings, closed in the ten commits `7d4ec00..9f773de`,
+**The gate ran a third round, of five findings, closed in the eight commits `7d4ec00..cf53977`,
 and it needs no exceptions block either.** Three were code and each is a red/green pair.
 **A render whose store write then failed was reported as never requested** (`0c8216f` /
 `9ed1db8`): the count was taken from the outcome the batch returned, and a store failure after
@@ -2558,10 +2559,25 @@ pull request exists yet. `specs/002-consolidate-progression-leg/pull-request.md`
 description, deviation section and all, so the obligation cannot go unmet in a body composed at the
 moment of raising.
 
+**A fifth round then found the sweep itself weaker than the claim it made**, in two shapes nothing
+in `src/main/java` exhibits, so no run over the real sources could have found either.
+`GenerationLegs.OUR_OWN_EXCEPTIONS` named four types as this service's own words and two of them
+take a `Throwable`, so attaching either wrapper would have passed while a driver's message rendered
+through its cause; and the scan read catch names for a whole file rather than lexically, so a later
+safe catch reusing a name excused an earlier attachment and a multi-catch passed on one allowed arm.
+`1c203b9` replaces the list with a rule the code derives - an exception may be attached only where
+no constructor of it takes a cause - resolves the enclosing catch by brace structure, requires every
+arm of a multi-catch, and puts both defeating shapes in front of the scan as source the suite writes
+(`LogStatementSweepTest`, 5 cases). It also rewrites three client comments that still said the
+exception travels with the line and is safe to keep. **That round also corrected the attribution
+this paragraph carried**: `1b80955` and `9f773de` are the fourth round's work and had been counted
+as the third's.
+
 **The gate's second round needs no exceptions block either, and none of its four stages reported
 test-after production behaviour**, so there is still no "### Approved TDD exceptions (Phase 8)"
 block and this is where one would have gone. What puts each of the twelve commits of
-`41009d0..7d4ec00` outside it, and the ten of `7d4ec00..9f773de` with them:
+`41009d0..7d4ec00` outside it, and the eight of `7d4ec00..cf53977` and four of
+`cf53977..1c203b9` with them:
 
 - **The settled snapshot is a pair**, `5b515a7` then `1e71f88`: eight failing assertions over the
   real job, quoted on T072's line, then the green run. The seam is declarations only -
