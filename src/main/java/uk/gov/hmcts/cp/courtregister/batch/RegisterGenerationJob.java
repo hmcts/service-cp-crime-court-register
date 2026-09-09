@@ -5,9 +5,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
@@ -114,6 +116,11 @@ public class RegisterGenerationJob {
     /** What the line calls the reading a run goes ahead on when nobody overrode anything. */
     private static final String FLAG_ON = "flag-on";
 
+    /** What the line calls a settled snapshot the store answered for, and one it refused. */
+    private static final String TAKEN = "taken";
+
+    private static final String UNREAD = "unread";
+
     private final FeatureFlagGate gate;
 
     private final RegisterStore store;
@@ -206,6 +213,13 @@ public class RegisterGenerationJob {
      * because a failure that is only logged about has not been settled (constitution Principle VI)
      * and both the schedule and the operations command decide what to do next from the throw.
      *
+     * <p><strong>The last thing it does is read back what its own night has come to.</strong> The
+     * batches this run assembled are read from the store as the report is made, so the line carries
+     * how many of them have a document and how many the notifying leg has finished with -
+     * {@link #settled}. That read is the one thing here that is not allowed to end the run: a report
+     * that cannot be assembled is not a reason to lose a night's generation, and the line says the
+     * counts are unread rather than reporting zeroes as facts.
+     *
      * @return what the run did, including a run the flag stopped
      */
     // PMD.AvoidCatchingGenericException: what has to be reported is a run that stopped, whatever
@@ -223,8 +237,8 @@ public class RegisterGenerationJob {
         final GateDecision decision = gate.decide(false);
 
         if (decision instanceof Skipped) {
-            return recorded(new RunReport(decision, Map.of(), 0, Map.of(), 0, 0, 0,
-                    sinceStart(startedAt)));
+            return recorded(new RunReport(decision, Map.of(), 0, Map.of(), 0, 0,
+                    RunReport.Settled.NOTHING_ASSEMBLED, 0, sinceStart(startedAt)));
         }
         // Only from here on is the file service anything readiness should have an opinion
         // about, and it stops being one however the run ends.
@@ -232,12 +246,12 @@ public class RegisterGenerationJob {
         runProgress.recordRunStarted();
         try {
             generate(tally);
-            return recorded(tally.reportOf(decision, sinceStart(startedAt)));
+            return recorded(tally.reportOf(decision, settled(tally), sinceStart(startedAt)));
         } catch (RuntimeException stopped) {
             LOG.error("The run did not finish, so the line beside this one describes what it had "
                             + "done rather than a night that completed. cause={}",
                     stopped.getClass().getName(), stopped);
-            recorded(tally.reportOf(decision, sinceStart(startedAt)));
+            recorded(tally.reportOf(decision, settled(tally), sinceStart(startedAt)));
             throw stopped;
         } finally {
             // Once, at the end, however the run ended - and only for what the run actually learned.
@@ -428,6 +442,121 @@ public class RegisterGenerationJob {
     }
 
     /**
+     * What the store says tonight's batches have come to, read once and never at the run's cost.
+     *
+     * <p><strong>Read rather than reasoned about, which is the whole of this method.</strong> The
+     * requesting leg's own account cannot go past GENERATING, but it is not the only thing writing
+     * to {@code register_batch} while a run is going on: a court centre whose render comes back in
+     * seconds is marked and notified by the event listener while this run is still asking about the
+     * court centres behind it. So the identities are kept as they are assembled and their states are
+     * read back here, at the moment the line is written, and what the line carries is what the store
+     * said then - a snapshot of a night that may still be settling, as {@link RunReport.Settled}
+     * says at length.
+     *
+     * <p>One statement for the whole night rather than one per batch: the requesting leg is already
+     * sequential and a read per court centre at the end of it would make a run's own reporting scale
+     * with the estate. The registers behind each batch are the run's own count of what it stamped
+     * rather than a second read, so the states come from the store and the sizes from the night.
+     *
+     * <p><strong>And it cannot fail the run.</strong> By the time it is taken the batches are
+     * stamped and the renders are away, so a store that will not answer this is not a reason to
+     * throw a night's generation away - the Youth Offending Teams are going to be told whatever
+     * this read does. It is a reason to say the counts are missing, which the line does in a word
+     * and the WARN does by naming what refused: nothing is swallowed, and a reader who cannot tell
+     * a night that settled nothing from a night nobody could read has been told less than nothing.
+     *
+     * @param tally what the run has done, which is where the identities it assembled are kept
+     * @return what the store said about them, or {@link RunReport.Settled#UNREAD} where it would
+     *         not say
+     */
+    // PMD.AvoidCatchingGenericException: a store outage arrives as the store's own unchecked type
+    // and a refused read as whatever the driver raised; both mean the same thing here - this run
+    // cannot say what its batches came to - and a narrower catch would leave the classes it does
+    // not name failing a run over its own report.
+    // PMD.OnlyOneReturn: the three exits are the three answers - nothing to ask about, what the
+    // store said, and a read that was refused - and each is stated where it is decided.
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
+    private RunReport.Settled settled(final RunTally tally) {
+        final Map<UUID, Integer> assembled = tally.registersPerBatch();
+        if (assembled.isEmpty()) {
+            return RunReport.Settled.NOTHING_ASSEMBLED;
+        }
+        try {
+            return snapshotOf(store.batchesNamed(assembled.keySet()), assembled);
+        } catch (RuntimeException notRead) {
+            LOG.warn("The batches this run assembled could not be read back, so its line says the "
+                            + "settled counts are unread rather than nought. cause={}",
+                    notRead.getClass().getName(), notRead);
+            return RunReport.Settled.UNREAD;
+        }
+    }
+
+    /**
+     * Counts the batches the store answered with, and the registers this run put inside them.
+     *
+     * <p>An identity nothing answers for is a batch that is not there rather than a batch that
+     * settled nothing: a stamp that was refused left no row and a batch the deadline never reached
+     * was never written down, and neither has come back from anywhere.
+     *
+     * @param asTheStoreHoldsThem the batches the store answered with
+     * @param registersPerBatch   how many registers this run stamped into each identity it
+     *                            assembled
+     * @return the two counts and the registers behind each
+     */
+    private static RunReport.Settled snapshotOf(final List<RegisterBatch> asTheStoreHoldsThem,
+            final Map<UUID, Integer> registersPerBatch) {
+
+        int generated = 0;
+        int notified = 0;
+        int generatedRows = 0;
+        int notifiedRows = 0;
+        for (final RegisterBatch batch : asTheStoreHoldsThem) {
+            final int registers = registersPerBatch.getOrDefault(batch.batchId(), 0);
+            if (hasBeenNotifiedAbout(batch.status())) {
+                notified++;
+                notifiedRows += registers;
+            }
+            if (hasADocument(batch.status())) {
+                generated++;
+                generatedRows += registers;
+            }
+        }
+        return RunReport.Settled.taken(generated, notified, generatedRows, notifiedRows);
+    }
+
+    /**
+     * Whether the notifying leg has finished with a batch in this state.
+     *
+     * <p>Read off the state machine rather than listed here. The endings the notifying leg can
+     * produce are exactly the states GENERATED may move to - everybody was told, some were and the
+     * rest are resendable, and there was nobody to tell (defect fix P1) - so an ending drawn into
+     * {@link BatchStatus} later joins this count with the diagram rather than needing a list here
+     * to be remembered. Which of them a batch reached is kept where it matters, in the row and on
+     * {@code courtregister_batches_total} by outcome, and is a distinction no count of batches can
+     * carry.
+     *
+     * @param status the state the store holds the batch in
+     * @return whether the notifying leg is done with it
+     */
+    private static boolean hasBeenNotifiedAbout(final BatchStatus status) {
+        return BatchStatus.GENERATED.canTransitionTo(status);
+    }
+
+    /**
+     * Whether a batch in this state has a document.
+     *
+     * <p>GENERATED and everything past it, because a batch that has been notified was generated
+     * first: a count that fell as the night progressed would be unreadable, and the point of the
+     * count is that it only ever grows towards the number of batches the run asked for.
+     *
+     * @param status the state the store holds the batch in
+     * @return whether its document exists
+     */
+    private static boolean hasADocument(final BatchStatus status) {
+        return status == BatchStatus.GENERATED || hasBeenNotifiedAbout(status);
+    }
+
+    /**
      * The one line a night leaves behind.
      *
      * <p>Written for every run, including - especially - the ones that did nothing, since before
@@ -444,21 +573,34 @@ public class RegisterGenerationJob {
      * is every batch it accepted plus the ones it refused, and never a batch that was left for the
      * next run or could not be written down.
      *
+     * <p><strong>And the four settled counts sit inside it too, under a word that says whether
+     * they are measurements at all.</strong> {@code generated} and {@code notified} are what the
+     * store said tonight's batches had come to when this line was written, so a batch counted in
+     * either was counted {@code generating} by the requesting leg and neither count is taken off
+     * that one. Nothing is claimed to add up over them: the two totals above are the night, and
+     * folding these into either would count the same batches twice. {@code snapshot=unread} is the
+     * read that could not be taken, and the four zeroes under it are not a night that settled
+     * nothing.
+     *
      * @param report what the run did
      * @return that same report, so a caller can write the line and answer with it in one step
      */
     private static RunReport recorded(final RunReport report) {
         final Map<BatchStatus, Integer> outcomes = report.outcomes();
         final Map<BatchStatus, Integer> rows = report.rowOutcomes();
+        final RunReport.Settled settled = report.settled();
         LOG.info("event={} gate={} reason={} batches={} requested={} generating={} failed={} "
                         + "pending={} deferred={} rows={} rows_generating={} rows_failed={} "
-                        + "rows_pending={} rows_deferred={} reconciled={} duration_ms={}",
+                        + "rows_pending={} rows_deferred={} snapshot={} generated={} notified={} "
+                        + "rows_generated={} rows_notified={} reconciled={} duration_ms={}",
                 RUN_EVENT, gateOf(report.gateDecision()), reasonOf(report.gateDecision()),
                 outcomes.values().stream().mapToInt(Integer::intValue).sum(), report.requested(),
                 counted(outcomes, BatchStatus.GENERATING), counted(outcomes, BatchStatus.FAILED),
                 counted(outcomes, BatchStatus.PENDING), report.deferredKeys(), report.rows(),
                 counted(rows, BatchStatus.GENERATING), counted(rows, BatchStatus.FAILED),
                 counted(rows, BatchStatus.PENDING), report.deferredRows(),
+                settled.read() ? TAKEN : UNREAD, settled.generated(), settled.notified(),
+                settled.generatedRows(), settled.notifiedRows(),
                 report.reconciled(), report.duration().toMillis());
         return report;
     }
@@ -520,6 +662,22 @@ public class RegisterGenerationJob {
         /** How many registers ended the run in each of those states, counted the same way. */
         private final Map<BatchStatus, Integer> rowOutcomes = new EnumMap<>(BatchStatus.class);
 
+        /**
+         * How many registers this run stamped into each batch it assembled, by identity.
+         *
+         * <p>The identities are what makes the settled counts <em>tonight's</em>: a key's history
+         * and a day's both hold batches earlier runs assembled, so a run that counted what came
+         * back from either read would credit itself with last night's documents. They are recorded
+         * the moment the assembler answers rather than as each batch is requested, so a run that
+         * stops part way can still say what the store makes of the batches it did stamp.
+         *
+         * <p>The sizes are kept beside them because they are already known - the run stamped them -
+         * and reading the registers of a settled batch back would be a second statement per court
+         * centre for a number that cannot have changed: a batch with a document is past every state
+         * in which its rows are released.
+         */
+        private final Map<UUID, Integer> registersByBatch = new LinkedHashMap<>();
+
         /** The registers the store called active, for the age of the oldest still waiting. */
         private List<RegisterRecord> activeRegisters = List.of();
 
@@ -552,6 +710,9 @@ public class RegisterGenerationJob {
             this.activeRegisters = read;
             this.nightsAssembly = made;
             this.registersWaiting = stillWaiting(read, made).size();
+            for (final AssembledBatch grouped : made.batches()) {
+                registersByBatch.put(grouped.batch().batchId(), grouped.records().size());
+            }
         }
 
         /**
@@ -634,17 +795,25 @@ public class RegisterGenerationJob {
             return batchesLeftBehind;
         }
 
+        private Map<UUID, Integer> registersPerBatch() {
+            return registersByBatch;
+        }
+
         /**
          * The report for a run that ended here, whether or not it meant to.
          *
          * @param decision what the gate decided, which the report carries unchanged
+         * @param settled  what the store said tonight's batches had come to, taken as the report
+         *                 is made and never before it
          * @param duration how long the run took
          * @return what the run had done
          */
-        private RunReport reportOf(final GateDecision decision, final Duration duration) {
+        private RunReport reportOf(final GateDecision decision, final RunReport.Settled settled,
+                final Duration duration) {
+
             return new RunReport(decision, outcomes, rendersRequested, rowOutcomes,
                     nightsAssembly == null ? 0 : nightsAssembly.deferred().size(),
-                    registersWaiting, outcomesChased, duration);
+                    registersWaiting, settled, outcomesChased, duration);
         }
     }
 }

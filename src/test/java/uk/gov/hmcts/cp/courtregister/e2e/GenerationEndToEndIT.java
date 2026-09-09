@@ -195,8 +195,10 @@ class GenerationEndToEndIT {
 
         assertThat(report.outcomes())
                 .as("the report is the requesting half's account of the night, and GENERATING is as "
-                        + "far as a run can carry a batch: the document arrives long after the run "
-                        + "has ended, so no run report can name a notified batch")
+                        + "far as a run can carry a batch itself: on this night the document "
+                        + "arrives after the run has ended, so its outcome map cannot name a "
+                        + "notified batch. What the store had settled by the time the line was "
+                        + "written is a separate reading, on RunReport.settled")
                 .containsKey(BatchStatus.GENERATING)
                 .doesNotContainKey(BatchStatus.NOTIFIED);
         assertThat(report.reconciled())

@@ -293,6 +293,27 @@ public final class GenerationLegs implements AutoCloseable {
         whateverItAnswers(job::run);
 
         aNightThatStoppedPartWay();
+        aNightWhoseOwnBatchesCouldNotBeReadBack();
+    }
+
+    /**
+     * The night the store answered everything except what the run's own batches had come to.
+     *
+     * <p>The one read of a run that is not allowed to end it. By the time it is taken the batches
+     * are stamped and the renders are away, so a store that will not answer it costs the line its
+     * four settled counts and nothing else - and the line says {@code snapshot=unread} rather than
+     * reporting zeroes as facts. The class of what refused is named beside it for the reason this
+     * sweep exists: a reading nobody can tell from a quiet night is worse than no reading, and the
+     * words that name it have to be as bounded as the counts they stand in for.
+     */
+    private void aNightWhoseOwnBatchesCouldNotBeReadBack() {
+        readyToGenerate();
+        when(store.assemble(any(RegisterBatch.class), anyList())).thenReturn(pending());
+        renderCommandAnswering(HttpStatus.ACCEPTED.value());
+        when(store.batchesNamed(any())).thenThrow(new StoreUnavailableException(
+                "the store could not be reached to read a run's own batches back by identity",
+                new IllegalStateException("the connection pool is empty")));
+        whateverItAnswers(job::run);
     }
 
     /**

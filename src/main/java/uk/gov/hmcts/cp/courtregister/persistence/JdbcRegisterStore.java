@@ -431,6 +431,27 @@ public class JdbcRegisterStore implements RegisterStore {
              ORDER BY court_centre_id, supplement_index, batch_id
             """;
 
+    /**
+     * Statement 4c - the batches a set of identities names, as their rows stand right now.
+     *
+     * <p>The run report's settled read. Asked by identity because that is the only predicate that
+     * says <em>tonight's</em> batches: 4a reads a key's whole history and 4b reads a day's, so a run
+     * counting either would credit itself with an earlier run's documents.
+     *
+     * <p>The same columns, because the caller reads the state off the same record the other two
+     * answer with, and no order at all: the caller counts them, and an ordering would be work for a
+     * question nobody asks. The primary key answers it, so it is one index scan however many court
+     * centres a night held.
+     */
+    private static final String BATCHES_BY_IDENTITY = """
+            SELECT batch_id, court_centre_id, court_centre_ou_code, court_house, register_date,
+                   file_name, payload_file_id, document_file_id, status, failure_reason,
+                   sdg_reason, system_generated, completed_by, assembled_at, requested_at,
+                   generated_at, notified_at, failed_at, attempts, supplement_of, supplement_index
+              FROM register_batch
+             WHERE batch_id IN (:batchIds)
+            """;
+
     /** Statement 5 - the status a transition is asked about and then fenced on. */
     private static final String READ_BATCH_STATUS = """
             SELECT status FROM register_batch WHERE batch_id = :batchId
@@ -1292,14 +1313,28 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * {@inheritDoc}
      *
-     * <p>The statement this seam is waiting on lands with the run's settled counts; until then the
-     * refusal names what is missing rather than answering an empty set, which a run would report as
-     * a night that had settled nothing.
+     * <p>Nothing asked for is nothing issued, exactly as {@link #batchesFor(Collection)} answers a
+     * run with nothing active: an empty {@code IN} list is a statement Postgres refuses rather than
+     * answers, and a caller that named no batch is not asking about one.
+     *
+     * <p>An identity with no row is left out rather than answered for, which is the contract: a
+     * stamp that was refused took its row with it and a batch the run deadline never reached was
+     * never written down, so the answer is smaller than the question on exactly the nights it should
+     * be.
      */
+    // PMD.OnlyOneReturn: "no identities" is answered without issuing anything, and saying so where
+    // it is decided is the whole of the guard - an empty IN list is a statement Postgres refuses.
+    @SuppressWarnings("PMD.OnlyOneReturn")
     @Override
     public List<RegisterBatch> batchesNamed(final Collection<UUID> batchIds) {
-        throw new UnsupportedOperationException(
-                "reading " + batchIds.size() + " batches back by identity is not written yet");
+        if (batchIds.isEmpty()) {
+            return List.of();
+        }
+        return StoreOutage.translating("read a run's own batches back by identity",
+                () -> jdbcClient.sql(BATCHES_BY_IDENTITY)
+                        .param("batchIds", List.copyOf(batchIds))
+                        .query((rs, rowNumber) -> recordedBatch(rs))
+                        .list());
     }
 
     /**
