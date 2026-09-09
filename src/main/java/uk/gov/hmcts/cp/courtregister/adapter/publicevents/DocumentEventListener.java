@@ -124,6 +124,17 @@ public class DocumentEventListener {
     /** systemdocgenerator's own words for a refusal, kept by the sink and never logged. */
     private static final String REASON = "reason";
 
+    /**
+     * What is written where an envelope's own name is not one this service declares.
+     *
+     * <p>The bounded stand-in for {@code _metadata.name}. The header's name is one of the two
+     * constants above by the time the two are compared, so it may be written; the envelope's is
+     * the message's own account of itself and may be anything at all, so it is written only where
+     * it is one of those two constants as well. Everything else - another event's name, an
+     * envelope carrying no name, and whatever a mistake puts there - reads as this one code.
+     */
+    private static final String NOT_A_SUBSCRIBED_EVENT = "not-a-subscribed-event";
+
     private final DocumentOutcomeSink sink;
 
     private final GenerationMetrics metrics;
@@ -188,17 +199,61 @@ public class DocumentEventListener {
         try {
             envelope = PublicEventEnvelope.parse(body);
         } catch (final JacksonException | IllegalArgumentException notAnEnvelope) {
-            LOG.warn("A {} was not a readable JsonEnvelope, so it is acknowledged and dropped.",
-                    eventName, notAnEnvelope);
+            // The event and what refused the body, never the body. Redaction of the parser's
+            // source location is not redaction of the body: an unquoted token is reported as
+            // "Unrecognized token '<the token>'", so the message quotes the body's own text, and
+            // that text is another context's, did not parse, and may be anything at all
+            // (Principle VII). The exception is named by class for the same reason the two field
+            // readers name theirs, and the class is the reading a diagnosis needs: a Jackson
+            // failure is a body that is not JSON, and IllegalArgumentException is JSON this
+            // service refused as an envelope.
+            LOG.warn("A {} was not a readable JsonEnvelope, so it is acknowledged and dropped. "
+                    + "cause={}", eventName, notAnEnvelope.getClass().getName());
             return;
         }
         if (!eventName.equals(envelope.metadataName())) {
+            // Both sides where both are bounded, and never the envelope's own text. The header's
+            // name is one of the two constants this class declares - the filter above has already
+            // dropped everything else - so it is written; the envelope's is what the message says
+            // it is, and a message that disagrees with its own header has already shown it is not
+            // what it claims, so its name may be a person's own details as easily as an event
+            // (Principle VII).
             LOG.warn("A public event's CPPNAME and its envelope disagree, so it is acknowledged and "
                     + "dropped: the header said {} and the envelope says {}.", eventName,
-                    envelope.metadataName());
+                    claimed(envelope.metadataName()));
             return;
         }
         route(eventName, envelope.payload());
+    }
+
+    /**
+     * What an envelope's own name may be written down as: one of this class's two constants, or the
+     * one code that stands for everything else.
+     *
+     * <p>The constant is returned rather than the argument, deliberately: what reaches the line is
+     * then a value this file spells, and no reading of this method can leak the message's text by
+     * being changed later. A name that is one of the two is worth writing because it is the whole
+     * of a genuine mismatch's diagnosis - a document-available body announced under a
+     * generation-failed header, or the crossing the other way about, which is what
+     * systemdocgenerator publishing the pair out of step would look like.
+     *
+     * <p>An envelope carrying no name at all reads as the same code as one naming another event.
+     * The distinction is real - a {@code JsonEnvelope} without its own name is the publisher's
+     * fault and not the routing's - and it is deliberately not made here: it would be a third
+     * reading no case asks for, and this line is about the disagreement rather than about the
+     * envelope's completeness.
+     *
+     * @param metadataName the envelope's {@code _metadata.name}, which may be {@code null}
+     * @return the bounded value to write
+     */
+    private static String claimed(final String metadataName) {
+        if (DOCUMENT_AVAILABLE.equals(metadataName)) {
+            return DOCUMENT_AVAILABLE;
+        }
+        if (GENERATION_FAILED.equals(metadataName)) {
+            return GENERATION_FAILED;
+        }
+        return NOT_A_SUBSCRIBED_EVENT;
     }
 
     /**
