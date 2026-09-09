@@ -67,13 +67,10 @@ public record LogStatement(String loggerName, String pattern, String where) {
 
     private static final char BLOCK_CLOSES = '}';
 
-    private static final char TAB_ESCAPE = 't';
+    /** The quote a character literal is written in, named so an {@code if} carries no literal. */
+    private static final char CHARACTER_QUOTE = '\'';
 
-    /** Where this service's own exceptions live; anything outside them is somebody else's. */
-    private static final List<String> OWN_PACKAGES = List.of(
-            "uk.gov.hmcts.cp.courtregister.domain.",
-            "uk.gov.hmcts.cp.courtregister.batch.cli.",
-            "uk.gov.hmcts.cp.courtregister.application.");
+    private static final char TAB_ESCAPE = 't';
 
     /** The five calls this repository writes a line with. */
     private static final List<String> CALLS =
@@ -122,12 +119,15 @@ public record LogStatement(String loggerName, String pattern, String where) {
      * string or a fragment of a statement turns up. A suite that pinned each one as it was found
      * would go on finding them; a sweep that refuses the shape cannot be added to without failing.
      *
-     * <p><strong>What may be attached is decided by the type, not by a list somebody keeps.</strong>
-     * An exception is attachable where it cannot carry a cause: no constructor of it takes a
-     * {@link Throwable}, so nothing of anybody else's can be underneath it, and its message is
-     * therefore composed here and nowhere else. A hand-kept allowlist got this wrong twice in one
-     * review - {@code ReportNotWritten} wraps an {@link java.io.IOException} and both store
-     * exceptions take a cause - which is what a list of names invites and a rule does not.
+     * <p><strong>Nothing may be attached, and the flat rule is the only one that holds.</strong>
+     * Two softer rules were tried and both were defeated inside one review. A hand-kept list of
+     * this service's own exception types let three wrappers through, because a cause chain renders
+     * recursively. Deriving the answer from the type - attachable where no constructor takes a
+     * {@link Throwable} - lasted no longer: every exception inherits {@code initCause}, so a type
+     * with no such constructor can still be given a cause after it is built, a subclass can
+     * declare one, and nothing about a constructor's signature says the message it composes is
+     * bounded. What is left is the rule that needs no exceptions: a line carries the class of what
+     * was caught and never the throwable.
      *
      * <p>The enclosing {@code catch} is resolved <strong>lexically</strong>, by the brace structure
      * around the statement, rather than by matching the argument's name against the catches in the
@@ -171,11 +171,8 @@ public record LogStatement(String loggerName, String pattern, String where) {
                 final String last = lastArgumentOf(source, at + call.length());
                 final CatchBlock enclosing = innermostAround(catches, at);
                 if (enclosing != null && last.equals(nameOf(source, enclosing))) {
-                    final List<String> types = typesOf(source, enclosing);
-                    if (!types.stream().allMatch(LogStatement::cannotCarryACause)) {
-                        attached.add(fileName + ":" + lineOf(source, at)
-                                + " catches " + String.join(" | ", types));
-                    }
+                    attached.add(fileName + ":" + lineOf(source, at)
+                            + " catches " + String.join(" | ", typesOf(source, enclosing)));
                 }
                 at = source.indexOf(call, at + 1);
             }
@@ -183,59 +180,19 @@ public record LogStatement(String loggerName, String pattern, String where) {
         return attached;
     }
 
-    /**
-     * Whether a caught type can be attached: only where no constructor of it takes a cause.
-     *
-     * <p>An unresolvable name is treated as attachable-not: a sweep that fell silent on a type it
-     * could not load would be answering the wrong question quietly, which is the failure this
-     * whole scan exists to make impossible.
-     *
-     * @param simpleName the type as the catch clause spells it
-     * @return true where nothing of anybody else's can be underneath it
-     */
-    private static boolean cannotCarryACause(final String simpleName) {
-        final String bare = simpleName.substring(simpleName.lastIndexOf('.') + 1);
-        boolean attachable = false;
-        for (final String namespace : OWN_PACKAGES) {
-            final java.util.Optional<Class<?>> type = loaded(namespace + bare);
-            if (type.isPresent()) {
-                attachable = java.util.Arrays.stream(type.orElseThrow().getConstructors())
-                        .flatMap(one -> java.util.Arrays.stream(one.getParameterTypes()))
-                        .noneMatch(Throwable.class::isAssignableFrom);
-                break;
-            }
-        }
-        return attachable;
-    }
-
-    /**
-     * The class of that name, where this service declares one.
-     *
-     * @param name the fully qualified name to try
-     * @return the class, or empty where this service declares no such type
-     */
-    private static java.util.Optional<Class<?>> loaded(final String name) {
-        java.util.Optional<Class<?>> type;
-        try {
-            type = java.util.Optional.of(Class.forName(name));
-        } catch (ClassNotFoundException notThisPackage) {
-            type = java.util.Optional.empty();
-        }
-        return type;
-    }
-
     /** Every {@code catch} block in a source, outermost first. */
     private static List<CatchBlock> catchBlocksIn(final String source) {
         final List<CatchBlock> blocks = new ArrayList<>();
         final java.util.regex.Matcher clauses = java.util.regex.Pattern
                 .compile("catch\\s*\\(([^)]*)\\)\\s*\\{").matcher(source);
+        final boolean[] codeAt = codePositionsIn(source);
         while (clauses.find()) {
             int depth = 0;
             int at = clauses.end() - 1;
             while (at < source.length()) {
-                if (source.charAt(at) == BLOCK_OPENS) {
+                if (codeAt[at] && source.charAt(at) == BLOCK_OPENS) {
                     depth++;
-                } else if (source.charAt(at) == BLOCK_CLOSES) {
+                } else if (codeAt[at] && source.charAt(at) == BLOCK_CLOSES) {
                     depth--;
                     if (depth == 0) {
                         break;
@@ -246,6 +203,69 @@ public record LogStatement(String loggerName, String pattern, String where) {
             blocks.add(new CatchBlock(clauses.start(), at, clauses.end()));
         }
         return blocks;
+    }
+
+    /**
+     * Which positions of a source are code, so a brace inside a string or a comment counts for
+     * nothing.
+     *
+     * <p>The reason this is not an optimisation. A block matcher that counted every brace could be
+     * closed early by one written in a comment or a literal - {@code // }} on the line above a
+     * warning ends the enclosing catch as far as the matcher can see, and the statement below it
+     * then belongs to no catch and is swept up by nothing. A defeating case is one line long and
+     * cost the whole claim, which is what this exists to stop and what
+     * {@code LogStatementSweepTest} pins.
+     *
+     * <p>Text blocks are treated as ordinary strings: their delimiter is three quotes, so the
+     * toggle opens on the first and closes on the third, and the two in between leave the state
+     * where it started. A brace inside one is still inside a string either way.
+     *
+     * @param source the source text
+     * @return one flag per character, true where that character is code
+     */
+    private static boolean[] codePositionsIn(final String source) {
+        final boolean[] codeAt = new boolean[source.length()];
+        boolean inString = false;
+        boolean inChar = false;
+        boolean inLineComment = false;
+        boolean inBlockComment = false;
+        boolean escaped = false;
+        int at = 0;
+        while (at < source.length()) {
+            final char character = source.charAt(at);
+            final char next = at + 1 < source.length() ? source.charAt(at + 1) : '\0';
+            int step = 1;
+            if (inLineComment) {
+                inLineComment = character != '\n';
+            } else if (inBlockComment) {
+                if (character == '*' && next == '/') {
+                    inBlockComment = false;
+                    step = 2;
+                }
+            } else if (escaped) {
+                escaped = false;
+            } else if ((inString || inChar) && character == ESCAPE) {
+                escaped = true;
+            } else if (inString) {
+                inString = character != QUOTE;
+            } else if (inChar) {
+                inChar = character != CHARACTER_QUOTE;
+            } else if (character == '/' && next == '/') {
+                inLineComment = true;
+                step = 2;
+            } else if (character == '/' && next == '*') {
+                inBlockComment = true;
+                step = 2;
+            } else if (character == QUOTE) {
+                inString = true;
+            } else if (character == CHARACTER_QUOTE) {
+                inChar = true;
+            } else {
+                codeAt[at] = true;
+            }
+            at += step;
+        }
+        return codeAt;
     }
 
     private static CatchBlock innermostAround(final List<CatchBlock> blocks, final int at) {

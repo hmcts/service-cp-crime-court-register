@@ -961,9 +961,11 @@ public class RegisterNotifierService {
             } catch (NotificationFailedException refused) {
                 lastAnswer = refused.responseCode();
                 LOG.warn("notificationnotify did not accept a register e-mail on attempt {} of {}. "
-                        + "notificationId={} batchId={} responseCode={} classification={}",
+                        + "notificationId={} batchId={} responseCode={} classification={} "
+                        + "cause={}",
                         posts, maxAttempts, row.notificationId(), row.batchId(),
-                        statusOf(lastAnswer), refused.classification(), refused);
+                        statusOf(lastAnswer), refused.classification(),
+                        refused.getClass().getName());
                 if (refused.classification() != FailureClassification.TRANSIENT
                         || posts == maxAttempts
                         || !waitFor(row, retryPolicy.waitAfter(posts, refused.retryAfter()))) {

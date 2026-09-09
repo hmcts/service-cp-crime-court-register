@@ -362,8 +362,8 @@ public class GenerationReconciler {
         } catch (GenerationFailedException e) {
             LOG.warn("Batch {} is past its grace period and systemdocgenerator could not answer "
                     + "what became of its payload, so it stays GENERATING and is asked again on "
-                    + "the next run rather than failed on the strength of this.", batch.batchId(),
-                    e);
+                    + "the next run rather than failed on the strength of this. cause={}",
+                    batch.batchId(), e.getClass().getName());
             completed = false;
         }
         return completed;

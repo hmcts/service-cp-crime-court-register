@@ -45,10 +45,16 @@ class LogStatementSweepTest {
     }
 
     /**
-     * And what may still be attached, so the sweep is not simply refusing everything.
+     * And this service's own exception is refused with the rest, which is the point of the rule.
+     *
+     * <p>Two softer rules were tried before this one and both were defeated in a single review: a
+     * list of this service's own types let three wrappers through, and deriving the answer from
+     * the constructors lasted no longer, because every exception inherits {@code initCause} and a
+     * type with no cause constructor can still be handed one after it is built. What survives is
+     * the rule with no exceptions in it.
      */
     @Test
-    void should_allow_an_exception_that_cannot_carry_a_cause() {
+    void should_refuse_this_services_own_exception_too() {
         assertThat(LogStatement.attachmentsIn("""
                 class Somewhere {
                     void run() {
@@ -60,9 +66,10 @@ class LogStatementSweepTest {
                     }
                 }
                 """, FILE))
-                .as("no constructor of it takes a Throwable, so nothing of anybody else's can be "
-                        + "underneath it and its message was composed in this repository")
-                .isEmpty();
+                .as("it declares no cause constructor and can still be given a cause through "
+                        + "initCause, so a rule that let it through would be a rule about the "
+                        + "shape of a constructor rather than about what reaches the log")
+                .containsExactly("Somewhere.java:6 catches GenerationFailedException");
     }
 
     @Nested
@@ -90,10 +97,13 @@ class LogStatementSweepTest {
                         }
                     }
                     """, FILE))
-                    .as("both catches bind the name `failed`, and the safe one is written second: "
-                            + "a scan that gathered names for the whole file would answer the "
-                            + "second catch's type for the first statement and report nothing")
-                    .containsExactly("Somewhere.java:6 catches RuntimeException");
+                    .as("both catches bind the name `failed`, and each statement is reported "
+                            + "under the type of its own catch: a scan that gathered names for the "
+                            + "whole file would answer one catch's type for both statements, and "
+                            + "under the rule this replaced - where the second type was allowed - "
+                            + "it would have reported neither")
+                    .containsExactly("Somewhere.java:6 catches RuntimeException",
+                            "Somewhere.java:14 catches GenerationFailedException");
         }
 
         @Test
@@ -109,10 +119,49 @@ class LogStatementSweepTest {
                         }
                     }
                     """, FILE))
-                    .as("the type that renders is whichever was thrown, so a multi-catch is only "
-                            + "as safe as its least safe arm")
+                    .as("both arms are reported, because both are refused: a multi-catch is "
+                            + "not a way to attach one of them")
                     .containsExactly(
                             "Somewhere.java:6 catches GenerationFailedException | RuntimeException");
+        }
+
+        @Test
+        void a_brace_in_a_comment_should_not_end_the_block_the_statement_is_in() {
+            assertThat(LogStatement.attachmentsIn("""
+                    class Somewhere {
+                        void run() {
+                            try {
+                                call();
+                            } catch (RuntimeException failed) {
+                                // the block this comment is in ends with }
+                                LOG.warn("it did not work. cause={}", failed.getClass(), failed);
+                            }
+                        }
+                    }
+                    """, FILE))
+                    .as("a matcher that counted every brace would close the catch at the one in "
+                            + "the comment, leaving the statement below it inside no block and "
+                            + "swept up by nothing - one line, and the whole claim is gone")
+                    .containsExactly("Somewhere.java:7 catches RuntimeException");
+        }
+
+        @Test
+        void a_brace_in_a_string_should_not_end_it_either() {
+            assertThat(LogStatement.attachmentsIn("""
+                    class Somewhere {
+                        void run() {
+                            try {
+                                call();
+                            } catch (RuntimeException failed) {
+                                render("a payload looks like {} and ends with }");
+                                LOG.warn("it did not work. cause={}", failed.getClass(), failed);
+                            }
+                        }
+                    }
+                    """, FILE))
+                    .as("the same hole through a literal rather than a comment, and this service "
+                            + "writes braces in strings all day: every log pattern has one")
+                    .containsExactly("Somewhere.java:7 catches RuntimeException");
         }
 
         @Test
