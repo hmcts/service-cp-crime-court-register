@@ -263,6 +263,58 @@ class LogStatementSweepTest {
         }
 
         @Test
+        void a_throwable_in_redundant_brackets_should_still_be_reported() {
+            assertThat(LogStatement.attachmentsIn("""
+                    class Somewhere {
+                        void run() {
+                            try {
+                                call();
+                            } catch (RuntimeException failed) {
+                                LOG.warn("it did not work.", (failed));
+                            }
+                        }
+                    }
+                    """, FILE))
+                    .as("brackets round an argument change nothing about what is attached")
+                    .containsExactly("Somewhere.java:6 catches RuntimeException");
+        }
+
+        @Test
+        void a_throwable_cast_inside_brackets_should_still_be_reported() {
+            assertThat(LogStatement.attachmentsIn("""
+                    class Somewhere {
+                        void run() {
+                            try {
+                                call();
+                            } catch (RuntimeException failed) {
+                                LOG.warn("it did not work.", ((Throwable) failed));
+                            }
+                        }
+                    }
+                    """, FILE))
+                    .as("a cast and brackets together, which is the same object again")
+                    .containsExactly("Somewhere.java:6 catches RuntimeException");
+        }
+
+        @Test
+        void a_cause_taken_off_the_caught_throwable_should_be_reported() {
+            assertThat(LogStatement.attachmentsIn("""
+                    class Somewhere {
+                        void run() {
+                            try {
+                                call();
+                            } catch (RuntimeException failed) {
+                                LOG.warn("it did not work.", failed.getCause());
+                            }
+                        }
+                    }
+                    """, FILE))
+                    .as("the cause is the library's exception with none of this service's wrapping "
+                            + "round it, which is the worst of the three to let through")
+                    .containsExactly("Somewhere.java:6 catches RuntimeException");
+        }
+
+        @Test
         void a_statement_outside_any_catch_should_not_be_read_as_attaching_anything() {
             assertThat(LogStatement.attachmentsIn("""
                     class Somewhere {
