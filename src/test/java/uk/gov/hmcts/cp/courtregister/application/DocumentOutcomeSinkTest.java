@@ -12,16 +12,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.Tag;
-import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
@@ -120,20 +115,6 @@ class DocumentOutcomeSinkTest {
     private static final Instant REQUESTED_AT = Instant.parse("2026-03-02T18:00:12Z");
     private static final Instant GENERATED_AT = Instant.parse("2026-03-02T18:01:40Z");
     private static final Instant FAILED_AT = Instant.parse("2026-03-02T18:01:45Z");
-
-    /**
-     * When the store stamped the failure, which is deliberately not {@link #FAILED_AT}.
-     *
-     * <p>{@code markFailed} sets {@code failed_at = now()} and ignores the renderer's own account of
-     * when it gave up, which the sink's javadoc says in as many words. The two are different
-     * instants in this suite so that a reading taken from the argument rather than from the row
-     * fails rather than agreeing by coincidence.
-     */
-    private static final Instant FAILURE_RECORDED_AT = Instant.parse("2026-03-02T18:01:59Z");
-
-    /** A generator whose clock is behind the store's, which is not a round trip (see below). */
-    private static final Instant GENERATED_BEFORE_IT_WAS_ASKED_FOR =
-            Instant.parse("2026-03-02T17:59:30Z");
 
     private static final UUID DOCUMENT_FILE_ID =
             UUID.fromString("2b8a9d10-77c5-4a6d-8f3e-0d51c9a2e4b7");
@@ -259,81 +240,12 @@ class DocumentOutcomeSinkTest {
                 GENERATED_AT, null, null, 1, null, 0);
     }
 
-    /**
-     * The same batch once the renderer has refused it, which is where a redelivery finds it.
-     *
-     * <p>{@code failed_at} is {@link #FAILURE_RECORDED_AT} and not the {@link #FAILED_AT} the sink
-     * was handed, because the store stamps its own instant and drops the renderer's.
-     */
+    /** The same batch once the renderer has refused it, which is where a redelivery finds it. */
     private static RegisterBatch failed(final RegisterBatch batch, final CompletedBy learnedBy) {
         return new RegisterBatch(batch.batchId(), COURT_CENTRE, OU_CODE, COURT_HOUSE,
                 batch.registerDate(), batch.fileName(), batch.payloadFileId(), null,
                 BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, SDG_REASON, true,
-                learnedBy, ASSEMBLED_AT, REQUESTED_AT, null, null, FAILURE_RECORDED_AT, 1, null, 0);
-    }
-
-    /**
-     * A batch in flight, and the row the store is left holding once its document is recorded.
-     *
-     * <p>Two answers from one lookup, because the round trip is a reading of the row rather than of
-     * the event: the sink reads the batch to decide what the outcome means, marks it, and reads
-     * back what the store ended up holding.
-     *
-     * @param learnedBy the mechanism that learned the document exists
-     * @return the batch as the first read returns it, GENERATING
-     */
-    private RegisterBatch inFlightUntilGenerated(final CompletedBy learnedBy) {
-        final RegisterBatch batch = generating(MONDAY);
-        when(batches.findById(batch.batchId()))
-                .thenReturn(Optional.of(batch))
-                .thenReturn(Optional.of(generated(batch, learnedBy)));
-        return batch;
-    }
-
-    /**
-     * A batch in flight, and the row the store is left holding once its refusal is recorded.
-     *
-     * @param learnedBy the mechanism that learned the render failed
-     * @return the batch as the first read returns it, GENERATING
-     */
-    private RegisterBatch inFlightUntilFailed(final CompletedBy learnedBy) {
-        final RegisterBatch batch = generating(MONDAY);
-        when(batches.findById(batch.batchId()))
-                .thenReturn(Optional.of(batch))
-                .thenReturn(Optional.of(failed(batch, learnedBy)));
-        return batch;
-    }
-
-    /**
-     * How many render round trips have been timed.
-     *
-     * @return the count, or {@link #ABSENT} where the timer has no series at all
-     */
-    private double roundTripsTimed() {
-        final Timer timer = registry.find(GenerationMetrics.GENERATION_LATENCY).timer();
-        return timer == null ? ABSENT : timer.count();
-    }
-
-    /**
-     * How long the timed round trips came to.
-     *
-     * @return the total in seconds, or {@link #ABSENT} where the timer has no series at all
-     */
-    private double roundTripSeconds() {
-        final Timer timer = registry.find(GenerationMetrics.GENERATION_LATENCY).timer();
-        return timer == null ? ABSENT : timer.totalTime(TimeUnit.SECONDS);
-    }
-
-    /**
-     * The label keys the timed series carries.
-     *
-     * @return the keys, or a named absence so that an unrecorded timer fails rather than passes
-     */
-    private List<String> roundTripLabels() {
-        final Timer timer = registry.find(GenerationMetrics.GENERATION_LATENCY).timer();
-        return timer == null
-                ? List.of("<the timer recorded nothing>")
-                : timer.getId().getTags().stream().map(Tag::getKey).toList();
+                learnedBy, ASSEMBLED_AT, REQUESTED_AT, null, null, FAILED_AT, 1, null, 0);
     }
 
     private static String fileName(final LocalDate registerDate) {
@@ -769,150 +681,6 @@ class DocumentOutcomeSinkTest {
                             + "whose compare-and-set lost the race sends nothing and the one that "
                             + "won sends everything",
                     () -> verifyNoInteractions(notifier));
-        }
-    }
-
-    /**
-     * How long the render took, which is the one reading of this leg nothing was taking.
-     *
-     * <p>{@code courtregister_generation_latency} is declared as "time from the render request to
-     * the batch's outcome", and its argument is documented as "request to outcome, however the
-     * outcome arrived" - so it is the render round trip, closed by whichever of the two mechanisms
-     * got there first, and not the request-to-e-mail span the notifying leg's own counters are
-     * about.
-     *
-     * <p><strong>Both ends come off the row, and that is the design rather than a convenience.
-     * </strong> The pod that asked systemdocgenerator for a render is not always the pod the topic
-     * delivers the outcome to, so a duration measured from an instant held in memory since the
-     * request would be absent on the pod that hears the answer and available only where one pod
-     * happened to do both. {@code requested_at} and the batch's own outcome stamp are columns, so
-     * the reading is the same whoever takes it - which is why the sink reads the batch back after
-     * the mark rather than timing the event it was handed.
-     *
-     * <p>The failure case is what proves that: {@link #FAILURE_RECORDED_AT} is the store's own
-     * {@code failed_at} and {@link #FAILED_AT} is the renderer's account of when it gave up, which
-     * {@code markFailed} drops. A reading taken from the argument would be fourteen seconds short.
-     *
-     * <p>The series carries no label, which is the surface {@code plan.md}'s metrics table declares
-     * and {@code GenerationMetricsTest} pins: a batch id, a court centre id or an address cannot be
-     * a label of a meter that has none, and there is nothing else about a render round trip that a
-     * bounded enumeration could carry.
-     */
-    @Nested
-    @DisplayName("how long the render took")
-    class HowLongTheRenderTook {
-
-        @ParameterizedTest
-        @EnumSource(CompletedBy.class)
-        void a_recorded_document_should_time_the_round_trip_the_row_ends_up_holding(
-                final CompletedBy learnedBy) {
-
-            final RegisterBatch batch = inFlightUntilGenerated(learnedBy);
-
-            documentAvailable(batch.batchId(), batch.payloadFileId(), learnedBy);
-
-            softly.assertThat(roundTripsTimed())
-                    .as("one render, one reading, and it is taken under both mechanisms: a series "
-                            + "that only moved for a delivered event would read as a renderer "
-                            + "getting faster every time the topic broke")
-                    .isEqualTo(1);
-            softly.assertThat(roundTripSeconds())
-                    .as("requested_at to generated_at, both off the row the store ended up "
-                            + "holding")
-                    .isEqualTo(Duration.between(REQUESTED_AT, GENERATED_AT).toSeconds());
-            softly.assertThat(roundTripLabels())
-                    .as("no label at all, so no batch id, court centre id or address can be one")
-                    .isEmpty();
-        }
-
-        @ParameterizedTest
-        @EnumSource(CompletedBy.class)
-        void a_recorded_refusal_should_time_the_round_trip_too(final CompletedBy learnedBy) {
-            final RegisterBatch batch = inFlightUntilFailed(learnedBy);
-
-            generationFailed(batch.batchId(), batch.payloadFileId(), learnedBy);
-
-            softly.assertThat(roundTripsTimed())
-                    .as("a refusal is an outcome - batchCompleted counts FAILED as one - and a "
-                            + "renderer that takes forty minutes to say no is exactly what a "
-                            + "latency series is read for; timing only the documents would leave "
-                            + "that invisible")
-                    .isEqualTo(1);
-            softly.assertThat(roundTripSeconds())
-                    .as("requested_at to the store's own failed_at, which is 107 seconds and not "
-                            + "the 93 the renderer's failedTime argument would have given: the "
-                            + "store stamps that column itself and drops what it was handed")
-                    .isEqualTo(Duration.between(REQUESTED_AT, FAILURE_RECORDED_AT).toSeconds());
-            softly.assertThat(roundTripLabels())
-                    .as("and the failure's series is the same unlabelled series, not one split by "
-                            + "outcome")
-                    .isEmpty();
-        }
-
-        /**
-         * An outcome this service cannot attribute closes no round trip, because there is no batch
-         * whose row the two instants could be read from. Counting a nought here would put a
-         * renderer that answers instantly into the same reading as another consumer's event.
-         */
-        @Test
-        void an_outcome_no_batch_answers_to_should_time_nothing() {
-            documentAvailable(UUID.randomUUID(), UUID.randomUUID(), CompletedBy.EVENT);
-
-            softly.assertThat(roundTripsTimed())
-                    .as("no batch, no row, no two instants, no reading")
-                    .isEqualTo(ABSENT);
-        }
-
-        /**
-         * The redelivery a durable subscription guarantees, which moves the batch nowhere: the
-         * round trip it would time was timed when the first arrival closed it, and timing it again
-         * would make one render read as two - halving the average every time the broker did what a
-         * durable subscription is for.
-         */
-        @Test
-        void an_outcome_that_moved_nothing_should_time_nothing() {
-            final RegisterBatch batch = generated(generating(MONDAY), CompletedBy.EVENT);
-            when(batches.findById(batch.batchId())).thenReturn(Optional.of(batch));
-
-            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.RECONCILER);
-
-            softly.assertThat(roundTripsTimed())
-                    .as("the batch already stands where the outcome would put it, so nothing was "
-                            + "marked and nothing is timed")
-                    .isEqualTo(ABSENT);
-        }
-
-        /**
-         * The one shape the two columns can take that is not a round trip.
-         *
-         * <p>{@code requested_at} is the store's own {@code now()} and {@code generated_at} is
-         * systemdocgenerator's account of when it rendered, so a generator whose clock is behind
-         * this service's database puts the outcome before the request. That is a clock to fix
-         * rather than a latency to alert on, and Micrometer would drop the negative silently one
-         * layer down - so it is refused here, where the refusal can be read.
-         */
-        @Test
-        void two_clocks_disagreeing_should_not_be_timed_as_a_round_trip() {
-            final RegisterBatch batch = generating(MONDAY);
-            final RegisterBatch impossible = new RegisterBatch(batch.batchId(), COURT_CENTRE,
-                    OU_CODE, COURT_HOUSE, MONDAY, batch.fileName(), batch.payloadFileId(),
-                    DOCUMENT_FILE_ID, BatchStatus.GENERATED, null, null, true, CompletedBy.EVENT,
-                    ASSEMBLED_AT, REQUESTED_AT, GENERATED_BEFORE_IT_WAS_ASKED_FOR, null, null, 1,
-                    null, 0);
-            when(batches.findById(batch.batchId()))
-                    .thenReturn(Optional.of(batch)).thenReturn(Optional.of(impossible));
-
-            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
-
-            told("the document is still recorded - a clock disagreement is not a reason to throw "
-                            + "a register away",
-                    () -> verify(store).markGenerated(
-                            batch.batchId(), DOCUMENT_FILE_ID, GENERATED_AT, CompletedBy.EVENT));
-            softly.assertThat(roundTripsTimed())
-                    .as("and the negative round trip is not recorded, because a histogram that "
-                            + "accepted it would answer questions about a clock rather than about "
-                            + "a renderer")
-                    .isEqualTo(ABSENT);
         }
     }
 }

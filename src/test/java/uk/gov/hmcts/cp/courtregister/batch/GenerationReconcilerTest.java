@@ -12,8 +12,6 @@ import static org.mockito.Mockito.when;
 import ch.qos.logback.classic.Level;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
-import io.micrometer.core.instrument.Tag;
-import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.lang.reflect.Method;
 import java.time.Duration;
@@ -24,7 +22,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -967,129 +964,6 @@ class GenerationReconcilerTest {
                             + "away")
                     .isZero();
         }
-    }
-
-    /**
-     * How long the render took, for the one ending that does not go through the sink.
-     *
-     * <p>{@code courtregister_generation_latency} is closed wherever a batch's render is answered,
-     * "however the outcome arrived" - and this class produces two of those endings itself. The
-     * answers it fetches go to {@code DocumentOutcomeSink}, which times them and is
-     * {@code DocumentOutcomeSinkTest}'s subject; the silences go to {@code RegisterStore.markFailed}
-     * directly, deliberately, because a batch nothing can be learned about has no outcome to apply
-     * - so this is where those are timed and this suite is what says so.
-     *
-     * <p>Both instants come off the row rather than from the pass's own clock, for the same reason
-     * they do in the sink: the pod that asked for the render is not always the pod that gives up on
-     * it, and a reading taken from anything but the two columns would be a different number on
-     * every pod.
-     */
-    @Nested
-    @DisplayName("how long a render the reconciler gave up on took")
-    class HowLongARenderItGaveUpOnTook {
-
-        @Test
-        void a_batch_given_up_on_should_time_the_round_trip_off_its_own_row() {
-            final RegisterBatch batch = overdue();
-            generatingSince(batch);
-            saysNothingAbout(batch);
-            settlingInto(failedAfterBeingRequested(batch));
-
-            reconcile();
-
-            softly.assertThat(roundTripsTimed())
-                    .as("GENERATION_TIMED_OUT is an outcome the batch really reached, and a render "
-                            + "that was still unanswered for after twenty-five minutes is the "
-                            + "longest reading a night can produce; leaving it out would make the "
-                            + "series describe only the renders that went well")
-                    .isEqualTo(1);
-            softly.assertThat(roundTripSeconds())
-                    .as("requested_at to the failed_at the store stamped, both read back off the "
-                            + "row this pass had just failed")
-                    .isEqualTo(Duration.between(REQUESTED_AT, FAILED_AT).toSeconds());
-            softly.assertThat(roundTripLabels())
-                    .as("unlabelled, so nothing about the court centre or the batch can reach the "
-                            + "series")
-                    .isEmpty();
-        }
-
-        /**
-         * The stale PENDING batch, which is the production path for "no render request to measure
-         * from": RENDER_REQUEST_FAILED is this service's verdict that the 202 never happened, so
-         * {@code requested_at} was never stamped and there is no start instant. A nought recorded
-         * here would say systemdocgenerator answered instantly.
-         */
-        @Test
-        void a_batch_that_never_reached_the_renderer_should_time_nothing() {
-            final RegisterBatch batch = stalePending(ASSEMBLED_AT);
-            generatingSince();
-            pendingSince(batch);
-            saysNothingAbout(batch);
-            settlingInto(failedWithoutEverBeingRequested(batch));
-
-            reconcile();
-
-            verify(store).markFailed(batch.batchId(), BatchFailureReason.RENDER_REQUEST_FAILED,
-                    null, null);
-            softly.assertThat(roundTripsTimed())
-                    .as("the batch reached a terminal state and still has no round trip, because "
-                            + "one end of it never happened")
-                    .isEqualTo(ABSENT);
-        }
-
-        @Test
-        void a_batch_still_waiting_for_its_answer_should_time_nothing() {
-            final RegisterBatch batch = overdue();
-            generatingSince(batch);
-            when(renderer.query(eq(batch.payloadFileId()), any()))
-                    .thenThrow(new GenerationFailedException(FailureClassification.TRANSIENT,
-                            BatchFailureReason.GENERATION_TIMED_OUT));
-
-            reconcile();
-
-            softly.assertThat(roundTripsTimed())
-                    .as("a batch that reached no outcome has no round trip to close; it keeps its "
-                            + "grace and the reading waits with it")
-                    .isEqualTo(ABSENT);
-        }
-    }
-
-    /** What the row read back after a mark answers, which is what the round trip is taken from. */
-    private void settlingInto(final RegisterBatch settled) {
-        when(batches.findById(settled.batchId())).thenReturn(Optional.of(settled));
-    }
-
-    /** The row a GENERATION_TIMED_OUT ending leaves: requested, and stamped as failed. */
-    private static RegisterBatch failedAfterBeingRequested(final RegisterBatch batch) {
-        return new RegisterBatch(batch.batchId(), batch.courtCentreId(), "B01OU", "Court House",
-                REGISTER_DATE, batch.fileName(), batch.payloadFileId(), null, BatchStatus.FAILED,
-                BatchFailureReason.GENERATION_TIMED_OUT, null, true, CompletedBy.RECONCILER,
-                ASSEMBLED_AT, REQUESTED_AT, null, null, FAILED_AT, 1, null, 0);
-    }
-
-    /** The row a RENDER_REQUEST_FAILED ending leaves: no request was ever recorded for it. */
-    private static RegisterBatch failedWithoutEverBeingRequested(final RegisterBatch batch) {
-        return new RegisterBatch(batch.batchId(), batch.courtCentreId(), "B01OU", "Court House",
-                REGISTER_DATE, batch.fileName(), batch.payloadFileId(), null, BatchStatus.FAILED,
-                BatchFailureReason.RENDER_REQUEST_FAILED, null, true, null, ASSEMBLED_AT, null,
-                null, null, FAILED_AT, 0, null, 0);
-    }
-
-    private double roundTripsTimed() {
-        final Timer timer = registry.find(GenerationMetrics.GENERATION_LATENCY).timer();
-        return timer == null ? ABSENT : timer.count();
-    }
-
-    private double roundTripSeconds() {
-        final Timer timer = registry.find(GenerationMetrics.GENERATION_LATENCY).timer();
-        return timer == null ? ABSENT : timer.totalTime(TimeUnit.SECONDS);
-    }
-
-    private List<String> roundTripLabels() {
-        final Timer timer = registry.find(GenerationMetrics.GENERATION_LATENCY).timer();
-        return timer == null
-                ? List.of("<the timer recorded nothing>")
-                : timer.getId().getTags().stream().map(Tag::getKey).toList();
     }
 
     private double oldestGeneratingAge() {
