@@ -7,10 +7,29 @@ import java.util.Map;
  * What one nightly run did, told in one line.
  *
  * <p>A value rather than a table. The per-batch facts are already durable in {@code register_batch};
- * what a run adds is the shape of the night - what the flag said, how many batches ended each way,
- * how many court-centre days it had to pass over, how many outcomes had to be reconciled, and how
- * long the requesting half took against its deadline - and all five are questions asked of a
- * dashboard rather than of a database.
+ * what a run adds is the shape of the night - what the flag said, how many batches it asked the
+ * renderer for, how many ended each way, how many registers were inside them, how many
+ * court-centre days it had to pass over and how many registers are waiting under those, how many
+ * outcomes had to be reconciled, and how long the requesting half took against its deadline - and
+ * every one of them is a question asked of a dashboard rather than of a database.
+ *
+ * <p><strong>Batches and registers are two different accounts of the same night.</strong> A batch
+ * is one document and one e-mail; a register is one hearing's youth defendants. One batch left for
+ * the next run is one court centre, and whether that matters tonight is decided by how many
+ * registers are inside it - which no count of batches can answer. So the run keeps both, and both
+ * add up to the night: {@link #outcomes} totals the batches the run accounted for and
+ * {@link #rows()} totals the registers, each of them counted exactly once, in the batch it was
+ * stamped into or under the day the assembler passed over.
+ *
+ * <p><strong>What the run asked for is not what came of it, and this reports the first.</strong>
+ * {@link #requested} counts the batches whose payload was written and whose render was asked for,
+ * which is where the nightly job's leg ends: the outcome of a render arrives afterwards, on the
+ * public-event topic or from the grace-period reconciler, so at the moment a run reports there is
+ * no generated or notified count of tonight's batches to carry - it would be zero by construction
+ * on every run, and a field that can only ever be zero says less than no field at all. What
+ * <em>this</em> run settled about earlier nights' batches is {@link #reconciled}; what tonight's
+ * batches came to is answered by {@code courtregister_batches_total} by outcome and by the
+ * oldest-generating and oldest-generated gauges, which is where FR-017 puts it.
  *
  * <p><strong>A skipped run still produces one.</strong> A run that read OFF and did nothing is the
  * expected state for every night before cutover, and a report that only appeared when work happened
@@ -72,5 +91,18 @@ public record RunReport(
     public RunReport {
         outcomes = outcomes == null ? Map.of() : Map.copyOf(outcomes);
         rowOutcomes = rowOutcomes == null ? Map.of() : Map.copyOf(rowOutcomes);
+    }
+
+    /**
+     * Every register this run accounted for, batched or left waiting.
+     *
+     * <p>The total the row counts have to add up to. Derived rather than carried, because a total
+     * held beside its parts is a second place for them to disagree - and the disagreement would be
+     * a register the night reported and could not say what happened to.
+     *
+     * @return how many registers the run saw
+     */
+    public int rows() {
+        return rowOutcomes.values().stream().mapToInt(Integer::intValue).sum() + deferredRows;
     }
 }

@@ -13,6 +13,7 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
+import uk.gov.hmcts.cp.courtregister.application.BatchOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
@@ -20,6 +21,7 @@ import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.RunProgress;
 import uk.gov.hmcts.cp.courtregister.domain.AssembledBatch;
 import uk.gov.hmcts.cp.courtregister.domain.BatchAssembly;
+import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CourtCentreDay;
 import uk.gov.hmcts.cp.courtregister.domain.Deadline;
@@ -318,10 +320,11 @@ public class RegisterGenerationJob {
         final Deadline deadline = Deadline.startingAt(clock.instant(), properties.runDeadline());
 
         for (final AssembledBatch assembled : tally.assembly().batches()) {
+            final int registers = assembled.records().size();
             if (deadline.hasPassedAt(clock.instant())) {
-                tally.noTimeLeftFor();
+                tally.noTimeLeftFor(registers);
             } else {
-                tally.ended(requested(assembled, deadline));
+                tally.ended(requested(assembled, deadline), registers);
             }
         }
     }
@@ -348,7 +351,9 @@ public class RegisterGenerationJob {
      *
      * @param assembled the batch the assembler decided on, beside the registers it groups
      * @param deadline  the run's requesting bound
-     * @return the state this batch ended the requesting leg in
+     * @return what this batch ended the requesting leg as, which for a batch that could not be
+     *         written down is PENDING under no reason at all: nothing was asked of the renderer and
+     *         there is no row for a reason to have been written to
      */
     // PMD.AvoidCatchingGenericException: the stamp refuses through IllegalStateException and the
     // store translates an outage into its own unchecked type; both mean the same thing here - this
@@ -357,7 +362,7 @@ public class RegisterGenerationJob {
     // so where it is decided; funnelling them through one would turn a verdict into a flag carried
     // past the call that must not be made once it exists.
     @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
-    private BatchStatus requested(final AssembledBatch assembled, final Deadline deadline) {
+    private BatchOutcome requested(final AssembledBatch assembled, final Deadline deadline) {
         final RegisterBatch batch;
         try {
             batch = store.assemble(assembled.batch(), assembled.records());
@@ -365,9 +370,9 @@ public class RegisterGenerationJob {
             LOG.error("Batch {} could not be written down, so no render is asked for and its "
                             + "registers are left for the next run. cause={}",
                     assembled.batch().batchId(), notStamped.getClass().getName(), notStamped);
-            return BatchStatus.PENDING;
+            return new BatchOutcome(assembled.batch().batchId(), BatchStatus.PENDING, null);
         }
-        return service.request(batch, deadline).status();
+        return service.request(batch, deadline);
     }
 
     /**
@@ -391,14 +396,35 @@ public class RegisterGenerationJob {
     private Duration oldestStillWaiting(final List<RegisterRecord> active,
             final BatchAssembly assembly) {
 
-        final List<CourtCentreDay> waiting = assembly.deferred();
         final Instant now = clock.instant();
-        return active.stream()
-                .filter(register -> waiting.contains(register.key()))
+        return stillWaiting(active, assembly).stream()
                 .map(RegisterRecord::registerTime)
                 .min(Instant::compareTo)
                 .map(oldest -> Duration.between(oldest, now))
                 .orElse(Duration.ZERO);
+    }
+
+    /**
+     * The registers this run knowingly left for the next one.
+     *
+     * <p>Everything the assembler deferred, since everything else it read is in a batch by now.
+     * Read in one place because the run says two things about them - how many there are, on its own
+     * line, and how long the oldest has waited, on
+     * {@code courtregister_oldest_recorded_unbatched_age} - and a night whose two readings came
+     * from two filters could report registers waiting under no court centre, or none waiting under
+     * a court centre it had passed over.
+     *
+     * @param active   the registers the store called active
+     * @param assembly what the assembler made of them
+     * @return the registers under the court centre days it passed over
+     */
+    private static List<RegisterRecord> stillWaiting(final List<RegisterRecord> active,
+            final BatchAssembly assembly) {
+
+        final List<CourtCentreDay> passedOver = assembly.deferred();
+        return active.stream()
+                .filter(register -> passedOver.contains(register.key()))
+                .toList();
     }
 
     /**
@@ -409,17 +435,30 @@ public class RegisterGenerationJob {
      * counted rather than named, and nothing a register carries is anywhere near it (constitution
      * Principle VII).
      *
+     * <p><strong>Two accounts of the same night, each adding up.</strong> {@code batches} is the
+     * total of the three states the requesting leg can leave a batch in, and {@code rows} is the
+     * total of the registers inside them plus the ones waiting under a day the run passed over. A
+     * fourth batch state or a register in neither place shows up as a total that no longer adds up
+     * rather than as a count nobody notices is missing. {@code requested} sits inside the first
+     * account rather than partitioning it: it is what the run asked systemdocgenerator for, which
+     * is every batch it accepted plus the ones it refused, and never a batch that was left for the
+     * next run or could not be written down.
+     *
      * @param report what the run did
      * @return that same report, so a caller can write the line and answer with it in one step
      */
     private static RunReport recorded(final RunReport report) {
         final Map<BatchStatus, Integer> outcomes = report.outcomes();
-        LOG.info("event={} gate={} reason={} batches={} generating={} failed={} pending={} "
-                        + "deferred={} reconciled={} duration_ms={}",
+        final Map<BatchStatus, Integer> rows = report.rowOutcomes();
+        LOG.info("event={} gate={} reason={} batches={} requested={} generating={} failed={} "
+                        + "pending={} deferred={} rows={} rows_generating={} rows_failed={} "
+                        + "rows_pending={} rows_deferred={} reconciled={} duration_ms={}",
                 RUN_EVENT, gateOf(report.gateDecision()), reasonOf(report.gateDecision()),
-                outcomes.values().stream().mapToInt(Integer::intValue).sum(),
+                outcomes.values().stream().mapToInt(Integer::intValue).sum(), report.requested(),
                 counted(outcomes, BatchStatus.GENERATING), counted(outcomes, BatchStatus.FAILED),
-                counted(outcomes, BatchStatus.PENDING), report.deferredKeys(),
+                counted(outcomes, BatchStatus.PENDING), report.deferredKeys(), report.rows(),
+                counted(rows, BatchStatus.GENERATING), counted(rows, BatchStatus.FAILED),
+                counted(rows, BatchStatus.PENDING), report.deferredRows(),
                 report.reconciled(), report.duration().toMillis());
         return report;
     }
@@ -478,11 +517,20 @@ public class RegisterGenerationJob {
         /** How many batches ended in each state, in the order the states are declared. */
         private final Map<BatchStatus, Integer> outcomes = new EnumMap<>(BatchStatus.class);
 
+        /** How many registers ended the run in each of those states, counted the same way. */
+        private final Map<BatchStatus, Integer> rowOutcomes = new EnumMap<>(BatchStatus.class);
+
         /** The registers the store called active, for the age of the oldest still waiting. */
         private List<RegisterRecord> activeRegisters = List.of();
 
         /** What the assembler made of the night, or {@code null} until it has been asked. */
         private BatchAssembly nightsAssembly;
+
+        /** How many registers are waiting under the days the assembler passed over. */
+        private int registersWaiting;
+
+        /** How many batches the run asked systemdocgenerator to render. */
+        private int rendersRequested;
 
         /** How many batches the run deadline left unrequested. */
         private int batchesLeftBehind;
@@ -493,33 +541,76 @@ public class RegisterGenerationJob {
         /**
          * Records what the night held, which is everything the deferral readings are taken from.
          *
+         * <p>The waiting registers are counted here rather than at the end, because they are known
+         * the moment the assembler answers and a run that stops while requesting still has to be
+         * able to say how much of the estate it had passed over.
+         *
          * @param read what the store called active
          * @param made what the assembler made of it
          */
         private void assembled(final List<RegisterRecord> read, final BatchAssembly made) {
             this.activeRegisters = read;
             this.nightsAssembly = made;
+            this.registersWaiting = stillWaiting(read, made).size();
         }
 
         /**
-         * Counts one batch by the state the requesting leg left it in.
+         * Counts one batch, and the registers inside it, by what the requesting leg left it as.
          *
-         * @param status that state
+         * <p>A render is counted as requested where the renderer accepted it and where it answered
+         * with anything else, but never where the batch never left this service
+         * ({@link BatchFailureReason#wasRenderRequested()}): a payload that was never written was
+         * never asked about, and counting it would report a renderer refusing documents nobody sent
+         * it. A batch that could not be written down at all arrives here PENDING with no reason,
+         * which is the same answer for the same cause.
+         *
+         * @param outcome   what the requesting leg answered about this batch
+         * @param registers how many registers it groups
          */
-        private void ended(final BatchStatus status) {
-            outcomes.merge(status, 1, Integer::sum);
+        private void ended(final BatchOutcome outcome, final int registers) {
+            account(outcome.status(), registers, askedTheRenderer(outcome));
         }
 
         /**
-         * Counts a batch the run had no time left for: PENDING, and left behind.
+         * Whether this run got as far as asking the renderer about the batch.
+         *
+         * @param outcome what the requesting leg answered
+         * @return true where a request was made
+         */
+        private static boolean askedTheRenderer(final BatchOutcome outcome) {
+            return outcome.status() == BatchStatus.GENERATING
+                    || outcome.failureReason() != null
+                    && outcome.failureReason().wasRenderRequested();
+        }
+
+        /**
+         * Counts a batch the run had no time left for: PENDING, left behind, and never asked for.
          *
          * <p>The two readings are one event, so they are moved by one call: a batch counted PENDING
          * without being counted as left behind would be a deadline nothing reads, and the reverse
          * would be a gauge that does not add up to the night.
+         *
+         * @param registers how many registers that batch groups, which are waiting with it
          */
-        private void noTimeLeftFor() {
+        private void noTimeLeftFor(final int registers) {
             batchesLeftBehind++;
-            ended(BatchStatus.PENDING);
+            account(BatchStatus.PENDING, registers, false);
+        }
+
+        /**
+         * The one place a batch and its registers enter the night's two accounts.
+         *
+         * @param status    what the requesting leg left the batch as
+         * @param registers how many registers it groups
+         * @param asked     whether the renderer was asked about it
+         */
+        private void account(final BatchStatus status, final int registers,
+                final boolean asked) {
+            outcomes.merge(status, 1, Integer::sum);
+            rowOutcomes.merge(status, registers, Integer::sum);
+            if (asked) {
+                rendersRequested++;
+            }
         }
 
         /**
@@ -551,11 +642,9 @@ public class RegisterGenerationJob {
          * @return what the run had done
          */
         private RunReport reportOf(final GateDecision decision, final Duration duration) {
-            // The seam T072's gate finding is answered against: the two counts and the row
-            // outcomes are declared here and nothing earns them yet.
-            return new RunReport(decision, outcomes, 0, Map.of(),
-                    nightsAssembly == null ? 0 : nightsAssembly.deferred().size(), 0,
-                    outcomesChased, duration);
+            return new RunReport(decision, outcomes, rendersRequested, rowOutcomes,
+                    nightsAssembly == null ? 0 : nightsAssembly.deferred().size(),
+                    registersWaiting, outcomesChased, duration);
         }
     }
 }

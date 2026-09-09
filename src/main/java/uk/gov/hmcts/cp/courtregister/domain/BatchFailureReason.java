@@ -56,4 +56,25 @@ public enum BatchFailureReason {
     public boolean isGeneratorAttributed() {
         return this == GENERATION_FAILED || this == GENERATION_TIMED_OUT;
     }
+
+    /**
+     * Whether the render request had left this service by the time a batch ended this way.
+     *
+     * <p>The two that had not are the pair the class comment above calls "the batch never left this
+     * service": {@link #PAYLOAD_STORE_UNAVAILABLE} is a payload that was never written, so there
+     * was nothing to ask about, and {@link #ASSEMBLY_FAILED} is a payload that was never built. The
+     * other four all follow a request that was made - refused by the renderer, undeliverable within
+     * the deadline, failed, or never answered.
+     *
+     * <p>Asked by the run report, which counts the batches a run asked systemdocgenerator to
+     * render. Without this the report would have to read a batch refused by another system and a
+     * batch this service could not write down as the same night, since both end FAILED - and
+     * "the renderer is rejecting our documents" and "our file service is down" are not the same
+     * investigation.
+     *
+     * @return true where a request had been made, and false where the batch never left here
+     */
+    public boolean wasRenderRequested() {
+        return this != PAYLOAD_STORE_UNAVAILABLE && this != ASSEMBLY_FAILED;
+    }
 }
