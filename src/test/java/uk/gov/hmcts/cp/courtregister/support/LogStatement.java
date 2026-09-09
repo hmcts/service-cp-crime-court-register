@@ -5,7 +5,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * One line a class can write, read out of the class's own source.
@@ -24,6 +27,16 @@ import java.util.List;
  * it lazily by taking a stack trace when it is first asked, so an event whose caller data is first
  * read on the asserting thread reports the <em>asserting</em> thread's stack. That is the same trap
  * {@link CapturedLog} documents for the MDC, and the pattern is not subject to it.
+ *
+ * <p><strong>Which is why the key has to be unique, and a sweep has to say so.</strong> Two
+ * statements in one class that spell the same pattern have the same key, and the event from either
+ * satisfies both declarations - so a line added beside one that already writes that wording would
+ * never have to be reached, and the sweep that exists to catch exactly that would pass anyway.
+ * {@link #keyCollisionsIn(List)} is what a sweep refuses on, asserted before it asserts anything
+ * about what a drive reached. Keying on the caller instead would close the same hole and cost more
+ * than it is worth twice over: the stack it would read is the asserting thread's, per the paragraph
+ * above, and a key carrying a line number would make a statement that only moved line fail its own
+ * declaration.
  *
  * <p>The scan is deliberately literal about this repository's style rather than a parser: every
  * logging statement in it begins its own line with {@code LOG.}, and the pattern is the leading
@@ -62,6 +75,28 @@ public record LogStatement(String loggerName, String pattern, String where) {
      */
     public String key() {
         return loggerName + "|" + pattern;
+    }
+
+    /**
+     * The statements no sweep over these can tell apart, by the locations that share a key.
+     *
+     * <p>Asserted empty before anything is asserted about what a drive reached, because two
+     * statements on one key make the reach assertion vacuous for the second of them: the event
+     * from whichever the drive did reach satisfies both, and the other sits inside no claim at all
+     * with the suite still green. The fix is on the source rather than here - give one of the two
+     * its own wording - which is the same answer as for a line the drive never reached.
+     *
+     * @param statements the enumerated declarations, as {@link #everyOneIn(List)} answers them
+     * @return one entry per shared key, naming every source location that spells it
+     */
+    public static List<String> keyCollisionsIn(final List<LogStatement> statements) {
+        final Map<String, List<String>> locations = statements.stream()
+                .collect(Collectors.groupingBy(LogStatement::key, LinkedHashMap::new,
+                        Collectors.mapping(LogStatement::where, Collectors.toList())));
+        return locations.values().stream()
+                .filter(shared -> shared.size() > 1)
+                .map(shared -> String.join(" and ", shared))
+                .toList();
     }
 
     /**

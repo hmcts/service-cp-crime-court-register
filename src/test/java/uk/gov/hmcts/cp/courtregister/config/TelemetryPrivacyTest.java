@@ -742,13 +742,14 @@ class TelemetryPrivacyTest {
      * a claim of its own and is asserted as one.
      *
      * <p><strong>[A]</strong>: every case in this group is a characterisation of behaviour the two
- * legs already had when it was written, so each records a passing run rather than a red one. What
- * makes it more than a rubber stamp is stated where each case's own reason is, and was shown by
- * mutation before it was committed: a line given the recipient's address, and a
- * {@code sdg_reason} line raised from DEBUG to INFO, each failing exactly one case and each
- * reverted.
- *
- * <p>What the drive doubles is the store and its two repositories, and nothing else: the two
+     * legs already had when it was written, so each records a passing run rather than a red one.
+     * What makes it more than a rubber stamp is stated where each case's own reason is, and was
+     * shown by mutation before it was committed: a line given the recipient's address, a
+     * {@code sdg_reason} line raised from DEBUG to INFO, and a second statement in one of the swept
+     * classes repeating a pattern already written there - each failing exactly one case and each
+     * reverted.
+     *
+     * <p>What the drive doubles is the store and its two repositories, and nothing else: the two
      * outward HTTP clients are the real ones over a real socket, the mapper that turns a batch into
      * a payload is the real one, and the metrics are registered on a real registry which the last
      * two cases read back. The clients matter most - they are the classes with the address in their
@@ -907,6 +908,18 @@ class TelemetryPrivacyTest {
                     .isEmpty();
         }
 
+        /**
+         * The sweep proper, and the two preconditions without which it covers nothing.
+         *
+         * <p>A declaration is matched to a captured event by logger and message pattern, so the
+         * first thing asserted after the scan's floor is that no two declarations share that key.
+         * Where two do, the event from whichever the drive reached satisfies <em>both</em>, and the
+         * reach assertion below is met without the second statement ever having been written to -
+         * so a line added beside one that already writes that wording would be outside every claim
+         * in this group from the moment it was written, with this suite still green. That is the
+         * one failure the enumeration exists to prevent, and it is asserted here rather than in a
+         * case of its own precisely so that it cannot be true while this case reports green.
+         */
         @Test
         @DisplayName("[A] and the drive above reached every line the two legs can write")
         void should_have_reached_every_line_the_two_legs_can_write() throws Exception {
@@ -918,6 +931,11 @@ class TelemetryPrivacyTest {
             assertThat(declared)
                     .as("a scan that found no statement would make the sweep above cover nothing")
                     .hasSizeGreaterThan(EVERY_LINE_THE_LEGS_WRITE);
+            assertThat(LogStatement.keyCollisionsIn(declared))
+                    .as("two statements one key cannot tell apart: the event from either satisfies "
+                            + "both declarations, so the assertion below is met without the second "
+                            + "of them being reached at all; give one its own wording")
+                    .isEmpty();
             assertThat(declared.stream()
                             .filter(statement -> !reached.contains(statement.key()))
                             .map(LogStatement::where)
