@@ -93,9 +93,17 @@ import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
  * one database this suite owns to connections (see
  * {@code PostgresTestSupport.refuseConnectionsTo}).
  *
- * <p>Three of the cases below are labelled <strong>[A]</strong>: they characterise behaviour the
+ * <p>Two of the cases below are labelled <strong>[A]</strong>: they characterise behaviour the
  * service already had rather than driving new behaviour, so each records a passing run and each was
- * shown non-vacuous by a mutation quoted in its commit and reverted.
+ * shown non-vacuous by a mutation quoted in its commit and reverted. They are the broker case that
+ * holds readiness up for the whole of an outage and the file-service case that takes readiness down
+ * during a run.
+ *
+ * <p><strong>The third file-service case is not one of them</strong>, and it is why the fix beside
+ * it exists. {@code should_keep_readiness_up_while_the_file_service_database_is_down_outside_a_run}
+ * was the red half of a pair: it failed against the service as it then stood, and the failing
+ * assertion is quoted in the test commit that landed it and the green run in the fix commit that
+ * followed. It therefore owes a red run rather than a mutation, and it has one.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -444,8 +452,17 @@ class ReadinessPolicyIT {
     }
 
     /**
-     * <strong>[A]</strong> Characterisation: the file-service database is down and no run is on, so
-     * readiness is not interested.
+     * The file-service database is down and no run is on, so readiness is not interested.
+     *
+     * <p><strong>Driven, not characterised.</strong> This case was the red half of a pair and the
+     * service failed it as it then stood: {@code db} was contributed as a composite over both pools
+     * on a generation-enabled pod, so an unreachable file service reported {@code db} DOWN at any
+     * hour and rolled a pod whose intake half was recording registers perfectly well. It failed on
+     * the assertion below, at {@code {db=DOWN, fileServiceRun=UP, intakeStartup=UP}} and "expected:
+     * UP but was: DOWN"; that assertion is quoted in the test commit that landed it, and the green
+     * run in the fix commit that switched the auto-configured contributor off and had
+     * {@code config/StoreHealth} contribute {@code db} over the primary pool alone. So it owes a
+     * red run rather than a reverted mutation, and the red run is what it has.
      *
      * <p>The outage is a real one and is shown to be real, because the whole case turns on it: a
      * database that was answering all along would pass this assertion without the policy having any
@@ -455,7 +472,7 @@ class ReadinessPolicyIT {
      * the opposite of what it claims.
      */
     @Test
-    @DisplayName("[A] the file-service database can be unreachable all morning without a pod rolling")
+    @DisplayName("the file-service database can be unreachable all morning without a pod rolling")
     void should_keep_readiness_up_while_the_file_service_database_is_down_outside_a_run()
             throws SQLException {
         awaitReady();
