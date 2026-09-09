@@ -324,6 +324,22 @@ class RegisterGenerationServiceTest {
                 .toList();
     }
 
+    /**
+     * The line the run's own budget writes, as an operator reads it.
+     *
+     * <p>Built from the count rather than quoted twice, because what the case is about is the
+     * number: the wording is the same on both nights this line describes and only the number tells
+     * a reader which of them happened.
+     *
+     * @param attempts how many attempts the line should say had been made
+     * @return that ERROR line in full
+     */
+    private static String theDeadlineGaveUpAfter(final int attempts) {
+        return "The run deadline would not hold another render attempt for batch " + BATCH_ID
+                + ", so it is failed " + BatchFailureReason.RENDER_REQUEST_FAILED + " after "
+                + attempts + " attempts.";
+    }
+
     /** A refusal systemdocgenerator will give the same answer to however often it is asked. */
     private static GenerationFailedException refusal() {
         return new GenerationFailedException(FailureClassification.NON_TRANSIENT,
@@ -769,6 +785,55 @@ class RegisterGenerationServiceTest {
                             + "distinction cannot be made by answering false for the reason")
                     .isEqualTo(new BatchOutcome(BATCH_ID, BatchStatus.FAILED,
                             BatchFailureReason.RENDER_REQUEST_FAILED, true));
+        }
+    }
+
+    /**
+     * What the line says a run gave up after, which has to be what happened.
+     *
+     * <p>The same statement describes both of the deadline's nights - a batch this leg was handed
+     * with less budget left than one attempt's own worst case, and a request that was made and left
+     * the run too little to wait before asking again - and the number is the only thing on it that
+     * tells them apart. It is read by somebody deciding whether the night was short of time or
+     * systemdocgenerator was slow to answer, and a line saying one attempt was made where none was
+     * points that reader at the wrong service.
+     */
+    @Nested
+    @DisplayName("what the deadline's own line says")
+    class TheLineTheBudgetWrites {
+
+        @Test
+        void a_batch_no_attempt_could_be_started_for_should_say_no_attempt_was_made() {
+            final Deadline noRoomForAnAttempt =
+                    Deadline.startingAt(NOW, CHEAP_ATTEMPT.dividedBy(2));
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationService.class)) {
+                request(batch(), noRoomForAnAttempt);
+
+                verifyNoInteractions(renderer);
+                softly.assertThat(atOrAbove(log, Level.ERROR))
+                        .as("nothing was asked of systemdocgenerator, so nothing had been "
+                                + "attempted: the count on the line is what the run did and not "
+                                + "which attempt it was about to make")
+                        .containsExactly(theDeadlineGaveUpAfter(0));
+            }
+        }
+
+        @Test
+        void a_request_that_left_before_the_budget_ran_out_should_say_one_attempt_was_made() {
+            doThrow(transientFailure()).when(renderer).requestRender(any(), any());
+            final Deadline roomForOneAttempt = Deadline.startingAt(NOW, Duration.ofMillis(150));
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationService.class)) {
+                request(batch(), roomForOneAttempt);
+
+                verify(renderer, times(1)).requestRender(any(), any());
+                softly.assertThat(atOrAbove(log, Level.ERROR))
+                        .as("one attempt was made and answered nothing, and the wait before the "
+                                + "second would have outlasted the night; the same line, and the "
+                                + "number is what says which night it was")
+                        .containsExactly(theDeadlineGaveUpAfter(1));
+            }
         }
     }
 
