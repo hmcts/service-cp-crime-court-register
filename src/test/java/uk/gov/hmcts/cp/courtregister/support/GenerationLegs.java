@@ -444,6 +444,24 @@ public final class GenerationLegs implements AutoCloseable {
         aRenderTheGeneratorRefused();
         aRenderTheGeneratorHasNoVerdictFor();
         aRendererThatWouldNotAnswerTheQuery();
+        anEndingWhoseRoundTripCouldNotBeRead();
+    }
+
+    /**
+     * The silence that was ended and could not be timed, which is the sink's line one door along.
+     *
+     * <p>This ending is written through the store rather than through the sink, so the reading is
+     * taken here and so is the line about a reading nobody could take. It is absorbed for a second
+     * reason as well as the sink's: this call is inside the loop over every overdue batch, so a
+     * refusal let out would leave the batches behind this one waiting another grace period.
+     */
+    private void anEndingWhoseRoundTripCouldNotBeRead() {
+        reconcilingOne();
+        when(batches.findById(BATCH_ID)).thenThrow(new StoreUnavailableException(
+                "the store could not be reached to read a settled batch back",
+                new IllegalStateException("the connection pool is empty")));
+        queryAnswering(HttpStatus.OK.value(), "{}");
+        whateverItAnswers(reconciler::reconcile);
     }
 
     private void aBatchNobodyHasBeenToldAbout() {
@@ -562,6 +580,7 @@ public final class GenerationLegs implements AutoCloseable {
         anOutcomeThatArrivedTwice();
         anOutcomeTheStateMachineDoesNotDraw();
         anOutcomeThatClosesTheRoundTrip();
+        anOutcomeWhoseRoundTripCouldNotBeRead();
     }
 
     private void anOutcomeForABatchNothingHolds() {
@@ -606,6 +625,27 @@ public final class GenerationLegs implements AutoCloseable {
         when(batches.findById(BATCH_ID))
                 .thenReturn(Optional.of(batch(BatchStatus.GENERATING, PAYLOAD_FILE_ID, null)))
                 .thenReturn(Optional.of(refused()));
+        whateverItAnswers(() -> sink.generationFailed(BATCH_ID, PAYLOAD_FILE_ID,
+                PersonalDataMarkers.GENERATOR_REASON, AT, CompletedBy.EVENT));
+    }
+
+    /**
+     * The outcome that was applied and could not be timed, which is a line and not a refusal.
+     *
+     * <p>The reading is taken off the row after the mark, so a store that has gone away between
+     * the two refuses it - and the sink absorbs that rather than passing it on, because the outcome
+     * was applied and a refusal reaching the listener would roll a delivery back over telemetry.
+     * What it writes is the batch and the class of what refused, which is what this sweep is here
+     * to hold to identities and bounded codes: a gap in a series has to be diagnosable without a
+     * store's words about a row reaching the index.
+     */
+    private void anOutcomeWhoseRoundTripCouldNotBeRead() {
+        reset(batches, store);
+        when(batches.findById(BATCH_ID))
+                .thenReturn(Optional.of(batch(BatchStatus.GENERATING, PAYLOAD_FILE_ID, null)))
+                .thenThrow(new StoreUnavailableException(
+                        "the store could not be reached to read a settled batch back",
+                        new IllegalStateException("the connection pool is empty")));
         whateverItAnswers(() -> sink.generationFailed(BATCH_ID, PAYLOAD_FILE_ID,
                 PersonalDataMarkers.GENERATOR_REASON, AT, CompletedBy.EVENT));
     }

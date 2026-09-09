@@ -72,7 +72,9 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * for the two mechanisms means one place the reading is taken, so a night whose outcomes all came
  * from the reconciler reads on the same series as a night the topic served. Both instants come off
  * the row - {@code requested_at} and whichever outcome stamp the mark wrote - because the pod that
- * asked for the render is not always this one.
+ * asked for the render is not always this one. It is taken at the mark and before anything the mark
+ * is followed by, and it can never cost the batch what follows: a reading nobody could take is a
+ * gap in a histogram, said out loud, and not a register nobody was sent.
  *
  * <p><strong>Notification follows generation here, on the thread that learned of it.</strong> A
  * document that exists and has been sent to nobody is the state defect fix P1 is about, and the
@@ -128,16 +130,18 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      * <p>And then the recipients are told, in the same step and on this thread. The mark is what
      * decides whether the notification happens at all - it refuses where another mechanism has
      * already moved the batch, and this never runs - so exactly one of two racing announcements
-     * sends the e-mails.
+     * sends the e-mails. The batch this answers with is the one the mark moved, and nothing at all
+     * where no mark was made, which is what makes the hand-on follow the decision rather than the
+     * arrival.
      */
     @Override
     public void documentAvailable(final UUID correlationId, final UUID payloadFileId,
             final UUID documentFileId, final Instant generatedAt, final CompletedBy completedBy) {
 
-        apply(correlationId, payloadFileId, BatchStatus.GENERATED, batch -> {
-            store.markGenerated(batch.batchId(), documentFileId, generatedAt, completedBy);
-            notifier.notify(batch.batchId());
-        });
+        apply(correlationId, payloadFileId, BatchStatus.GENERATED,
+                batch -> store.markGenerated(batch.batchId(), documentFileId, generatedAt,
+                        completedBy))
+                .ifPresent(generated -> notifier.notify(generated.batchId()));
     }
 
     /**
@@ -171,18 +175,25 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      * a batch lives beside the method that received it and what an outcome has to survive to be
      * applied at all lives in exactly one place for both.
      *
+     * <p>What it answers is the batch the mark actually moved, so that a step which may only
+     * follow a mark - telling the recipients - is written where it cannot be reached any other way.
+     *
      * @param correlationId the batch identity the outcome named, which the contract allows to be
      *                      absent
      * @param payloadFileId the payload the outcome is about, which the contract requires
      * @param outcome       the state this outcome would put the batch in
      * @param mark          the store call that puts it there
+     * @return the batch this outcome moved, or empty where it moved none
      */
-    private void apply(final UUID correlationId, final UUID payloadFileId,
+    private Optional<RegisterBatch> apply(final UUID correlationId, final UUID payloadFileId,
             final BatchStatus outcome, final Consumer<RegisterBatch> mark) {
 
-        find(correlationId).ifPresentOrElse(
-                batch -> applyToTheBatchItNamed(batch, payloadFileId, outcome, mark),
-                () -> countUnattributed(correlationId, payloadFileId));
+        final Optional<RegisterBatch> named = find(correlationId);
+        if (named.isEmpty()) {
+            countUnattributed(correlationId, payloadFileId);
+        }
+        return named.flatMap(
+                batch -> applyToTheBatchItNamed(batch, payloadFileId, outcome, mark));
     }
 
     /**
@@ -199,15 +210,20 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      * @param payloadFileId the payload the outcome is about
      * @param outcome       the state this outcome would put the batch in
      * @param mark          the store call that puts it there
+     * @return the batch this outcome moved, or empty where the two identifiers disagree
      */
-    private void applyToTheBatchItNamed(final RegisterBatch batch, final UUID payloadFileId,
-            final BatchStatus outcome, final Consumer<RegisterBatch> mark) {
+    private Optional<RegisterBatch> applyToTheBatchItNamed(final RegisterBatch batch,
+            final UUID payloadFileId, final BatchStatus outcome,
+            final Consumer<RegisterBatch> mark) {
 
+        final Optional<RegisterBatch> marked;
         if (batch.payloadFileId() == null || !batch.payloadFileId().equals(payloadFileId)) {
             countPayloadMismatch(batch, payloadFileId);
+            marked = Optional.empty();
         } else {
-            applyTo(batch, outcome, mark);
+            marked = applyTo(batch, outcome, mark);
         }
+        return marked;
     }
 
     /**
@@ -221,25 +237,38 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      * reason - and re-stamping it would take systemdocgenerator's verdict about one identity and
      * attach it to a batch that has moved past it.
      *
+     * <p>The reading is taken in the one branch that marked anything, immediately after the mark
+     * and before whatever the caller does with the answer. The mark is what closes the round trip,
+     * so the reading belongs to it: taken any later it would be lost whenever the step after it
+     * threw, this batch standing where the outcome put it by then and every redelivery being
+     * recognised in the first branch rather than re-stamped. Taking it here costs nothing on the
+     * redelivery path, because that path is this method's first branch and marks nothing.
+     *
      * @param batch   the batch the outcome was attributed to, as it stood when it was read
      * @param outcome the state this outcome would put it in
      * @param mark    the store call that puts it there
+     * @return the batch this outcome moved, or empty where it was left where it stood
      */
-    private void applyTo(final RegisterBatch batch, final BatchStatus outcome,
+    private Optional<RegisterBatch> applyTo(final RegisterBatch batch, final BatchStatus outcome,
             final Consumer<RegisterBatch> mark) {
 
+        final Optional<RegisterBatch> marked;
         if (batch.status() == outcome) {
             LOG.debug("Batch {} already stands at {}, so the outcome that has just arrived for it "
                     + "again is recognised rather than re-stamped.", batch.batchId(), outcome);
+            marked = Optional.empty();
         } else if (batch.status().canTransitionTo(outcome)) {
             mark.accept(batch);
             timeTheRoundTrip(batch.batchId());
+            marked = Optional.of(batch);
         } else {
             LOG.warn("Batch {} stands at {} and an outcome arrived that would move it to {}, which "
                     + "the state machine does not draw; the batch is left where it is and the "
                     + "outcome is reported here rather than applied.",
                     batch.batchId(), batch.status(), outcome);
+            marked = Optional.empty();
         }
+        return marked;
     }
 
     /**
@@ -248,7 +277,21 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      * <p>After the mark and never before it, which is what makes the reading the outcomes this
      * service actually applied: {@code JdbcRegisterStore} refuses a move the batch has already made
      * by throwing, so a compare-and-set that lost a race never reaches here and one render is timed
-     * once however many mechanisms announce it.
+     * once however many mechanisms announce it. And immediately after it, before anything the mark
+     * is followed by: a reading taken after the recipients had been told would be lost whenever
+     * telling them threw, because the batch stands at GENERATED from the mark on and the
+     * redelivery that follows is recognised rather than re-stamped.
+     *
+     * <p><strong>And it may not cost the batch anything, which is the one thing this class
+     * absorbs.</strong> Both halves of the reading can refuse - the row is read out of a store that
+     * can be away, and the timer is Micrometer's, which raises on a measurement it will not take -
+     * and neither is the batch's failure. Passed on, the refusal would reach the listener, which
+     * would roll its delivery back and have the broker offer an outcome already applied; inside the
+     * reconciler it would end the pass and leave every batch behind this one waiting another grace
+     * period. So it stops here and is written down instead: the batch and the class of what refused
+     * are what a gap in the series is diagnosed from, and neither is about a person. Every other
+     * refusal still leaves, the store's compare-and-set included, because those say the outcome was
+     * not applied.
      *
      * <p>The row is read back rather than assembled from what arrived, because the two instants the
      * reading is made of are columns and only one of them was ever in this method's hands:
@@ -264,10 +307,23 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      *
      * @param batchId the batch whose outcome has just been written
      */
+    // PMD.AvoidCatchingGenericException: the claim is that no failure of this reading can cost the
+    // batch what follows it, and that is only worth anything if it holds for every way the reading
+    // can fail - the store read, the rule, and Micrometer's own refusal of a measurement. A
+    // narrower catch would leave the classes a list did not name suppressing the notification,
+    // which is the defect being fixed rather than a smaller version of it.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void timeTheRoundTrip(final UUID batchId) {
-        batches.findById(batchId)
-                .flatMap(RegisterBatch::generationRoundTrip)
-                .ifPresent(metrics::generationLatency);
+        try {
+            batches.findById(batchId)
+                    .flatMap(RegisterBatch::generationRoundTrip)
+                    .ifPresent(metrics::generationLatency);
+        } catch (RuntimeException notTimed) {
+            LOG.warn("Batch {} was settled and its render round trip could not be timed, so this "
+                    + "outcome is missing from courtregister_generation_latency and from nothing "
+                    + "else: the mark stands and the leg carries on from it. cause={}",
+                    batchId, notTimed.getClass().getName());
+        }
     }
 
     /**

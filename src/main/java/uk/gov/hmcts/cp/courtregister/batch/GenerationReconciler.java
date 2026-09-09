@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.function.Function;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
@@ -439,10 +440,40 @@ public class GenerationReconciler {
                 + "for it, so it is failed {} rather than left waiting.", batch.batchId(),
                 ending.reason());
         store.markFailed(batch.batchId(), ending.reason(), null, ending.completedBy());
-        batches.findById(batch.batchId())
-                .flatMap(RegisterBatch::generationRoundTrip)
-                .ifPresent(metrics::generationLatency);
+        timeTheRoundTrip(batch.batchId());
         return true;
+    }
+
+    /**
+     * Times the round trip of the ending this pass has just written, and never at its expense.
+     *
+     * <p>The reading is telemetry and this pass is the last thing a night's stuck batches have, so
+     * a reading that could not be taken may not end it: the read comes out of a store that can be
+     * away, the timer raises on a measurement it will not take, and this call sits inside a loop
+     * over batches the read returned oldest first - the ones a Youth Offending Team has been
+     * waiting longest for. A refusal let out of here would leave every batch behind this one
+     * waiting another grace period for a reason that has nothing to do with it, and the ending is
+     * already written by the time it happens. So it stops here and is written down instead, which
+     * is the rule {@code DocumentOutcomeSinkImpl} states for the same reading taken for every
+     * other outcome.
+     *
+     * @param batchId the batch whose ending has just been written
+     */
+    // PMD.AvoidCatchingGenericException: as in DocumentOutcomeSinkImpl, the claim is that no
+    // failure of this reading can end the pass, and a narrower catch would leave the classes the
+    // list did not name doing exactly that.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void timeTheRoundTrip(final UUID batchId) {
+        try {
+            batches.findById(batchId)
+                    .flatMap(RegisterBatch::generationRoundTrip)
+                    .ifPresent(metrics::generationLatency);
+        } catch (RuntimeException notTimed) {
+            LOG.warn("Batch {} was given up on and its render round trip could not be timed, so "
+                    + "this ending is missing from courtregister_generation_latency and the pass "
+                    + "carries on to the batches behind it. cause={}",
+                    batchId, notTimed.getClass().getName());
+        }
     }
 
     /**
