@@ -174,6 +174,31 @@ public interface RegisterStore {
     List<RegisterBatch> batchesOn(LocalDate registerDate);
 
     /**
+     * The batches these identities name, as the rows stand at the moment of asking.
+     *
+     * <p>The read behind the run report's settled counts, and it is asked by identity because that
+     * is the only thing that says <em>tonight's</em> batches. {@link #batchesFor(Collection)} reads
+     * a key's whole history and {@link #batchesOn(LocalDate)} reads a day's, so both answer with
+     * batches earlier runs assembled; a run that counted what came back from either would credit
+     * itself with last night's documents.
+     *
+     * <p><strong>One statement for the whole set.</strong> The caller holds every identity it
+     * assembled and asks once, because a read per batch would make a run's own reporting scale with
+     * the size of the estate - the requesting leg is already sequential and one statement per court
+     * centre at the end of it is a second pass over the night.
+     *
+     * <p>Whatever state each has reached, and only the ones that exist: a batch whose stamp was
+     * refused has no row and a batch the run deadline never reached was never written down, so an
+     * identity nothing answers for is a batch that is not there rather than an error. The order is
+     * nobody's business here - the caller counts them - so none is stated.
+     *
+     * @param batchIds the batches being asked about, which for a run is every identity it assembled
+     * @return the batches those identities name, in no particular order; empty where none of them
+     *         has a row
+     */
+    List<RegisterBatch> batchesNamed(Collection<UUID> batchIds);
+
+    /**
      * Writes the batch the assembler decided on and stamps its identity onto the rows.
      *
      * <p><strong>The batch is an argument, not something this port invents.</strong> Which identity

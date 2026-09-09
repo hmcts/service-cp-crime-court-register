@@ -1290,6 +1290,19 @@ public class JdbcRegisterStore implements RegisterStore {
     }
 
     /**
+     * {@inheritDoc}
+     *
+     * <p>The statement this seam is waiting on lands with the run's settled counts; until then the
+     * refusal names what is missing rather than answering an empty set, which a run would report as
+     * a night that had settled nothing.
+     */
+    @Override
+    public List<RegisterBatch> batchesNamed(final Collection<UUID> batchIds) {
+        throw new UnsupportedOperationException(
+                "reading " + batchIds.size() + " batches back by identity is not written yet");
+    }
+
+    /**
      * The assembly statement and the count that judges it, inside the transaction that undoes both.
      *
      * <p>The refusal is thrown from here rather than from the caller precisely so that it is thrown

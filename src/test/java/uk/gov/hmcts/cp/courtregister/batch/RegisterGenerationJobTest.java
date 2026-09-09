@@ -170,14 +170,42 @@ class RegisterGenerationJobTest {
             GENERATING_ROWS + FAILING_ROWS + UNSTAMPABLE_ROWS + WAITING_ROWS;
 
     /**
+     * How many registers each of the settling night's three batches groups.
+     *
+     * <p>Three different numbers again, and none of them the count of batches, for the reason
+     * {@link #GENERATING_ROWS} gives: the four settled fields are two counts of batches and two
+     * counts of the registers behind them, so a fixture whose batches were the same size would be
+     * pinned by a line that had the four in the wrong order.
+     */
+    private static final int NOTIFIED_ROWS = 3;
+
+    private static final int GENERATED_ROWS = 2;
+
+    private static final int STILL_RENDERING_ROWS = 1;
+
+    /**
+     * What the line says about a night the store had nothing settled for when it was written.
+     *
+     * <p>The snapshot stands - the four counts beside it are what the store says - and what it says
+     * is that none of tonight's batches had come back yet, which is the ordinary night. A night that
+     * assembled no batch at all reads the same way and for the same reason: there is nothing to ask
+     * about, so the empty answer is exact and no statement is issued for it. A snapshot that could
+     * not be taken says {@code unread} instead, and the four counts beside it are then zeroes the
+     * run did not earn rather than a night that settled nothing.
+     */
+    private static final String NOTHING_SETTLED_YET =
+            " snapshot=taken generated=0 notified=0 rows_generated=0 rows_notified=0";
+
+    /**
      * The line a night that did something leaves behind, in full.
      *
      * <p>Every field of {@link RunReport}: what the gate decided and why, how many batches the run
      * asked the renderer for, the three states the requesting leg can leave a batch in and their
      * total, the court centre days the run passed over, how many registers ended the run under each
-     * of those outcomes, the outcomes it had to chase and how long it took. Written out rather than
-     * asserted field by field because the claim is the whole line - a field dropped from it is a
-     * night an operator can no longer read, and a field renamed is an alert that stops firing.
+     * of those outcomes, what the store said tonight's batches had come to by the time the line was
+     * written, the outcomes it had to chase and how long it took. Written out rather than asserted
+     * field by field because the claim is the whole line - a field dropped from it is a night an
+     * operator can no longer read, and a field renamed is an alert that stops firing.
      */
     private static final String THE_MIXED_NIGHTS_LINE = RUN_EVENT
             + " gate=proceed reason=flag-on batches=3 requested=2 generating=1 failed=1 pending=1"
@@ -186,12 +214,14 @@ class RegisterGenerationJobTest {
             + " rows_failed=" + FAILING_ROWS
             + " rows_pending=" + UNSTAMPABLE_ROWS
             + " rows_deferred=" + WAITING_ROWS
+            + NOTHING_SETTLED_YET
             + " reconciled=" + RECONCILED + " duration_ms=180000";
 
     /** The same line for a night the flag stopped: the same fields, and nothing earned. */
     private static final String THE_SKIPPED_NIGHTS_LINE = RUN_EVENT
             + " gate=skipped reason=flag-off batches=0 requested=0 generating=0 failed=0 pending=0"
             + " deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0 rows_deferred=0"
+            + NOTHING_SETTLED_YET
             + " reconciled=0 duration_ms=0";
 
     /**
@@ -206,7 +236,8 @@ class RegisterGenerationJobTest {
             "event=register_generation_run gate=(?:proceed|skipped) reason=[a-z-]+ batches=\\d+ "
                     + "requested=\\d+ generating=\\d+ failed=\\d+ pending=\\d+ deferred=\\d+ "
                     + "rows=\\d+ rows_generating=\\d+ rows_failed=\\d+ rows_pending=\\d+ "
-                    + "rows_deferred=\\d+ reconciled=\\d+ duration_ms=\\d+");
+                    + "rows_deferred=\\d+ snapshot=(?:taken|unread) generated=\\d+ notified=\\d+ "
+                    + "rows_generated=\\d+ rows_notified=\\d+ reconciled=\\d+ duration_ms=\\d+");
 
     /** What the store answers with; the run's job is to pass it on unchanged. */
     private static final List<RegisterRecord> ACTIVE = List.of(record(), record());
@@ -379,6 +410,67 @@ class RegisterGenerationJobTest {
         });
         when(reconciler.reconcile()).thenReturn(RECONCILED);
         return List.of(generating, failing, unstampable);
+    }
+
+    /**
+     * A night of three accepted renders, one of which the completion legs have already settled.
+     *
+     * <p>The night the run's own account and the store's come apart, which is the whole reason the
+     * settled counts are read back rather than reasoned about. All three batches were stamped and
+     * all three renders were accepted, so the requesting leg leaves every one of them GENERATING -
+     * and while the run was still working through the court centres behind it, the event listener
+     * marked the first one's document and its notification and the reconciler settled the second
+     * one's document. By the time the line is written the store says one NOTIFIED, one GENERATED and
+     * one still GENERATING, and nothing the requesting leg saw could have said so.
+     *
+     * <p>Each batch groups a different number of registers so that the two counts of batches and
+     * the two counts of registers behind them cannot be pinned in the wrong order.
+     *
+     * @return the batches the night holds, in the order the assembler answered
+     */
+    private List<RegisterBatch> aNightThatIsAlreadySettling() {
+        final RegisterBatch told = batch();
+        final RegisterBatch rendered = batch();
+        final RegisterBatch stillRendering = batch();
+        final List<RegisterRecord> toldRows = records(NOTIFIED_ROWS);
+        final List<RegisterRecord> renderedRows = records(GENERATED_ROWS);
+        final List<RegisterRecord> stillRenderingRows = records(STILL_RENDERING_ROWS);
+        theGateAnswers(new Proceed(false));
+        when(store.activeUnbatched()).thenReturn(Stream.of(toldRows, renderedRows,
+                stillRenderingRows).flatMap(List::stream).toList());
+        when(assembler.assemble(any(), any(), anyBoolean())).thenReturn(new BatchAssembly(
+                List.of(new AssembledBatch(told, toldRows),
+                        new AssembledBatch(rendered, renderedRows),
+                        new AssembledBatch(stillRendering, stillRenderingRows)),
+                List.of()));
+        when(store.assemble(any(), any())).thenAnswer(call -> call.getArgument(0));
+        everyRequestIsAccepted();
+        return List.of(told, rendered, stillRendering);
+    }
+
+    /**
+     * What the store answers when the run reads tonight's batches back by identity.
+     *
+     * @param settled the batches as their rows stand at the moment the line is written
+     */
+    private void theStoreSaysTheyAreNow(final RegisterBatch... settled) {
+        when(store.batchesNamed(any())).thenReturn(List.of(settled));
+    }
+
+    /**
+     * The same batch as the store now holds it, in the state the completion legs moved it to.
+     *
+     * @param batch  the batch the run assembled
+     * @param status the state its row has since reached
+     * @return that batch under that state, everything else unchanged
+     */
+    private static RegisterBatch nowHeldAt(final RegisterBatch batch, final BatchStatus status) {
+        return new RegisterBatch(batch.batchId(), batch.courtCentreId(), batch.courtCentreOuCode(),
+                batch.courtHouse(), batch.registerDate(), batch.fileName(), batch.payloadFileId(),
+                batch.documentFileId(), status, batch.failureReason(), batch.sdgReason(),
+                batch.systemGenerated(), batch.completedBy(), batch.assembledAt(),
+                batch.requestedAt(), batch.generatedAt(), batch.notifiedAt(), batch.failedAt(),
+                batch.attempts(), batch.supplementOf(), batch.supplementIndex());
     }
 
     /**
@@ -1150,6 +1242,17 @@ class RegisterGenerationJobTest {
      * whole-line cases they widen, therefore fail before the implementation that answers them; the
      * rest still pass on introduction and are shown non-vacuous by mutation instead.
      *
+     * <p><strong>And the five the settled snapshot adds are the same kind.</strong> User Story 7
+     * asks the line for {@code generated} and {@code notified} as well, and the reading that left
+     * them out - that they are zero by construction, the requesting leg ending where it does - does
+     * not hold: the event listener can mark and notify a fast render while later court centres of
+     * the same run are still being requested, and neither the cumulative
+     * {@code courtregister_batches_total} counter nor the age gauges can be asked a question about
+     * one night. So the run keeps the identities it assembled, reads their states back from the
+     * store once at the moment it writes the line, and counts them - with {@code snapshot} saying
+     * whether that read stands. The three cases below and the whole-line cases they widen fail
+     * before the implementation that answers them.
+     *
      * <p>The gauges are the other half of the same report (data model: "recorded as the run report
      * (log + gauges), not as a table"). Their names, their labels and their readings are pinned in
      * {@code GenerationMetricsTest}; what belongs here is that the run publishes them, which for
@@ -1340,6 +1443,142 @@ class RegisterGenerationJobTest {
             }
         }
 
+        /**
+         * What the store says tonight's batches came to, which is not what the run saw.
+         *
+         * <p>The requesting leg ends when the renderer has been asked, so the run's own account
+         * cannot go past GENERATING - but the run is not the only thing writing to
+         * {@code register_batch} while it is going on. A court centre whose render came back in
+         * seconds is marked by the event listener and notified while the run is still asking about
+         * the court centres behind it, and nothing the requesting leg saw can say so. Read back by
+         * identity at the moment the line is written, the night says one batch told, one document
+         * rendered and one still out - and the registers behind each, because one settled batch is
+         * one court centre and how many youth defendants are inside it is the number that matters.
+         *
+         * <p><strong>The two counts sit inside the requesting leg's account rather than beside
+         * it.</strong> Every batch counted here was counted GENERATING by the run, so
+         * {@code generated} and {@code notified} do not partition anything and are not subtracted
+         * from {@code generating}; they are read as bounds against it here for that reason.
+         */
+        @Test
+        void the_batches_the_night_had_already_settled_should_be_counted_where_it_reports() {
+            final List<RegisterBatch> night = aNightThatIsAlreadySettling();
+            theStoreSaysTheyAreNow(nowHeldAt(night.get(0), BatchStatus.NOTIFIED),
+                    nowHeldAt(night.get(1), BatchStatus.GENERATED),
+                    nowHeldAt(night.get(2), BatchStatus.GENERATING));
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(fields)
+                        .as("the counts are what the store said and the line says they are, so a "
+                                + "reader is not left to guess whether the night was read back")
+                        .containsEntry("snapshot", "taken");
+                softly.assertThat(onTheLine(fields, "generated"))
+                        .as("every batch whose document exists by the time the line is written, "
+                                + "whether or not anybody has been told about it yet")
+                        .isEqualTo(2);
+                softly.assertThat(onTheLine(fields, "notified"))
+                        .as("and the one the notifying leg has finished with, which is the batch "
+                                + "a Youth Offending Team has actually had")
+                        .isEqualTo(1);
+                softly.assertThat(onTheLine(fields, "rows_generated"))
+                        .as("the registers behind those two batches, which is what a count of "
+                                + "court centres cannot say")
+                        .isEqualTo(NOTIFIED_ROWS + GENERATED_ROWS);
+                softly.assertThat(onTheLine(fields, "rows_notified"))
+                        .as("and the registers behind the one that was told about")
+                        .isEqualTo(NOTIFIED_ROWS);
+                softly.assertThat(onTheLine(fields, "generated"))
+                        .as("a settled batch was requested by this run, so the snapshot cannot "
+                                + "claim more batches than the requesting leg left GENERATING")
+                        .isLessThanOrEqualTo(onTheLine(fields, "generating"));
+                softly.assertThat(onTheLine(fields, "rows_generated"))
+                        .as("and the registers behind them are the same registers, counted in the "
+                                + "same batches")
+                        .isLessThanOrEqualTo(onTheLine(fields, "rows_generating"));
+            }
+        }
+
+        /**
+         * The ordinary night, on which nothing has come back yet and the line says so.
+         *
+         * <p>The other half of the case above, and the reason the snapshot is worth taking at all:
+         * zeroes here are a reading rather than an absence. A night whose renders are all still out
+         * and a night whose read was refused are the same four zeroes, and only {@code snapshot}
+         * separates them.
+         */
+        @Test
+        void a_night_nothing_had_come_back_for_should_be_on_the_line_as_nothing_settled() {
+            final List<RegisterBatch> night = aNightThatIsAlreadySettling();
+            theStoreSaysTheyAreNow(nowHeldAt(night.get(0), BatchStatus.GENERATING),
+                    nowHeldAt(night.get(1), BatchStatus.GENERATING),
+                    nowHeldAt(night.get(2), BatchStatus.GENERATING));
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(fields)
+                        .as("the store answered, and what it answered is that the night is still "
+                                + "out; that is a reading and not a gap")
+                        .containsEntry("snapshot", "taken");
+                softly.assertThat(onTheLine(fields, "generated"))
+                        .as("nothing had a document yet")
+                        .isZero();
+                softly.assertThat(onTheLine(fields, "notified"))
+                        .as("so nobody had been told")
+                        .isZero();
+                softly.assertThat(onTheLine(fields, "rows_generated"))
+                        .as("and no register was behind either count")
+                        .isZero();
+                softly.assertThat(onTheLine(fields, "rows_notified")).isZero();
+            }
+        }
+
+        /**
+         * A snapshot the store refused, which must cost the line its four counts and nothing else.
+         *
+         * <p>The report is read from the night's own generation and not the other way round: the
+         * batches are stamped, the renders are away and the Youth Offending Teams are going to be
+         * told whatever this read answers, so a store that will not answer it is not a reason to
+         * fail the run. It is a reason to say the counts are missing. Four zeroes under
+         * {@code snapshot=unread} say exactly that, and the class of what refused is named beside
+         * them rather than swallowed - a reading nobody can tell from a quiet night is worse than
+         * no reading, which is the failure mode this whole leg was absorbed to stop.
+         */
+        @Test
+        void a_snapshot_the_store_refused_should_be_said_on_the_line_and_not_reported_as_zeroes() {
+            aNightThatIsAlreadySettling();
+            when(store.batchesNamed(any()))
+                    .thenThrow(new IllegalStateException("the register store did not answer"));
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                final RunReport report = run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(fields)
+                        .as("the one word that separates a night that settled nothing from a night "
+                                + "nobody could read; without it the four zeroes below are a lie "
+                                + "an alert would act on")
+                        .containsEntry("snapshot", "unread");
+                softly.assertThat(onTheLine(fields, "generated")).isZero();
+                softly.assertThat(onTheLine(fields, "notified")).isZero();
+                softly.assertThat(onTheLine(fields, "rows_generated")).isZero();
+                softly.assertThat(onTheLine(fields, "rows_notified")).isZero();
+                softly.assertThat(reported(report, RunReport::outcomes))
+                        .as("and the night is not lost: three batches were stamped and three "
+                                + "renders were asked for, and a report that could not be "
+                                + "assembled is no reason to throw that away")
+                        .containsEntry(BatchStatus.GENERATING, 3);
+                softly.assertThat(log.messages())
+                        .as("nothing is swallowed, so what refused the read is named where the "
+                                + "line says the read is missing")
+                        .anyMatch(line -> line.contains(IllegalStateException.class.getName()));
+            }
+        }
+
         @Test
         void nothing_on_the_line_should_be_free_text_or_anything_a_register_carries() {
             aMixedNight();
@@ -1408,20 +1647,22 @@ class RegisterGenerationJobTest {
         private static final String NOTHING_YET = RUN_EVENT
                 + " gate=proceed reason=flag-on batches=0 requested=0 generating=0 failed=0"
                 + " pending=0 deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0"
-                + " rows_deferred=0 reconciled=0 duration_ms=0";
+                + " rows_deferred=0" + NOTHING_SETTLED_YET + " reconciled=0 duration_ms=0";
 
         /**
          * The line the mixed night can write once its second batch stops the run.
          *
          * <p>One batch requested and its registers accounted for, the two days it passed over and
-         * the registers waiting under them known before any of it, and nothing chased.
+         * the registers waiting under them known before any of it, and nothing chased. The snapshot
+         * is still taken: the identities were known the moment the assembler answered, so a run that
+         * stopped part way can still say what the store makes of the batches it did stamp.
          */
         private static final String AS_FAR_AS_IT_GOT = RUN_EVENT
                 + " gate=proceed reason=flag-on batches=1 requested=1 generating=1 failed=0"
                 + " pending=0 deferred=2 rows=" + (GENERATING_ROWS + WAITING_ROWS)
                 + " rows_generating=" + GENERATING_ROWS
                 + " rows_failed=0 rows_pending=0 rows_deferred=" + WAITING_ROWS
-                + " reconciled=0 duration_ms=60000";
+                + NOTHING_SETTLED_YET + " reconciled=0 duration_ms=60000";
 
         /** Sets the night up as one the flag allowed and the store then refused. */
         private void aStoreThatWentAway() {
