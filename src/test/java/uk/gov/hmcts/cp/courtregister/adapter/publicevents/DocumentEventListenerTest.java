@@ -1007,4 +1007,48 @@ class DocumentEventListenerTest {
             }
         }
     }
+
+    /**
+     * What this service writes down about a delivery it could not read off the subscription.
+     *
+     * <p>The third door, and the one a sweep of the first two does not reach. A
+     * {@code JMSException} is the broker client's own account of why it could not hand a message
+     * over, and the text of it is that client's rather than this service's: a provider explaining a
+     * body it could not decode, or a property it could not convert to a string, has the body and
+     * the property in hand and nothing stops it quoting either. So its message is another context's
+     * unvalidated value by exactly the reading a payload field's is, and a log index is the one
+     * place it must not reach (constitution Principle VII).
+     *
+     * <p>Both accessors the listener calls are inside the one try, so one case holds the whole
+     * statement; the body is the one used here because a body is the larger thing for a provider to
+     * quote back. What is written instead is that a delivery was dropped and what refused it, and
+     * there is nothing else to write: a message that would not come off the subscription named no
+     * event, no batch and no payload, so the class is the whole of what this service knows of it.
+     */
+    @Nested
+    @DisplayName("a delivery this service could not read off the subscription")
+    class UnreadableDeliveries {
+
+        @Test
+        void a_broker_that_would_not_hand_a_message_over_should_not_be_quoted()
+                throws JMSException {
+            final TextMessage undeliverable = mock(TextMessage.class);
+            when(undeliverable.getText()).thenThrow(new JMSException(
+                    "the broker could not decode " + PersonalDataMarkers.OPERATOR_TOKEN));
+
+            try (CapturedLog log = CapturedLog.capturing(DocumentEventListener.class)) {
+                listener.onPublicEvent(undeliverable);
+
+                assertThat(log.renderings())
+                        .as("the drop is written down and the broker's own words are not, because "
+                                + "a provider explaining a message it could not hand over may "
+                                + "quote what that message carried")
+                        .anySatisfy(line -> assertThat(line)
+                                .contains("could not be read off the subscription")
+                                .doesNotContain(PersonalDataMarkers.OPERATOR_TOKEN));
+                assertThat(log.renderings())
+                        .noneMatch(line -> line.contains(PersonalDataMarkers.OPERATOR_TOKEN));
+            }
+        }
+    }
 }
