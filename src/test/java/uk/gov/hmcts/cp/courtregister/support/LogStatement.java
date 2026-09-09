@@ -148,9 +148,9 @@ public record LogStatement(String loggerName, String pattern, String where) {
      *
      * <p>The enclosing {@code catch} is resolved <strong>lexically</strong>, by the brace structure
      * around the statement, rather than by matching the argument's name against the catches in the
-     * file: a name reused by a later, safer catch would otherwise excuse an earlier attachment.
-     * Every type of a multi-catch must be attachable, because the one that is not is the one that
-     * renders.
+     * file: a name reused by a later catch would otherwise excuse an earlier attachment. A
+     * multi-catch is reported under every type it declares, because no type is attachable and the
+     * entry should say what was caught.
      *
      * @return one entry per offending statement, empty where the sweep's claim holds
      * @throws IOException if a source cannot be read
@@ -240,9 +240,11 @@ public record LogStatement(String loggerName, String pattern, String where) {
      * cost the whole claim, which is what this exists to stop and what
      * {@code LogStatementSweepTest} pins.
      *
-     * <p>Text blocks are treated as ordinary strings: their delimiter is three quotes, so the
-     * toggle opens on the first and closes on the third, and the two in between leave the state
-     * where it started. A brace inside one is still inside a string either way.
+     * <p>A text block is its own state, entered and left on the three quotes read as one token.
+     * Treating the delimiter as three ordinary quotes was the version this replaced and it does
+     * not work: the toggle opens, closes and opens again, so the block is entered correctly and
+     * then left by the first quote in its content - a lone quote inside one, which a payload
+     * fixture may perfectly well contain, and every brace after it counts as code.
      *
      * @param source the source text
      * @return one flag per character, true where that character is code

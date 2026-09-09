@@ -2954,12 +2954,16 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     **Two rounds of the gate then found the sweep weaker than the claim, and the rule is now flat.**
     `LogStatement.exceptionsAttachedOutside`, with the hand-kept allowlist named here, is gone; so
     is the rule that replaced it, which derived attachability from a type's constructors and was
-    defeated by `initCause`. What stands is `exceptionsAttachedOutsideOwnWording`, which refuses
-    **every** caught-throwable attachment, so the two sites this item's closure had left standing
-    (`GenerationReconciler` and `RegisterNotifierService`, both catching this service's own
-    exceptions) are fixed too, and the block matcher reads only positions that are code, a brace in
-    a comment or a string having closed the enclosing catch early. `LogStatementSweepTest` holds
-    all four defeating shapes as source the suite writes.
+    defeated by `initCause`. What stands is `attachmentsInProductionSources`, which refuses
+    **every** caught-throwable attachment at **every** level, so the two sites this item's closure
+    had left standing (`GenerationReconciler` and `RegisterNotifierService`, both catching this
+    service's own exceptions) are fixed, and so are the two that a level list stopping at INFO had
+    hidden: `RegisterGenerationService`'s DEBUG dump of the mapper's failure, which leaned on a
+    clause requiring a local-only profile guard it did not have, and `ProcessedLogProbe`'s
+    `DataAccessException`, whose message carries SQL and a connection string. The block matcher
+    reads only positions that are code, a brace in a comment or a string having closed the
+    enclosing catch early, and the argument is read through any cast written around it.
+    `LogStatementSweepTest` holds every defeating shape as source the suite writes.
     **The gate also corrected the inventory this item first carried**: `CliMain:302` was called
     safe because `ReportNotWritten` is this service's own type, and it is not, because that type
     wraps an `IOException` and a cause chain renders recursively. Two safe and thirteen unsafe, not
