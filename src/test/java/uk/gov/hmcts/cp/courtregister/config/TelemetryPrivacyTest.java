@@ -945,6 +945,32 @@ class TelemetryPrivacyTest {
                     .isEmpty();
         }
 
+        /**
+         * The claim that makes one whole class of leak unrepeatable, over the production sources.
+         *
+         * <p>Five separate statements wrote a bounded reason and then attached the throwable as
+         * well, each found by a review rather than by a test, and the fifth arrived in the fix for
+         * the first. A rendered exception carries the message of whoever raised it - a driver, a
+         * pool, an HTTP client, the broker - so the bounded reason beside it buys nothing: what
+         * reaches the log index is a library's words about this service's data, which on a store
+         * or transport failure is where a connection string or a fragment of a statement appears.
+         *
+         * <p>So the shape is refused rather than the instances pinned, and refused across all of
+         * {@code src/main/java} rather than the swept legs alone, because the operations commands
+         * write to the same index. What may still be attached is an exception this service raises
+         * and words itself; a wrapper does not qualify, because a cause chain renders recursively
+         * and the wrapper's own wording does not stop what is underneath it reaching the line.
+         */
+        @Test
+        @DisplayName("no line anywhere attaches an exception this service did not write")
+        void should_attach_no_exception_whose_words_are_not_this_services() throws Exception {
+            assertThat(LogStatement.exceptionsAttachedOutside(GenerationLegs.OUR_OWN_EXCEPTIONS))
+                    .as("each of these renders the message of whatever it caught, so the bounded "
+                            + "reason beside it buys nothing; name the class and drop the "
+                            + "throwable, as the five before them were fixed")
+                    .isEmpty();
+        }
+
         @Test
         @DisplayName("[A] and the payload store writes no line at all, so its words are its own")
         void should_leave_the_payload_store_writing_nothing() throws Exception {

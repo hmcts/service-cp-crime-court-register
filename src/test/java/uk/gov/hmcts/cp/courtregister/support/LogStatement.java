@@ -100,6 +100,118 @@ public record LogStatement(String loggerName, String pattern, String where) {
     }
 
     /**
+     * Every WARN or ERROR in the production sources that attaches an exception this service did
+     * not author, as {@code file:line -> the type caught}.
+     *
+     * <p><strong>The claim this makes is by construction, and it is the only kind worth making
+     * about a whole class of defect.</strong> Five times a statement wrote a bounded reason and
+     * then attached the throwable as well, and the message an attached throwable renders belongs
+     * to whoever raised it - a driver, a pool, an HTTP client, the broker - so it carries whatever
+     * that library chose to put in it, which on a store or transport failure is where a connection
+     * string or a fragment of a statement turns up. A suite that pinned each one as it was found
+     * would go on finding them; a sweep that refuses the shape cannot be added to without failing.
+     *
+     * <p>What is allowed through is an exception whose message this service wrote, and the test is
+     * the caught type rather than the wording: a catch of one of this service's own exceptions
+     * renders a message composed here, and a catch of anything else does not. A wrapper counts as
+     * somebody else's, because a cause chain renders recursively and the wrapper's own wording
+     * does not stop the cause underneath it reaching the line.
+     *
+     * <p>Literal about this repository's style for the reason {@link #everyOneIn(List)} is: the
+     * final argument is read off the call, and a statement is reported where that argument is the
+     * name bound by an enclosing {@code catch}. A statement written some other way is not matched,
+     * which is why the suite asserts a floor on what the scan sees.
+     *
+     * @param ownExceptions the simple names of the exception types this service itself raises and
+     *                      words, which may therefore be attached
+     * @return one entry per offending statement, empty where the sweep's claim holds
+     * @throws IOException if a source cannot be read
+     */
+    public static List<String> exceptionsAttachedOutside(final List<String> ownExceptions)
+            throws IOException {
+        final List<String> attached = new ArrayList<>();
+        try (java.util.stream.Stream<Path> sources = Files.walk(SOURCE_ROOT)) {
+            for (final Path source : sources.filter(each -> each.toString().endsWith(".java"))
+                    .sorted().toList()) {
+                attached.addAll(attachedIn(source, ownExceptions));
+            }
+        }
+        return attached;
+    }
+
+    private static List<String> attachedIn(final Path source, final List<String> ownExceptions)
+            throws IOException {
+        final String text = Files.readString(source, StandardCharsets.UTF_8);
+        final Map<String, String> caught = new LinkedHashMap<>();
+        final java.util.regex.Matcher clauses = java.util.regex.Pattern
+                .compile("catch\\s*\\(\\s*(?:final\\s+)?([\\w.| ]+?)\\s+(\\w+)\\s*\\)").matcher(text);
+        while (clauses.find()) {
+            caught.put(clauses.group(2), clauses.group(1).trim());
+        }
+        final List<String> attached = new ArrayList<>();
+        for (final String call : List.of("LOG.error(", "LOG.warn(")) {
+            int at = text.indexOf(call);
+            while (at >= 0) {
+                final String last = lastArgumentOf(text, at + call.length());
+                final String type = caught.get(last);
+                if (type != null && ownExceptions.stream().noneMatch(type::contains)) {
+                    attached.add(source.getFileName() + ":"
+                            + text.substring(0, at).split("\\n", -1).length + " catches " + type);
+                }
+                at = text.indexOf(call, at + 1);
+            }
+        }
+        return attached;
+    }
+
+    /**
+     * The last argument of one call, read by balancing brackets from its opening one.
+     *
+     * @param text from the source
+     * @param from the index just past the opening bracket
+     * @return the final argument as written, or an empty string where the call has none
+     */
+    private static String lastArgumentOf(final String text, final int from) {
+        int depth = 1;
+        int at = from;
+        boolean inString = false;
+        boolean escaped = false;
+        final List<StringBuilder> arguments = new ArrayList<>(List.of(new StringBuilder()));
+        while (depth > 0 && at < text.length()) {
+            final char character = text.charAt(at);
+            at++;
+            if (escaped) {
+                escaped = false;
+                arguments.getLast().append(character);
+                continue;
+            }
+            if (character == ESCAPE) {
+                escaped = true;
+                arguments.getLast().append(character);
+                continue;
+            }
+            if (character == QUOTE) {
+                inString = !inString;
+            }
+            if (!inString) {
+                if (character == '(' || character == '<') {
+                    depth++;
+                } else if (character == ')' || character == '>') {
+                    depth--;
+                    if (depth == 0) {
+                        break;
+                    }
+                } else if (character == ',' && depth == 1) {
+                    arguments.add(new StringBuilder());
+                    continue;
+                }
+            }
+            arguments.getLast().append(character);
+        }
+        return arguments.getLast().toString().strip();
+    }
+
+    /**
      * Every line the given classes can write, in source order.
      *
      * @param types the classes to read; each must have its source under {@code src/main/java}
