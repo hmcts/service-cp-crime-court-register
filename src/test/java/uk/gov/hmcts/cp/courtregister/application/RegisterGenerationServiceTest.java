@@ -471,7 +471,7 @@ class RegisterGenerationServiceTest {
                             + "has nothing to be rendered from - and the run is told so rather "
                             + "than left to read the row back")
                     .isEqualTo(new BatchOutcome(BATCH_ID, BatchStatus.FAILED,
-                            BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE));
+                            BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, false));
         }
 
         @Test
@@ -508,7 +508,7 @@ class RegisterGenerationServiceTest {
             softly.assertThat(outcome)
                     .as("GENERATING is honest about what has happened: a render was asked for, and "
                             + "the document arrives later on the public-event topic")
-                    .isEqualTo(new BatchOutcome(BATCH_ID, BatchStatus.GENERATING, null));
+                    .isEqualTo(new BatchOutcome(BATCH_ID, BatchStatus.GENERATING, null, true));
         }
 
         @Test
@@ -592,7 +592,7 @@ class RegisterGenerationServiceTest {
                             + "answered, which is a different investigation from a refusal and is "
                             + "never treated as a render that will happen")
                     .isEqualTo(new BatchOutcome(BATCH_ID, BatchStatus.FAILED,
-                            BatchFailureReason.RENDER_REQUEST_REJECTED));
+                            BatchFailureReason.RENDER_REQUEST_REJECTED, true));
         }
 
         @Test
@@ -641,7 +641,7 @@ class RegisterGenerationServiceTest {
             softly.assertThat(outcome)
                     .as("a connect failure and a 503 are not a refusal, and a batch failed on the "
                             + "first of them is a night's register lost to a restart somewhere else")
-                    .isEqualTo(new BatchOutcome(BATCH_ID, BatchStatus.GENERATING, null));
+                    .isEqualTo(new BatchOutcome(BATCH_ID, BatchStatus.GENERATING, null, true));
             softly.assertThat(pause.waits)
                     .as("the wait is the shared policy's, so this service cannot hold a different "
                             + "opinion about a back-off than the two clients 001 built (C3)")
@@ -661,7 +661,7 @@ class RegisterGenerationServiceTest {
                             + "back to the next run and nothing downstream believes a register is "
                             + "coming")
                     .isEqualTo(new BatchOutcome(BATCH_ID, BatchStatus.FAILED,
-                            BatchFailureReason.RENDER_REQUEST_FAILED));
+                            BatchFailureReason.RENDER_REQUEST_FAILED, true));
             softly.assertThat(pause.waits)
                     .as("doubling per attempt, bounded by max-backoff, and a wait between each "
                             + "pair of attempts rather than after the last one")
@@ -682,7 +682,7 @@ class RegisterGenerationServiceTest {
                             + "costs at worst rather than against the instant it starts: a run "
                             + "still asking at midnight is a run that collides with the next one")
                     .isEqualTo(new BatchOutcome(BATCH_ID, BatchStatus.FAILED,
-                            BatchFailureReason.RENDER_REQUEST_FAILED));
+                            BatchFailureReason.RENDER_REQUEST_FAILED, true));
         }
 
         @Test
@@ -692,6 +692,63 @@ class RegisterGenerationServiceTest {
             request();
 
             verify(store, never()).markRequested(any(), any());
+        }
+    }
+
+    /**
+     * Whether the request left this service, which the reason it failed under cannot answer.
+     *
+     * <p>RENDER_REQUEST_FAILED is the ending of two different nights. A request that was made and
+     * answered nothing inside the budget ends that way, and so does a batch this class was handed
+     * with less budget left than one attempt's own worst case - which asks systemdocgenerator
+     * nothing at all. The outcome carries which of the two happened, because the run report's
+     * {@code requested} count is read as "the renderer was sent this many documents", and a night
+     * that counted the second would report a renderer refusing a document it was never sent.
+     *
+     * <p>The deadline both cases work to has <strong>not</strong> passed. The run checks that before
+     * it hands a batch over ({@code RegisterGenerationJob.request}, which counts a batch it has no
+     * time left for as PENDING without asking this class at all), so a batch reaches here with
+     * budget left - and what is left may still be smaller than an attempt.
+     */
+    @Nested
+    @DisplayName("whether the render request left this service")
+    class WhetherTheRequestLeftThisService {
+
+        @Test
+        void a_budget_too_small_for_one_attempt_should_say_no_render_was_ever_asked_for() {
+            final Deadline noRoomForAnAttempt =
+                    Deadline.startingAt(NOW, CHEAP_ATTEMPT.dividedBy(2));
+
+            final BatchOutcome outcome = request(batch(), noRoomForAnAttempt);
+
+            softly.assertThat(noRoomForAnAttempt.hasPassedAt(NOW))
+                    .as("the budget is not spent, so the run hands this batch over rather than "
+                            + "counting it left behind; what it will not hold is one whole attempt")
+                    .isFalse();
+            verifyNoInteractions(renderer);
+            softly.assertThat(outcome)
+                    .as("nothing was sent, and the bounded reason cannot say so - the run report "
+                            + "counts the renders a night asked for off this, and counting this "
+                            + "one would tell an operator the renderer refused a document it "
+                            + "never had")
+                    .isEqualTo(new BatchOutcome(BATCH_ID, BatchStatus.FAILED,
+                            BatchFailureReason.RENDER_REQUEST_FAILED, false));
+        }
+
+        @Test
+        void a_request_that_left_and_then_ran_out_of_budget_should_say_it_was_made() {
+            doThrow(transientFailure()).when(renderer).requestRender(any(), any());
+            final Deadline roomForOneAttempt = Deadline.startingAt(NOW, Duration.ofMillis(150));
+
+            final BatchOutcome outcome = request(batch(), roomForOneAttempt);
+
+            verify(renderer, times(1)).requestRender(any(), any());
+            softly.assertThat(outcome)
+                    .as("the same bounded reason and the other night: the request was away and "
+                            + "nothing answered it, so this batch belongs in the count and the "
+                            + "distinction cannot be made by answering false for the reason")
+                    .isEqualTo(new BatchOutcome(BATCH_ID, BatchStatus.FAILED,
+                            BatchFailureReason.RENDER_REQUEST_FAILED, true));
         }
     }
 
@@ -725,7 +782,7 @@ class RegisterGenerationServiceTest {
                     .as("a batch that cannot be turned into a payload is recorded FAILED under a "
                             + "bounded reason, which is the half progression never wrote down")
                     .isEqualTo(new BatchOutcome(BATCH_ID, BatchStatus.FAILED,
-                            BatchFailureReason.ASSEMBLY_FAILED));
+                            BatchFailureReason.ASSEMBLY_FAILED, false));
             softly.assertThat(batches(BatchStatus.FAILED))
                     .as("and counted, which is the other half: a failure nothing counts is a "
                             + "failure nobody is paged about")
@@ -741,7 +798,7 @@ class RegisterGenerationServiceTest {
                     .as("per-batch isolation is the legacy's useful half and is kept: one bad "
                             + "batch must not cost the estate a night's registers, so the verdict "
                             + "is returned to the run rather than thrown at it")
-                    .isEqualTo(new BatchOutcome(OTHER_BATCH_ID, BatchStatus.GENERATING, null));
+                    .isEqualTo(new BatchOutcome(OTHER_BATCH_ID, BatchStatus.GENERATING, null, true));
         }
 
         @Test

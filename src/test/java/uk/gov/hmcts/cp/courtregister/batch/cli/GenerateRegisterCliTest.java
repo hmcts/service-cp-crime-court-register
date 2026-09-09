@@ -251,7 +251,7 @@ class GenerateRegisterCliTest {
             final RegisterBatch batch = call.getArgument(0);
             renders.add(new Render(batch, call.getArgument(1)));
             sequence.add(REQUESTED + batch.batchId());
-            return new BatchOutcome(batch.batchId(), BatchStatus.GENERATING, null);
+            return new BatchOutcome(batch.batchId(), BatchStatus.GENERATING, null, true);
         });
     }
 

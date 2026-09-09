@@ -570,6 +570,27 @@ class RegisterGenerationJobTest {
                 .toList(), List.of());
     }
 
+    /**
+     * A night of two batches that end under one reason, only one of which was ever sent.
+     *
+     * <p>The night the reason a batch failed under cannot say whether the renderer was asked.
+     * {@code RENDER_REQUEST_FAILED} is what a request that was made and answered nothing inside the
+     * budget ends under, and it is also what a batch the run reached with less budget left than one
+     * whole attempt ends under - and that one asked systemdocgenerator nothing at all. So a night
+     * whose two batches share the reason is the night a count read off the reason gets wrong, and it
+     * gets it wrong in the direction that matters: it reports a renderer refusing a document it was
+     * never sent.
+     */
+    private void aNightOfOneReasonAndOneRequest() {
+        final RegisterBatch outOfBudget = batch();
+        final RegisterBatch unanswered = batch();
+        aNightHolding(outOfBudget, unanswered);
+        when(service.request(eq(outOfBudget), any())).thenAnswer(call -> neverRequested(
+                outOfBudget, BatchFailureReason.RENDER_REQUEST_FAILED));
+        when(service.request(eq(unanswered), any())).thenAnswer(call -> requested(unanswered,
+                BatchStatus.FAILED, BatchFailureReason.RENDER_REQUEST_FAILED));
+    }
+
     /** Every request is accepted, and each answers about the batch it was given. */
     private void everyRequestIsAccepted() {
         when(service.request(any(), any()))
@@ -624,9 +645,33 @@ class RegisterGenerationJobTest {
         return IntStream.range(0, registers).mapToObj(one -> recordUnder(key)).toList();
     }
 
+    /**
+     * What the requesting leg answers about a batch it did ask systemdocgenerator for.
+     *
+     * @param batch  the batch it is about
+     * @param status what the leg left the batch as
+     * @param reason the bounded reason where it failed, and {@code null} where it did not
+     * @return that outcome, saying the request left this service
+     */
     private static BatchOutcome requested(final RegisterBatch batch, final BatchStatus status,
             final BatchFailureReason reason) {
-        return new BatchOutcome(batch.batchId(), status, reason);
+        return new BatchOutcome(batch.batchId(), status, reason, true);
+    }
+
+    /**
+     * What it answers about a batch that ended before the renderer was ever asked.
+     *
+     * <p>Always FAILED: the two endings that reach here are a payload the file service would not
+     * take and a budget that would not hold one attempt, and both fail the batch and hand its
+     * registers back to the next run.
+     *
+     * @param batch  the batch it is about
+     * @param reason the bounded reason it failed under
+     * @return that outcome, saying nothing was sent
+     */
+    private static BatchOutcome neverRequested(final RegisterBatch batch,
+            final BatchFailureReason reason) {
+        return new BatchOutcome(batch.batchId(), BatchStatus.FAILED, reason, false);
     }
 
     /**
@@ -1146,6 +1191,27 @@ class RegisterGenerationJobTest {
         }
 
         /**
+         * What the requesting leg says it did, rather than what its reason can be read to imply.
+         *
+         * <p>Both of this night's batches failed {@code RENDER_REQUEST_FAILED} and only one of them
+         * was sent, so the count cannot be derived from the reason at all - it is the requesting
+         * leg's own account of whether the call was made, and nothing else in the run has it.
+         */
+        @Test
+        void the_report_should_count_only_the_renders_the_run_actually_sent() {
+            aNightOfOneReasonAndOneRequest();
+
+            final RunReport report = run();
+
+            softly.assertThat(reported(report, RunReport::requested))
+                    .as("one of the two: the request that left this service and was never "
+                            + "answered. The batch beside it ended under the same reason with the "
+                            + "run's budget too small to hold a single attempt, so nothing was "
+                            + "ever sent about it")
+                    .isEqualTo(1);
+        }
+
+        /**
          * The registers behind the batches, which are what a Youth Offending Team is waiting for.
          *
          * <p>A count of batches says how many documents were asked for and a count of registers
@@ -1369,8 +1435,8 @@ class RegisterGenerationJobTest {
             final RegisterBatch neverAsked = batch();
             final RegisterBatch refused = batch();
             aNightHolding(neverAsked, refused);
-            when(service.request(eq(neverAsked), any())).thenAnswer(call -> requested(neverAsked,
-                    BatchStatus.FAILED, BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE));
+            when(service.request(eq(neverAsked), any())).thenAnswer(call -> neverRequested(
+                    neverAsked, BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE));
             when(service.request(eq(refused), any())).thenAnswer(call -> requested(refused,
                     BatchStatus.FAILED, BatchFailureReason.RENDER_REQUEST_REJECTED));
 
@@ -1386,6 +1452,37 @@ class RegisterGenerationJobTest {
                 softly.assertThat(onTheLine(fields, "failed"))
                         .as("both still failed, which is why the outcome count cannot carry the "
                                 + "distinction on its own")
+                        .isEqualTo(2);
+            }
+        }
+
+        /**
+         * The same distinction on the night the reason cannot carry it either.
+         *
+         * <p>The case above pairs a reason no sent batch can end under with one only a sent batch
+         * can, so a line that read the request off the reason would get that night right by
+         * accident. This one gives both batches {@code RENDER_REQUEST_FAILED}: the ending of a
+         * request that was made and answered nothing inside the budget, and the ending of a batch
+         * the run reached with less budget left than one whole attempt, which asked the renderer
+         * nothing. Only the requesting leg knows which, and the line has to say what it knew.
+         */
+        @Test
+        void a_render_the_run_never_sent_should_not_be_on_the_line_as_requested() {
+            aNightOfOneReasonAndOneRequest();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "requested"))
+                        .as("one request left this service; the other batch ended under the same "
+                                + "reason without one being made, and a line counting both would "
+                                + "have an operator investigating a renderer that was sent one "
+                                + "document and refused none")
+                        .isEqualTo(1);
+                softly.assertThat(onTheLine(fields, "failed"))
+                        .as("both failed, under one reason, so neither the outcome count nor the "
+                                + "reason behind it can tell the two nights apart")
                         .isEqualTo(2);
             }
         }

@@ -299,7 +299,7 @@ public class RegisterGenerationService {
         store.markRequested(batch.batchId(), payloadFileId);
         LOG.info("systemdocgenerator accepted the render request for batch {}, which now waits for "
                 + "its document on the public-event topic.", batch.batchId());
-        return new BatchOutcome(batch.batchId(), BatchStatus.GENERATING, null);
+        return new BatchOutcome(batch.batchId(), BatchStatus.GENERATING, null, true);
     }
 
     /**
@@ -362,7 +362,8 @@ public class RegisterGenerationService {
     private BatchOutcome failed(final RegisterBatch batch, final BatchFailureReason reason) {
         store.markFailed(batch.batchId(), reason, null, null);
         metrics.batchCompleted(BatchStatus.FAILED);
-        return new BatchOutcome(batch.batchId(), BatchStatus.FAILED, reason);
+        return new BatchOutcome(batch.batchId(), BatchStatus.FAILED, reason,
+                reason.wasRenderRequested());
     }
 
     /**

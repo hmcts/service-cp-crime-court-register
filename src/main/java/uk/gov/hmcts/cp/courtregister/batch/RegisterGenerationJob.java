@@ -384,7 +384,7 @@ public class RegisterGenerationJob {
             LOG.error("Batch {} could not be written down, so no render is asked for and its "
                             + "registers are left for the next run. cause={}",
                     assembled.batch().batchId(), notStamped.getClass().getName(), notStamped);
-            return new BatchOutcome(assembled.batch().batchId(), BatchStatus.PENDING, null);
+            return new BatchOutcome(assembled.batch().batchId(), BatchStatus.PENDING, null, false);
         }
         return service.request(batch, deadline);
     }
