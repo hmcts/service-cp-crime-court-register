@@ -493,9 +493,13 @@ public class RegisterGenerationJob {
         try {
             return snapshotOf(store.batchesNamed(assembled.keySet()), assembled);
         } catch (RuntimeException notRead) {
+            // The class and not the throwable: the message belongs to whatever library refused
+            // the read, and a store failure is where a connection string or a fragment of a
+            // statement turns up in one (Principle VII). The same rule the listener's four
+            // readers were held to.
             LOG.warn("The batches this run assembled could not be read back, so its line says the "
                             + "settled counts are unread rather than nought. cause={}",
-                    notRead.getClass().getName(), notRead);
+                    notRead.getClass().getName());
             return RunReport.Settled.UNREAD;
         }
     }
