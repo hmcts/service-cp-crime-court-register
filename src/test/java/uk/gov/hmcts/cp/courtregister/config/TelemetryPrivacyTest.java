@@ -964,7 +964,7 @@ class TelemetryPrivacyTest {
         @Test
         @DisplayName("no line anywhere attaches an exception this service did not write")
         void should_attach_no_exception_whose_words_are_not_this_services() throws Exception {
-            assertThat(LogStatement.exceptionsAttachedOutside(GenerationLegs.OUR_OWN_EXCEPTIONS))
+            assertThat(LogStatement.exceptionsAttachedOutsideOwnWording())
                     .as("each of these renders the message of whatever it caught, so the bounded "
                             + "reason beside it buys nothing; name the class and drop the "
                             + "throwable, as the five before them were fixed")

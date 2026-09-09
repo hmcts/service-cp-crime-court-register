@@ -237,12 +237,12 @@ public class ProgressionCommandGateway {
             // Connect failure, read timeout, connection dropped: the command may or may not have
             // been applied. Unknown is not failed, and it is retried rather than written off.
             //
-            // The exception travels with the line rather than only its type. What the pipeline acts
-            // on is the classification; what a human acts on is what it *was* — a refused
-            // connection, a read that timed out, a route the mesh dropped — and the bounded reason
-            // code this is eventually reported under is deliberately incapable of carrying it. It is
-            // safe to keep: a transport exception is raised instead of a response, so it carries the
-            // endpoint and the socket error and never a register body.
+            // Only the exception's type travels with the line. What the pipeline acts on is the
+            // classification; what a human acts on is what it *was* - a refused connection, a read
+            // that timed out, a route the mesh dropped - and the class distinguishes those where
+            // the bounded reason code cannot. The message does not go with it: it belongs to
+            // whatever raised it, and a line carries this service's own words (Principle VII),
+            // which the sweep in TelemetryPrivacyTest now holds by construction.
             LOG.warn("The add-court-register attempt did not reach a verdict, so the outcome is "
                     + "unknown; retrying. attempt={} cause={}", attempt,
                     unreachable.getClass().getName());

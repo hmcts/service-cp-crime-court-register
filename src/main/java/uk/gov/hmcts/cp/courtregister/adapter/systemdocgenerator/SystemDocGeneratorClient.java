@@ -168,10 +168,12 @@ public class SystemDocGeneratorClient implements DocumentRenderer {
             // to ask again inside its deadline, and it carries no status - an invented one would
             // say an attempt was answered when nothing answered.
             //
-            // The exception travels with the line rather than only its type. What the run acts on is
-            // the classification; what a human acts on is what it *was*, and the bounded reason code
-            // cannot carry that. It is safe to keep: a transport exception is raised instead of a
-            // response, so it names the endpoint and the socket error and never a register.
+            // Only the exception's type travels with the line. What the run acts on is the
+            // classification; what a human acts on is what it *was*, and the class carries that
+            // much where the bounded reason code cannot. The message does not go with it: it
+            // belongs to whatever raised it, and a line carries this service's own words
+            // (Principle VII), which the sweep in TelemetryPrivacyTest now holds by
+            // construction.
             LOG.warn("The generate-document request reached no verdict, so whether the render was "
                     + "asked for is unknown. batchId={} cause={}", request.batchId(),
                     unreachable.getClass().getName());

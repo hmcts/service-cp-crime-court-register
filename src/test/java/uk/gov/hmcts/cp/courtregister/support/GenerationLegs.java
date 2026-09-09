@@ -129,21 +129,6 @@ public final class GenerationLegs implements AutoCloseable {
             RegisterNotifierService.class,
             NotificationNotifyClient.class);
 
-    /**
-     * The exceptions this service raises and words itself, which may therefore be attached to a
-     * line: their messages are composed in this repository and carry only what it chose to say.
-     *
-     * <p>Named by simple name because that is what a {@code catch} clause spells. A wrapper of
-     * somebody else's exception does not belong here however this service names it: a cause chain
-     * renders recursively, so the wrapper's own wording does not stop the cause underneath it
-     * reaching the log index.
-     */
-    public static final List<String> OUR_OWN_EXCEPTIONS = List.of(
-            "StoreUnavailableException",
-            "GenerationFailedException",
-            "NotificationFailedException",
-            "PayloadStoreUnavailableException");
-
     /** Everything a meter's name or label may never carry, whoever it describes. */
     public static final List<String> NOTHING_A_SERIES_MAY_CARRY = List.of(
             PersonalDataMarkers.RECIPIENT_EMAIL,

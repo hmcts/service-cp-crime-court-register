@@ -62,7 +62,18 @@ public record LogStatement(String loggerName, String pattern, String where) {
 
     private static final char NEWLINE_ESCAPE = 'n';
 
+    /** The braces a block is counted by, named so an {@code if} carries no literal. */
+    private static final char BLOCK_OPENS = '{';
+
+    private static final char BLOCK_CLOSES = '}';
+
     private static final char TAB_ESCAPE = 't';
+
+    /** Where this service's own exceptions live; anything outside them is somebody else's. */
+    private static final List<String> OWN_PACKAGES = List.of(
+            "uk.gov.hmcts.cp.courtregister.domain.",
+            "uk.gov.hmcts.cp.courtregister.batch.cli.",
+            "uk.gov.hmcts.cp.courtregister.application.");
 
     /** The five calls this repository writes a line with. */
     private static final List<String> CALLS =
@@ -100,8 +111,8 @@ public record LogStatement(String loggerName, String pattern, String where) {
     }
 
     /**
-     * Every WARN or ERROR in the production sources that attaches an exception this service did
-     * not author, as {@code file:line -> the type caught}.
+     * Every WARN or ERROR in the production sources that attaches an exception whose words this
+     * service did not write, as {@code file:line catches <the types caught>}.
      *
      * <p><strong>The claim this makes is by construction, and it is the only kind worth making
      * about a whole class of defect.</strong> Five times a statement wrote a bounded reason and
@@ -111,57 +122,168 @@ public record LogStatement(String loggerName, String pattern, String where) {
      * string or a fragment of a statement turns up. A suite that pinned each one as it was found
      * would go on finding them; a sweep that refuses the shape cannot be added to without failing.
      *
-     * <p>What is allowed through is an exception whose message this service wrote, and the test is
-     * the caught type rather than the wording: a catch of one of this service's own exceptions
-     * renders a message composed here, and a catch of anything else does not. A wrapper counts as
-     * somebody else's, because a cause chain renders recursively and the wrapper's own wording
-     * does not stop the cause underneath it reaching the line.
+     * <p><strong>What may be attached is decided by the type, not by a list somebody keeps.</strong>
+     * An exception is attachable where it cannot carry a cause: no constructor of it takes a
+     * {@link Throwable}, so nothing of anybody else's can be underneath it, and its message is
+     * therefore composed here and nowhere else. A hand-kept allowlist got this wrong twice in one
+     * review - {@code ReportNotWritten} wraps an {@link java.io.IOException} and both store
+     * exceptions take a cause - which is what a list of names invites and a rule does not.
      *
-     * <p>Literal about this repository's style for the reason {@link #everyOneIn(List)} is: the
-     * final argument is read off the call, and a statement is reported where that argument is the
-     * name bound by an enclosing {@code catch}. A statement written some other way is not matched,
-     * which is why the suite asserts a floor on what the scan sees.
+     * <p>The enclosing {@code catch} is resolved <strong>lexically</strong>, by the brace structure
+     * around the statement, rather than by matching the argument's name against the catches in the
+     * file: a name reused by a later, safer catch would otherwise excuse an earlier attachment.
+     * Every type of a multi-catch must be attachable, because the one that is not is the one that
+     * renders.
      *
-     * @param ownExceptions the simple names of the exception types this service itself raises and
-     *                      words, which may therefore be attached
      * @return one entry per offending statement, empty where the sweep's claim holds
      * @throws IOException if a source cannot be read
      */
-    public static List<String> exceptionsAttachedOutside(final List<String> ownExceptions)
-            throws IOException {
+    public static List<String> exceptionsAttachedOutsideOwnWording() throws IOException {
         final List<String> attached = new ArrayList<>();
         try (java.util.stream.Stream<Path> sources = Files.walk(SOURCE_ROOT)) {
             for (final Path source : sources.filter(each -> each.toString().endsWith(".java"))
                     .sorted().toList()) {
-                attached.addAll(attachedIn(source, ownExceptions));
+                attached.addAll(attachmentsIn(
+                        Files.readString(source, StandardCharsets.UTF_8),
+                        source.getFileName().toString()));
             }
         }
         return attached;
     }
 
-    private static List<String> attachedIn(final Path source, final List<String> ownExceptions)
-            throws IOException {
-        final String text = Files.readString(source, StandardCharsets.UTF_8);
-        final Map<String, String> caught = new LinkedHashMap<>();
-        final java.util.regex.Matcher clauses = java.util.regex.Pattern
-                .compile("catch\\s*\\(\\s*(?:final\\s+)?([\\w.| ]+?)\\s+(\\w+)\\s*\\)").matcher(text);
-        while (clauses.find()) {
-            caught.put(clauses.group(2), clauses.group(1).trim());
-        }
+    /**
+     * The same sweep over one source, so the scan itself can be put in front of a case.
+     *
+     * <p>A scan is a claim about every line in the repository, and a claim that large is worth
+     * nothing if the scan quietly stops matching: this is how a suite hands it source it wrote and
+     * asserts what it finds, including the two shapes that defeated the first version of it.
+     *
+     * @param source   the source text
+     * @param fileName what to call it in an entry
+     * @return one entry per offending statement in it
+     */
+    public static List<String> attachmentsIn(final String source, final String fileName) {
+        final List<CatchBlock> catches = catchBlocksIn(source);
         final List<String> attached = new ArrayList<>();
         for (final String call : List.of("LOG.error(", "LOG.warn(")) {
-            int at = text.indexOf(call);
+            int at = source.indexOf(call);
             while (at >= 0) {
-                final String last = lastArgumentOf(text, at + call.length());
-                final String type = caught.get(last);
-                if (type != null && ownExceptions.stream().noneMatch(type::contains)) {
-                    attached.add(source.getFileName() + ":"
-                            + text.substring(0, at).split("\\n", -1).length + " catches " + type);
+                final String last = lastArgumentOf(source, at + call.length());
+                final CatchBlock enclosing = innermostAround(catches, at);
+                if (enclosing != null && last.equals(nameOf(source, enclosing))) {
+                    final List<String> types = typesOf(source, enclosing);
+                    if (!types.stream().allMatch(LogStatement::cannotCarryACause)) {
+                        attached.add(fileName + ":" + lineOf(source, at)
+                                + " catches " + String.join(" | ", types));
+                    }
                 }
-                at = text.indexOf(call, at + 1);
+                at = source.indexOf(call, at + 1);
             }
         }
         return attached;
+    }
+
+    /**
+     * Whether a caught type can be attached: only where no constructor of it takes a cause.
+     *
+     * <p>An unresolvable name is treated as attachable-not: a sweep that fell silent on a type it
+     * could not load would be answering the wrong question quietly, which is the failure this
+     * whole scan exists to make impossible.
+     *
+     * @param simpleName the type as the catch clause spells it
+     * @return true where nothing of anybody else's can be underneath it
+     */
+    private static boolean cannotCarryACause(final String simpleName) {
+        final String bare = simpleName.substring(simpleName.lastIndexOf('.') + 1);
+        boolean attachable = false;
+        for (final String namespace : OWN_PACKAGES) {
+            final java.util.Optional<Class<?>> type = loaded(namespace + bare);
+            if (type.isPresent()) {
+                attachable = java.util.Arrays.stream(type.orElseThrow().getConstructors())
+                        .flatMap(one -> java.util.Arrays.stream(one.getParameterTypes()))
+                        .noneMatch(Throwable.class::isAssignableFrom);
+                break;
+            }
+        }
+        return attachable;
+    }
+
+    /**
+     * The class of that name, where this service declares one.
+     *
+     * @param name the fully qualified name to try
+     * @return the class, or empty where this service declares no such type
+     */
+    private static java.util.Optional<Class<?>> loaded(final String name) {
+        java.util.Optional<Class<?>> type;
+        try {
+            type = java.util.Optional.of(Class.forName(name));
+        } catch (ClassNotFoundException notThisPackage) {
+            type = java.util.Optional.empty();
+        }
+        return type;
+    }
+
+    /** Every {@code catch} block in a source, outermost first. */
+    private static List<CatchBlock> catchBlocksIn(final String source) {
+        final List<CatchBlock> blocks = new ArrayList<>();
+        final java.util.regex.Matcher clauses = java.util.regex.Pattern
+                .compile("catch\\s*\\(([^)]*)\\)\\s*\\{").matcher(source);
+        while (clauses.find()) {
+            int depth = 0;
+            int at = clauses.end() - 1;
+            while (at < source.length()) {
+                if (source.charAt(at) == BLOCK_OPENS) {
+                    depth++;
+                } else if (source.charAt(at) == BLOCK_CLOSES) {
+                    depth--;
+                    if (depth == 0) {
+                        break;
+                    }
+                }
+                at++;
+            }
+            blocks.add(new CatchBlock(clauses.start(), at, clauses.end()));
+        }
+        return blocks;
+    }
+
+    private static CatchBlock innermostAround(final List<CatchBlock> blocks, final int at) {
+        return blocks.stream()
+                .filter(block -> block.from() < at && at < block.to())
+                .reduce((outer, inner) -> inner)
+                .orElse(null);
+    }
+
+    /**
+     * One {@code catch} block's extent: where the clause starts, where the body ends, and where
+     * the clause itself ends so the declaration can be read back off it.
+     *
+     * @param from       the index of the {@code catch} keyword
+     * @param to         the index of the closing brace of its body
+     * @param clauseEnds the index just past the opening brace of its body
+     */
+    private record CatchBlock(int from, int to, int clauseEnds) {
+    }
+
+    /** The name a catch binds, read off its own clause. */
+    private static String nameOf(final String source, final CatchBlock block) {
+        final String clause = source.substring(block.from(), block.clauseEnds());
+        final String inside = clause.substring(clause.indexOf('(') + 1, clause.lastIndexOf(')'));
+        return inside.strip().substring(inside.strip().lastIndexOf(' ') + 1);
+    }
+
+    /** Every type a catch declares, a multi-catch giving more than one. */
+    private static List<String> typesOf(final String source, final CatchBlock block) {
+        final String clause = source.substring(block.from(), block.clauseEnds());
+        final String inside = clause.substring(clause.indexOf('(') + 1, clause.lastIndexOf(')'))
+                .replace("final ", "").strip();
+        final String declared = inside.substring(0, inside.lastIndexOf(' ')).strip();
+        return java.util.Arrays.stream(declared.split("\\|")).map(String::strip).toList();
+    }
+
+    private static int lineOf(final String source, final int at) {
+        return source.substring(0, at).split("\\n", -1).length;
     }
 
     /**

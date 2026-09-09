@@ -148,10 +148,12 @@ public class NotificationNotifyClient implements RegisterNotifier {
             // status, because an invented one would say an attempt was answered when nothing
             // answered.
             //
-            // The exception travels with the line rather than only its type. What the run acts on is
-            // the classification; what a human acts on is what it *was*. It is safe to keep: a
-            // transport exception is raised instead of a response, so it names the endpoint and the
-            // socket error - and the endpoint carries the notification id, never the address.
+            // Only the exception's type travels with the line. What the run acts on is the
+            // classification; what a human acts on is what it *was*, and the class carries that
+            // much. The message does not go with it: the message belongs to whatever raised it,
+            // and a line carries this service's own words (Principle VII). The claim is made by
+            // construction, so this cannot quietly go back - see the sweep in
+            // TelemetryPrivacyTest.
             LOG.warn("The send-email-notification command reached no verdict, so whether the e-mail "
                     + "was asked for is unknown. notificationId={} batchId={} cause={}",
                     notification.notificationId(), notification.batchId(),
