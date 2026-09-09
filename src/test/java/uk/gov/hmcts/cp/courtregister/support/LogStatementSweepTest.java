@@ -165,6 +165,67 @@ class LogStatementSweepTest {
         }
 
         @Test
+        void an_attachment_at_info_should_be_reported_like_any_other() {
+            assertThat(LogStatement.attachmentsIn("""
+                    class Somewhere {
+                        void run() {
+                            try {
+                                call();
+                            } catch (RuntimeException failed) {
+                                LOG.info("it did not work. cause={}", failed.getClass(), failed);
+                            }
+                        }
+                    }
+                    """, FILE))
+                    .as("the privacy rule is written about INFO and above, so a sweep reading only "
+                            + "the two levels above it leaves the level the rule names uncovered")
+                    .containsExactly("Somewhere.java:6 catches RuntimeException");
+        }
+
+        @Test
+        void a_catch_written_in_a_comment_should_not_become_the_enclosing_block() {
+            assertThat(LogStatement.attachmentsIn("""
+                    class Somewhere {
+                        void run() {
+                            try {
+                                call();
+                            } catch (RuntimeException failed) {
+                                // catch (GenerationFailedException failed) {
+                                LOG.warn("it did not work. cause={}", failed.getClass(), failed);
+                            }
+                        }
+                    }
+                    """, FILE))
+                    .as("a catch-shaped comment inside a real one would be the innermost block a "
+                            + "scan that read comments could find, so the statement would be "
+                            + "reported under the commented type or not at all")
+                    .containsExactly("Somewhere.java:7 catches RuntimeException");
+        }
+
+        @Test
+        void a_text_block_holding_quotes_and_braces_should_not_end_the_catch() {
+            assertThat(LogStatement.attachmentsIn("""
+                    class Somewhere {
+                        void run() {
+                            try {
+                                call();
+                            } catch (RuntimeException failed) {
+                                send(\"\"\"
+                                        a payload may carry a lone " and then a }
+                                        \"\"\");
+                                LOG.warn("it did not work. cause={}", failed.getClass(), failed);
+                            }
+                        }
+                    }
+                    """, FILE))
+                    .as("a text block's content is ordinary source to a lexer that knows only "
+                            + "single quotes: the lone quote inside it closes a string that was "
+                            + "never open, and the brace after it then counts as code and closes "
+                            + "the catch before the statement below")
+                    .containsExactly("Somewhere.java:9 catches RuntimeException");
+        }
+
+        @Test
         void a_statement_outside_any_catch_should_not_be_read_as_attaching_anything() {
             assertThat(LogStatement.attachmentsIn("""
                     class Somewhere {
