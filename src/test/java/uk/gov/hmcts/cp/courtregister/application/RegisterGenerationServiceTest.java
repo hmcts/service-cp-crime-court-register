@@ -819,6 +819,39 @@ class RegisterGenerationServiceTest {
             }
         }
 
+        /**
+         * The guard before an attempt, on the pass where attempts have been made.
+         *
+         * <p>The case the two above cannot make between them, and the one that says the number is
+         * arithmetic rather than a constant: this batch was asked for once, the back-off after that
+         * attempt fitted and was taken, and the attempt the next pass would have made did not fit.
+         * One attempt has been made and one is reported. A line that answered nought here would be
+         * as wrong as one that answered two, and the same guard writes both.
+         */
+        @Test
+        void a_budget_spent_between_attempts_should_say_only_the_attempts_that_were_made() {
+            doThrow(transientFailure()).when(renderer).requestRender(any(), any());
+            // Room for the first attempt and the wait after it, and none for the second attempt:
+            // the pause moves the clock by the back-off the shared policy names.
+            final Deadline roomForTheWaitAndNoMore =
+                    Deadline.startingAt(NOW, INITIAL_BACKOFF.plusMillis(10));
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationService.class)) {
+                request(batch(), roomForTheWaitAndNoMore);
+
+                verify(renderer, times(1)).requestRender(any(), any());
+                softly.assertThat(pause.waits)
+                        .as("the wait after the first attempt was taken, which is what leaves the "
+                                + "budget too small for the attempt that would have followed it")
+                        .containsExactly(INITIAL_BACKOFF);
+                softly.assertThat(atOrAbove(log, Level.ERROR))
+                        .as("one attempt was made and the second was never started, so the line "
+                                + "reports the one that happened: the count is the attempts "
+                                + "behind this pass and not the pass number")
+                        .containsExactly(theDeadlineGaveUpAfter(1));
+            }
+        }
+
         @Test
         void a_request_that_left_before_the_budget_ran_out_should_say_one_attempt_was_made() {
             doThrow(transientFailure()).when(renderer).requestRender(any(), any());
