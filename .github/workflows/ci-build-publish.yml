@@ -89,7 +89,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: 'temurin'
           java-version: '25'
@@ -129,7 +129,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: 'temurin'
           java-version: '25'
@@ -201,7 +201,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: 'temurin'
           java-version: '25'
@@ -222,7 +222,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: 'temurin'
           java-version: '25'
@@ -273,7 +273,7 @@ jobs:
           path: build/libs
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       - name: Log in to GitHub Packages
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -290,8 +290,17 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository }}:${{ needs.Artefact-Version.outputs.artefact_version }}
+          # Stands in for the base ADO actually deploys from,
+          # crmdvrepo01.azurecr.io/hmcts/apm-services:25-jre, which is Ubuntu 24.04 and a JRE.
+          # That registry is private (RFC1918), so a GitHub-hosted runner cannot pull it and this
+          # job has to build on the public equivalent. Matching its OS release and its JRE-ness is
+          # what makes the Trivy scan below say anything about the artefact that ships: the tag
+          # this used to pin was a JDK on Ubuntu 26.04, whose base layer carries a pebble binary
+          # that nothing we deploy contains, so the scan reported findings against an image no
+          # environment ever runs. What it still cannot reproduce is the ACR image's patch level.
+          # Pinned to the multi-arch index digest, not a platform-specific one.
           build-args: |
-            BASE_IMAGE=eclipse-temurin:25@sha256:201fbb8886b2d273218aa3a192f0afbf7b5ff65ee8cc6ef47f5dce2171f013ea
+            BASE_IMAGE=eclipse-temurin:25-jre-noble@sha256:b4c93a50fc67612798db73d68ca3b0ee4ebdd51736e59cca370e689b9797037e
             JAR_FILENAME=${{ needs.Build.outputs.artefact_name }}.jar
 
       - name: Run Trivy vulnerability scan
@@ -299,7 +308,17 @@ jobs:
         with:
           image-ref: ghcr.io/${{ github.repository }}:${{ needs.Artefact-Version.outputs.artefact_version }}
           format: 'table'
-          exit-code: '0'
+          # A finding fails the job. It was '0' -- report-only -- inherited from the
+          # informant-register scaffold, where it had been set that way pending a Spring Boot CVE
+          # fix that has long since shipped. It stayed at '0' here for a second reason: the job
+          # built on a JDK on Ubuntu 26.04, whose base layer carries a pebble binary with 14
+          # fixable HIGH advisories that nothing we deploy contains, so a gate would have blocked
+          # every push on a finding against an image no environment runs. Now that the build uses
+          # a base matching the deployed one, the scan is answerable and can be enforced:
+          # verified at 0 fixable HIGH/CRITICAL in the base image and 0 in the shipped
+          # dependencies. ignore-unfixed stays on, so an advisory with no available fix reports
+          # without blocking a release nobody could unblock.
+          exit-code: '1'
           ignore-unfixed: true
           severity: 'HIGH,CRITICAL'
 
