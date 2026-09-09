@@ -75,20 +75,23 @@ public record LogStatement(String loggerName, String pattern, String where) {
 
     private static final char TAB_ESCAPE = 't';
 
-    /**
-     * The levels this sweep reads, which is every level Principle VII governs.
-     *
-     * <p>INFO is in the list and was not: the principle is written about INFO and above, so a
-     * statement that attached at INFO passed a sweep reading only the two above it. DEBUG and
-     * TRACE are deliberately out, being the levels the principle allows a cause to be written at
-     * and the levels two statements deliberately use for exactly that.
-     */
-    private static final List<String> ATTACHABLE_LEVELS =
-            List.of("LOG.error(", "LOG.warn(", "LOG.info(");
 
     /** The five calls this repository writes a line with. */
     private static final List<String> CALLS =
             List.of("LOG.error(", "LOG.warn(", "LOG.info(", "LOG.debug(", "LOG.trace(");
+
+    /**
+     * The levels this sweep reads, which is all of them.
+     *
+     * <p>The list has been wrong twice by being short. It read WARN and ERROR while Principle VII
+     * governs INFO and above, and then INFO, WARN and ERROR on the reasoning that DEBUG is where
+     * the principle allows a cause. It does not: what DEBUG permits is a payload dump "behind
+     * {@code DEBUG} <strong>and</strong> an explicit local-only profile guard", and secrets,
+     * connection strings and tokens "MUST NOT appear anywhere in output" - no level named, because
+     * no level is exempt. A library's exception message can carry any of those, so the level it is
+     * attached at does not decide the question and the sweep no longer asks.
+     */
+    private static final List<String> ATTACHABLE_LEVELS = CALLS;
 
     /**
      * What the suite matches a captured event against: the logger and the pattern it wrote.

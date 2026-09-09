@@ -226,6 +226,43 @@ class LogStatementSweepTest {
         }
 
         @Test
+        void a_throwable_reached_through_a_cast_should_still_be_reported() {
+            assertThat(LogStatement.attachmentsIn("""
+                    class Somewhere {
+                        void run() {
+                            try {
+                                call();
+                            } catch (RuntimeException failed) {
+                                LOG.warn("it did not work.", (Throwable) failed);
+                            }
+                        }
+                    }
+                    """, FILE))
+                    .as("a scan that compares the last argument to the caught name character for "
+                            + "character is defeated by anything written around it, and a cast is "
+                            + "the shortest thing there is")
+                    .containsExactly("Somewhere.java:6 catches RuntimeException");
+        }
+
+        @Test
+        void an_attachment_at_debug_should_be_reported_like_any_other() {
+            assertThat(LogStatement.attachmentsIn("""
+                    class Somewhere {
+                        void run() {
+                            try {
+                                call();
+                            } catch (DataAccessException unreachable) {
+                                LOG.debug("the store did not answer.", unreachable);
+                            }
+                        }
+                    }
+                    """, FILE))
+                    .as("a driver's exception carries SQL and a connection string, and the "
+                            + "constitution puts those outside every level rather than above one")
+                    .containsExactly("Somewhere.java:6 catches DataAccessException");
+        }
+
+        @Test
         void a_statement_outside_any_catch_should_not_be_read_as_attaching_anything() {
             assertThat(LogStatement.attachmentsIn("""
                     class Somewhere {
