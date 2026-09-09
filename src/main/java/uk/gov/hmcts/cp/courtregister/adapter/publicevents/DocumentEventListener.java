@@ -185,9 +185,16 @@ public class DocumentEventListener {
             eventName = message.getStringProperty(EVENT_NAME_PROPERTY);
             body = message.getText();
         } catch (final JMSException unreadable) {
+            // The drop and what refused it, never the broker's own words. A JMSException's message
+            // is the provider's text, and a provider explaining a body it could not decode or a
+            // property it could not convert has both in hand and may quote either - so it is
+            // another context's unvalidated value of unknown shape, exactly what Principle VII
+            // keeps out of a log index, and it is named by class for the reason the readers below
+            // name theirs. There is nothing else to write: a message that would not come off the
+            // subscription named no event, no batch and no payload.
             LOG.warn("A public event could not be read off the subscription, so it is acknowledged "
                     + "and dropped: a message the broker cannot hand over will not read any better "
-                    + "on the redelivery.", unreadable);
+                    + "on the redelivery. cause={}", unreadable.getClass().getName());
             return;
         }
         if (!DOCUMENT_AVAILABLE.equals(eventName) && !GENERATION_FAILED.equals(eventName)) {
