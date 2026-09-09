@@ -888,8 +888,10 @@ class DocumentOutcomeSinkTest {
          * <p>{@code requested_at} is the store's own {@code now()} and {@code generated_at} is
          * systemdocgenerator's account of when it rendered, so a generator whose clock is behind
          * this service's database puts the outcome before the request. That is a clock to fix
-         * rather than a latency to alert on, and Micrometer would drop the negative silently one
-         * layer down - so it is refused here, where the refusal can be read.
+         * rather than a latency to alert on, and handing it on is worse than dropping it:
+         * Micrometer refuses a negative measurement by raising and logging one, so the estate's log
+         * index would carry a stack trace about a clock and the series would stand with a count
+         * that does not match the renders behind it.
          */
         @Test
         void two_clocks_disagreeing_should_not_be_timed_as_a_round_trip() {

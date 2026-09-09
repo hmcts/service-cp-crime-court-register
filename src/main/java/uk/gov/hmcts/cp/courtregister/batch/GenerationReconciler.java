@@ -66,6 +66,13 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * reconciliation is a subscription to investigate, and the {@code reconciled} metric and the run
  * report are where that shows.
  *
+ * <p><strong>Two of the three endings this class produces are timed by the sink and the third by
+ * this class.</strong> {@code courtregister_generation_latency} is the render request to the batch's
+ * outcome "however the outcome arrived", so a fetched answer is timed where every other answer is,
+ * inside the sink. The silence is not an answer and does not go there, so the reading for a batch
+ * given up on is taken here - off the same two columns, by the same rule - and a series that had
+ * left the timeouts out would have described only the renders that came back.
+ *
  * <p><strong>It has a schedule of its own, and not the flag gate's.</strong> Reconciliation is about
  * batches this service already owns; whether it may generate tonight is a different question with a
  * different answer, and hanging the net off the nightly run costs a night in both directions. Called
@@ -413,6 +420,15 @@ public class GenerationReconciler {
      * render nobody answered for and not an answer anybody gave, with no words from
      * systemdocgenerator because it said none.
      *
+     * <p>The round trip is timed here for the same reason the ending is written here: this is the
+     * one outcome of a batch's render that does not pass through the sink, so it is the one the
+     * sink cannot time. What is timed is the same thing and by the same rule -
+     * {@link RegisterBatch#generationRoundTrip()} over the row this call has just settled - so a
+     * batch given up on after twenty-five minutes reads on the same series as one the renderer
+     * answered about in ninety seconds, which is the comparison the series exists to make. A stale
+     * PENDING batch has no {@code requested_at} and so no round trip, and the rule answers that
+     * rather than this method deciding it.
+     *
      * @param batch  the overdue batch neither the topic nor the query API has an outcome for
      * @param ending the bounded reason and attribution its own read decided on
      * @return {@code true}, because a batch given up on is a completion this run made rather than
@@ -423,6 +439,9 @@ public class GenerationReconciler {
                 + "for it, so it is failed {} rather than left waiting.", batch.batchId(),
                 ending.reason());
         store.markFailed(batch.batchId(), ending.reason(), null, ending.completedBy());
+        batches.findById(batch.batchId())
+                .flatMap(RegisterBatch::generationRoundTrip)
+                .ifPresent(metrics::generationLatency);
         return true;
     }
 

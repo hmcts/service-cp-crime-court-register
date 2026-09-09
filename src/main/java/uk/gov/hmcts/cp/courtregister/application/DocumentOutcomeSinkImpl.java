@@ -66,6 +66,14 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * the batch. What this class does with the same question beforehand is keep the ordinary duplicate -
  * the one a durable subscription is for - from being reported as a refusal every night.
  *
+ * <p><strong>And the mark is where the render's round trip is timed.</strong>
+ * {@code courtregister_generation_latency} is declared as the time from the render request to the
+ * batch's outcome "however the outcome arrived", which is this class's whole subject: one code path
+ * for the two mechanisms means one place the reading is taken, so a night whose outcomes all came
+ * from the reconciler reads on the same series as a night the topic served. Both instants come off
+ * the row - {@code requested_at} and whichever outcome stamp the mark wrote - because the pod that
+ * asked for the render is not always this one.
+ *
  * <p><strong>Notification follows generation here, on the thread that learned of it.</strong> A
  * document that exists and has been sent to nobody is the state defect fix P1 is about, and the
  * moment the batch has one is the moment its Youth Offending Teams can be told; so the GENERATED
@@ -225,12 +233,41 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
                     + "again is recognised rather than re-stamped.", batch.batchId(), outcome);
         } else if (batch.status().canTransitionTo(outcome)) {
             mark.accept(batch);
+            timeTheRoundTrip(batch.batchId());
         } else {
             LOG.warn("Batch {} stands at {} and an outcome arrived that would move it to {}, which "
                     + "the state machine does not draw; the batch is left where it is and the "
                     + "outcome is reported here rather than applied.",
                     batch.batchId(), batch.status(), outcome);
         }
+    }
+
+    /**
+     * Times how long the render this outcome answers took, off the row it has just settled.
+     *
+     * <p>After the mark and never before it, which is what makes the reading the outcomes this
+     * service actually applied: {@code JdbcRegisterStore} refuses a move the batch has already made
+     * by throwing, so a compare-and-set that lost a race never reaches here and one render is timed
+     * once however many mechanisms announce it.
+     *
+     * <p>The row is read back rather than assembled from what arrived, because the two instants the
+     * reading is made of are columns and only one of them was ever in this method's hands:
+     * {@code failed_at} is stamped by the statement that fails the batch, not by the renderer's
+     * account of when it gave up. {@link RegisterBatch#generationRoundTrip()} is the whole of the
+     * rule - which instants, and when there is no reading to take - so the reconciler's own ending,
+     * which settles through the store rather than through here, states the same one.
+     *
+     * <p>A batch the read no longer finds, or one whose row carries no round trip, moves the timer
+     * nowhere. Nothing is reported about either: a settled batch that cannot be read back a moment
+     * later is what {@code SETTLEMENT_ROW_ABSENT} is for on the notifying side, and it is not this
+     * method's to claim on the strength of a telemetry read.
+     *
+     * @param batchId the batch whose outcome has just been written
+     */
+    private void timeTheRoundTrip(final UUID batchId) {
+        batches.findById(batchId)
+                .flatMap(RegisterBatch::generationRoundTrip)
+                .ifPresent(metrics::generationLatency);
     }
 
     /**

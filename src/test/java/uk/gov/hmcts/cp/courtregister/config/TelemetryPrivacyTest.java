@@ -880,14 +880,14 @@ class TelemetryPrivacyTest {
          * off {@link GenerationMetrics}, and a meter declared later is inside the claim above from
          * the moment its name is.
          *
-         * <p><strong>One declared meter has no series, and it is named rather than
-         * exempted.</strong> {@code courtregister_generation_latency} is a timer no production
-         * code records: nothing
-         * calls {@code GenerationMetrics.generationLatency}, so no arrangement of this leg can put
-         * a reading on it. That is an alerting surface that never fires rather than anything about
-         * privacy - it carries no label either way - and it is asserted as the fact it is, so that
-         * whoever wires the timer up is told by this test to fold it into the drive rather than
-         * leaving its labels unswept.
+         * <p><strong>The one meter that used to be exempted no longer is.</strong>
+         * {@code courtregister_generation_latency} was a timer no production code recorded, so no
+         * arrangement of this leg could put a reading on it, and this case named it as the single
+         * unmoved meter so that whoever wired the timer up would be told to fold it into the drive.
+         * It is wired now: the outcome sink times a render's round trip off the row it has just
+         * settled, and the reconciler times the one ending that does not pass through the sink. So
+         * the exception is gone and the claim is the plain one - the drive moves every meter
+         * {@link GenerationMetrics} declares, and the label sweep above passes over all of them.
          */
         @Test
         @DisplayName("[A] and the drive above moved every meter the downstream half can publish")
@@ -904,7 +904,7 @@ class TelemetryPrivacyTest {
                             .toList())
                     .as("a meter the drive never moved is a series whose labels nothing above "
                             + "swept; each one needs a case in GenerationLegs.driveEverything")
-                    .containsExactly(GenerationMetrics.GENERATION_LATENCY);
+                    .isEmpty();
         }
 
         @Test

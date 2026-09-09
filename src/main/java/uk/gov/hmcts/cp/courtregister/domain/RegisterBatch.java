@@ -140,11 +140,52 @@ public record RegisterBatch(
      * How long this batch's render took, from the request systemdocgenerator accepted to the
      * outcome it was answered with.
      *
-     * @return the round trip, or empty where either end is missing
+     * <p>The reading behind {@code courtregister_generation_latency}, and it is derived from the row
+     * rather than timed in memory for one reason: the pod that asked for a render is not always the
+     * pod the topic delivers the outcome to. A duration measured from a field held since the request
+     * would be absent on the pod that hears the answer, available only where one pod happened to do
+     * both, and silently wrong across a restart. Both instants are columns of this row, so any pod
+     * that can read the batch can state the reading, and two pods reading it state the same one.
+     *
+     * <p><strong>Both ends, or no reading at all.</strong> {@code requested_at} is written by the
+     * mark that records the 202, so a batch whose render was never accepted has no start - which is
+     * every batch the requesting leg fails on its own account, and the stale PENDING batch the
+     * reconciler ends RENDER_REQUEST_FAILED. {@code generated_at} and {@code failed_at} are the two
+     * ends a render can reach, and a batch still waiting for one has no end. Neither absence is a
+     * nought to record: a timer told nought would say the round trip was instant, which is the
+     * reading a fast renderer produces.
+     *
+     * <p><strong>And a negative reading is two clocks disagreeing rather than a round trip.</strong>
+     * {@code requested_at} is the store's own {@code now()} and {@code generated_at} is
+     * systemdocgenerator's account of when it rendered, so a generator running behind this service's
+     * database can put the outcome before the request. That is a clock to fix, not a latency to
+     * alert on, and it is answered as no reading here rather than handed on. Measured: Micrometer
+     * refuses a negative measurement itself, but it refuses it by raising and logging - "'amount'
+     * should not be negative but was: -42000000000", with an
+     * {@code IllegalArgumentException: Timer measurements cannot be negative} attached - so passing
+     * one on would put a stack trace in the estate's log index for a clock skew and leave a series
+     * standing whose count does not match the renders behind it.
+     *
+     * @return the round trip, or empty where either end is missing or the two disagree about order
      */
     public Optional<Duration> generationRoundTrip() {
-        throw new UnsupportedOperationException(
-                "the render round trip is derived from requested_at and this batch's own outcome "
-                        + "stamp; the gate finding names the implementation");
+        return Optional.ofNullable(requestedAt)
+                .flatMap(from -> Optional.ofNullable(renderingOutcomeAt())
+                        .map(to -> Duration.between(from, to)))
+                .filter(roundTrip -> !roundTrip.isNegative());
+    }
+
+    /**
+     * The instant this batch's render was answered, whichever answer it got.
+     *
+     * <p>The document first, because a batch that has one has moved past every failure the state
+     * machine admits and {@code generated_at} is the end of its render. {@code failed_at} is the end
+     * of a batch that got no document at all, whether systemdocgenerator refused it or nobody ever
+     * answered for it.
+     *
+     * @return {@code generated_at}, then {@code failed_at}, or {@code null} while neither stands
+     */
+    private Instant renderingOutcomeAt() {
+        return generatedAt != null ? generatedAt : failedAt;
     }
 }

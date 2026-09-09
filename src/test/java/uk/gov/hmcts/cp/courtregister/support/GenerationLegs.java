@@ -48,6 +48,7 @@ import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.AssembledBatch;
 import uk.gov.hmcts.cp.courtregister.domain.BatchAssembly;
+import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.CourtCentreDay;
@@ -539,6 +540,7 @@ public final class GenerationLegs implements AutoCloseable {
         anOutcomeAboutAnotherPayload();
         anOutcomeThatArrivedTwice();
         anOutcomeTheStateMachineDoesNotDraw();
+        anOutcomeThatClosesTheRoundTrip();
     }
 
     private void anOutcomeForABatchNothingHolds() {
@@ -562,6 +564,27 @@ public final class GenerationLegs implements AutoCloseable {
 
     private void anOutcomeTheStateMachineDoesNotDraw() {
         holding(batch(BatchStatus.NOTIFIED, PAYLOAD_FILE_ID, DOCUMENT_FILE_ID));
+        whateverItAnswers(() -> sink.generationFailed(BATCH_ID, PAYLOAD_FILE_ID,
+                PersonalDataMarkers.GENERATOR_REASON, AT, CompletedBy.EVENT));
+    }
+
+    /**
+     * The outcome that settles a batch, which is the one that closes a render's round trip.
+     *
+     * <p>Here so that {@code courtregister_generation_latency} has a series for the label sweep to
+     * pass over: every other arrangement in this group is an outcome that moves nothing, and a
+     * timer nothing recorded is a timer whose labels nothing swept. A refusal rather than a
+     * document, because a document hands the batch on to the notifying leg and that leg has its own
+     * group below; what is wanted here is the mark and the reading, and nothing after them.
+     *
+     * <p>The row is answered twice over because the sink reads it twice: GENERATING to decide what
+     * the outcome means, and then back again for the two instants the reading is made of.
+     */
+    private void anOutcomeThatClosesTheRoundTrip() {
+        reset(batches, store);
+        when(batches.findById(BATCH_ID))
+                .thenReturn(Optional.of(batch(BatchStatus.GENERATING, PAYLOAD_FILE_ID, null)))
+                .thenReturn(Optional.of(refused()));
         whateverItAnswers(() -> sink.generationFailed(BATCH_ID, PAYLOAD_FILE_ID,
                 PersonalDataMarkers.GENERATOR_REASON, AT, CompletedBy.EVENT));
     }
@@ -869,6 +892,21 @@ public final class GenerationLegs implements AutoCloseable {
         return new RegisterBatch(BATCH_ID, COURT_CENTRE, OU_CODE, COURT_HOUSE, REGISTER_DATE,
                 FILE_NAME, payloadFileId, documentFileId, status, null, null, true, null, AT, AT,
                 null, null, null, 1, null, 0);
+    }
+
+    /**
+     * The row a refusal leaves behind: requested, and stamped as failed a minute and a half later.
+     *
+     * <p>The only arrangement in this class that carries an outcome stamp, because it is the only
+     * one whose reading is a round trip rather than a state.
+     *
+     * @return the batch as the read after the mark answers it
+     */
+    private static RegisterBatch refused() {
+        return new RegisterBatch(BATCH_ID, COURT_CENTRE, OU_CODE, COURT_HOUSE, REGISTER_DATE,
+                FILE_NAME, PAYLOAD_FILE_ID, null, BatchStatus.FAILED,
+                BatchFailureReason.GENERATION_FAILED, PersonalDataMarkers.GENERATOR_REASON, true,
+                CompletedBy.EVENT, AT, AT, null, null, AT.plusSeconds(90), 1, null, 0);
     }
 
     /** One recorded register addressed to the given teams, about a child made of markers. */
