@@ -274,7 +274,10 @@ public class RegisterGenerationService {
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             if (!retryPolicy.attemptFitsBefore(clock.instant(), deadline.expiresAt())) {
-                return overran(batch, attempt, sent);
+                // The attempt this pass would have made has not been made, so what is reported is
+                // the ones before it: none at all where the batch arrived with too little budget
+                // left for a single attempt.
+                return overran(batch, attempt - 1, sent);
             }
             try {
                 if (!sent) {
@@ -370,6 +373,12 @@ public class RegisterGenerationService {
      * <p>It says how many attempts had been made, and the outcome says whether any of them was: a
      * run that reached this batch with less budget left than one attempt costs at worst has asked
      * systemdocgenerator nothing, and a run that ran out between attempts has asked it already.
+     *
+     * <p><strong>Made, and never about to be made.</strong> The number is completed attempts, so
+     * the guard before the first call reports none and the guard between two calls reports the one
+     * that was answered. The wording is identical on both nights and this is the only thing on the
+     * line that tells them apart - short of night, or a renderer slow to answer - so a number one
+     * too high sends the reader to the wrong service.
      *
      * @param batch    the batch that was not asked for
      * @param attempts how many attempts had been made when the budget ran out
