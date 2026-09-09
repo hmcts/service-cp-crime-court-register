@@ -70,7 +70,21 @@ public record LogStatement(String loggerName, String pattern, String where) {
     /** The quote a character literal is written in, named so an {@code if} carries no literal. */
     private static final char CHARACTER_QUOTE = '\'';
 
+    /** How many characters a text block's delimiter takes. */
+    private static final int TEXT_BLOCK_DELIMITER = 3;
+
     private static final char TAB_ESCAPE = 't';
+
+    /**
+     * The levels this sweep reads, which is every level Principle VII governs.
+     *
+     * <p>INFO is in the list and was not: the principle is written about INFO and above, so a
+     * statement that attached at INFO passed a sweep reading only the two above it. DEBUG and
+     * TRACE are deliberately out, being the levels the principle allows a cause to be written at
+     * and the levels two statements deliberately use for exactly that.
+     */
+    private static final List<String> ATTACHABLE_LEVELS =
+            List.of("LOG.error(", "LOG.warn(", "LOG.info(");
 
     /** The five calls this repository writes a line with. */
     private static final List<String> CALLS =
@@ -163,11 +177,16 @@ public record LogStatement(String loggerName, String pattern, String where) {
      * @return one entry per offending statement in it
      */
     public static List<String> attachmentsIn(final String source, final String fileName) {
-        final List<CatchBlock> catches = catchBlocksIn(source);
+        final boolean[] codeAt = codePositionsIn(source);
+        final List<CatchBlock> catches = catchBlocksIn(codeAt, source);
         final List<String> attached = new ArrayList<>();
-        for (final String call : List.of("LOG.error(", "LOG.warn(")) {
+        for (final String call : ATTACHABLE_LEVELS) {
             int at = source.indexOf(call);
             while (at >= 0) {
+                if (!codeAt[at]) {
+                    at = source.indexOf(call, at + 1);
+                    continue;
+                }
                 final String last = lastArgumentOf(source, at + call.length());
                 final CatchBlock enclosing = innermostAround(catches, at);
                 if (enclosing != null && last.equals(nameOf(source, enclosing))) {
@@ -181,12 +200,14 @@ public record LogStatement(String loggerName, String pattern, String where) {
     }
 
     /** Every {@code catch} block in a source, outermost first. */
-    private static List<CatchBlock> catchBlocksIn(final String source) {
+    private static List<CatchBlock> catchBlocksIn(final boolean[] codeAt, final String source) {
         final List<CatchBlock> blocks = new ArrayList<>();
         final java.util.regex.Matcher clauses = java.util.regex.Pattern
                 .compile("catch\\s*\\(([^)]*)\\)\\s*\\{").matcher(source);
-        final boolean[] codeAt = codePositionsIn(source);
         while (clauses.find()) {
+            if (!codeAt[clauses.start()]) {
+                continue;
+            }
             int depth = 0;
             int at = clauses.end() - 1;
             while (at < source.length()) {
@@ -226,6 +247,7 @@ public record LogStatement(String loggerName, String pattern, String where) {
     private static boolean[] codePositionsIn(final String source) {
         final boolean[] codeAt = new boolean[source.length()];
         boolean inString = false;
+        boolean inTextBlock = false;
         boolean inChar = false;
         boolean inLineComment = false;
         boolean inBlockComment = false;
@@ -246,6 +268,11 @@ public record LogStatement(String loggerName, String pattern, String where) {
                 escaped = false;
             } else if ((inString || inChar) && character == ESCAPE) {
                 escaped = true;
+            } else if (inTextBlock) {
+                if (character == QUOTE && isTripleQuoteAt(source, at)) {
+                    inTextBlock = false;
+                    step = TEXT_BLOCK_DELIMITER;
+                }
             } else if (inString) {
                 inString = character != QUOTE;
             } else if (inChar) {
@@ -256,6 +283,9 @@ public record LogStatement(String loggerName, String pattern, String where) {
             } else if (character == '/' && next == '*') {
                 inBlockComment = true;
                 step = 2;
+            } else if (character == QUOTE && isTripleQuoteAt(source, at)) {
+                inTextBlock = true;
+                step = TEXT_BLOCK_DELIMITER;
             } else if (character == QUOTE) {
                 inString = true;
             } else if (character == CHARACTER_QUOTE) {
@@ -266,6 +296,23 @@ public record LogStatement(String loggerName, String pattern, String where) {
             at += step;
         }
         return codeAt;
+    }
+
+    /**
+     * Whether a text block's delimiter starts here.
+     *
+     * <p>A text block is the shape that defeated the first version of this lexer: its content is
+     * ordinary source to a scanner that only knows single quotes, so a JSON fragment inside one -
+     * {@code "end": "}"} is the case that found it - closed the string on its first quote and let
+     * every brace after it count. Reading the delimiter as one token puts the whole block in a
+     * state that ends only at the matching three.
+     *
+     * @param source the source text
+     * @param at     the index of the first quote
+     * @return true where three quotes start at that index
+     */
+    private static boolean isTripleQuoteAt(final String source, final int at) {
+        return source.startsWith("\"\"\"", at);
     }
 
     private static CatchBlock innermostAround(final List<CatchBlock> blocks, final int at) {
