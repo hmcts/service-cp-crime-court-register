@@ -94,10 +94,12 @@ import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
  * {@code PostgresTestSupport.refuseConnectionsTo}).
  *
  * <p>Two of the cases below are labelled <strong>[A]</strong>: they characterise behaviour the
- * service already had rather than driving new behaviour, so each records a passing run and each was
- * shown non-vacuous by a mutation quoted in its commit and reverted. They are the broker case that
- * holds readiness up for the whole of an outage and the file-service case that takes readiness down
- * during a run.
+ * service already had rather than driving new behaviour, so each records a passing run instead of a
+ * red one. They are the broker case that holds readiness up for the whole of an outage and the
+ * file-service case that takes readiness down during a run. Each is shown non-vacuous by a mutation
+ * of the readiness {@code include:} line, quoted on the case itself and in the commit that ran it,
+ * and reverted before that commit: the mutations were named when the cases landed and run later,
+ * which is why neither is quoted in the commit that introduced them.
  *
  * <p><strong>The third file-service case is not one of them</strong>, and it is why the fix beside
  * it exists. {@code should_keep_readiness_up_while_the_file_service_database_is_down_outside_a_run}
@@ -423,6 +425,16 @@ class ReadinessPolicyIT {
      * failed a probe during the outage" are different claims, and only the second is the one spec
      * FR-011 makes. The broker component is held DOWN for the whole window as part of the
      * condition, so the window cannot pass by the outage quietly ending.
+     *
+     * <p><strong>Non-vacuous by a reverted mutation.</strong> With {@code servicebus} added to the
+     * readiness {@code include:} line of {@code application.yaml} - the group the whole policy is
+     * about - this case fails, because readiness then follows the broker down and the awaited
+     * condition never holds: "org.awaitility.core.ConditionTimeoutException: Condition with Lambda
+     * expression in uk.gov.hmcts.cp.courtregister.e2e.ReadinessPolicyIT was not fulfilled within 2
+     * minutes.", thrown from the {@code during(OUTAGE)} wait. 8 tests completed, 3 failed: this
+     * case, the single-probe broker case beside it on "[a broker blip must never roll the pods]
+     * expected: UP but was: DOWN", and the membership case on {@code servicebus} being a key it did
+     * not expect. Mutation reverted.
      */
     @Test
     @DisplayName("[A] a broker outage fails no readiness probe at all, not merely the first")
@@ -514,6 +526,16 @@ class ReadinessPolicyIT {
      * host, the port and the database name - and the component reports the status rather than the
      * message (constitution Principle VII). {@code FileServiceRunHealthIndicatorTest} makes the same
      * claim over a probe that throws on demand; this one makes it with a real refusal behind it.
+     *
+     * <p><strong>Non-vacuous by a reverted mutation.</strong> With {@code fileServiceRun} dropped
+     * from the readiness {@code include:} line of {@code application.yaml}, so the component still
+     * decides correctly and readiness no longer listens, this case fails: readiness stays UP and
+     * the wait for DOWN runs out - "org.awaitility.core.ConditionTimeoutException:
+     * Condition with Lambda expression in uk.gov.hmcts.cp.courtregister.e2e.ReadinessPolicyIT was
+     * not fulfilled within 2 minutes." 8 tests completed, 4 failed: this case, the two cases that
+     * assert the group's three component names, and the case above, which reads the component off
+     * the group and found none at all - a {@code NullPointerException} on
+     * {@code fileServiceComponent()}. Mutation reverted.
      */
     @Test
     @DisplayName("[A] a run that cannot write its payload stops claiming the pod can do its one job")
