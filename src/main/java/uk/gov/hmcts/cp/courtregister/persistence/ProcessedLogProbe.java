@@ -54,7 +54,11 @@ public class ProcessedLogProbe {
             jdbcClient.sql(PROBE).query(Integer.class).single();
             reachable = true;
         } catch (DataAccessException unreachable) {
-            LOG.debug("The processed log did not answer the probe.", unreachable);
+            // The class and not the exception: a driver's message carries the statement it was
+            // running and the connection string it was running it on, and the constitution puts
+            // secrets and connection strings outside every level rather than above one.
+            LOG.debug("The processed log did not answer the probe. cause={}",
+                    unreachable.getClass().getName());
             reachable = false;
         }
         return reachable;

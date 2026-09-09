@@ -191,9 +191,14 @@ public class RegisterGenerationService {
             LOG.error("Batch {} could not be assembled into a payload, so it is failed {} and the "
                     + "run continues to the next batch. cause={}", batch.batchId(),
                     BatchFailureReason.ASSEMBLY_FAILED, notAssembled.getClass().getName());
-            // The failure in full, at the one level a register's own words are allowed to reach:
-            // what the mapper raised is about a document whose every defendant is a child.
-            LOG.debug("The assembly failure for batch {}, in full.", batch.batchId(), notAssembled);
+            // No dump of the failure, at any level. What the mapper raised is about a document
+            // whose every defendant is a child, and Principle VII puts a register fragment behind
+            // DEBUG *and* an explicit local-only profile guard - this statement had the first and
+            // never the second, so what it wrote was a fragment in a deployed log index. The
+            // bounded reason above is what a reader gets; reproducing the mapper's own words needs
+            // the payload, which is in the file service and is reached deliberately.
+            LOG.debug("The assembly failure for batch {} was {}.", batch.batchId(),
+                    notAssembled.getClass().getName());
             return Optional.empty();
         }
     }

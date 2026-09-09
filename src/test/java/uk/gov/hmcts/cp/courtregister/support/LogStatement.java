@@ -192,7 +192,7 @@ public record LogStatement(String loggerName, String pattern, String where) {
                 }
                 final String last = lastArgumentOf(source, at + call.length());
                 final CatchBlock enclosing = innermostAround(catches, at);
-                if (enclosing != null && last.equals(nameOf(source, enclosing))) {
+                if (enclosing != null && unwrapped(last).equals(nameOf(source, enclosing))) {
                     attached.add(fileName + ":" + lineOf(source, at)
                             + " catches " + String.join(" | ", typesOf(source, enclosing)));
                 }
@@ -299,6 +299,35 @@ public record LogStatement(String loggerName, String pattern, String where) {
             at += step;
         }
         return codeAt;
+    }
+
+    /**
+     * One argument with the casts and brackets written around it taken off.
+     *
+     * <p>The comparison this feeds used to be character for character against the caught name,
+     * which anything at all defeats: {@code (Throwable) failed} attaches the same object and reads
+     * as a different argument. Casts and redundant brackets are what a compiler ignores here, so
+     * they are what this takes off, repeatedly, until the argument is whatever was written at the
+     * centre of them.
+     *
+     * @param argument the argument as written
+     * @return the expression at the centre of it
+     */
+    private static String unwrapped(final String argument) {
+        String bare = argument.strip();
+        boolean changed = true;
+        while (changed) {
+            final String before = bare;
+            if (bare.startsWith("(")) {
+                final int closing = bare.indexOf(')');
+                final String inside = closing < 0 ? "" : bare.substring(1, closing).strip();
+                if (closing >= 0 && inside.matches("[\\w.<>\\[\\] ]+")) {
+                    bare = bare.substring(closing + 1).strip();
+                }
+            }
+            changed = !bare.equals(before);
+        }
+        return bare;
     }
 
     /**
