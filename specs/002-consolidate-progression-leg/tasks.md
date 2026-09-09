@@ -2881,13 +2881,13 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     settled read failed - the WARN and the word on the line are the only signals. And a lost latency
     sample moves no counter either, only a WARN, so a dashboard cannot show that this service's
     latency series is under-counting. Either would need a bounded reason on a counter and a red case
-    of its own: new behaviour, so Phase 9 or the next increment. Related and separate: the sixteen
-    justified exception-attaching sites the second round inventoried each carry their own in-code
-    note saying why keeping the exception is safe, and one shared note - a sentence in the
-    constitution, or a single javadoc the sites point at - may be worth more than sixteen local
-    restatements. Each note is correct; the risk is a seventeenth site written without one and
-    reading as justified by neighbourhood. Not done at the gate: outside its scope, and it would
-    touch nine files.
+    of its own: new behaviour, so Phase 9 or the next increment.
+    **The second half of this item is closed and was answered the other way round.** It had said
+    the sixteen exception-attaching sites each carried a note saying why keeping the exception was
+    safe, and wondered whether one shared note would serve better than sixteen local ones, with the
+    risk being a seventeenth site written without one. None of those notes was correct: no site
+    keeps an exception now, the sweep refuses every attachment, and the seventeenth site the item
+    worried about is a failing test rather than a paragraph nobody reads.
 28. **The zero-attempt deadline path and the two moved latency readings have no integration or
     end-to-end cover.** The zero-attempt path is pinned at unit level in
     `RegisterGenerationServiceTest` and, through the mocked service, in `RegisterGenerationJobTest`;
@@ -2907,6 +2907,15 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     bound by an enclosing `catch`, and allows through only the exceptions this service raises and
     words itself. It listed thirteen, all thirteen are fixed, and the claim now holds by
     construction: a fourteenth is a failing test on the day it is written.
+    **Two rounds of the gate then found the sweep weaker than the claim, and the rule is now flat.**
+    `LogStatement.exceptionsAttachedOutside`, with the hand-kept allowlist named here, is gone; so
+    is the rule that replaced it, which derived attachability from a type's constructors and was
+    defeated by `initCause`. What stands is `exceptionsAttachedOutsideOwnWording`, which refuses
+    **every** caught-throwable attachment, so the two sites this item's closure had left standing
+    (`GenerationReconciler` and `RegisterNotifierService`, both catching this service's own
+    exceptions) are fixed too, and the block matcher reads only positions that are code, a brace in
+    a comment or a string having closed the enclosing catch early. `LogStatementSweepTest` holds
+    all four defeating shapes as source the suite writes.
     **The gate also corrected the inventory this item first carried**: `CliMain:302` was called
     safe because `ReportNotWritten` is this service's own type, and it is not, because that type
     wraps an `IOException` and a cause chain renders recursively. Two safe and thirteen unsafe, not
