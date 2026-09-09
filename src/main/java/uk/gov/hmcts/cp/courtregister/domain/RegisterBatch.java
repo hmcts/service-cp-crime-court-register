@@ -1,7 +1,9 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -132,5 +134,17 @@ public record RegisterBatch(
      */
     public CourtCentreDay key() {
         return new CourtCentreDay(courtCentreId, registerDate);
+    }
+
+    /**
+     * How long this batch's render took, from the request systemdocgenerator accepted to the
+     * outcome it was answered with.
+     *
+     * @return the round trip, or empty where either end is missing
+     */
+    public Optional<Duration> generationRoundTrip() {
+        throw new UnsupportedOperationException(
+                "the render round trip is derived from requested_at and this batch's own outcome "
+                        + "stamp; the gate finding names the implementation");
     }
 }
