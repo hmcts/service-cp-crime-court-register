@@ -1495,6 +1495,13 @@ class RegisterGenerationJobTest {
          * swallowing what it reports: a failure that is only logged about has not been settled
          * (constitution Principle VI), and the scheduler and the operations command both decide
          * what to do next from the throw.
+         *
+         * <p><strong>Non-vacuous by a reverted mutation.</strong> With {@code run()}'s failure path
+         * changed from {@code recorded(...); throw stopped;} to {@code return recorded(...)} - the
+         * night reported instead of rethrown, which is the one way the reporting could have been
+         * built - this case fails and only this case: 50 tests completed, 1 failed, on "[reported
+         * and rethrown, not reported instead of thrown] Expecting actual not to be null", twice
+         * over, once for the type asserted and once for the message. Mutation reverted.
          */
         @Test
         void a_run_that_stopped_part_way_should_still_fail() {
@@ -1526,6 +1533,12 @@ class RegisterGenerationJobTest {
          * publishing the gauges unconditionally: a run that stopped before it assembled does not
          * know that no court centre was passed over, and a zero from it would erase the reading
          * that says a court centre has been waiting for nights.
+         *
+         * <p><strong>Non-vacuous by a reverted mutation.</strong> With the deferred-keys gauge
+         * moved outside {@code RegisterGenerationJob.publish}'s "did this run assemble anything"
+         * guard, so a run that learned nothing publishes a zero for it, this case fails and only
+         * this case: 50 tests completed, 1 failed, on "[no reading is better than a reading the run
+         * did not take] expected: 2.0 but was: 0.0". Mutation reverted.
          */
         @Test
         void a_run_that_stopped_before_it_assembled_should_leave_the_gauges_as_they_were() {
