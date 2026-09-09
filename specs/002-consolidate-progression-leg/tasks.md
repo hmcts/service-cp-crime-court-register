@@ -266,6 +266,8 @@ it, rather than before it, and each is named here with the reason it was allowed
 **design owner, 2026-09-06**. Anything else in Phase 2 that arrived test-after is a defect, not a
 precedent.
 
+
+
 1. **The V1-to-V2 backfill case (`SchemaMigrationV2IT.BackfillOfADeployedV1Row`), written after
    T012.** The migration's backfill values were chosen and hand-checked when V2 was written, and the
    case accepts an existing migration rather than specifying a new behaviour: there was no design
@@ -2487,11 +2489,11 @@ assertion distinguishes - a completing run publishing its gauges after the recon
 before it - moves no value any case or any meter can read, so it is stated in the commit body rather
 than claimed as an exception.
 
-**The gate's own fourteen commits of `8510cf5..e4a4c7e` need none either, and this is where an
-"### Approved TDD exceptions (Phase 8)" block would have gone had any stage reported test-after
-production behaviour. None of the five stages did, and what puts each of them outside the
-block is named here**, since an absence is only worth reading if what was judged against it is
-stated.
+**The gate's own fourteen commits of `8510cf5..e4a4c7e` need none either. None of the five stages
+reported test-after production behaviour, and what puts each of them outside the block is named
+here**, since an entry is only worth reading if what was judged against it is stated. The block
+itself is below, and it holds one entry: the phase produced exactly one commit that broke the
+red-first rule, in the gate's fifth round.
 
 - **The run report's widening is a pair**, `2cafacb` then `707e7d8`: ten failing assertions over the
   real job, quoted on T072's line, then the green run. The seams it needed - `requested`,
@@ -2573,9 +2575,21 @@ exception travels with the line and is safe to keep. **That round also corrected
 this paragraph carried**: `1b80955` and `9f773de` are the fourth round's work and had been counted
 as the third's.
 
+**A sixth round then found three holes in the scanner itself and one in this record's discipline.**
+The scanner read WARN and ERROR only, while Principle VII governs INFO and above; it matched
+`catch` and `LOG.` without asking whether either was code, so a catch-shaped comment inside a real
+catch became the innermost block and the statement under it was reported against the commented
+type; and its lexer did not know a text block, so a lone quote in the content closed a string that
+was never open and the next brace ended the catch early. All three are closed red-first,
+`ec734be` quoting one failing assertion per hole and `6801b2b` making them pass, with `ddf7f21`
+correcting three descriptions that still stated the superseded rules - including the name of the
+method that enforces the current one. **The fourth finding was that `1a71033` bundled its cases,
+its scanner change and two production logging changes into one commit and recorded only green
+runs**, which is the phase's one breach of the red-first rule and is exception 1 of the block
+below.
+
 **The gate's second round needs no exceptions block either, and none of its four stages reported
-test-after production behaviour**, so there is still no "### Approved TDD exceptions (Phase 8)"
-block and this is where one would have gone. What puts each of the twelve commits of
+test-after production behaviour.** What puts each of the twelve commits of
 `41009d0..7d4ec00` outside it, and the eight of `7d4ec00..cf53977` and four of
 `cf53977..1c203b9` with them:
 
@@ -2635,6 +2649,36 @@ saying so in its own commit body, because each is the bounding half of a red pai
 `the_batches_the_night_had_already_settled_should_be_counted_where_it_reports` that pass vacuously
 against `-1` in `5b515a7` and bite from `1e71f88` on. That is the footing `02597f2`'s five
 green-on-introduction cases were recorded on.
+
+### Approved TDD exceptions (Phase 8)
+
+One, and it is the phase's only breach of the red-first rule. Approver: **design owner,
+2026-09-09**. Anything else in Phase 8 that arrived test-after is a defect, not a precedent; the
+paragraphs above name what was judged against this block and deliberately left off it.
+
+1. **`1a71033` "fix(telemetry): attach no exception at all, and match braces only in code" bundled
+   its cases, its scanner change and two production logging changes into one commit, and recorded
+   only green runs.** The rule from Phase 3 on is a red test commit quoting the failing assertion
+   followed by the implementation commit, and this is a single commit doing both halves and a third
+   thing beside them: `LogStatement` moved from the derived rule to the flat one, its own suite
+   gained the cases for it, and `GenerationReconciler` and `RegisterNotifierService` stopped
+   attaching their exceptions.
+   **Why no red run was recorded**: none was taken. The pair was separable and should have been
+   separated - the flat rule with its cases would have been red on exactly those two production
+   sites, and fixing them would have been the green half - so this is a lapse rather than a shape
+   that resisted the convention, and it happened in a commit answering a finding about rigour.
+   **What stands in place of one**: the two production changes are the mechanical removal of one
+   argument from two statements, and the sweep that refuses them is itself pinned by
+   `LogStatementSweepTest`, whose cases were later driven red at `ec734be` against the very scanner
+   this commit wrote. So the behaviour is held down by cases with a recorded red run, arrived at
+   afterwards.
+   **Why it was not re-landed as a pair**: reverting correct production code in order to re-land it
+   unchanged buys a red line in a log and nothing else, which is the judgement the Phase 7 block
+   records for its exception 3 and the same one applied here. **Approved: design owner,
+   2026-09-09.**
+   **And the discipline is intact from `ec734be` on**: the scanner hardening of the sixth round was
+   driven by reverting the change, writing three cases, recording all three failing assertions, and
+   restoring it green.
 
 **What Phase 8 leaves open.** Each item names where it belongs, so that nothing is carried only in a
 workflow report. Items 1 to 6 are T071's and the gate's; 7 to 10 came out of T070's drive; 11 to 14
