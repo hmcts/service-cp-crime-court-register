@@ -2033,7 +2033,13 @@ repository edits that page, and T074 carries the handover.
   refused. **There is deliberately no third sum over the settled four**: `notified` is at most
   `generated`, and both sit **inside** `generating` rather than partitioning it, so folding them
   into either arithmetic above would count the same batches and the same registers twice. Neither
-  is ever subtracted from `generating`.
+  is ever subtracted from `generating`. **`notified <= generated <= generating` is not an
+  invariant, and an alert must not be written as though it were** (Phase 8 finding 25): a run that
+  stopped part way is the one case it comes apart on, because a batch whose render was accepted and
+  whose verdict was lost with the run is in none of the requesting leg's three counts and can still
+  be settled by the time the line is written. A snapshot larger than the account beside it is then
+  exactly the divergence worth seeing, not a fault - and the night it happens on is the night an
+  operator most needs the line to be readable.
 - **`generated` and `notified` are a snapshot, not a tally**, and a page that lists them without
   saying so invites the wrong alert. They are what the store said about this run's own batches at
   the instant the line was written, of a night that may still be settling: a render accepted at
@@ -2054,6 +2060,14 @@ repository edits that page, and T074 carries the handover.
   `courtregister_generation_unrecorded_total{reason="settled-snapshot"}`** (Phase 9, findings
   15/27), so a night whose settled read failed can be alerted on rather than only found in the log
   index; before that counter the word and the WARN were the whole of the signal.
+- **Two things about the settled half that a reader will otherwise assume wrongly** (Phase 8
+  finding 26). First, `rows_generated` and `rows_notified` are **the run's own count of what it
+  stamped**, not a second read from the store - the only numbers on the settled half that are not
+  the store's. That is exact for a batch with a document, which is past every state that releases
+  rows, but it means `rows_generated` is not a store total and must not be reconciled against one.
+  Second, **the snapshot's scope is the run, not a register date**: a supplementary batch assembled
+  tonight for an earlier day is counted under tonight, because the identities are the night's
+  assembly. So `generated` must never be read as "documents for today's registers".
 - **What tonight's batches finally came to is still not on the line**, and cannot be: `reconciled`
   is what a run settles about **earlier** nights, and the end state of tonight's is read from
   `courtregister_batches_total` by outcome with the oldest-generating and oldest-generated gauges,

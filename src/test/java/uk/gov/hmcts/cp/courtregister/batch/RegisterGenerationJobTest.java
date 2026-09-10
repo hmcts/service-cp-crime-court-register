@@ -2074,6 +2074,49 @@ class RegisterGenerationJobTest {
             }
         }
 
+        /**
+         * The one arrangement where the settled snapshot can exceed the account beside it.
+         *
+         * <p>{@code RunReport.Settled} documents that {@code notified <= generated <= generating}
+         * is not an invariant, and this is the case it names: a batch whose render was accepted and
+         * whose verdict was lost with the run is in none of the requesting leg's three counts, and
+         * the completion legs can still settle it before the line is written. Nothing asserted it,
+         * so the exception lived only in a javadoc - which is how a reader comes to write an alert
+         * on the inequality, or to "fix" the code until it holds and take the divergence with it.
+         *
+         * <p>A divergence worth seeing rather than a fault: the night it happens on is a night that
+         * stopped part way, which is the night an operator most needs the line to be readable.
+         *
+         * <p><strong>[A]</strong> - green on introduction; it states what the report already does.
+         */
+        @Test
+        @DisplayName("[A] a snapshot may exceed the account beside it, on the night that stopped")
+        void a_settled_snapshot_may_exceed_the_requesting_account_on_a_run_that_stopped() {
+            final List<RegisterBatch> night = aMixedNight();
+            when(service.request(eq(night.get(1)), any(), any()))
+                    .thenThrow(new IllegalStateException(OUTAGE));
+            // The completion legs run while the run does, so a batch requested at 18:04 can be
+            // marked before the line is written - including the one whose verdict the run lost,
+            // which the requesting leg never counted.
+            theStoreSaysTheyAreNow(nowHeldAt(night.get(0), BatchStatus.GENERATED),
+                    nowHeldAt(night.get(1), BatchStatus.GENERATED),
+                    nowHeldAt(night.get(2), BatchStatus.GENERATED));
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                whatStoppedTheRun();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "generated"))
+                        .as("the store settled every batch this run had assembled, including the "
+                                + "one whose verdict the run lost, so the snapshot counts more "
+                                + "than the requesting leg ever got to account for")
+                        .isGreaterThan(onTheLine(fields, "generating"));
+                softly.assertThat(fields)
+                        .as("and the run still says the counts are the store's, because they are")
+                        .containsEntry("snapshot", "taken");
+            }
+        }
+
         @Test
         void a_run_that_stopped_part_way_should_name_what_stopped_it_in_a_line_of_its_own() {
             aStoreThatWentAway();
