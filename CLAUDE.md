@@ -17,12 +17,18 @@ leg's `P` rows — is fixed or externally owned, each with a register row naming
 
 ## Programme
 Crime Common Platform (CPP) — Modern by Default (MbD)
-Team: Resulting Assistant
+Organisation: HMCTS / Ministry of Justice — Team: Resulting Assistant
+Jira: none — this work carries no ticket; it lands on plain `main`
 
 ## Stack
-- Spring Boot 4.1, Java 25, Gradle
+- Spring Boot 4.1, Java 25, **Gradle — never Maven**
 - Package: uk.gov.hmcts.cp.courtregister
 - Port: 8082 (local) / 4550 (Kubernetes)
+- Deployment/release name: `courtregister-service`
+- Provenance: derived from the `hmcts/service-hmcts-crime-springboot-template` crime Spring Boot
+  template by way of the `service-cp-crime-informant-register` reference implementation. **Never
+  scaffold from scratch and never use Spring Initializr** — the shape of this repo is inherited, and
+  a hand-rolled skeleton loses the estate conventions baked into it.
 
 ## Key Documentation
 | Document | Location |
@@ -30,7 +36,7 @@ Team: Resulting Assistant
 | **Design (authoritative)** | Confluence — [Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service) (CRA space). This repo carries **no** design narrative; do not create `doc/*_DESIGN.md`, `SOLUTION_BRIEF.md`, `API_CONTRACTS.md` or `CHANGELOG.md` here |
 | Defect-fix register | `doc/DEFECT-FIXES.md` |
 | Constitution | `.specify/memory/constitution.md` |
-| Specifications | `specs/001-court-register-port/` (complete), `specs/002-consolidate-progression-leg/` (in progress) |
+| Specifications | `specs/001-court-register-port/` (complete), `specs/002-consolidate-progression-leg/` (complete) |
 | Inbound message schema | `src/main/resources/contracts/distribution-command.schema.json` |
 | Register contract (frozen) | `src/main/resources/contracts/progression/` (+ `PROVENANCE.md`) |
 
@@ -63,6 +69,14 @@ static-data patch, endpoint) that decides which implementation is live. The nigh
 flag once per run with no cache and does nothing when it is off or unreadable; the regeneration CLI
 refuses without `--ignore-flag`. Never run generation with notification enabled against production
 data outside cutover.
+
+## Deployment
+- **CI/CD**: GitHub Actions → **ADO Pipeline 460** → images to **`crmdvrepo01.azurecr.io`** →
+  deployed by **Flux** using the shared **`springboot-app`** Helm chart.
+- **Secrets** come from **Azure Key Vault via the CSI driver, with workload identity**. No static
+  keys, no committed connection strings, no secret in a Helm value or an environment default.
+- The STE wiring (helmsman entry, values, queue terraform, MI exports) lives in the sibling infra
+  repos, not here.
 
 ## Build & Test
 ```bash

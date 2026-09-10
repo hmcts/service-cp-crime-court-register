@@ -72,10 +72,25 @@ Templates / guidance reviewed:
       the write in place of the absorbed-duplicate-POST argument, the four
       consumed platform contracts, and the one-lever Cutover Rule.
   - .claude/rules/workflow.md                 ✅ aligned (2026-09-05).
-  - .claude/rules/technical-default.md        ⚠ pending — its Description,
-      Outbound row and no-REST bullet still name the POST to progression
-      and "all 34 catalogued defects". Not named by any 002 task; raised
-      at T074 for a decision rather than edited out of scope.
+  - .claude/rules/technical-default.md        ✅ resolved by removal
+      (2026-09-10). Raised at T074 as stale - its Description, Outbound row
+      and no-REST bullet still named the POST to progression - and ruled on
+      after Phase 9 closed: **folded into CLAUDE.md and deleted**, rather
+      than rewritten. Four of its six sections (Service Identity, Technology
+      Stack, Build & Test Commands, Key Documentation) duplicated CLAUDE.md
+      and its Constraints overlapped the three Rules there and
+      technical-rules.md, and that duplication is how it drifted - the 002
+      documentation sweep (`a1cbcab`) edited only its Key Documentation
+      table and left the rest describing the 001 shape. Every rule file in
+      `.claude/rules/` is loaded into each session, so a stale duplicate was
+      being read as authority, not merely sitting on disk. The twelve facts
+      that lived only there are now in CLAUDE.md: the release name
+      `courtregister-service`, the CI/CD chain (GitHub Actions → ADO
+      Pipeline 460 → `crmdvrepo01.azurecr.io` → Flux, `springboot-app`
+      chart), the Key Vault CSI + workload identity secrets rule, the
+      template provenance and the never-Maven/never-Initializr/never-
+      scaffold constraint, the organisation, and the no-Jira note. Three
+      rule files remain: design_rules.md, technical-rules.md, workflow.md.
   - .claude/agents/spec-validator.md          ✅ aligned (2026-09-10, T073):
       "The Four Contracts" is now eight in three groups - two owned, four
       consumed, two properties of this service's shape - and the scope gate

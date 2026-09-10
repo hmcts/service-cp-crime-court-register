@@ -3045,6 +3045,18 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
       task's decision is that it is not Phase 9's to take silently**, because rewriting a rule file
       no task named is exactly the scope discipline the constitution asks for, and a stale rule file
       recorded as stale is honest where a quietly-rewritten one is not. It needs a ruling.
+      **The ruling came after Phase 9 closed, and it was neither of the two options this note
+      imagined: the file is gone.** Four of its six sections duplicated `CLAUDE.md` and its
+      Constraints overlapped the three Rules there and `technical-rules.md`, and that duplication
+      is what let it drift - the 002 documentation sweep `a1cbcab` edited only its Key Documentation
+      table, four insertions and five deletions, and left everything else describing the 001 POST.
+      Since every file in `.claude/rules/` is loaded into each session, the stale copy was being
+      read as authority rather than sitting unread on disk. So the twelve facts that lived only
+      there moved into `CLAUDE.md` - the release name, the CI/CD chain through ADO Pipeline 460 to
+      `crmdvrepo01.azurecr.io` and Flux, the Key Vault CSI and workload-identity secrets rule, the
+      template provenance with its never-scaffold constraint, the organisation and the no-Jira
+      note - and the file was deleted. Rewriting it would have fixed this instance of the drift and
+      left the mechanism in place for the next increment.)
       **The four register corrections, as decided here**: (1) the `v3.0.0` citation stands - the
       bump to v3.0.1 was a PATCH that changed no principle, so the citation is historical and
       accurate as written, and editing it would be churn; (2) the four over-length prose lines are

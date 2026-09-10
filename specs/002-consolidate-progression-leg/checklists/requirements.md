@@ -52,7 +52,10 @@
     machine-checked: the register is read by `RegisteredDefectFixes` and the audit fails the build on
     a deviation no row explains, so "registered" stopped being a documentation promise.
   - The process requirements FR-020/021 impose are discharged and recorded: the `P` rows are
-    appended with pinning tests, and the constitution's Sync Impact Report is reconciled (one item
-    deliberately left `⚠ pending` — `.claude/rules/technical-default.md`, which no 002 task names
-    and which T074 raised rather than rewrote out of scope).
+    appended with pinning tests, and the constitution's Sync Impact Report is reconciled. One item
+    was deliberately left `⚠ pending` at T074 — `.claude/rules/technical-default.md`, which no 002
+    task named and which T074 raised rather than rewrote out of scope. **It was ruled on after
+    Phase 9 closed and is now resolved by removal**: folded into `CLAUDE.md` and deleted, the
+    duplication having been the mechanism of its drift. The Sync Impact Report carries the
+    reasoning.
 - Items marked incomplete require spec updates before `/speckit.clarify` or `/speckit.plan`.
