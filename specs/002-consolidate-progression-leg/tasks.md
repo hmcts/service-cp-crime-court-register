@@ -3156,8 +3156,33 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
       unchecked box with an owner and a trigger is the honest state for something this repository
       cannot assert. **`1fe0285`'s body mis-cites this evidence as T075's**; the commit is not
       rewritten and the correction is in the new checklist's own notes.)
-- [ ] T077 [A] Final `./gradlew build` (PMD, Checkstyle 0 warnings, JaCoCo gate) green on the branch;
+- [x] T077 [A] Final `./gradlew build` (PMD, Checkstyle 0 warnings, JaCoCo gate) green on the branch;
       review gate 9 (whole increment) PASS; report token use per phase.
+      (**Green, 2026-09-10.** `./gradlew clean jacocoTestReport build`, 24 actionable tasks all
+      executed, **BUILD SUCCESSFUL in 8m 44s**: 531 test classes, **3269 cases, 0 failures, 0
+      errors, 0 skipped** - unit and `*IT` alike, the Testcontainers suites included, which is what
+      makes this the whole gate and not the fast half of it. `checkstyleMain` and `checkstyleTest`
+      at `maxWarnings = 0`, `pmdMain` and `pmdTest`, and `jacocoTestCoverageVerification` reading a
+      report written before it: **LINE 0.9673** (5671 covered, 192 missed) against the 0.88 floor
+      and **BRANCH 0.8931** (1754 covered, 210 missed) against 0.85.
+      **Review gate 9, whole increment: PASS.** The seven gates of `.claude/rules/workflow.md`,
+      each checked rather than asserted: no `@RestController`/`@Controller`/`@RequestMapping`
+      anywhere under `src/main/java`; no `System.out`, `System.err` or `printStackTrace()` in main
+      or test (the one grep hit is the javadoc sentence in `StandardOutput` that states the rule);
+      no wildcard imports; no empty catch block. The message-contract, settlement, idempotency and
+      golden gates are assertions in the suite that just ran rather than opinions here, and the
+      no-PII gate is `TelemetryPrivacyTest`/`IT` plus the statement sweep. **Defect-fix gate**:
+      every one of the 44 pinning-test classes named anywhere in `doc/DEFECT-FIXES.md` exists, and
+      the register's own arithmetic reconciles by count - 36 `C` rows, 10 `P` rows, 7 of the `P`
+      rows FIXED, which is what its header claims.
+      **Token use per phase: not reported, because the data does not exist.** Stated plainly rather
+      than ticked: no phase of this increment recorded a token figure - the whole file was checked,
+      not sampled - so there is nothing to report per phase and nothing this stage can reconstruct
+      after the fact. Phase 9 itself ran in one session whose total was roughly 265K tokens, and
+      that figure covers an unrelated investigation at the start of the same session, so it is not
+      a Phase 9 measurement either. If per-phase accounting is wanted for the next increment it has
+      to be recorded as each phase closes; asking for it at the end cannot produce it. This clause
+      of the task is therefore closed as **unsatisfiable as written**, not as done.)
 
 ---
 
