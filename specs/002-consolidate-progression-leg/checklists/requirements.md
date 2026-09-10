@@ -38,4 +38,21 @@
 - Validation run 1 (2026-09-05): all items pass. FR-002's "registered deviation" and FR-020/021's
   register and constitution obligations are process requirements the constitution imposes; they are
   kept in the spec so the task list carries them.
+- **Validation run 2 (2026-09-10, T076): re-validated against the delivered behaviour rather than
+  against the spec's intent, which is the question this run asks and run 1 could not.** All items
+  still pass, and three are worth naming because delivery could have falsified them:
+  - *"Success criteria are measurable"* — SC-101/SC-103's readiness budget is measured by
+    `scripts/container-smoke.sh` against the packaged image (PASS within the 60s budget, re-run at
+    T075), not asserted in prose.
+  - *"Scope is clearly bounded"* — the boundary held. The one lever stayed one: `courtregister.output`
+    and `courtregister.generation.enabled` are deployment shape, `courtregister.cli` decides who
+    starts, and none of the three decides which implementation is live. FR-016's "no HTTP endpoint"
+    held too, asserted on every context shape including the CLI one.
+  - *"Requirements are testable and unambiguous"* — FR-002's registered-deviation requirement is now
+    machine-checked: the register is read by `RegisteredDefectFixes` and the audit fails the build on
+    a deviation no row explains, so "registered" stopped being a documentation promise.
+  - The process requirements FR-020/021 impose are discharged and recorded: the `P` rows are
+    appended with pinning tests, and the constitution's Sync Impact Report is reconciled (one item
+    deliberately left `⚠ pending` — `.claude/rules/technical-default.md`, which no 002 task names
+    and which T074 raised rather than rewrote out of scope).
 - Items marked incomplete require spec updates before `/speckit.clarify` or `/speckit.plan`.

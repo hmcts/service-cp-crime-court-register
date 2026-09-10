@@ -3115,7 +3115,7 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
       FR-011 asks for: the probe Kubernetes reads was UP throughout while the aggregate a dashboard
       reads had not settled. A readiness group containing either would have failed the first probe
       of every rollout.)
-- [ ] T076 Spec checklists: `checklists/requirements.md` re-validated against the delivered behaviour;
+- [x] T076 Spec checklists: `checklists/requirements.md` re-validated against the delivered behaviour;
       add `checklists/consolidation-audit.md` recording T069's result and the goldens' provenance.
       **T069 has already delivered what that file has to record, and turned it from a check taken
       once into an assertion on every build**: the 001 corpus reproduces by manifest digest
@@ -3130,6 +3130,32 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
       merging, which nothing in this repository can assert, so the residue checklist (design §10.6)
       needs them tracked to conclusion with the owner-and-trigger shape C18, C28 and C34 carry
       rather than assumed.
+      (**Done, 2026-09-10.** `checklists/consolidation-audit.md` is new and records T069 as what it
+      became - assertions inside `DifferentialAuditTest` rather than a check taken once - with each
+      claim against the case that re-establishes it: the corpus digest
+      `20fcb123…a649d924`, 177 goldens by recorded `outputSha256`, 168 payload goldens reproduced
+      from their recorded inputs, 52 refusals refused, the exclusion counts (404 inputs, 205
+      documents, 381 cases) that stop an audit passing by looking at less, and the single attributed
+      deviation - P10's two synthetic shapes, where exactly one row must explain each. It also
+      records that the register is *read* by the suite and not merely described by it, which is why
+      P10 cannot be edited as prose. **`requirements.md` gains validation run 2**, which asks the
+      question run 1 could not - the items against delivered behaviour rather than against the
+      spec's intent - and names the three that delivery could have falsified: the readiness budget
+      is measured against the packaged image, the scope boundary held (the one lever stayed one),
+      and FR-002's registered-deviation requirement is machine-checked rather than promised.
+      **`PROVENANCE.md`'s Verification section** was the one thing this task asked about first, and
+      the answer taken was to add rather than replace: the `diff -r` sentences stay as the record of
+      what was done at recording time, and a paragraph beside them says what re-establishes it on
+      every build. Nothing recorded was rewritten - it is a recording artefact.
+      **The residue is tracked, not assumed**: P6 and P7 carry an owner and now a trigger
+      (progression's retirement PR merging, which nothing here can assert), beside C18, C28, C34 and
+      the SIT→STE replay gate; finding 12's counter is recorded as **refused with its reason**
+      rather than deferred, because a CLI JVM has no way to export a meter at all; and finding 14's
+      unregistered `stream().findAny()` header is named so that judging it a defect later starts
+      from a written note rather than a rediscovery. Those boxes are deliberately unchecked: an
+      unchecked box with an owner and a trigger is the honest state for something this repository
+      cannot assert. **`1fe0285`'s body mis-cites this evidence as T075's**; the commit is not
+      rewritten and the correction is in the new checklist's own notes.)
 - [ ] T077 [A] Final `./gradlew build` (PMD, Checkstyle 0 warnings, JaCoCo gate) green on the branch;
       review gate 9 (whole increment) PASS; report token use per phase.
 

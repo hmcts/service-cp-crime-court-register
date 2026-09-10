@@ -228,6 +228,15 @@ decide what it does instead, and whatever it decides is a difference from progre
   `defendant-type` and `INDEX.json` are byte-identical between runs.
 - All 184 JSON files under `goldens/progression/` parse, and every one ends in exactly one newline.
 - The counts above are `INDEX.json`'s own, not a second tally.
+- **And it is re-established on every build, not only at recording time.** The two statements above
+  are what was done when these goldens were made, and they are left as that record. What holds them
+  now is `DifferentialAuditTest`: the corpus reproduces to `corpusDigest`, all 177 goldens digest to
+  their recorded `outputSha256`, all 168 payload goldens reproduce from their recorded inputs, the
+  52 refusals are refused here too, and every deviation must be explained by exactly one
+  `doc/DEFECT-FIXES.md` P row — which for these goldens is P10's two shapes and nothing else. So an
+  edited golden or an unregistered deviation fails `./gradlew build` rather than waiting for someone
+  to re-run a `diff`. Recorded in
+  `specs/002-consolidate-progression-leg/checklists/consolidation-audit.md`.
 
 ## Files
 
