@@ -470,9 +470,11 @@ public class RegisterGenerationJob {
      * <p><strong>And it cannot fail the run.</strong> By the time it is taken the batches are
      * stamped and the renders are away, so a store that will not answer this is not a reason to
      * throw a night's generation away - the Youth Offending Teams are going to be told whatever
-     * this read does. It is a reason to say the counts are missing, which the line does in a word
-     * and the WARN does by naming what refused: nothing is swallowed, and a reader who cannot tell
-     * a night that settled nothing from a night nobody could read has been told less than nothing.
+     * this read does. It is a reason to say the counts are missing, which the line does in a word,
+     * the WARN does by naming what refused, and {@code courtregister_generation_unrecorded_total}
+     * does in the one form an alert can be written against: nothing is swallowed, and a reader who
+     * cannot tell a night that settled nothing from a night nobody could read has been told less
+     * than nothing.
      *
      * @param tally what the run has done, which is where the identities it assembled are kept
      * @return what the store said about them, or {@link RunReport.Settled#UNREAD} where it would
@@ -497,6 +499,7 @@ public class RegisterGenerationJob {
             // the read, and a store failure is where a connection string or a fragment of a
             // statement turns up in one (Principle VII). The same rule the listener's four
             // readers were held to.
+            metrics.settledSnapshotUnrecorded();
             LOG.warn("The batches this run assembled could not be read back, so its line says the "
                             + "settled counts are unread rather than nought. cause={}",
                     notRead.getClass().getName());

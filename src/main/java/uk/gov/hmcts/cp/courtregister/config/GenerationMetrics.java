@@ -379,6 +379,57 @@ public class GenerationMetrics {
     }
 
     /**
+     * Counts a delivery whose body could not be parsed at all.
+     *
+     * <p>The four readings above are taken from an envelope this service read; this one is taken
+     * where the read itself failed, and it is the only thing that separates a topic delivering
+     * rubbish from a topic delivering nothing. The body does not reach the series - what would not
+     * parse is unvalidated text (Principle VII) - so the bounded reason is the whole of it and the
+     * class that refused stays on the line beside it.
+     */
+    public void unreadableEnvelopeIgnored() {
+        counter(PUBLIC_EVENTS_IGNORED, REASON_TAG, UNREADABLE_ENVELOPE).increment();
+    }
+
+    /**
+     * Counts a delivery whose {@code CPPNAME} and envelope name different events.
+     *
+     * <p>Its own reason rather than a reading of {@link #UNREADABLE_ENVELOPE}: that one is a
+     * publisher writing malformed JSON, and this one is a message that parsed and contradicts
+     * itself, which is a broker routing on a header nobody kept in step with the payload. Counting
+     * them together would send a reader after JSON that was never malformed.
+     */
+    public void headerEnvelopeMismatchIgnored() {
+        counter(PUBLIC_EVENTS_IGNORED, REASON_TAG, HEADER_ENVELOPE_MISMATCH).increment();
+    }
+
+    /**
+     * Counts a run whose settled counts the store would not answer for.
+     *
+     * <p>The run line's {@code snapshot=unread} says the four counts are missing and the WARN
+     * beside it names what refused, and both are read by somebody already looking. This is the
+     * reading an alert fires on. It counts a report that came up short and never a night that did:
+     * by the time the snapshot is taken the batches are stamped and the renders are away.
+     */
+    public void settledSnapshotUnrecorded() {
+        counter(GENERATION_UNRECORDED, REASON_TAG, SETTLED_SNAPSHOT).increment();
+    }
+
+    /**
+     * Counts a settled batch whose render round trip could not be timed.
+     *
+     * <p>{@link #GENERATION_LATENCY} under-counting looks exactly like {@link #GENERATION_LATENCY}
+     * healthy - the count is lower and every reading in it is real - so the loss is counted here
+     * and a dashboard can say the series is short rather than assume it is complete. Both legs that
+     * take the reading count it, the sink for an outcome that arrived and the reconciler for one
+     * that had to be fetched, because the question is how many samples are missing and not which
+     * leg missed them.
+     */
+    public void latencySampleUnrecorded() {
+        counter(GENERATION_UNRECORDED, REASON_TAG, LATENCY_SAMPLE).increment();
+    }
+
+    /**
      * Counts a run that read the flag and did not generate.
      *
      * @param decision what the flag said, whose bounded code is the reason label

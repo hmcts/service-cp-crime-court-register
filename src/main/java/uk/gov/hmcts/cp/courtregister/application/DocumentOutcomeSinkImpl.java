@@ -319,9 +319,11 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
                     .flatMap(RegisterBatch::generationRoundTrip)
                     .ifPresent(metrics::generationLatency);
         } catch (RuntimeException notTimed) {
+            metrics.latencySampleUnrecorded();
             LOG.warn("Batch {} was settled and its render round trip could not be timed, so this "
-                    + "outcome is missing from courtregister_generation_latency and from nothing "
-                    + "else: the mark stands and the leg carries on from it. cause={}",
+                    + "outcome is missing from courtregister_generation_latency, counted on "
+                    + "courtregister_generation_unrecorded_total and missing from nothing else: "
+                    + "the mark stands and the leg carries on from it. cause={}",
                     batchId, notTimed.getClass().getName());
         }
     }

@@ -1023,9 +1023,11 @@ class DocumentEventListenerTest {
          *
          * <p>Both sides of a crossed pair are this class's own two constants, so both may be
          * written down. It is here so that the case above cannot be satisfied by dropping the
-         * envelope's side of the line altogether: that would take a real mismatch's only reading
-         * with it, this subscription counting no metric for a message whose header and envelope
-         * disagree.
+         * envelope's side of the line altogether: that would take with it the only reading that
+         * says which two events were crossed. The mismatch is counted as well now, under
+         * {@code header-envelope-mismatch}, so a dropped line no longer costs the fault its only
+         * trace - but a counter says how many and never which, and which is what a genuine
+         * mismatch is diagnosed from.
          */
         @Test
         void a_crossed_pair_should_still_name_the_event_on_each_side() throws JMSException {

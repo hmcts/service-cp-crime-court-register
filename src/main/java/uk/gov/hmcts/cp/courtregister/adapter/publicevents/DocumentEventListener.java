@@ -214,6 +214,7 @@ public class DocumentEventListener {
             // readers name theirs, and the class is the reading a diagnosis needs: a Jackson
             // failure is a body that is not JSON, and IllegalArgumentException is JSON this
             // service refused as an envelope.
+            metrics.unreadableEnvelopeIgnored();
             LOG.warn("A {} was not a readable JsonEnvelope, so it is acknowledged and dropped. "
                     + "cause={}", eventName, notAnEnvelope.getClass().getName());
             return;
@@ -225,6 +226,7 @@ public class DocumentEventListener {
             // it is, and a message that disagrees with its own header has already shown it is not
             // what it claims, so its name may be a person's own details as easily as an event
             // (Principle VII).
+            metrics.headerEnvelopeMismatchIgnored();
             LOG.warn("A public event's CPPNAME and its envelope disagree, so it is acknowledged and "
                     + "dropped: the header said {} and the envelope says {}.", eventName,
                     claimed(envelope.metadataName()));

@@ -470,6 +470,7 @@ public class GenerationReconciler {
                     .flatMap(RegisterBatch::generationRoundTrip)
                     .ifPresent(metrics::generationLatency);
         } catch (RuntimeException notTimed) {
+            metrics.latencySampleUnrecorded();
             LOG.warn("Batch {} was given up on and its render round trip could not be timed, so "
                     + "this ending is missing from courtregister_generation_latency and the pass "
                     + "carries on to the batches behind it. cause={}",
