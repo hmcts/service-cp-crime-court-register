@@ -1,11 +1,14 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.azure.messaging.servicebus.ServiceBusProcessorClient;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -15,6 +18,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.annotation.ConditionContext;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.env.StandardEnvironment;
 import org.springframework.jms.config.JmsListenerEndpointRegistry;
 import org.springframework.jms.listener.MessageListenerContainer;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
@@ -244,6 +250,74 @@ class CliModeConfigTest {
                     .as("FR-016: the operations surface is a command in the image, and a CLI "
                             + "context is not the place a first endpoint arrives through")
                     .containsExactly(ERROR_FALLBACK);
+        }
+    }
+
+    /**
+     * The default the image ships with, which neither context above can see.
+     *
+     * <p>Both of those set {@code courtregister.cli} explicitly - that is what makes them a pair
+     * differing by one property - so between them they say what {@code true} and {@code false} do
+     * and nothing about what happens when nothing sets it at all. {@link CliModeConfig#NOT_CLI}
+     * could be flipped to {@code "true"} and both would stay green, while every deployed pod that
+     * does not name the property stopped consuming, stopped scheduling and stopped subscribing:
+     * the quietest outage in the service, produced by a one-word change with a green suite behind
+     * it. Carried as an open finding from Phase 7 and closed here.
+     *
+     * <p>Asserted on the condition rather than on a context, deliberately. A context loads
+     * {@code application.yaml}, which sets {@code cli: false} itself, so a Spring test would pass
+     * on the file's value whatever the constant said and would pin the wrong one of the two.
+     * {@link org.springframework.core.env.StandardEnvironment} carries no such property, which is
+     * the environment a deployed pod's condition is evaluated against where nothing sets it.
+     */
+    @Nested
+    @DisplayName("the default the image ships, which nothing sets")
+    class TheShippedDefault {
+
+        /**
+         * The condition as it is evaluated before any bean exists, over an environment that does
+         * not carry the property.
+         *
+         * @return what the condition answered
+         */
+        private boolean matchesAnEnvironmentWithout(final String value) {
+            final StandardEnvironment environment = new StandardEnvironment();
+            if (value != null) {
+                environment.getPropertySources().addFirst(new MapPropertySource("under-test",
+                        Map.of(CliModeConfig.CLI_PROPERTY, value)));
+            }
+            final ConditionContext context = mock(ConditionContext.class);
+            when(context.getEnvironment()).thenReturn(environment);
+            return new CliModeConfig.NotCliMode().matches(context, null);
+        }
+
+        @Test
+        @DisplayName("is not CLI mode, so a pod nothing configured still consumes")
+        void a_property_nothing_sets_at_all_should_not_be_read_as_cli_mode() {
+            assertThat(matchesAnEnvironmentWithout(null))
+                    .as("an ordinary pod must be unaffected by the property existing; a default of "
+                            + "true would take the consumer, the scheduler and the subscription "
+                            + "off every pod that does not name it, and say nothing while doing it")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("and neither is a value that will not parse")
+        void a_value_that_will_not_parse_should_not_be_read_as_cli_mode() {
+            assertThat(matchesAnEnvironmentWithout("yes-please"))
+                    .as("this switch decides who starts, so a typo in a Helm value must not be "
+                            + "able to stop a pod consuming; anything other than true is read the "
+                            + "same way as absent")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("while true, and only true, is")
+        void the_one_value_that_should_be_read_as_cli_mode_is_true() {
+            assertThat(matchesAnEnvironmentWithout("true"))
+                    .as("the other half of the claim: a default that could never be overridden "
+                            + "would leave every command holding a scheduler")
+                    .isFalse();
         }
     }
 

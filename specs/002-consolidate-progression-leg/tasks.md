@@ -3079,7 +3079,7 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
       either: only identity says tonight's batches, 4a reads a key's whole history and 4b a day's,
       so a run counting either would credit itself with an earlier run's documents. `RegisterStore`
       and `JdbcRegisterStore` already say it in their own javadoc.)
-- [ ] T075 [P] `scripts/container-smoke.sh` - readiness UP < 60 s with generation enabled against the
+- [x] T075 [P] `scripts/container-smoke.sh` - readiness UP < 60 s with generation enabled against the
       compose stubs; `check-flag` exit 0. **Both were already recorded green in Phase 7** at
       `441d653` ("PASS: readiness reported UP within the 60s budget" and "PASS: startup.sh
       check-flag printed flag=ON and exited 0", the second through the deployed reader rather than a
@@ -3087,6 +3087,34 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
       one case Phase 7's exception 1 left open and Phase 8 did not close: the shipped default of
       `courtregister.cli` when nothing sets it at all. The host-side `bootRun` block of
       quickstart.md is the other thing still owed from Phase 7's checkpoint.
+      (**All three done, 2026-09-10.** (1) `./scripts/container-smoke.sh` re-run on the branch as
+      it stands: both report lines PASS - "readiness reported UP within the 60s budget" and
+      "startup.sh check-flag printed flag=ON and exited 0" - exit 0, and the teardown check left no
+      container, network or volume behind. (2) **Finding 13 is closed**, and closed the way it had
+      to be. `CliModeConfigTest` gains `TheShippedDefault`, three cases asserted on the condition
+      rather than on a context: a context loads `application.yaml`, which sets `cli: false` itself,
+      so a Spring test would have pinned the file's value and not the constant. Over a bare
+      `StandardEnvironment` the property is absent, which is what a deployed pod's condition is
+      evaluated against where nothing names it. **The mutation is recorded**: `NOT_CLI` flipped from
+      `"false"` to `"true"` fails `a_property_nothing_sets_at_all_should_not_be_read_as_cli_mode`
+      and **nothing else in the suite** - 11 cases, 1 failed - which is finding 13's own diagnosis
+      confirmed rather than taken on trust; reverted, green again. The other two cases hold the ends
+      of the same claim: a value that will not parse is read as absent (a typo in a Helm value must
+      not be able to stop a pod consuming), and `true` is the one value that is read as CLI mode.
+      (3) **The host-side `bootRun` block runs as written**, which is the thing Phase 7 could only
+      reason about because 5432 was occupied: `docker compose up -d postgres servicebus-emulator
+      artemis fileservice-postgres wiremock sdg-echo`, then the block verbatim - Started Application
+      in 1.915s, Tomcat on 8082, the three Flyway migrations applied by the deferred migration the
+      lifecycle controller runs, intake started against the emulator, and
+      `/actuator/health/readiness` and `/liveness` both UP. No correction to the block was needed.
+      **One reading worth keeping**: the *aggregate* `/actuator/health` answered DOWN when polled
+      seconds after startup and UP once settled, with all ten components UP -
+      `publicEvents: subscription=running`, `servicebus: condition=none`,
+      `fileServiceRun: run=idle, fileservice=not-probed`. The DOWN was the two broker components
+      still coming up, and neither is in the readiness group, which is exactly the arrangement
+      FR-011 asks for: the probe Kubernetes reads was UP throughout while the aggregate a dashboard
+      reads had not settled. A readiness group containing either would have failed the first probe
+      of every rollout.)
 - [ ] T076 Spec checklists: `checklists/requirements.md` re-validated against the delivered behaviour;
       add `checklists/consolidation-audit.md` recording T069's result and the goldens' provenance.
       **T069 has already delivered what that file has to record, and turned it from a check taken
