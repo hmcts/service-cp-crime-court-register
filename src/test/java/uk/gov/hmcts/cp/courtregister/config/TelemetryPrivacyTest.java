@@ -77,7 +77,9 @@ import uk.gov.hmcts.cp.courtregister.batch.cli.SupersedeBeforeCli;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
+import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
+import uk.gov.hmcts.cp.courtregister.domain.GateDecision;
 import uk.gov.hmcts.cp.courtregister.domain.ContractViolation;
 import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryIdentity;
@@ -218,7 +220,16 @@ class TelemetryPrivacyTest {
                     Arrays.stream(ReasonCode.values()).map(ReasonCode::code),
                     Arrays.stream(CompletionReason.values()).map(CompletionReason::value),
                     Arrays.stream(TransformationAnomaly.values()).map(TransformationAnomaly::value),
-                    Arrays.stream(DeadLetterReason.values()).map(DeadLetterReason::label))
+                    Arrays.stream(DeadLetterReason.values()).map(DeadLetterReason::label),
+                    // The generation leg's own vocabulary, carried by name because the enum has no
+                    // separate wire form: a batch's failure is written down as the constant.
+                    Arrays.stream(BatchFailureReason.values()).map(Enum::name),
+                    // The gate's three, plus the fourth the job holds privately for the run it did
+                    // not stop. The run line's whole field grammar is pinned separately by
+                    // RegisterGenerationJobTest.BOUNDED_FIELDS_ONLY; this set is only about which
+                    // words may sit in a reason slot.
+                    Arrays.stream(GateDecision.Reason.values()).map(GateDecision.Reason::code),
+                    Stream.of("flag-on"))
             .flatMap(codes -> codes)
             .collect(Collectors.toUnmodifiableSet());
 
@@ -790,6 +801,45 @@ class TelemetryPrivacyTest {
                     .noneMatch(line -> line.contains(marker));
         }
 
+        /**
+         * The bounded-reason rule, over the two legs rather than over the delivery path alone.
+         *
+         * <p>{@code reason=} and {@code detail=} are parsed slots: an index filter and an alert
+         * query key on them, so what goes in one has to come from a vocabulary and not from a
+         * sentence. The delivery path has been swept for this since T070; the legs were outside it
+         * for no better reason than that {@code GenerationLegs} did not exist yet, and a rule
+         * enforced on one half of a service is a rule that will be broken on the other.
+         *
+         * <p>It catches nothing today that item 8 does not already name - there are exactly two
+         * such slots on the legs, and the run report's own is pinned by
+         * {@code RegisterGenerationJobTest.BOUNDED_FIELDS_ONLY}. Its value is the next one somebody
+         * writes.
+         *
+         * <p><strong>INFO and above, which is the scope Principle VII governs and not a
+         * convenience.</strong> {@code SystemDocGeneratorClient} writes the generator's own words
+         * into a reason slot at DEBUG deliberately - that is the diagnostic the case above keeps
+         * <em>below</em> INFO rather than removes - so a sweep over every level would forbid the
+         * one place those words are allowed to be. The estate's index is the thing being protected,
+         * and free text below INFO does not reach it.
+         */
+        @Test
+        @DisplayName("writes a bounded code into every reason slot, on both legs")
+        void should_write_a_bounded_code_into_every_reason_slot() {
+            final List<String> reasons = reasonsIn(written.stream()
+                    .filter(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
+                    .toList());
+
+            assertThat(reasons)
+                    .as("a drive that named no reason at all would satisfy the assertion below "
+                            + "vacuously, and this drive reaches the payload store's own failure")
+                    .isNotEmpty();
+            assertThat(reasons)
+                    .as("a reason outside the bounded vocabulary is free text in a slot something "
+                            + "parses; the batch's own reason is already a bounded code and is "
+                            + "what belongs there")
+                    .allMatch(BOUNDED_REASONS::contains);
+        }
+
         @Test
         @DisplayName("[A] keeps systemdocgenerator's own words out of INFO and above")
         void should_keep_the_generator_s_own_words_below_info() {
@@ -1312,6 +1362,19 @@ class TelemetryPrivacyTest {
     }
 
     /** Every {@code reason=} and {@code detail=} value this service wrote. */
+    private static List<String> reasonsIn(final List<ILoggingEvent> events) {
+        return events.stream()
+                .filter(event -> event.getLoggerName()
+                        .startsWith("uk.gov.hmcts.cp.courtregister"))
+                .map(ILoggingEvent::getFormattedMessage)
+                .flatMap(line -> {
+                    final Matcher matcher = REASON.matcher(line);
+                    return matcher.results().map(result -> result.group(1));
+                })
+                .toList();
+    }
+
+    /** Reads the {@code reason=} and {@code detail=} tokens out of a delivery-path capture. */
     private static List<String> reasonsIn(final CapturedLog log) {
         return log.events().stream()
                 .filter(event -> event.getLoggerName()
