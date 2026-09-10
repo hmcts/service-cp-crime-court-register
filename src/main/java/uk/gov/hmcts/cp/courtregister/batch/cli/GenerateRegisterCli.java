@@ -13,6 +13,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import uk.gov.hmcts.cp.courtregister.application.BatchOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
@@ -512,11 +513,15 @@ public class GenerateRegisterCli {
         int requested = 0;
         for (final AssembledBatch assembled : assembly.batches()) {
             final RegisterBatch stored = store.assemble(assembled.batch(), assembled.records());
-            final BatchStatus status =
-                    service.request(stored, deadline, RenderProgress.NONE).status();
-            output.accept("batch=" + stored.batchId() + " state=" + status
+            final BatchOutcome outcome = service.request(stored, deadline, RenderProgress.NONE);
+            output.accept("batch=" + stored.batchId() + " state=" + outcome.status()
                     + " records=" + assembled.records().size());
-            requested++;
+            // The requesting leg's own account of what it did, exactly as the run's line reads it
+            // (RegisterGenerationJob). A batch the deadline left without an attempt was written
+            // down and never asked for, and the count says what was asked for.
+            if (outcome.renderRequested()) {
+                requested++;
+            }
         }
         return requested;
     }

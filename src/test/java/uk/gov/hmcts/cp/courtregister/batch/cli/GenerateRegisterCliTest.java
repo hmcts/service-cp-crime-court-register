@@ -1169,7 +1169,8 @@ class GenerateRegisterCliTest {
             softly.assertThat(printed)
                     .as("one batch was written down and no render was sent, so the line an "
                             + "operator reads must not claim one was")
-                    .contains("batches=1 requested=0");
+                    .contains("date=" + THURSDAY + " released=1 registers=2 batches=1"
+                            + " requested=0 deferred=0");
             softly.assertThat(code).isEqualTo(CliMain.SUCCESS);
         }
 
