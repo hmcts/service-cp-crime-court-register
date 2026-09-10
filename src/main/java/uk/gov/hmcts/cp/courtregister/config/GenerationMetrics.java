@@ -70,6 +70,7 @@ public class GenerationMetrics {
     public static final String OLDEST_GENERATED_AGE = "courtregister_oldest_generated_age";
     public static final String PENDING_AFTER_DEADLINE = "courtregister_pending_after_deadline";
     public static final String DEFERRED_KEYS = "courtregister_deferred_keys";
+    public static final String DEFERRED_REGISTERS = "courtregister_deferred_registers";
     public static final String FLAG_READ_OK = "courtregister_flag_read_ok";
 
     public static final String OUTCOME_TAG = "outcome";

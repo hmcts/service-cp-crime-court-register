@@ -587,6 +587,11 @@ class RegisterGenerationJobTest {
         return gauge == null ? ABSENT : gauge.value();
     }
 
+    private double deferredRegisters() {
+        final Gauge gauge = registry.find(GenerationMetrics.DEFERRED_REGISTERS).gauge();
+        return gauge == null ? ABSENT : gauge.value();
+    }
+
     /**
      * The assembly the assembler answers with, one pairing per batch and nothing deferred.
      *
@@ -1295,6 +1300,30 @@ class RegisterGenerationJobTest {
                     .as("the companion of the oldest-unbatched age: that says how long the worst "
                             + "of them has waited and this says how much of the estate is waiting")
                     .isEqualTo(2);
+        }
+
+        /**
+         * The registers behind the deferred days, which the keys gauge cannot say.
+         *
+         * <p>A court centre day is one key however many children's registers are inside it, so
+         * {@code deferred_keys=3} is the same reading whether three registers are waiting or four
+         * hundred. The run line already draws that distinction - {@code rows} sits beside
+         * {@code batches} for exactly this reason - but the line is per run and the gauges are what
+         * a dashboard reads in the twenty-three hours between them. Without this, the only
+         * between-runs readings are how many court centres are waiting and how long the worst has
+         * waited, and neither answers how much is undelivered.
+         */
+        @Test
+        void the_registers_behind_the_deferred_keys_should_be_gauged_too() {
+            aNightDeferring(key(), key());
+
+            run();
+
+            softly.assertThat(deferredRegisters())
+                    .as("the registers waiting under those keys, which is the impact reading: a "
+                            + "count of court centres cannot say how many children's registers "
+                            + "have not gone out")
+                    .isEqualTo(ACTIVE.size());
         }
 
         @Test
