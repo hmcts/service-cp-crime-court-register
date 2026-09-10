@@ -314,7 +314,17 @@ class ReadinessPolicyIT {
      * a group that ignores it would pass every assertion made against the indicator alone.
      */
     private IndicatedHealthDescriptor fileServiceComponent() {
-        return (IndicatedHealthDescriptor) readiness().getComponents().get(FILE_SERVICE_COMPONENT);
+        final HealthDescriptor component = readiness().getComponents().get(FILE_SERVICE_COMPONENT);
+        // Named rather than dereferenced. This suite deliberately mutates the readiness group to
+        // prove the membership claim, and a component the mutation removed used to arrive here as
+        // a NullPointerException pointing at this line - which says a reader broke, not which
+        // component went missing. The assertion says the second thing.
+        assertThat(component)
+                .as("%s is not in the readiness group, so nothing below can be asked about it - "
+                        + "the group is %s", FILE_SERVICE_COMPONENT,
+                        readiness().getComponents().keySet())
+                .isNotNull();
+        return (IndicatedHealthDescriptor) component;
     }
 
     /**

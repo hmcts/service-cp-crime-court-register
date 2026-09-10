@@ -245,6 +245,15 @@ class TelemetryPrivacyIT {
      * @param log everything anything wrote while the leg ran
      */
     private void assertNothingIdentifyingWasWritten(final CapturedLog log) {
+        // A backstop rather than the guard. What actually stops a leg passing on silence is the
+        // leg itself: the two success-shaped ones assert the register was posted and what the body
+        // carried, and the three failing ones await a processed_request row with a failureReason -
+        // so a stub that stopped producing its refusal times out rather than sweeping a quiet log
+        // clean. This is why the enumeration TelemetryPrivacyTest keeps, and the key-collision
+        // check that goes with it, are deliberately not shared here (Phase 8 finding 16): that
+        // machinery exists to stop "the drive reached every declared statement" passing vacuously,
+        // and this suite makes no such claim - it sweeps what five live legs wrote for markers, and
+        // each leg proves separately that it ran.
         assertThat(linesFromThisService(log))
                 .as("a leg that logged nothing would satisfy the assertions below vacuously")
                 .isNotEmpty();
