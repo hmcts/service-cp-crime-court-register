@@ -158,14 +158,25 @@ class ReadinessPolicyIT {
     /**
      * How long an outage is held open while readiness is sampled through the whole of it.
      *
-     * <p>Ten seconds rather than one sample, because the claim is about a rolling restart and a
+     * <p>A window rather than one sample, because the claim is about a rolling restart and a
      * rolling restart needs consecutive failed probes: a case that read readiness once could not
-     * tell "readiness never moved" from "readiness had not moved yet". This repository ships no
-     * deployment manifest, so the window is not the deployed {@code failureThreshold} times
-     * {@code periodSeconds} - it is simply longer than several probe intervals, which is what
-     * "consecutive" needs.
+     * tell "readiness never moved" from "readiness had not moved yet".
+     *
+     * <p><strong>Thirty seconds, because that is the deployed roll threshold.</strong> No
+     * deployment manifest ships in this repository, so this constant cannot be derived from one
+     * here - but the numbers exist one repository away, and pretending otherwise made the window
+     * weaker than the thing it protects. {@code cpp-aks-deploy} ships this service's probes as
+     * {@code failureThreshold: 3} over {@code periodSeconds: 10}
+     * ({@code ansible/group_vars/courtregister-service_values.yaml.j2}), so Kubernetes rolls a pod
+     * after about thirty seconds of sustained readiness failure. Holding the outage for that long
+     * is what turns "readiness did not flip while we looked" into the claim an operator actually
+     * needs: this outage would not have rolled the pod.
+     *
+     * <p>Read as a floor, not as a mirror of the deployment. If those values change the case does
+     * not break - it becomes conservative, which is the safe direction for a window whose job is to
+     * be long enough.
      */
-    private static final Duration OUTAGE = Duration.ofSeconds(10);
+    private static final Duration OUTAGE = Duration.ofSeconds(30);
 
     /** The default window, so the boundary asserted below is the one the service ships with. */
     private static final Duration STALENESS = Duration.ofSeconds(60);
