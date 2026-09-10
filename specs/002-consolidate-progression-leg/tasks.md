@@ -2762,8 +2762,17 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     and this is how the line has been since `6d7aca8` rather than anything T072 changed. The gate
     rules: either the principle is read as scoped to per-delivery lines, or the run's line gains a
     run correlation id of its own.
-12. **The severity of a refused report (`CliMain.reported`, `CliMain.java:302`) is the design
-    owner's to set**, and the behaviour is unchanged pending it. It breaks no stated rule: Principle
+12. **RULED ON in Phase 9 (T074), and the ruling is recorded in `CliMain.reported`'s javadoc:
+    ERROR stays, and deliberately carries no counter.** The design owner chose ERROR-plus-a-counter,
+    and implementing it showed the counter cannot exist: `dispatch` runs the context with
+    `WebApplicationType.NONE`, so a command's JVM exposes no scrape endpoint and holds no push
+    registry, and `ReportNotWritten` leaves that try-with-resources before the catch is reached, so
+    there is no registry to increment by then. A counter there would be incremented and die with the
+    process - a signal no dashboard could read, which is worse than the honest absence of one. The
+    javadoc says so, so the next reader does not re-open it as an oversight. The original item
+    follows.
+    The severity of a refused report (`CliMain.reported`, `CliMain.java:302`) is the design
+    owner's to set, and the behaviour is unchanged pending it. It breaks no stated rule: Principle
     VI's ERROR-plus-metric clause is conditional on a failure path taking one of the two settlement
     outcomes, and a command reached by `kubectl exec` takes neither and can carry neither id, while
     what does bind - that nothing is swallowed - is satisfied, the refusal being answered on exit 2
@@ -2782,7 +2791,11 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     ordinary first step of a cutover), so a ruling against everyday ERRORs reaches it too; and if
     ERROR is kept on Principle VI grounds, the same sentence pairs an ERROR with a metric an alert
     fires on, which this path has none of, so the consistent third option is ERROR plus a counter.
-13. **The shipped default of `courtregister.cli` when nothing sets it at all is pinned nowhere.**
+13. **CLOSED by T075.** `CliModeConfigTest.TheShippedDefault` pins it on the condition rather than
+    on a context - a context loads `application.yaml`, which sets `cli: false` itself, so a Spring
+    test would have pinned the file's value and not the constant. The mutation is recorded: `NOT_CLI`
+    flipped to `"true"` fails that one case and nothing else in the suite. The original item follows.
+    The shipped default of `courtregister.cli` when nothing sets it at all is pinned nowhere.
     Carried from Phase 7's exception 1 as a follow-up for T075 or Phase 8 and still open: both
     `CliModeConfigTest` and `HttpSurfaceTest` set the property explicitly, so `NOT_CLI` flipped from
     `"false"` to `"true"` leaves both green. It now belongs to T075, which names it.
@@ -2791,7 +2804,11 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     header-from-any-member behaviour is ever judged a defect it has no register row of its own.
     `PROVENANCE.md` calls it "the P4 shape", though P4's fix is the recipient union and not the
     header.
-15. **Two acknowledged-and-dropped paths on the public-event subscription move no counter at all.**
+15. **CLOSED by `d1d9313` / `5b0aea9` (Phase 9).** Both paths now move a bounded reason on
+    `courtregister_public_events_ignored_total` - `unreadable-envelope` and
+    `header-envelope-mismatch`, kept as two reasons for the reason this item gives. The original
+    item follows.
+    Two acknowledged-and-dropped paths on the public-event subscription move no counter at all.
     A body that will not parse and a header that disagrees with its envelope are both dropped
     silently as far as the metrics go, `courtregister_public_events_ignored_total`'s four reasons
     being counted downstream of both. That is why `9b1fb27` had to keep a bounded diagnosis on the
@@ -2864,7 +2881,9 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     rather than a gap. The registers behind deferred days are on the line as `rows_deferred` but are
     not gauged; `courtregister_deferred_keys` counts court centres and
     `courtregister_oldest_recorded_unbatched_age` says how long the worst has waited.
-21. **Three source-file documentation corrections are owed and could not be made from this stage.**
+21. **CLOSED by T074**, all three, plus the fourth as a recorded Confluence handover. The original
+    item follows.
+    Three source-file documentation corrections are owed and could not be made from this stage.
     `TelemetryPrivacyTest`'s `TheGenerationAndNotificationLegs` javadoc says the statements are
     enumerated out of "the nine sources that write one" and calls `FileServicePayloadStore` "the
     tenth"; `THE_LEGS` holds eight, so it is eight sources and the ninth. `DocumentEventListener`'s
@@ -2922,8 +2941,12 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     so a supplementary batch assembled tonight for an earlier day is counted under tonight, because
     the identities are the night's assembly. Nobody should read `generated` as "documents for
     today's registers".
-27. **Two more paths move no counter, which is the alerting gap item 15 carries in a third and
-    fourth shape.** `snapshot=unread` increments nothing, so nothing can alert on a night whose
+27. **CLOSED by `d1d9313` / `5b0aea9` (Phase 9)**, both shapes, on
+    `courtregister_generation_unrecorded_total` under `settled-snapshot` and `latency-sample`; both
+    legs that take the latency reading count it, because the question is how many samples the series
+    is missing and not which leg missed them. The original item follows.
+    Two more paths move no counter, which is the alerting gap item 15 carries in a third and
+    fourth shape. `snapshot=unread` increments nothing, so nothing can alert on a night whose
     settled read failed - the WARN and the word on the line are the only signals. And a lost latency
     sample moves no counter either, only a WARN, so a dashboard cannot show that this service's
     latency series is under-counting. Either would need a bounded reason on a counter and a red case
