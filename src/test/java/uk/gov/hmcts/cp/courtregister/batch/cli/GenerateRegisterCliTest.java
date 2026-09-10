@@ -37,6 +37,7 @@ import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties.SourceMode;
 import uk.gov.hmcts.cp.courtregister.domain.AssembledBatch;
 import uk.gov.hmcts.cp.courtregister.domain.BatchAssembly;
+import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CourtCentreDay;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDefendant;
@@ -309,6 +310,25 @@ class GenerateRegisterCliTest {
      */
     private void stillWaiting(final RegisterRecord register) {
         unbatched.add(register);
+    }
+
+    /**
+     * The requesting leg, answering that the deadline held no attempt at all.
+     *
+     * <p>{@code RENDER_REQUEST_FAILED} with {@code renderRequested=false} is what
+     * {@code RegisterGenerationService} answers when the budget would not hold one attempt's own
+     * worst case - the batch is failed and its registers go back, and nothing was sent.
+     */
+    private void theDeadlineSendsNothing() {
+        // doAnswer rather than when(...): the setup above has already stubbed this call, and
+        // evaluating it inside when(...) would run that answer against the matchers' nulls.
+        doAnswer(call -> {
+            final RegisterBatch batch = call.getArgument(0);
+            renders.add(new Render(batch, call.getArgument(1)));
+            sequence.add(REQUESTED + batch.batchId());
+            return new BatchOutcome(batch.batchId(), BatchStatus.FAILED,
+                    BatchFailureReason.RENDER_REQUEST_FAILED, false);
+        }).when(service).request(any(), any(), any());
     }
 
     /**
@@ -1118,6 +1138,38 @@ class GenerateRegisterCliTest {
                             + "asked for and what waits for a later run")
                     .contains("date=" + THURSDAY + " released=1 registers=2 batches=1 requested=1"
                             + " deferred=1");
+            softly.assertThat(code).isEqualTo(CliMain.SUCCESS);
+        }
+
+        /**
+         * A batch the run's deadline stopped before any attempt was sent.
+         *
+         * <p>The same misreading `136eb81` took off the run's own line, one door along: the count
+         * is what this command tells an operator it asked the renderer for, and a batch the
+         * deadline left without an attempt was never asked for. {@code BatchOutcome.renderRequested}
+         * is the requesting leg's own account of what it did - the payload written and the request
+         * away - and it exists precisely so a count does not have to be inferred from the state a
+         * batch ended in.
+         *
+         * <p>Read as an operator would: {@code batches=1} says one was written down and
+         * {@code requested=0} says nothing went to systemdocgenerator, so a regeneration that
+         * achieved nothing cannot report that it did.
+         */
+        @Test
+        void a_render_the_deadline_stopped_before_sending_should_not_be_counted_as_requested() {
+            theFlagIsOn();
+            final RegisterBatch failed = batch(new CourtCentreDay(LEEDS, THURSDAY), LEEDS_HOUSE,
+                    BatchStatus.FAILED);
+            theDayHolds(failed, leedsRegister());
+            stillWaiting(leedsRegister());
+            theDeadlineSendsNothing();
+
+            final int code = run("--" + Args.DATE, THURSDAY.toString());
+
+            softly.assertThat(printed)
+                    .as("one batch was written down and no render was sent, so the line an "
+                            + "operator reads must not claim one was")
+                    .contains("batches=1 requested=0");
             softly.assertThat(code).isEqualTo(CliMain.SUCCESS);
         }
 
