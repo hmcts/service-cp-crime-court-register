@@ -2857,7 +2857,18 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     Carried from Phase 7's exception 1 as a follow-up for T075 or Phase 8 and still open: both
     `CliModeConfigTest` and `HttpSurfaceTest` set the property explicitly, so `NOT_CLI` flipped from
     `"false"` to `"true"` leaves both green. It now belongs to T075, which names it.
-14. **The 127-member batch's header still comes from progression's `stream().findAny()`** and this
+14. **CLOSED by `e6a3e0d` (2026-09-10), and the premise it rested on was false.** `PROVENANCE.md`
+    said a batch whose first row differs from the rest is what makes the 127-member golden worth
+    pinning; no such batch is recorded. All six base fixtures behind those members carry the same
+    court centre, LJA and address, so the golden pins the assembly and says nothing about which
+    member the header came from. A synthetic disagreeing batch in `PdfPayloadMapperTest` now pins
+    it, authored rather than recorded for the reason `defendant-type/synthetic/` is, and the
+    mutation isolates exactly: last-wins fails one case out of 574, the whole differential audit
+    included. The register-row worry is answered by T073, which put the behaviour on
+    `design_rules.md`'s deliberately-KEPT list - a register row is for a defect fixed or externally
+    owned, and this is neither. The "P4 shape" label is also gone: P4 is the recipients, and P4 is
+    fixed. The original item follows.
+    The 127-member batch's header still comes from progression's `stream().findAny()` and this
     port reproduces it bug for bug. Nothing is wrong - the golden reproduces - but if the
     header-from-any-member behaviour is ever judged a defect it has no register row of its own.
     `PROVENANCE.md` calls it "the P4 shape", though P4's fix is the recipient union and not the
@@ -2876,7 +2887,16 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     9 or the next increment. A distinction deliberately not drawn while closing finding 3, and
     stated in `claimed`'s javadoc: a nameless envelope reads `not-a-subscribed-event`, the same as
     one naming another event, because a third reading no case asks for would be an untested branch.
-16. **The statement-collision check guards only the one sweep that calls it.**
+16. **CLOSED as no change, reasoning recorded on `TelemetryPrivacyIT` (2026-09-10).** The
+    enumeration and its collision check stay where they are: that machinery stops "the drive reached
+    every declared statement" passing vacuously, and the IT makes no such claim - it sweeps five
+    live legs for markers. **A floor on the captured line count was proposed here and withdrawn**:
+    reading `publishAndAwaitAFailedRun` showed three of the five legs await a `processed_request`
+    row carrying a `failureReason` and the other two assert the register was posted and what the
+    body carried, so every leg already proves it ran and `isNotEmpty` is a backstop rather than the
+    guard. A numeric floor would have been a constant to maintain for something already guaranteed.
+    The original item follows.
+    The statement-collision check guards only the one sweep that calls it.
     `config/TelemetryPrivacyIT` is the declared other half of the privacy claim - live adapters,
     real Redis and real HTTP contexts - and enumerates no statements at all, so a duplicate pattern
     in a class only the IT exercises is outside any declaration check. Worth deciding whether the IT
@@ -2899,7 +2919,19 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     of `GenerationMetricsTest`'s tag case, and a red case per label value. `d150b6c` / `dcaec4b`
     moved where the reading is taken and moved no meter, name, tag or label, so the acceptance is
     about the surface as it stands at HEAD.
-18. **Three gaps in the latency pair's evidence, each named rather than left to be assumed. One of
+18. **PARTLY CLOSED (2026-09-10).** Gap B is closed: `RegisterStoreIT` now reads the round trip
+    back from what the columns actually hold, both routes - the batch with a document and the batch
+    with only a refusal, which is the `renderingOutcomeAt` fallback no live write had exercised. A
+    timestamp mapping, a column default or a zone round trip would have been invisible to the mocked
+    repositories the rule is otherwise pinned over. Gap A stands and is accepted: a mutation that
+    cannot exist cannot be produced. Gap C is **declined** - nothing in the suite scrapes
+    `/actuator/prometheus`, so an end-to-end scrape assertion means a web context nothing else
+    needs, while `GenerationMetricsContextTest` already proves the meters land on the exported
+    registry and the sink and reconciler suites prove a settled batch moves the timer. **One
+    over-claim corrected**: an IT can settle whether the columns can hold a pair where
+    `generated_at` precedes `requested_at`; it cannot settle whether a generator's clock ever runs
+    behind this database's in production. The original item follows.
+    Three gaps in the latency pair's evidence, each named rather than left to be assumed. One of
     the three is now false and is corrected in place by `d150b6c` / `dcaec4b`; two still stand.**
     Two of its five bounding cases have no mutation - `an_outcome_no_batch_answers_to_should_time_
     nothing` and `a_batch_still_waiting_for_its_answer_should_time_nothing` - because in both the
@@ -2935,7 +2967,15 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     second scheduled pass the morning after reading `register_batch` by register date. Either would
     still be the way to get a **final** per-night tally, which the snapshot deliberately is not, so
     they are recorded as item 24's option rather than lost with this one.
-20. **A registers-waiting gauge would be a third reading of the same fact**, and is a decision
+20. **CLOSED by `6578415` (2026-09-10): the gauge was added.** It is a third reading of the same
+    backlog, as this item says - and the decision turned on cost and on precedent. Cost: the gauges
+    are set once per run in `publish()` from numbers the run already holds, so this publishes
+    `registersWaiting`, the same number the line carries as `rows_deferred`, rather than taking a
+    new measurement. Precedent: the line already carries `rows` beside `batches` for exactly this
+    reason, and the line is per run while the gauges are what a dashboard reads between them. Three
+    court centres deferred reads very differently from three court centres and four hundred
+    registers. The original item follows.
+    A registers-waiting gauge would be a third reading of the same fact, and is a decision
     rather than a gap. The registers behind deferred days are on the line as `rows_deferred` but are
     not gauged; `courtregister_deferred_keys` counts court centres and
     `courtregister_oldest_recorded_unbatched_age` says how long the worst has waited.
@@ -2960,7 +3000,14 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     batches, 4a reading a key's whole history and 4b a day's, so a run counting either would credit
     itself with an earlier run's documents. T074 carries the design and Confluence handover;
     `RegisterStore` and `JdbcRegisterStore` already say it in their own javadoc.
-22. **Neither readiness mutation isolates to one case.** `ReadinessPolicyIT`'s two membership cases
+22. **CLOSED by `c012bc7` (2026-09-10), second half fixed and first half accepted.**
+    `fileServiceComponent()` now names the missing component and the group's actual membership
+    instead of dying on a `NullPointerException` that pointed at the reader. The first half stands
+    as recorded: both membership cases assert the group's three names so either mutation fails both,
+    but that duplication is deliberate - membership at rest and membership during an outage are
+    different claims, the second is the one FR-011 rests on, and isolating the mutation would cost a
+    claim rather than a duplication. The original item follows.
+    Neither readiness mutation isolates to one case. `ReadinessPolicyIT`'s two membership cases
     both assert the group's three component names, so either `include:` mutation fails them as
     collateral - duplication rather than a defect, one case owning the membership claim and the
     other repeating it inside an outage for a stated reason, but worth knowing if the next gate
@@ -2968,7 +3015,12 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     rather than an assertion when `fileServiceComponent()` is absent from the group; a null-safe
     read there would make any future group mutation report which component went missing. Not touched
     at the gate, because it would change a case rather than a claim about one.
-23. **The same misreading second-round finding 2 fixed is one door along, unfixed and deliberately
+23. **CLOSED by `912cc15` / `5ada165` (2026-09-10).** The count reads
+    `BatchOutcome.renderRequested` now, exactly as the run's own line reads it, so a regeneration
+    whose deadline held no attempt no longer reports a render it never sent. No register row: the
+    `C` and `P` rows catalogue the function app's defects and progression's, and this was a defect
+    in code this increment wrote. The original item follows.
+    The same misreading second-round finding 2 fixed is one door along, unfixed and deliberately
     out of that stage's scope.** `GenerateRegisterCli.request` (around line 505) increments
     `requested++` for every batch it hands to the service and prints it on the command's own
     operator-facing line, and its javadoc says "how many batches were asked for" - so a
@@ -2977,7 +3029,16 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     the fix is one condition plus a case in `GenerateRegisterCliTest`; it needs its own red-first
     pair and did not get one here, the finding having been about the run report. Phase 9 or the next
     increment.
-24. **The three notify endings are counted together as `notified`, and prising them apart is three
+24. **DECLINED, and the reasoning recorded (2026-09-10).** The distinction is not lost - it is in
+    the batch row and on `courtregister_batches_total{outcome}`, which is where an alert on
+    "was anybody missed" belongs. Two things argued against the three fields: they would be three
+    *snapshot* numbers rather than a breakdown, which makes the misreading `snapshot=taken|unread`
+    exists to prevent easier rather than harder; and the line is already twenty-two fields wide. The
+    cheaper middle - one `partially_notified` field rather than three - was named and declined for
+    the same reasons. If per-night finality is ever genuinely needed, the answer is the
+    per-settled-batch line this item names, and that is a different logging posture deserving its
+    own decision. The original item follows.
+    The three notify endings are counted together as `notified`, and prising them apart is three
     more fields or a per-batch line.** Told everybody, told some with the rest resendable, and
     nobody to tell (defect fix P1) are one count on the line; which of the three a batch reached
     stays in the row and on `courtregister_batches_total{outcome}` and is deliberately not on the
@@ -2985,13 +3046,24 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     If an operator needs them apart **per night**, that is three more fields, or the
     per-settled-batch structured line old item 19's first option described - which is also the only
     way to get a **final** per-night tally rather than the snapshot the line now carries.
-25. **`notified <= generated <= generating` is documented as not holding on a run that stopped part
+25. **CLOSED by `71c5cb5` (2026-09-10), and it turned up something more urgent than itself.** The
+    divergence is now pinned: `a_settled_snapshot_may_exceed_the_requesting_account_on_a_run_that_
+    stopped` is [A], and the assertion discriminates - with the store answering only the batch the
+    requesting leg counted, it fails. **More urgently, the metrics note held for the Confluence page
+    stated the inequality as though it always held**, with no mention of the exception, so an alert
+    written from it would have fired on exactly the night that most needs the line to be readable.
+    Corrected before handover. The original item follows.
+    `notified <= generated <= generating` is documented as not holding on a run that stopped part
     way, and no case pins the divergence.** It is stated in `RunReport.Settled` rather than
     asserted: a run that lost a verdict leaves a batch in none of the three requesting counts while
     the completion legs can still settle it before the line is written. Pinning it would need a
     fixture where a verdict is lost and the store then settles the same batch. Recorded as a reading
     rather than a defect, on the same footing item 18's two unmutated bounding cases are.
-26. **The registers behind a settled batch are the run's own count of what it stamped, not a second
+26. **CLOSED by `71c5cb5` (2026-09-10).** Both caveats are in the metrics note held for the
+    Confluence page, which is the only viable home: there is no runbook in this repository, `doc/`
+    carries only the defect-fix register, and the repo deliberately holds no design narrative. The
+    original item follows.
+    The registers behind a settled batch are the run's own count of what it stamped, not a second
     read.** That is exact for a batch with a document, which is past every state that releases rows,
     and it is the one number on the settled half of the line that is not the store's. Worth knowing
     before anyone reads `rows_generated` as a store total, and worth one sentence in the runbook
@@ -3015,7 +3087,25 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     risk being a seventeenth site written without one. None of those notes was correct: no site
     keeps an exception now, the sweep refuses every attachment, and the seventeenth site the item
     worried about is a failing test rather than a paragraph nobody reads.
-28. **The zero-attempt deadline path and the two moved latency readings have no integration or
+28. **PARTLY CLOSED, and the question this item asks is answered: neither (2026-09-10).** The two
+    moved latency readings are covered by finding 18's `RegisterStoreIT` case. The zero-attempt
+    deadline path is **not**, and "whether it belongs in an existing IT rather than a new one" turns
+    out to have a third answer. `RunDeadlineEndToEndIT` is about the *intake* pipeline's per-delivery
+    budget (`PROCESSING_DEADLINE_EXCEEDED`), not the run's; `GenerationEndToEndIT` and
+    `GenerationFailureEndToEndIT` are the right subject but start their stack once in `@BeforeAll`
+    with fixed settings, and a `courtregister.generation.run-deadline` small enough to starve an
+    attempt would break every sibling case in whichever suite hosted it. So it needs a suite of its
+    own, on the pattern `RunDeadlineEndToEndIT` already sets - a whole stack started for one
+    assertion.
+    **Declined on proportion, not on merit**: the path is pinned twice at unit level, in
+    `RegisterGenerationServiceTest` and through the mocked service in `RegisterGenerationJobTest`,
+    and `requested` is now also read from `renderRequested` by the CLI (finding 23) with its own
+    case. What a future increment would add is one suite whose whole point is a starved deadline;
+    it is written down here so that decision starts from a note rather than a rediscovery.
+    Half B is accepted as recorded: `maxAttempts() < 1` is unreachable through configuration
+    `PropertiesValidator` refuses, and testing an unreachable branch buys nothing.
+    The original item follows.
+    The zero-attempt deadline path and the two moved latency readings have no integration or
     end-to-end cover.** The zero-attempt path is pinned at unit level in
     `RegisterGenerationServiceTest` and, through the mocked service, in `RegisterGenerationJobTest`;
     no suite drives it through the real service, so the run report's `requested` is not asserted

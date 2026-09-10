@@ -151,6 +151,9 @@ class RegisterStoreIT {
 
     private static final Instant GENERATED_AT = Instant.parse("2026-08-24T18:04:11Z");
 
+    /** A render's duration, chosen so a wrong zone or mapping lands as a wrong number. */
+    private static final Duration ROUND_TRIP = Duration.ofSeconds(97);
+
     /** systemdocgenerator's own words about a failure, which the row keeps and no log prints. */
     private static final String SDG_REASON = "template OEE_Layout5 rendered no pages";
 
@@ -1570,6 +1573,109 @@ class RegisterStoreIT {
             softly.assertThat(generatedRowsAtCourtCentre())
                     .as("two rows generated, not four: the count is the whole of defect fix P3")
                     .isEqualTo(2);
+        }
+
+        /**
+         * What the request was stamped at, read back off the column.
+         *
+         * @param registerDate the day whose single batch to read
+         * @return that batch's {@code requested_at}
+         */
+        private Instant requestedAtOn(final LocalDate registerDate) {
+            return batchesOn(registerDate).get(0).requestedAt();
+        }
+
+        /**
+         * The three instants the latency reading is taken from, across a live write and read.
+         *
+         * <p>{@code RegisterBatch.generationRoundTrip} is pinned at unit level over mocked
+         * repositories, so what is proved there is the rule and the wiring - that it reads
+         * {@code requested_at} and prefers {@code generated_at} over {@code failed_at}, and refuses
+         * a negative. What no suite proved is that the columns carry what the rule assumes once a
+         * real {@code markRequested} and {@code markGenerated} have been through JDBC and back:
+         * a timestamp mapping, a column default or a zone round trip would be invisible to a mock
+         * and would silently change every latency sample the service publishes.
+         *
+         * <p>Both routes, because {@code renderingOutcomeAt} prefers the document and falls back to
+         * the refusal: a batch that generated, and a batch that failed.
+         *
+         * <p><strong>[A]</strong> - the behaviour is what it already was; this is where it is
+         * asserted against a real database rather than against a mock. It cannot settle whether a
+         * generator's clock ever actually runs behind this database's in production - only that the
+         * columns hold what the reading is taken from.
+         */
+        @Test
+        void the_round_trip_is_read_from_what_the_columns_actually_hold() {
+            final DistributionCommand generated = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand failed = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(generated, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(failed, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> waiting = mine(store.activeUnbatched());
+                final RegisterBatch withDocument = assembled(MONDAY, recordsOn(waiting, MONDAY));
+                final RegisterBatch withRefusal = assembled(TUESDAY, recordsOn(waiting, TUESDAY));
+                store.markRequested(withDocument.batchId(), PAYLOAD_FILE_ID);
+                // Read requested_at back rather than assuming it: it is the store's own now(), so
+                // the only way to mark a document a known interval after the request is to ask the
+                // column what the request was stamped at.
+                store.markGenerated(withDocument.batchId(), DOCUMENT_FILE_ID,
+                        requestedAtOn(MONDAY).plus(ROUND_TRIP), CompletedBy.EVENT);
+                store.markRequested(withRefusal.batchId(), SECOND_PAYLOAD_FILE_ID);
+                store.markFailed(withRefusal.batchId(), BatchFailureReason.GENERATION_FAILED,
+                        SDG_REASON, CompletedBy.RECONCILER);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchesOn(MONDAY))
+                    .as("the interval the columns actually hold, not merely that one is there: a "
+                            + "timestamp mapping or a zone round trip would land here as a wrong "
+                            + "duration, and every latency sample this service publishes is this "
+                            + "reading")
+                    .singleElement()
+                    .extracting(batch -> batch.generationRoundTrip().orElse(null))
+                    .isEqualTo(ROUND_TRIP);
+            softly.assertThat(batchesOn(TUESDAY))
+                    .as("and the batch with no document at all, whose round trip ends at the "
+                            + "refusal instead - the renderingOutcomeAt fallback the rule states "
+                            + "and no live write had exercised")
+                    .singleElement()
+                    .extracting(batch -> batch.generationRoundTrip().isPresent())
+                    .isEqualTo(true);
+        }
+
+        /**
+         * The one shape the columns can hold that is not a round trip, across a live write.
+         *
+         * <p>{@code generated_at} is systemdocgenerator's account of when it rendered and
+         * {@code requested_at} is the store's own {@code now()}, so a generator whose clock is
+         * behind this database's puts the outcome before the request. The rule refuses a negative
+         * reading; this says the columns will carry such a pair, which is what makes the rule worth
+         * having. It cannot say whether that ever happens in production - only that nothing between
+         * the write and the read prevents it.
+         */
+        @Test
+        void a_document_stamped_before_its_request_is_carried_and_refused_as_a_round_trip() {
+            final DistributionCommand backwards = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(backwards, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch batch =
+                        assembled(MONDAY, recordsOn(mine(store.activeUnbatched()), MONDAY));
+                store.markRequested(batch.batchId(), PAYLOAD_FILE_ID);
+                store.markGenerated(batch.batchId(), DOCUMENT_FILE_ID,
+                        requestedAtOn(MONDAY).minus(ROUND_TRIP), CompletedBy.EVENT);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchesOn(MONDAY))
+                    .as("the pair is stored as written - the database refuses nothing - and the "
+                            + "rule declines to call it a round trip, which is a clock to fix "
+                            + "rather than a latency to publish")
+                    .singleElement()
+                    .extracting(batch -> batch.generationRoundTrip().isPresent())
+                    .isEqualTo(false);
         }
 
         /**
