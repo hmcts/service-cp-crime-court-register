@@ -957,6 +957,46 @@ class DocumentEventListenerTest {
             }
         }
 
+        /**
+         * The reading a broker feeding this subscription rubbish is seen by. Without it a topic
+         * delivering nothing but unparseable bodies and a topic delivering nothing at all are the
+         * same picture on a dashboard, the four reasons beside it all being counted downstream of
+         * a parse that succeeded.
+         */
+        @Test
+        void a_body_that_would_not_parse_should_be_counted_under_its_own_reason()
+                throws JMSException {
+            listener.onPublicEvent(message(DocumentEventListener.DOCUMENT_AVAILABLE,
+                    ourDocumentAvailable().replace("\"" + DOCUMENT_FILE_ID + "\"",
+                            PersonalDataMarkers.OPERATOR_TOKEN)));
+
+            assertThat(ignored(GenerationMetrics.UNREADABLE_ENVELOPE))
+                    .as("a delivery dropped before it could be read is still a delivery this "
+                            + "subscription took, and the only place it can be seen is a counter")
+                    .isEqualTo(1);
+        }
+
+        /**
+         * Its own reason rather than a second reading of the one above: a body that will not parse
+         * is a publisher writing malformed JSON, and a crossed pair is a message that parsed and
+         * contradicts itself, which is the fault a subscription is re-declared over.
+         */
+        @Test
+        void a_header_that_disagrees_with_its_envelope_should_be_counted_under_its_own_reason()
+                throws JMSException {
+            listener.onPublicEvent(message(DocumentEventListener.DOCUMENT_AVAILABLE,
+                    generationFailed(DocumentEventListener.ORIGINATING_SOURCE)));
+
+            assertThat(ignored(GenerationMetrics.HEADER_ENVELOPE_MISMATCH))
+                    .as("the header and the envelope disagreeing is a fault of its own, and "
+                            + "counting it as an unreadable body would send a reader after a "
+                            + "publisher whose JSON was never malformed")
+                    .isEqualTo(1);
+            assertThat(ignored(GenerationMetrics.UNREADABLE_ENVELOPE))
+                    .as("and it is not also counted as one that would not parse")
+                    .isEqualTo(ABSENT);
+        }
+
         @Test
         void an_envelope_naming_something_else_should_not_be_quoted() throws JMSException {
             try (CapturedLog log = CapturedLog.capturing(DocumentEventListener.class)) {

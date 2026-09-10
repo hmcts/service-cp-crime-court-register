@@ -1097,6 +1097,35 @@ class GenerationReconcilerTest {
                             + "what a pass that carried on means")
                     .doesNotThrowAnyException();
         }
+
+        /**
+         * The twin of {@code DocumentOutcomeSinkTest}'s, and counted on the same series.
+         *
+         * <p>Both legs take this reading and either can lose it, so a counter that only one of
+         * them moved would answer "how many samples is the series missing?" with the half taken on
+         * whichever leg happened to be instrumented. What a reader wants is the total, which is
+         * why the reason is the sample and not the leg.
+         */
+        @Test
+        void a_reading_that_cannot_be_taken_should_be_counted_on_the_same_series_as_the_sinks() {
+            final RegisterBatch unreadable = overdue();
+            generatingSince(unreadable);
+            saysNothingAbout(unreadable);
+            when(batches.findById(unreadable.batchId())).thenThrow(new StoreUnavailableException(
+                    "the store could not be reached to read a settled batch back",
+                    new IllegalStateException("the connection pool is empty")));
+
+            reconcile();
+
+            final Counter counter = registry.find(GenerationMetrics.GENERATION_UNRECORDED)
+                    .tag(GenerationMetrics.REASON_TAG, GenerationMetrics.LATENCY_SAMPLE)
+                    .counter();
+            softly.assertThat(counter)
+                    .as("the reconciler's lost samples are the same gap in the same histogram as "
+                            + "the sink's, so they are the same series")
+                    .isNotNull();
+            softly.assertThat(counter == null ? -1 : counter.count()).isEqualTo(1);
+        }
     }
 
     /** What the row read back after a mark answers, which is what the round trip is taken from. */

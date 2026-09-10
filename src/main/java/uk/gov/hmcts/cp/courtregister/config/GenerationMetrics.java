@@ -61,6 +61,8 @@ public class GenerationMetrics {
             "courtregister_notifications_ignored_total";
     public static final String PUBLIC_EVENTS_IGNORED =
             "courtregister_public_events_ignored_total";
+    public static final String GENERATION_UNRECORDED =
+            "courtregister_generation_unrecorded_total";
     public static final String OLDEST_RECORDED_UNBATCHED_AGE =
             "courtregister_oldest_recorded_unbatched_age";
     public static final String OLDEST_GENERATING_AGE = "courtregister_oldest_generating_age";
@@ -121,6 +123,54 @@ public class GenerationMetrics {
      * registers, so it is counted here and applied nowhere.
      */
     public static final String PAYLOAD_MISMATCH = "payload-mismatch";
+
+    /**
+     * The {@code reason} label of a delivery whose body would not parse at all.
+     *
+     * <p>The four readings above are all taken from an envelope this service read: they say what a
+     * readable announcement was about and why nothing could be done with it. This one is taken
+     * before any of that, and it is the reading a broker feeding this subscription rubbish is seen
+     * by - without it, a topic delivering nothing but unparseable bodies is indistinguishable on a
+     * dashboard from a topic delivering nothing at all. Nothing of the body reaches the label: what
+     * refused to parse is unvalidated text this service never asked for (Principle VII), so the
+     * bounded reason is the whole of the series and the class that refused it stays on the line.
+     */
+    public static final String UNREADABLE_ENVELOPE = "unreadable-envelope";
+
+    /**
+     * The {@code reason} label of a delivery whose header and envelope name different events.
+     *
+     * <p>Its own series rather than a second reading of {@link #UNREADABLE_ENVELOPE}, because the
+     * two are different faults with different owners: a body that will not parse is a publisher
+     * writing malformed JSON, and a crossed pair is a message that parsed perfectly well and
+     * contradicts itself - the selector matched on one name and the envelope carries another. Only
+     * this one can be a broker routing on a header nobody kept in step with the payload, which is
+     * the fault a subscription is re-declared over.
+     */
+    public static final String HEADER_ENVELOPE_MISMATCH = "header-envelope-mismatch";
+
+    /**
+     * The {@code reason} label of a run whose settled counts could not be read back.
+     *
+     * <p>{@code snapshot=unread} on the run line says the four settled counts are missing, and
+     * before this series that word and a WARN were the whole of the signal: a night whose settled
+     * read failed could not be alerted on, only found by somebody already reading the log index.
+     * The run itself is unharmed - the batches are stamped and the renders are away by the time the
+     * snapshot is taken - so this counts a report that came up short, never a night that did.
+     */
+    public static final String SETTLED_SNAPSHOT = "settled-snapshot";
+
+    /**
+     * The {@code reason} label of a settled batch whose render round trip could not be timed.
+     *
+     * <p>The same gap one leg along: a lost sample leaves {@code courtregister_generation_latency}
+     * quietly under-counting, and a series that is under-counting looks exactly like a series that
+     * is healthy. Counting the loss is what lets a dashboard say the latency reading is incomplete
+     * rather than good. Both legs that take the reading count it here - the sink for an outcome
+     * that arrived and the reconciler for one that had to be fetched - because the question is how
+     * many samples the series is missing and not which leg missed them.
+     */
+    public static final String LATENCY_SAMPLE = "latency-sample";
 
     /**
      * The {@code reason} label of a settlement that arrived after the row was already accepted.

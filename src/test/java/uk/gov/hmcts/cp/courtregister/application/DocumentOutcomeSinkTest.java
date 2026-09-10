@@ -1049,6 +1049,37 @@ class DocumentOutcomeSinkTest {
         }
 
         /**
+         * What the WARN above cannot do on its own.
+         *
+         * <p>A lost sample leaves {@code courtregister_generation_latency} quietly under-counting,
+         * and a series that is under-counting is indistinguishable from a healthy one: the count
+         * is lower and every reading in it is real. Until this counter the only trace was a line
+         * in the log index, so a dashboard could not say the latency reading was incomplete. It is
+         * counted where the sample is lost rather than where the batch settled, because what it
+         * measures is how many samples the series is missing.
+         */
+        @Test
+        void a_reading_that_could_not_be_taken_should_be_counted_so_the_series_says_it_is_short() {
+            final RegisterBatch batch = generating(MONDAY);
+            when(batches.findById(batch.batchId()))
+                    .thenReturn(Optional.of(batch))
+                    .thenThrow(new StoreUnavailableException(STORE_GONE,
+                            new IllegalStateException("the connection pool is empty")));
+
+            sink.documentAvailable(batch.batchId(), batch.payloadFileId(), DOCUMENT_FILE_ID,
+                    GENERATED_AT, CompletedBy.EVENT);
+
+            final Counter counter = registry.find(GenerationMetrics.GENERATION_UNRECORDED)
+                    .tag(GenerationMetrics.REASON_TAG, GenerationMetrics.LATENCY_SAMPLE)
+                    .counter();
+            softly.assertThat(counter)
+                    .as("a histogram that is short by an unknown number of samples cannot be "
+                            + "alerted on; one that says how many it is short by can")
+                    .isNotNull();
+            softly.assertThat(counter == null ? -1 : counter.count()).isEqualTo(1);
+        }
+
+        /**
          * The other half of the reading, and the one Micrometer itself refuses: a measurement it
          * will not take is raised rather than dropped, which is measured in
          * {@code RegisterBatch.generationRoundTrip}'s own javadoc. The rule keeps a negative

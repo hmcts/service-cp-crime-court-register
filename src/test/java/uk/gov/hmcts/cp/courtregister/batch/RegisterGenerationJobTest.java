@@ -12,6 +12,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.lang.reflect.Method;
@@ -1734,6 +1735,33 @@ class RegisterGenerationJobTest {
                                 + "line says the read is missing")
                         .anyMatch(line -> line.contains(IllegalStateException.class.getName()));
             }
+        }
+
+        /**
+         * The third half of it, and the one a dashboard can act on.
+         *
+         * <p>The word and the WARN above are read by somebody already looking. Until this counter
+         * a run whose settled read failed moved no metric at all, so nothing could alert on it and
+         * a fortnight of unread snapshots would show as a healthy fortnight. It counts a report
+         * that came up short, never a night that did - which is why it is its own series and not a
+         * reading of any batch outcome.
+         */
+        @Test
+        void a_snapshot_the_store_refused_should_move_a_counter_something_can_alert_on() {
+            aNightThatIsAlreadySettling();
+            when(store.batchesNamed(any()))
+                    .thenThrow(new IllegalStateException("the register store did not answer"));
+
+            run();
+
+            final Counter counter = registry.find(GenerationMetrics.GENERATION_UNRECORDED)
+                    .tag(GenerationMetrics.REASON_TAG, GenerationMetrics.SETTLED_SNAPSHOT)
+                    .counter();
+            softly.assertThat(counter)
+                    .as("a lost snapshot that increments nothing is a gap only the log index can "
+                            + "see, and an alert cannot be written against a log index")
+                    .isNotNull();
+            softly.assertThat(counter == null ? -1 : counter.count()).isEqualTo(1);
         }
 
         /**
