@@ -346,8 +346,12 @@ court-register leg for the downstream half. The register is `doc/DEFECT-FIXES.md
   its message belongs to whatever library raised it and is exactly where a connection string or a
   fragment of a statement turns up. The log-statement sweep enforces this, and it governs INFO and
   above.
-- Every log line carries `requestId` and `hearingId` (MDC) on the intake leg, and the batch id on
-  the generation leg. `source` and court-centre id/OU code where relevant.
+- Every log line carries the correlation of the unit of work it belongs to: `requestId` and
+  `hearingId` (MDC) on the intake leg, `runId` for a scheduled run, and the batch id for a line
+  about one batch. `source` and court-centre id/OU code where relevant. A scheduled run has no
+  delivery identifiers and never can, which is why it has one of its own (Principle VII, v3.1.0);
+  `batch/RunCorrelation` opens it, adopts an ambient one where a run reached into a sweep, and only
+  whoever opened it clears it - the scheduler's threads are pooled.
 - **No defendant PII at `info`** — no names, addresses, dates of birth, ASNs, or URNs. Identifiers
   only. Every defendant on this register is a **youth**. PII-bearing detail belongs at `debug` and
   must be off in deployed environments.

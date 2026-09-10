@@ -35,10 +35,10 @@ import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.slf4j.MDC;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Scheduled;
 import uk.gov.hmcts.cp.courtregister.application.BatchOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
@@ -202,6 +202,12 @@ class RegisterGenerationJobTest {
             " snapshot=taken generated=0 notified=0 rows_generated=0 rows_notified=0";
 
     /**
+     * The correlation as {@code normalisedRunLines} renders it, so an expectation can name the
+     * field without naming the identity, which is minted per run.
+     */
+    private static final String NORMALISED_RUN_ID = " run_id=<id>";
+
+    /**
      * The line a night that did something leaves behind, in full.
      *
      * <p>Every field of {@link RunReport}: what the gate decided and why, how many batches the run
@@ -213,6 +219,7 @@ class RegisterGenerationJobTest {
      * operator can no longer read, and a field renamed is an alert that stops firing.
      */
     private static final String THE_MIXED_NIGHTS_LINE = RUN_EVENT
+            + NORMALISED_RUN_ID
             + " gate=proceed reason=flag-on batches=3 requested=2 generating=1 failed=1 pending=1"
             + " deferred=2 rows=" + THE_MIXED_NIGHTS_ROWS
             + " rows_generating=" + GENERATING_ROWS
@@ -224,6 +231,7 @@ class RegisterGenerationJobTest {
 
     /** The same line for a night the flag stopped: the same fields, and nothing earned. */
     private static final String THE_SKIPPED_NIGHTS_LINE = RUN_EVENT
+            + NORMALISED_RUN_ID
             + " gate=skipped reason=flag-off batches=0 requested=0 generating=0 failed=0 pending=0"
             + " deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0 rows_deferred=0"
             + NOTHING_SETTLED_YET
@@ -508,6 +516,25 @@ class RegisterGenerationJobTest {
      */
     private static List<String> runLines(final CapturedLog log) {
         return log.messages().stream().filter(line -> line.startsWith(RUN_EVENT)).toList();
+    }
+
+    /**
+     * The run's lines with the correlation's value normalised, for the cases that read the whole
+     * line verbatim.
+     *
+     * <p>The id is minted per run, so a case comparing the whole line cannot name it. Normalising
+     * rather than stripping is deliberate: the field stays visible in every expectation below, so a
+     * reader sees what the line carries, and a field that vanished from the line would still fail
+     * them. That the value is a real identity, and a different one each run, is asserted by the
+     * three cases that own the correlation.
+     *
+     * @param log what the job logged
+     * @return the run's lines, each with {@code run_id=<id>} in place of the minted value
+     */
+    private static List<String> normalisedRunLines(final CapturedLog log) {
+        return runLines(log).stream()
+                .map(line -> line.replaceAll("run_id=[0-9a-f-]{36}", "run_id=<id>"))
+                .toList();
     }
 
     /**
@@ -1342,7 +1369,7 @@ class RegisterGenerationJobTest {
             try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
                 run();
 
-                softly.assertThat(runLines(log))
+                softly.assertThat(normalisedRunLines(log))
                         .as("one line per run and every field of the report on it: the durable "
                                 + "rows say what happened to each batch, and this is the only "
                                 + "place that says what happened to the night")
@@ -1357,7 +1384,7 @@ class RegisterGenerationJobTest {
             try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
                 run();
 
-                softly.assertThat(runLines(log))
+                softly.assertThat(normalisedRunLines(log))
                         .as("before cutover this is every night, and the same fields with zeroes "
                                 + "in them is what makes \"the flag is off\" different from \"the "
                                 + "scheduler never fired\" in a log index")
@@ -1931,6 +1958,7 @@ class RegisterGenerationJobTest {
 
         /** The line a run that stopped before it read anything can still write. */
         private static final String NOTHING_YET = RUN_EVENT
+                + NORMALISED_RUN_ID
                 + " gate=proceed reason=flag-on batches=0 requested=0 generating=0 failed=0"
                 + " pending=0 deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0"
                 + " rows_deferred=0" + NOTHING_SETTLED_YET + " reconciled=0 duration_ms=0";
@@ -1944,6 +1972,7 @@ class RegisterGenerationJobTest {
          * stopped part way can still say what the store makes of the batches it did stamp.
          */
         private static final String AS_FAR_AS_IT_GOT = RUN_EVENT
+                + NORMALISED_RUN_ID
                 + " gate=proceed reason=flag-on batches=1 requested=1 generating=1 failed=0"
                 + " pending=0 deferred=2 rows=" + (GENERATING_ROWS + WAITING_ROWS)
                 + " rows_generating=" + GENERATING_ROWS
@@ -1962,6 +1991,7 @@ class RegisterGenerationJobTest {
          * it asked.
          */
         private static final String A_RENDER_AWAY_AND_NOTHING_ACCOUNTED = RUN_EVENT
+                + NORMALISED_RUN_ID
                 + " gate=proceed reason=flag-on batches=0 requested=1 generating=0 failed=0"
                 + " pending=0 deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0"
                 + " rows_deferred=0" + NOTHING_SETTLED_YET + " reconciled=0 duration_ms=0";
@@ -1992,7 +2022,7 @@ class RegisterGenerationJobTest {
             try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
                 whatStoppedTheRun();
 
-                softly.assertThat(runLines(log))
+                softly.assertThat(normalisedRunLines(log))
                         .as("a night that stopped is still a night, and it is the one night that "
                                 + "produced no line at all - which is the silence the report was "
                                 + "written to abolish")
@@ -2007,7 +2037,7 @@ class RegisterGenerationJobTest {
             try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
                 whatStoppedTheRun();
 
-                softly.assertThat(runLines(log))
+                softly.assertThat(normalisedRunLines(log))
                         .as("one batch was requested, two court centre days were passed over and "
                                 + "nothing was chased; a run has to be able to say how far it got, "
                                 + "because the batches it did stamp are waiting on somebody now")
@@ -2086,7 +2116,7 @@ class RegisterGenerationJobTest {
             try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
                 whatStoppedTheRun();
 
-                softly.assertThat(runLines(log))
+                softly.assertThat(normalisedRunLines(log))
                         .as("the render was accepted and the mark that would have recorded it was "
                                 + "not written, so no outcome came back for this batch; the "
                                 + "document is being rendered either way, and a night that "
@@ -2103,7 +2133,7 @@ class RegisterGenerationJobTest {
             try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
                 whatStoppedTheRun();
 
-                softly.assertThat(runLines(log))
+                softly.assertThat(normalisedRunLines(log))
                         .as("the same one render, refused by systemdocgenerator this time and "
                                 + "failed on a row the store would not take: what the night sent "
                                 + "cannot depend on which of the two marks was the one that could "

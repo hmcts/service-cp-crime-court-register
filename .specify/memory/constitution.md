@@ -1,7 +1,50 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 3.0.0 → 3.0.1
+Version change: 3.0.1 → 3.1.0
+Bump rationale: MINOR - Principle VII's correlation rule is made satisfiable,
+                and doing so adds an obligation (2026-09-10). The rule said
+                every log line about processing MUST carry `requestId` and
+                `hearingId`. A scheduled run has neither and never could: it is
+                one unit of work across many hearings and many batches, and
+                those identifiers belong to the deliveries that recorded the
+                registers rather than to the night that renders them. So the
+                eleven lines a night writes - four from the nightly job, seven
+                from the grace-period reconciler - stood in permanent breach of
+                a rule that could not be met, and carried no correlation at all:
+                a night could not be pulled out of the estate's index as one
+                thing, which on an evening where the reconciler is also settling
+                earlier nights' batches is the difference between reading a run
+                and reading a haystack.
+
+                The rule now names the correlation appropriate to the unit of
+                work - `requestId` + `hearingId` for a delivery, `runId` for a
+                scheduled run, the batch id for a line about one batch - and
+                says what it was always for: no line is unattributable. The new
+                obligation is the `runId`, which is why this is MINOR and not a
+                wording PATCH.
+
+                Implemented by `batch/RunCorrelation`, opened by
+                `RegisterGenerationJob.run()` and by
+                `GenerationReconciler.reconcileScheduled()`. Nesting is handled
+                rather than assumed: a sweep the run reaches into adopts the
+                run's id, a sweep that fired on its own schedule mints one, and
+                only whoever opened it removes it - the scheduler's threads are
+                pooled, and an id left behind would be inherited by whatever ran
+                next on that thread, which is worse than no correlation because
+                it reads as a true one.
+
+Modified sections (this amendment): Principle VII, the correlation bullet only.
+Principles I-VI and VIII unchanged.
+
+Templates / guidance reviewed:
+  - .claude/rules/design_rules.md   ✅ already said it (2026-09-10, T073): "the
+      batch id on the generation leg". Now also names the run id.
+  - The run report line gains `run_id` as its second field, so the metrics note
+      handed over for the Confluence page moves from twenty-one fields to
+      twenty-two. Corrected in that note before handover.
+
+Previous amendment (3.0.0 → 3.0.1):
 Bump rationale: PATCH - the commit-type list is completed (2026-09-05). The
                 Commits bullet of Principle VIII (Estate Conventions) listed six
                 Conventional Commit types (feat, fix, chore, docs, refactor, test), but
@@ -544,7 +587,13 @@ nuance.
 
 - The permitted correlation set at `INFO` is: `requestId`, `hearingId`,
   `hearingDay`, `source`, court-centre id / OU code, counts, and timings.
-  Every log line about processing MUST carry `requestId` and `hearingId`.
+  Every log line about processing MUST carry the correlation of the unit of
+  work it belongs to. For a delivery that is `requestId` and `hearingId`. A
+  **scheduled run** has neither and cannot: it is one unit of work across many
+  hearings and many batches, so it carries a `runId` of its own, minted per run
+  and cleared when the run ends. A line about one batch carries its batch id.
+  The rule is that no line is unattributable, not that every line names a
+  delivery.
 - Whole payloads, register fragments, and outbound documents MUST NOT be
   logged at any level in a deployed environment. Where a payload dump is
   genuinely needed for local diagnosis it goes behind `DEBUG` **and** an
@@ -798,4 +847,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 3.0.1 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-05
+**Version**: 3.1.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-10

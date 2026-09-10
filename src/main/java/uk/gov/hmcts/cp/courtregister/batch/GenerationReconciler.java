@@ -309,6 +309,16 @@ public class GenerationReconciler {
     @Scheduled(initialDelayString = GRACE_PERIOD, fixedDelayString = GRACE_PERIOD)
     @SchedulerLock(name = LOCK_NAME, lockAtMostFor = LOCK_AT_MOST_FOR)
     public void reconcileScheduled() {
+        RunCorrelation.under(this::reconcileUnderItsOwnCorrelation);
+    }
+
+    /**
+     * The sweep, under the correlation {@link #reconcileScheduled()} opened for it.
+     *
+     * <p>A sweep the nightly run reached into is part of that run and carries its id; this is the
+     * other case, where the sweep fired on its own schedule and is a unit of work in its own right.
+     */
+    private void reconcileUnderItsOwnCorrelation() {
         reconcile();
     }
 

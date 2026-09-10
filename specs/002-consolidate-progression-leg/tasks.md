@@ -1987,12 +1987,16 @@ repository edits that page, and T074 carries the handover.
 
 - **The run report is two things, not one**: a single structured log line and three gauges. Both are
   emitted for every run, including a run the flag stopped and a run that failed part way.
-- **The line**, one at INFO per run, from `batch/RegisterGenerationJob`, **twenty-one fields in this
-  order** (it carried ten until `2cafacb` / `707e7d8`, which added `requested` and the four row
+- **The line**, one at INFO per run, from `batch/RegisterGenerationJob`, **twenty-two fields in this
+  order** (`run_id` was added second, after `event`, by the Phase 8 finding-11 ruling: a run carries
+  no `requestId` or `hearingId` and cannot, so it carries a correlation of its own, and every other
+  line the run and the reconciler write carries the same id in MDC - which is what lets a night be
+  pulled out of the index as one thing) (it carried ten until `2cafacb` / `707e7d8`, which added `requested` and the four row
   counts beside `rows`, and sixteen until `5b515a7` / `1e71f88`, which added `snapshot`,
   `generated`, `notified`, `rows_generated` and `rows_notified` in the middle rather than at the end
   so the requesting leg's own two accounts stay contiguous). `event`, always
-  `register_generation_run`, which is what an index filter or an alert query keys on. `gate`,
+  `register_generation_run`, which is what an index filter or an alert query keys on. `run_id`, the
+  correlation this run and everything it wrote share. `gate`,
   `proceed` or `skipped`. `reason`, one of four bounded codes: `flag-on`,
   `overridden` (an operator overrode a flag that had not said ON), `flag-off`, `flag-unreadable`
   (the flag could not be read and the run failed closed). `batches`, the total the run accounted
@@ -2715,7 +2719,17 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
    introduced it - the evidence is quoted where it was run. Full readings on T071's line above. The
    third case was never an [A] at all and its label is retracted at `42816a7`; the collateral each
    mutation takes down is item 22.
-6. **`PostgresTestSupport.refuseConnectionsTo` / `allowConnectionsTo`** is worth folding into the
+6. **CLOSED, both halves (2026-09-10).** The first half needed no change and is closed as already
+   satisfied: both helpers are already `public static` on `PostgresTestSupport`, the shared fixture,
+   which 26 suites import - only `ReadinessPolicyIT` calls them, and no suite has turned out to need
+   a single-database outage without one, so adopting it elsewhere would be speculative generality.
+   The second half was real and is fixed at `eeb25ac`: the window **is** grounded now, at thirty
+   seconds. `cpp-aks-deploy` ships this service's probes as `failureThreshold: 3` over
+   `periodSeconds: 10`, so Kubernetes rolls a pod after about thirty seconds of sustained readiness
+   failure - which made the old ten-second window a third of the thing it protects. It is read as a
+   floor: if those values change the case becomes conservative rather than broken. The original item
+   follows.
+   `PostgresTestSupport.refuseConnectionsTo` / `allowConnectionsTo` is worth folding into the
    fixture on its own merits - `ALTER DATABASE ... ALLOW_CONNECTIONS false` plus
    `pg_terminate_backend` is the only way this build can stage an outage of one database inside the
    shared server, and `FileServicePayloadStoreIT` and the generation suites may want it. Note also
@@ -2740,11 +2754,27 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
    header-mismatch WARN, are CLOSED by `893d45a` / `9b1fb27`** - the same defect class one level out
    from the fields to the message, and the fourth and fifth door along from the operations commands.
    Full reading in the checkpoint above; the alerting gap those two paths leave is item 15.
-8. **`RegisterGenerationService:220` puts an English sentence in a `reason=` slot**, logging
+8. **CLOSED by `b1ade41` (2026-09-10).** The slot carries `PAYLOAD_STORE_UNAVAILABLE`, the batch's
+   own bounded code. The phrase stays as prose in the sentence rather than as a value: which of the
+   five it is says whether this was the network, the row count or the serialisation, and that
+   distinction survives nowhere else - the batch row records only the bounded reason. A bounded
+   sub-code on the five throw sites was weighed as the more correct answer and judged more than this
+   needs; it is the shape to reach for if anyone ever wants to alert on which file-service fault it
+   was. The original item follows.
+   `RegisterGenerationService:220` puts an English sentence in a `reason=` slot, logging
    `unavailable.getMessage()`. Not a leak - the phrase is bounded and written in
    `FileServicePayloadStore`, which documents exactly that - but the suite's own stated rule is that
    `reason=` carries a bounded code, and `PAYLOAD_STORE_UNAVAILABLE` is already the batch's reason.
-9. **The bounded-reason sweep is delivery-path only** (`reasonsIn` / `BOUNDED_REASONS`) and could be
+9. **CLOSED by `6418254` (2026-09-10)**, and it caught item 8 by construction exactly as this item
+   said it would - the red run is one unbounded token, `"the"`, the first word of the sentence in
+   that slot. Two narrowings are deliberate and recorded on the case: it reads **INFO and above**,
+   because that is the scope Principle VII governs and because `SystemDocGeneratorClient` writes the
+   generator's own words into a reason slot at DEBUG on purpose - a sweep over every level would
+   forbid the one place those words are allowed; and its non-vacuity guard is real rather than
+   decorative, the drive reaching the payload store's own failure. Said plainly on the case itself:
+   with item 8 fixed it catches nothing that exists, and its value is the next slot somebody writes.
+   The original item follows.
+   The bounded-reason sweep is delivery-path only (`reasonsIn` / `BOUNDED_REASONS`) and could be
    extended over the two legs now that `GenerationLegs` drives them, which would catch item 8 by
    construction. Deliberately outside T070, whose claim is the three named values. Still open and
    untouched at the gate; the run's own line is covered separately, by
@@ -2757,7 +2787,21 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
     asserts an unmoved set - the exemption is gone and the meter case asserts the unmoved list
     `isEmpty()`, so the timer is inside the label sweep. The timer's own surface is unchanged: no
     meter added, none renamed, no label. Whether it should carry a bounded one is item 17.
-11. **Neither the run report's line nor its new ERROR carries `requestId` or `hearingId`**, which
+11. **RULED ON and CLOSED (2026-09-10): the run gained a correlation of its own**, which is the
+    second of the two rulings this item offered rather than the first. Scoping the principle to
+    per-delivery lines was the cheap ruling and would have left eleven lines a night with no
+    correlation at all - four from the job, seven from the reconciler - so a night could not be
+    pulled out of the index as one thing, which on an evening where the reconciler is also settling
+    earlier nights' batches is the difference between reading a run and reading a haystack.
+    `batch/RunCorrelation` mints a `runId` per scheduled unit of work and clears it, handling the
+    nesting rather than assuming it: a sweep the run reached into adopts the run's id, a sweep that
+    fired on its own schedule mints one, and only whoever opened it removes it, because the
+    scheduler's threads are pooled and an inherited id reads as a true one. The run line carries it
+    as `run_id`, second, beside the event it correlates. **The constitution was the thing that was
+    wrong**, and is amended to v3.1.0 (MINOR - the `runId` is a new obligation): the rule now names
+    the correlation appropriate to the unit of work and says what it was always for, that no line is
+    unattributable. The original item follows.
+    Neither the run report's line nor its new ERROR carries `requestId` or `hearingId`, which
     Principle VII asks of every log line about processing. A run is not a delivery and has neither,
     and this is how the line has been since `6d7aca8` rather than anything T072 changed. The gate
     rules: either the principle is read as scoped to per-delivery lines, or the run's line gains a

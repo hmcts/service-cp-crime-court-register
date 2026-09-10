@@ -230,10 +230,27 @@ public class RegisterGenerationJob {
     // PMD.OnlyOneReturn: the two exits are the two nights - one the flag stopped and one it allowed
     // - and each reports where it ends; funnelling them through one would put the report after a
     // branch that has to be able to say which of the two it is describing.
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
     @Scheduled(cron = "${courtregister.generation.cron}", zone = "${courtregister.generation.zone}")
     @SchedulerLock(name = LOCK_NAME, lockAtMostFor = LOCK_AT_MOST_FOR)
     public RunReport run() {
+        return RunCorrelation.under(this::correlatedRun);
+    }
+
+    /**
+     * The run itself, under the correlation {@link #run()} opened for it.
+     *
+     * <p>Separate so that every exit - the gate's, the deadline's and the failure - leaves through
+     * the same removal, rather than each of them having to remember to take the id away. The work
+     * is handed to {@link RunCorrelation} rather than the scope handed back here for that reason:
+     * the scheduler's threads are pooled, and there is no way to call it and forget the finally.
+     *
+     * @return what the run did
+     */
+    // PMD.AvoidCatchingGenericException and PMD.OnlyOneReturn: as stated above this method's
+    // opening comment, which describes this body - the two exits are the two nights, and the wide
+    // catch is what stops a night reporting nothing.
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
+    private RunReport correlatedRun() {
         final Instant startedAt = clock.instant();
         final GateDecision decision = gate.decide(false);
 
@@ -605,11 +622,12 @@ public class RegisterGenerationJob {
         final Map<BatchStatus, Integer> outcomes = report.outcomes();
         final Map<BatchStatus, Integer> rows = report.rowOutcomes();
         final RunReport.Settled settled = report.settled();
-        LOG.info("event={} gate={} reason={} batches={} requested={} generating={} failed={} "
+        LOG.info("event={} run_id={} gate={} reason={} batches={} requested={} generating={} failed={} "
                         + "pending={} deferred={} rows={} rows_generating={} rows_failed={} "
                         + "rows_pending={} rows_deferred={} snapshot={} generated={} notified={} "
                         + "rows_generated={} rows_notified={} reconciled={} duration_ms={}",
-                RUN_EVENT, gateOf(report.gateDecision()), reasonOf(report.gateDecision()),
+                RUN_EVENT, RunCorrelation.current(), gateOf(report.gateDecision()),
+                reasonOf(report.gateDecision()),
                 outcomes.values().stream().mapToInt(Integer::intValue).sum(), report.requested(),
                 counted(outcomes, BatchStatus.GENERATING), counted(outcomes, BatchStatus.FAILED),
                 counted(outcomes, BatchStatus.PENDING), report.deferredKeys(), report.rows(),
