@@ -2046,8 +2046,10 @@ repository edits that page, and T074 carries the handover.
   read: `taken` means the four counts stand (and a run that assembled no batch reads `taken` too,
   no statement having been issued and the empty answer being exact); `unread` means the store would
   not answer, the four counts are zeroes the run did not earn, and a WARN naming the class of what
-  refused is on the same run. A lost snapshot **increments no metric**, so nothing alerts on it -
-  the word and the WARN are the whole of the signal.
+  refused is on the same run. A lost snapshot also **increments
+  `courtregister_generation_unrecorded_total{reason="settled-snapshot"}`** (Phase 9, findings
+  15/27), so a night whose settled read failed can be alerted on rather than only found in the log
+  index; before that counter the word and the WARN were the whole of the signal.
 - **What tonight's batches finally came to is still not on the line**, and cannot be: `reconciled`
   is what a run settles about **earlier** nights, and the end state of tonight's is read from
   `courtregister_batches_total` by outcome with the oldest-generating and oldest-generated gauges,
@@ -2997,11 +2999,27 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
 
 ## Phase 9: Polish and documentation sync
 
-- [ ] T073 [P] Rewrite `.claude/rules/design_rules.md` for the 002 shape (ports, `batch/`, adapters,
+- [x] T073 [P] Rewrite `.claude/rules/design_rules.md` for the 002 shape (ports, `batch/`, adapters,
       state machines, the one-lever rule); rewrite "The Four Contracts" in
       `.claude/agents/spec-validator.md`; update `.claude/agents/software-engineer.md` rules (record
       not POST; the flag; ids before calls). Docs-only, exempt from the loop.
-- [ ] T074 [P] `README.md` Status → 002 complete; `CLAUDE.md` unchanged unless a rule moved; the
+      (**Done at `0b003ae`.** `design_rules.md` is rewritten around the two legs it has: the intake
+      leg ending at `RegisterStore` and the 18:00 leg, with the batch state machine written out
+      beside the request one and the topic beside the queue - a durable subscription admitting one
+      consumer is a design constraint and the reason a CLI JVM must not subscribe, so it is stated
+      where the queue rules are. The idempotency section drops the absorbed-duplicate-POST argument
+      for supersession at the write, which V3 makes a constraint. "The Four Contracts" is now eight
+      in three groups - two owned, four consumed, two properties of this service's shape - and the
+      validator's checks gain the generation leg, the events, the flag and the batch terminal
+      states; its scope gate no longer says 001 is mid-build, and both audits are named as
+      per-build assertions. `software-engineer.md` gains record-not-POST, ids-before-calls,
+      learn-outcomes-never-assume-them, the batch statuses, the one lever and the
+      counter-on-every-drop rule. **One thing was found and not fixed here**:
+      `.claude/rules/technical-default.md` still describes the 001 shape in three places - its
+      Description and no-REST bullet name the POST to progression and its Outbound row names the
+      command API - and no 002 task names that file. It is recorded as `⚠ pending` in the
+      constitution's Sync Impact Report and raised on T074 rather than edited out of scope.)
+- [x] T074 [P] `README.md` Status → 002 complete; `CLAUDE.md` unchanged unless a rule moved; the
       constitution's Sync Impact Report `⚠ pending` items → `✅`. Two handovers and four register
       corrections land here or with the owner of the file in question, which this task decides.
       **The handovers**: the metrics-section note for the Confluence page, written out under T072
@@ -3018,6 +3036,49 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
       reconciliation should note that P10 is now cited from test code as well as from its pinning
       tests, `RegisteredDefectFixes.progressionLegRows()` carrying it and the differential audit's
       own summary counting two differences against it.
+      (**Done at the commit this line lands in.** README's Status says 002 complete and names what
+      landed; the Cutover bullet names P6 and P7 as tracked before cutover beside C18, C28, C34 and
+      the SIT→STE replay gate. The constitution's two `⚠ pending` entries are `✅ aligned
+      (2026-09-10, T073)` with what changed in each, and `software-engineer.md` is added to the
+      reviewed list; a **new** `⚠ pending` entry replaces them, for the
+      `.claude/rules/technical-default.md` staleness T073 found, which no 002 task names - **this
+      task's decision is that it is not Phase 9's to take silently**, because rewriting a rule file
+      no task named is exactly the scope discipline the constitution asks for, and a stale rule file
+      recorded as stale is honest where a quietly-rewritten one is not. It needs a ruling.
+      **The four register corrections, as decided here**: (1) the `v3.0.0` citation stands - the
+      bump to v3.0.1 was a PATCH that changed no principle, so the citation is historical and
+      accurate as written, and editing it would be churn; (2) the four over-length prose lines are
+      reflowed, the paragraph re-wrapped around the Confluence URL rather than through it, since an
+      unsplittable token is the one thing a column convention cannot ask to be broken - the URL now
+      sits on a line of its own and every other prose line is within 100; (3) P10's status cell
+      names `T022` and the two Phase 3 exceptions, which is the pointer every other FIXED row
+      carries; (4) the P-row reconciliation gains a paragraph saying P10 is cited from test code as
+      well - `RegisteredDefectFixes.progressionLegRows()` carries it, `DifferentialAuditTest` asks
+      that catalogue whether a golden deviation is explained, and the audit's summary counts two
+      differences against it - so the row cannot be edited as prose alone: what it claims is what
+      the audit will accept. **Beyond the four**, P6 and P7 gained the explicit **trigger** the
+      PENDING C rows carry (P7 had an owner and no trigger at all): progression's retirement PR
+      merging, which nothing here can assert.
+      **The three source-file corrections owed by finding 21 land here too**: `TelemetryPrivacyTest`
+      said "the nine sources that write one" and called `FileServicePayloadStore` "the tenth" where
+      `GenerationLegs.THE_LEGS` holds eight, so it is eight and the ninth - counted, not reasoned;
+      `DocumentEventListener.EVENT_NAME_PROPERTY` now says the two names are written separately as
+      well as read separately and points at `claimed`, which is the half that was missing; and
+      `PersonalDataMarkers` now says what its markers' shape limits - Jackson stops an unquoted
+      token at the first non-identifier character, so a parse failure can reach `zqx7` of
+      `OPERATOR_TOKEN` and all of a marker made only of identifier characters, which is why a sweep
+      for the whole value would pass for the wrong reason. **Finding 12's ruling is recorded in
+      `CliMain.reported`'s javadoc** (see T077's note for the ruling itself).
+      **The two handovers are recorded and not applied**, which is what this task decides: nothing
+      in this repository edits the Confluence page, and the page owner pastes both. (a) The
+      metrics-section note written out above under T072 - **corrected in place first**, because its
+      last bullet said a lost snapshot increments no metric, which stopped being true in this phase;
+      it now names `courtregister_generation_unrecorded_total{reason="settled-snapshot"}`. (b) The
+      store section, and any list of the store's read paths, should name **statement 4c
+      `batchesNamed`** beside 4a `batchesFor` and 4b `batchesOn`, with the reason it cannot be
+      either: only identity says tonight's batches, 4a reads a key's whole history and 4b a day's,
+      so a run counting either would credit itself with an earlier run's documents. `RegisterStore`
+      and `JdbcRegisterStore` already say it in their own javadoc.)
 - [ ] T075 [P] `scripts/container-smoke.sh` - readiness UP < 60 s with generation enabled against the
       compose stubs; `check-flag` exit 0. **Both were already recorded green in Phase 7** at
       `441d653` ("PASS: readiness reported UP within the 60s budget" and "PASS: startup.sh

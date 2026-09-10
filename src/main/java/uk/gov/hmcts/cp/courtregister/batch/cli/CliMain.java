@@ -290,6 +290,21 @@ public class CliMain {
      * on a line of an operator's own. A report nobody could write has no such line available, so it
      * is the one failure that has to be answered by the exit code and the log alone.
      *
+     * <p><strong>ERROR is deliberate, and it deliberately carries no counter.</strong> The level
+     * was ruled on by the design owner rather than left to whoever read it next (Phase 8 finding
+     * 12): it agrees with the exit code, as every level in this class does - WARN answers REFUSED
+     * and 1, ERROR answers FAILED and 2 - and this line is the only surviving record that a listing
+     * somebody may already be acting on is incomplete, which a pod cannot tell from a deliberate
+     * {@code | head -1}. Principle VI would ordinarily pair an ERROR with a metric an alert fires
+     * on, and this one has none, because it cannot: {@link #dispatch} runs the context with
+     * {@code WebApplicationType.NONE}, so a command's JVM exposes no scrape endpoint and holds no
+     * push registry, and {@link ReportNotWritten} leaves that context's try-with-resources before
+     * reaching here, so by this point there is no registry to increment at all. A counter here
+     * would be incremented and then die with the process - a signal no dashboard could ever read,
+     * which is worse than the honest absence of one. The clause of Principle VI that binds is the
+     * one about nothing being swallowed, and that is satisfied: the refusal is said once and
+     * answered on exit 2.
+     *
      * @param command    the command the invocation named, or {@link #NOT_A_COMMAND}
      * @param invocation the dispatch, over a context of this service's own or over a registry
      * @return whatever the invocation answered, or {@link #FAILED} where its report was refused

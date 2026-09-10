@@ -94,6 +94,16 @@ public final class PersonalDataMarkers {
      * over 36 characters with "UUID string too large" and quotes only what is shorter, so a longer
      * marker would leave every {@code --batch} case passing without the token ever having been in
      * reach of a log line.
+     *
+     * <p><strong>Its shape limits how much of it a parse failure can reach, and a sweep written
+     * without knowing that will pass for the wrong reason.</strong> Jackson stops an unquoted token
+     * at the first character that cannot be part of an identifier, so the most of this marker a
+     * refused parse can quote back is {@code zqx7} - its first segment, the dot ending it - which
+     * is why {@code DocumentEventListenerTest} derives what it sweeps for from the marker instead
+     * of writing the whole thing out. A marker made only of identifier characters, as
+     * {@link #CHILD_NAME} is, would be quoted whole by that same route. So a case that sweeps for
+     * the entire value of this marker proves nothing about the parse-failure path: it would stay
+     * green with a fragment of somebody's typing sitting in the index.
      */
     public static final String OPERATOR_TOKEN = "zqx7.marker@example.invalid";
 

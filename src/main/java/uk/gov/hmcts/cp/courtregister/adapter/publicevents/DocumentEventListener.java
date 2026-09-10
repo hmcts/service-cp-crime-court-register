@@ -81,6 +81,14 @@ public class DocumentEventListener {
      * <p>The broker applies it as a selector so a subscriber to a topic the whole estate publishes
      * to is handed two event names rather than all of them; the envelope's own {@code _metadata.name}
      * is what the message says it is, and the two are read separately for that reason.
+     *
+     * <p><strong>They are also written separately, and only one of them verbatim.</strong> This
+     * property's value has already been narrowed by the filter above to one of the two constants
+     * below, so it may go on a line as it stands. The envelope's name may be anything at all - a
+     * message that disagrees with its own header has shown it is not what it claimed, so its name
+     * is another context's arbitrary text and could be a child's own details (Principle VII). It
+     * therefore reaches a line only through {@link #claimed(String)}, which answers one of the two
+     * constants or {@code not-a-subscribed-event} and never the text it was given.
      */
     public static final String EVENT_NAME_PROPERTY = "CPPNAME";
 

@@ -730,13 +730,13 @@ class TelemetryPrivacyTest {
      * --batch} takes the first of them - and none of them names a person.
      *
      * <p><strong>The sweep is over the statements rather than over a list of cases.</strong> Every
-     * line the two legs can write is enumerated out of the nine sources that write one, and the
+     * line the two legs can write is enumerated out of the eight sources that write one, and the
      * last case below insists the drive above reached <em>each</em> of them: a statement added to
      * any of those classes later is inside this claim from the moment it is written, rather than
      * inside it if somebody remembered to add a case. The classes are named because the two legs
      * are not a package - the run and the reconciler are in {@code batch}, the two services in
      * {@code application}, the renderer's client, the notifier's client and the topic listener in
-     * three {@code adapter} packages - and the tenth,
+     * three {@code adapter} packages - and the ninth,
      * {@link uk.gov.hmcts.cp.courtregister.adapter.fileservice.FileServicePayloadStore}, is in the
      * list for the opposite reason: it holds a night's payload and writes no line at all, which is
      * a claim of its own and is asserted as one.

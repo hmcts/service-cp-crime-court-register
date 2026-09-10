@@ -66,11 +66,23 @@ Templates / guidance reviewed:
   - CLAUDE.md                                 ✅ aligned (2026-09-05): contract
       rule, cutover rule, Confluence as the design authority.
   - README.md                                 ✅ aligned (2026-09-05).
-  - .claude/rules/design_rules.md             ⚠ pending — still describes the
-      001 shape (RegisterSubmissionClient, POST); updated by a 002 task.
-  - .claude/rules/workflow.md, technical-default.md  ✅ aligned (2026-09-05).
-  - .claude/agents/spec-validator.md          ✅ interim note added; full
-      rewrite of "The Four Contracts" is a 002 task.
+  - .claude/rules/design_rules.md             ✅ aligned (2026-09-10, T073):
+      rewritten for the 002 shape - the two legs, the batch state machine
+      beside the request one, the topic beside the queue, supersession at
+      the write in place of the absorbed-duplicate-POST argument, the four
+      consumed platform contracts, and the one-lever Cutover Rule.
+  - .claude/rules/workflow.md                 ✅ aligned (2026-09-05).
+  - .claude/rules/technical-default.md        ⚠ pending — its Description,
+      Outbound row and no-REST bullet still name the POST to progression
+      and "all 34 catalogued defects". Not named by any 002 task; raised
+      at T074 for a decision rather than edited out of scope.
+  - .claude/agents/spec-validator.md          ✅ aligned (2026-09-10, T073):
+      "The Four Contracts" is now eight in three groups - two owned, four
+      consumed, two properties of this service's shape - and the scope gate
+      names 002 with both audits as per-build assertions.
+  - .claude/agents/software-engineer.md       ✅ aligned (2026-09-10, T073):
+      record-not-POST, ids-before-calls, learn-outcomes-never-assume-them,
+      the batch statuses, the one lever, a counter on every drop.
 
 Previous amendment (2.0.3 → 2.0.4):
 Bump rationale: PATCH — wording (2026-09-05). The repo no longer carries

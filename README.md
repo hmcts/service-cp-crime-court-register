@@ -65,13 +65,21 @@ This repository carries no design narrative of its own. What it does carry:
   document), contract validation against the vendored schemas, and the terminal-state processed log.
   The differential audit against 381 recorded runs of the real function app found zero unattributed
   differences.
-- **Increment 002 — consolidate-progression-leg: in progress.** Replaces the POST to progression
-  with the register store; adds the nightly batch job, the systemdocgenerator and notificationnotify
-  adapters, the `public.event` listener, the flag gate and the operations CLI; appends the
-  progression-leg `P` rows to the defect-fix register. Progress is the checkbox state in
-  `specs/002-consolidate-progression-leg/tasks.md`.
-- **Cutover** is a separate step once both increments are signed off: the producer's queue publisher
-  and the legacy kill-switch already exist as patterns; the flag is the only lever.
+- **Increment 002 — consolidate-progression-leg: complete.** The POST to progression is replaced by
+  the register store, with supersession enforced at the write; the nightly job assembles one batch
+  per (court centre, register date), writes the PDF payload into the file service, asks
+  systemdocgenerator for the unchanged `OEE_Layout5` render, learns the outcome from the
+  `public.event` topic — with a grace-period reconciler for the outcomes that never arrive — and
+  sends one notificationnotify e-mail per matched Youth Offending Team. The flag gate, the five
+  operations commands and the run report land with it, and the progression-leg `P` rows are appended
+  to the defect-fix register. The consolidation audit reproduces the recorded progression corpus by
+  manifest digest on every build, with one attributed deviation (P10). Task-level detail is the
+  checkbox state in `specs/002-consolidate-progression-leg/tasks.md`.
+- **Cutover** is a separate step now that both increments are signed off: the producer's queue
+  publisher and the legacy kill-switch already exist as patterns; the flag is the only lever. Two
+  register rows are tracked to conclusion first — P6 and P7 depend on progression's retirement PR
+  merging, which nothing in this repository can assert — alongside the legacy-repo items C18, C28
+  and C34 and the SIT→STE replay gate.
 
 This service exposes **no REST API**. The only HTTP surface is Spring Boot Actuator. Operational
 actions (regenerate a date, resend a batch's failed notifications, list batches, review rows recorded
