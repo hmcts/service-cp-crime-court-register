@@ -1315,7 +1315,7 @@ class RegisterGenerationJobTest {
          */
         @Test
         void the_registers_behind_the_deferred_keys_should_be_gauged_too() {
-            aNightDeferring(key(), key());
+            aNightDeferringARegisterRecordedAt(SIX_PM.minusSeconds(93_600));
 
             run();
 
@@ -1323,7 +1323,7 @@ class RegisterGenerationJobTest {
                     .as("the registers waiting under those keys, which is the impact reading: a "
                             + "count of court centres cannot say how many children's registers "
                             + "have not gone out")
-                    .isEqualTo(ACTIVE.size());
+                    .isEqualTo(1);
         }
 
         @Test

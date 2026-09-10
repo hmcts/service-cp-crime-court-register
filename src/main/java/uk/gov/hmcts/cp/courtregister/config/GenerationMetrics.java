@@ -29,12 +29,14 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
  * ordinary one, because a run whose outcomes all arrive by reconciliation is a broker to look at
  * rather than a renderer.
  *
- * <p>The seven gauges are the state a nightly flow cannot be understood without between runs: how
+ * <p>The eight gauges are the state a nightly flow cannot be understood without between runs: how
  * old the oldest unbatched record is, how long the oldest batch has been waiting for a document,
  * how long the oldest batch that never reached the renderer has been stuck, how long the oldest
  * batch holding a document nobody was told about has stood there, how many batches the
- * run deadline left behind, how many court centre days a run passed over, and whether the flag was
- * readable at all. Like {@link ProcessingMetrics}'s two, they are registered from construction,
+ * run deadline left behind, how many court centre days a run passed over and how many registers are
+ * waiting under them, and whether the flag was readable at all. The last pair is deliberate: a
+ * court centre day is one key however many children's registers are inside it, so the count of keys
+ * and the count of registers are different questions and a dashboard wants both. Like {@link ProcessingMetrics}'s two, they are registered from construction,
  * because a dashboard must be able to read them from a pod that has not yet run.
  *
  * <p>Nothing here refuses a reading it does not recognise. Telemetry that threw would end the run it
@@ -245,6 +247,8 @@ public class GenerationMetrics {
     private final AtomicInteger pendingAfterDeadlineBatches = new AtomicInteger();
     private final AtomicInteger deferredCourtCentreDays = new AtomicInteger();
 
+    private final AtomicInteger deferredRegistersWaiting = new AtomicInteger();
+
     /**
      * Whether the flag was readable, up until a read says otherwise - the honest starting position
      * for a pod that has not asked yet, and the same one {@code courtregister_servicebus_up} takes.
@@ -280,6 +284,9 @@ public class GenerationMetrics {
         Gauge.builder(DEFERRED_KEYS, deferredCourtCentreDays, AtomicInteger::doubleValue)
                 .description("Court centre days a run passed over, their earlier batch still in "
                         + "flight")
+                .register(registry);
+        Gauge.builder(DEFERRED_REGISTERS, deferredRegistersWaiting, AtomicInteger::doubleValue)
+                .description("Registers waiting under the court centre days a run passed over")
                 .register(registry);
         Gauge.builder(FLAG_READ_OK, flagReadable, AtomicInteger::doubleValue)
                 .description("1 while the CourtRegisterService flag is readable, 0 while it is not")
@@ -588,6 +595,21 @@ public class GenerationMetrics {
      */
     public void deferredKeys(final int keys) {
         deferredCourtCentreDays.set(keys);
+    }
+
+    /**
+     * Reports how many registers are waiting under the days a run passed over.
+     *
+     * <p>The impact reading beside {@link #DEFERRED_KEYS}'s count and
+     * {@link #OLDEST_RECORDED_UNBATCHED_AGE}'s severity: one court centre day is one key however
+     * many children's registers are inside it, so a count of keys cannot say how much is
+     * undelivered. The run's line carries the same number as {@code rows_deferred}; this is the
+     * reading between runs, when there is no line.
+     *
+     * @param registers the registers behind the deferred days
+     */
+    public void deferredRegisters(final int registers) {
+        deferredRegistersWaiting.set(registers);
     }
 
     /**

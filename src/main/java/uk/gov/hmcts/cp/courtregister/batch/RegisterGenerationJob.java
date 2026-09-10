@@ -319,6 +319,7 @@ public class RegisterGenerationJob {
         if (assembly != null) {
             metrics.oldestRecordedUnbatchedAge(oldestStillWaiting(tally.active(), assembly));
             metrics.deferredKeys(assembly.deferred().size());
+            metrics.deferredRegisters(tally.registersWaiting);
             metrics.pendingAfterDeadline(tally.leftBehind());
         }
     }

@@ -513,6 +513,7 @@ class GenerationMetricsTest {
                             GenerationMetrics.OLDEST_GENERATED_AGE,
                             GenerationMetrics.PENDING_AFTER_DEADLINE,
                             GenerationMetrics.DEFERRED_KEYS,
+                            GenerationMetrics.DEFERRED_REGISTERS,
                             GenerationMetrics.FLAG_READ_OK);
         }
 
@@ -537,6 +538,7 @@ class GenerationMetricsTest {
                             GenerationMetrics.OLDEST_GENERATED_AGE,
                             GenerationMetrics.PENDING_AFTER_DEADLINE,
                             GenerationMetrics.DEFERRED_KEYS,
+                            GenerationMetrics.DEFERRED_REGISTERS,
                             GenerationMetrics.FLAG_READ_OK);
         }
 
@@ -595,6 +597,7 @@ class GenerationMetricsTest {
             metrics.oldestGeneratedAge(Duration.ofMinutes(70));
             metrics.pendingAfterDeadline(1);
             metrics.deferredKeys(1);
+            metrics.deferredRegisters(1);
             metrics.flagRead(FlagDecision.OFF);
         }
     }
