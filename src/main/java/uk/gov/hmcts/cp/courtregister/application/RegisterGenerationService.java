@@ -225,11 +225,14 @@ public class RegisterGenerationService {
         try {
             payloadFileStore.store(payloadFileId, assembled.payload(), assembled.metadata());
         } catch (PayloadStoreUnavailableException unavailable) {
-            // The store's own message is a bounded phrase it wrote itself, and the batch is failed
-            // under the one reason this can mean: the document has nothing to be rendered from.
+            // The reason slot carries the batch's own bounded code, which is what an index filter
+            // and an alert query key on. The store's phrase is one of five it wrote itself - which
+            // of them says whether this was the network, the row count or the serialisation, and
+            // that distinction survives nowhere else - so it stays on the line as prose, where free
+            // text is what a sentence is made of and nothing parses it as a value.
             LOG.error("The payload for batch {} was not stored, so no render is asked for and its "
-                    + "registers stay RECORDED for the next run. reason={}", batch.batchId(),
-                    unavailable.getMessage());
+                    + "registers stay RECORDED for the next run: {}. reason={}", batch.batchId(),
+                    unavailable.getMessage(), BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE);
             return failed(batch, BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, false);
         }
         return askForRender(batch, payloadFileId, deadline, progress);
