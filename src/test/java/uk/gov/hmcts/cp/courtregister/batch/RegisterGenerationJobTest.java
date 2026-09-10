@@ -35,6 +35,7 @@ import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
@@ -237,7 +238,8 @@ class RegisterGenerationJobTest {
      * produces, and this refuses the shape rather than the particular words.
      */
     private static final Pattern BOUNDED_FIELDS_ONLY = Pattern.compile(
-            "event=register_generation_run gate=(?:proceed|skipped) reason=[a-z-]+ batches=\\d+ "
+            "event=register_generation_run run_id=[0-9a-f-]{36} "
+                    + "gate=(?:proceed|skipped) reason=[a-z-]+ batches=\\d+ "
                     + "requested=\\d+ generating=\\d+ failed=\\d+ pending=\\d+ deferred=\\d+ "
                     + "rows=\\d+ rows_generating=\\d+ rows_failed=\\d+ rows_pending=\\d+ "
                     + "rows_deferred=\\d+ snapshot=(?:taken|unread) generated=\\d+ notified=\\d+ "
@@ -1806,6 +1808,77 @@ class RegisterGenerationJobTest {
                                 + "Principle VII)")
                         .matches(BOUNDED_FIELDS_ONLY);
             }
+        }
+
+        /**
+         * The correlation a run has, in place of the two a delivery has.
+         *
+         * <p>Principle VII asks that every line about processing carry {@code requestId} and
+         * {@code hearingId}. A run has neither and cannot: it is one unit of work across many
+         * hearings and many batches. Before this it carried nothing at all, and the eleven lines a
+         * night writes - four from the job, seven from the reconciler - could not be pulled out of
+         * the index as one run. On a night where the reconciler is also settling batches from
+         * earlier nights, that is the difference between reading a run and reading a haystack.
+         */
+        @Test
+        void every_line_a_run_writes_should_name_the_run_it_belongs_to() {
+            aNightThatIsAlreadySettling();
+
+            try (CapturedLog log = CapturedLog.everything()) {
+                run();
+
+                final List<String> runIds = log.events().stream()
+                        .filter(event -> event.getLoggerName()
+                                .startsWith("uk.gov.hmcts.cp.courtregister"))
+                        .map(event -> event.getMDCPropertyMap().get("runId"))
+                        .distinct()
+                        .toList();
+                softly.assertThat(runIds)
+                        .as("every line the run wrote carries one run id, and the same one: a line "
+                                + "without it belongs to no run a reader can find, and two ids in "
+                                + "one run would split the night in the index")
+                        .hasSize(1);
+                softly.assertThat(runIds.getFirst())
+                        .as("and it is an identity rather than an empty slot")
+                        .isNotNull();
+            }
+        }
+
+        @Test
+        void the_run_id_should_not_outlive_the_run() {
+            aNightThatIsAlreadySettling();
+
+            run();
+
+            softly.assertThat(MDC.get("runId"))
+                    .as("the scheduler's thread is reused, so a run id left behind would be "
+                            + "inherited by the next run and by anything else that thread writes")
+                    .isNull();
+        }
+
+        /**
+         * Two nights, over the simplest run that still writes a line: the flag stopped it, so
+         * nothing but the gate and the report is exercised and the pair can be driven twice.
+         */
+        @Test
+        void two_runs_should_not_share_a_run_id() {
+            theGateAnswers(new Skipped(Reason.FLAG_OFF));
+
+            final String first;
+            final String second;
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+                first = fieldsOf(theOneLine(log)).get("run_id");
+            }
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+                second = fieldsOf(theOneLine(log)).get("run_id");
+            }
+
+            softly.assertThat(first)
+                    .as("a correlation that repeated would merge two nights into one in the index")
+                    .isNotNull()
+                    .isNotEqualTo(second);
         }
 
         @Test
