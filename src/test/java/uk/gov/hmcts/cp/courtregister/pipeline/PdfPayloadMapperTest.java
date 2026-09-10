@@ -146,6 +146,85 @@ class PdfPayloadMapperTest {
         }
     }
 
+    /**
+     * The header of a batch whose members do not agree, which no recorded golden exercises.
+     *
+     * <p>progression's generator reads the header fields from {@code stream().findAny()} and this
+     * port reproduces that, deliberately and by name in {@code .claude/rules/design_rules.md}. The
+     * 127-member golden was thought to pin it and does not: all six base fixtures behind it carry
+     * the same court centre, the same LJA and the same address, so whichever member is picked the
+     * header is identical and the recording says nothing about which one was.
+     *
+     * <p>So the input here is <strong>authored, not recorded</strong> - the same reason
+     * {@code defendant-type/synthetic/} exists. It is a characterisation: the behaviour is what it
+     * already was, and this states it so that a batch whose members disagree has an answer written
+     * down. Two things follow from having it. The behaviour becomes visible if anyone later argues
+     * the header should be the union, or the earliest hearing's, rather than arbitrary; and a
+     * change from a sequential stream to anything unordered would fail here rather than silently
+     * printing a different court house on a night nobody was watching.
+     *
+     * <p><strong>[A]</strong> - green on introduction, with no red run available, because it
+     * describes behaviour the mapper already had.
+     */
+    @Nested
+    @DisplayName("a batch whose members disagree")
+    class TheHeaderOfAMixedBatch {
+
+        @Test
+        @DisplayName("[A] takes its header from the first member, and says so rather than merging")
+        void the_header_comes_from_the_first_member_and_not_from_any_other() {
+            final JsonNode mixed = aBatchOf(documentFor(BASE), aDocumentHeldAt("Leeds Youth Court",
+                    "West Yorkshire", "1 The Headrow, Leeds, LS1 6DD"));
+
+            final JsonNode payload = mapper.mapPayload(mixed);
+
+            assertThat(payload.get("courtHouse").stringValue())
+                    .as("the first member's court house, not the second's and not both: a batch "
+                            + "is one court centre day, so members that disagree are a reference "
+                            + "data change between two recordings rather than two venues")
+                    .isEqualTo(documentFor(BASE).at("/hearingVenue/courtHouse").stringValue());
+            assertThat(payload.get("courtHouse").stringValue())
+                    .as("and emphatically not the second member's, which is what a union or a "
+                            + "last-wins read would have produced")
+                    .isNotEqualTo("Leeds Youth Court");
+        }
+
+        /**
+         * The recorded document with its venue replaced, so the batch has two members that disagree.
+         *
+         * @param courtHouse the court house this member names
+         * @param lja        the local justice area this member names
+         * @param address    the first address line this member names
+         * @return the document, in the shape the generator reads
+         */
+        private JsonNode aDocumentHeldAt(final String courtHouse, final String lja,
+                final String address) {
+
+            final ObjectNode document = (ObjectNode) documentFor(BASE).deepCopy();
+            final ObjectNode venue = (ObjectNode) document.get("hearingVenue");
+            venue.put("courtHouse", courtHouse);
+            venue.put("ljaName", lja);
+            ((ObjectNode) venue.get("address")).put("address1", address);
+            return document;
+        }
+
+        /**
+         * The documents as one batch, in the envelope shape the generator was written against.
+         *
+         * @param documents the batch's members, in the order they were assembled
+         * @return the envelope
+         */
+        private JsonNode aBatchOf(final JsonNode... documents) {
+            final ArrayNode requests = MAPPER.createArrayNode();
+            for (final JsonNode document : documents) {
+                requests.add(document);
+            }
+            final ObjectNode envelope = MAPPER.createObjectNode();
+            envelope.set(REQUESTS, requests);
+            return envelope;
+        }
+    }
+
     @Nested
     @DisplayName("C24's sentinel")
     class TheSentinel {

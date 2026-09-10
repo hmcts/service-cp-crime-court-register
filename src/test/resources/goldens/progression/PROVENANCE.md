@@ -116,10 +116,24 @@ in the same batch as its first would invent a batch the pipeline cannot produce.
 | `853b1ff8-fc2a-44d1-a621-0cd16419f54a__2021-03-11` | 3 | 6 |
 | `853b1ff8-fc2a-44d1-a621-0cd16419f54a__2026-08-21` | 1 | 2 |
 
-The 127-member batch is the P4 shape: one payload assembled from many documents, whose header fields
+The 127-member batch is one payload assembled from many documents, whose header fields
 (`registerDate`, `ljaName`, `courtHouse`, `courtHouseAddress`) the generator takes from
-`stream().findAny()` (`:47`) - the first element in practice, and a batch whose first row differs
-from the rest is the thing that makes that line worth pinning.
+`stream().findAny()` (`:47`) - the first element in practice.
+
+**Two corrections to what this paragraph used to say** (Phase 8 finding 14):
+
+- It called this "the P4 shape". It is not. P4 is *"only the first request's recipients are used"*,
+  and P4 is **fixed** - the recipients are the de-duplicated union across the batch. The header is a
+  different first-element-wins behaviour and is **deliberately kept**, listed as such in
+  `.claude/rules/design_rules.md`. Calling them one shape invites the reading that the header was
+  fixed too.
+- It said "a batch whose first row differs from the rest is the thing that makes that line worth
+  pinning". No such batch is recorded here. All six base fixtures behind these 127 members carry the
+  same court centre (`Lavender Hill Magistrates' Court` / `B01LY00`), the same LJA (`2577`) and the
+  same address, so whichever member `findAny()` picks the header is identical. **This golden pins
+  the assembly, not the arbitrariness of the header.** What pins the arbitrariness is
+  `PdfPayloadMapperTest`'s synthetic disagreeing batch, which is authored rather than recorded
+  precisely because the corpus has no such case.
 
 ### Counts
 
