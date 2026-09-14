@@ -229,7 +229,7 @@ these types.
 
 ### Tests first ⚠️
 
-- [ ] T008 [P] `persistence/ProcessedRequestReportReadsIT` - Testcontainers Postgres:
+- [x] T008 [P] `persistence/ProcessedRequestReportReadsIT` - Testcontainers Postgres:
       `failed_since_returns_failed_rows_inside_the_window_and_nothing_else`,
       `non_terminal_older_than_returns_received_and_retrying_oldest_first`,
       `non_terminal_older_than_excludes_terminal_rows`,
@@ -252,7 +252,23 @@ these types.
       `nonTerminalOlderThan(Instant)` and `oldestNonTerminal()` throwing
       `UnsupportedOperationException`. Red: the seam's throw is replaced by a failing assertion on
       the returned row count.
-- [ ] T009 [P] `persistence/RegisterNotificationReportReadsIT` - Testcontainers Postgres:
+      (red at `e9b7145`: 7 tests, 7 failures, 0 errors, every one an assertion.
+      `failed_since_returns_failed_rows_inside_the_window_and_nothing_else` on "Expecting actual:
+      [] to contain exactly (and in same order): [994332d3-24ee-4d24-8156-93ad289c9e0a]";
+      `both_scheduled_reads_use_the_v4_indexes` on "Expecting actual: \"Result  (cost=0.00..0.01
+      rows=1 width=4)\" to contain: \"idx_request_non_terminal_created\"";
+      `every_read_goes_through_store_outage_translating` on "Expecting actual throwable to be an
+      instance of StoreUnavailableException but was UnsupportedOperationException". Three
+      deviations, all additive. The suite migrates a **database of its own**, because "and nothing
+      else" and "on an empty table" are unobservable against the container the other persistence
+      suites share, and because an outage staged with `refuseConnectionsTo` must reach one suite's
+      rows and no other's. The `EXPLAIN` case plans the statement the repository really prepared,
+      taken off the driver by a recording connection rather than spelled a second time here - a
+      copy proves what the copy can use - so `SET enable_seqscan = off` is issued on the same
+      connection the plan is asked over, after `ANALYZE` on two thousand seeded rows. The
+      recording connection and the private database live in a new
+      `support/ReportReadsDatabase`, shared with T009, T010 and T011.)
+- [x] T009 [P] `persistence/RegisterNotificationReportReadsIT` - Testcontainers Postgres:
       `failed_since_returns_failed_notifications_with_their_batchs_court_centre_and_register_date`,
       `failed_since_orders_oldest_first`, `failed_since_is_one_statement_not_one_per_row` (assert a
       single statement, because N+1 reads land on precisely the morning the list is longest),
@@ -262,7 +278,15 @@ these types.
       Seams: `domain/FailedNotification` record signature per data-model.md (nine components), and
       `persistence/RegisterNotificationRepository.failedSince(Instant)` throwing. Red: the assertion
       on the joined court centre id fails against the seam's throw.
-- [ ] T010 [P] `persistence/RegisterBatchReportReadsIT` - Testcontainers Postgres, the **four** new
+      (red at `58adec7`: 5 tests, 5 failures, 0 errors, every one an assertion.
+      `failed_since_returns_failed_notifications_with_their_batchs_court_centre_and_register_date`
+      on "Expecting actual: [] to contain exactly (and in same order):
+      [84cff973-e4c4-40aa-a17a-6b53c3260048]"; `failed_since_is_one_statement_not_one_per_row` on
+      "Expected size: 1 but was: 0 in: []". The two cases about the statement rather than the rows
+      - the count and the select list - read the SQL the driver was asked to prepare, recorded by
+      `support/ReportReadsDatabase`, because one statement and thirty produce the same list and a
+      column that is never selected leaves no trace in a projection with no component for it.)
+- [x] T010 [P] `persistence/RegisterBatchReportReadsIT` - Testcontainers Postgres, the **four** new
       batch reads, all of which answer `BatchException` and all of which compute their age in SQL:
       `late_pending_returns_pending_batches_assembled_before_the_cut_off_oldest_first`,
       `late_generating_returns_generating_batches_requested_before_the_cut_off_oldest_first`,
@@ -283,7 +307,16 @@ these types.
       `persistence/RegisterBatchRepository` gains `latePending(Instant)`, `lateGenerating(Instant)`,
       `lateGenerated(Instant)` and `failedSince(Instant)` throwing `UnsupportedOperationException`.
       Red: the assertion on the returned row count fails against the seam's throw.
-- [ ] T011 [P] `persistence/RegisterStoreReportReadsIT` - Testcontainers Postgres, the fourth
+      (red at `dc6227c`: 8 tests, 8 failures, 0 errors, every one an assertion.
+      `late_pending_returns_pending_batches_assembled_before_the_cut_off_oldest_first` on
+      "Expecting actual: [] to contain exactly (and in same order):
+      [1af67c46-8816-4f32-9895-029f0e0554db, 4ec6e473-3d84-4606-b59a-f57356ef6990]";
+      `the_sdg_reason_column_is_never_selected_by_any_of_the_four` on "Expected size: 4 but was: 0
+      in: []". The suite's timestamps are truncated to microseconds, which is what `timestamptz`
+      holds, so `the_002_entity_reads_are_untouched` fails on the seam alone and its three
+      assertions about 002's reads pass; that case also pins `pendingSince`'s own payload
+      predicate, which is exactly why the report cannot borrow it.)
+- [x] T011 [P] `persistence/RegisterStoreReportReadsIT` - Testcontainers Postgres, the fourth
       `BATCH_LATE` source: `recorded_unbatched_before_returns_registers_recorded_before_the_cut_off`,
       `recorded_unbatched_before_returns_exactly_the_rows_active_unbatched_returns_that_are_older`
       (the two reads share one predicate, written once, because two spellings of "active and
@@ -296,7 +329,13 @@ these types.
       and `application/RegisterStore.recordedUnbatchedBefore(Instant)` with
       `persistence/JdbcRegisterStore` throwing `UnsupportedOperationException` for it. Red: the
       assertion on the returned row count fails against the seam's throw.
-- [ ] T012 [P] `domain/LastScheduledRunTest` - the one most-recent-occurrence computation, which this
+      (red at `09a61b1`: 5 tests, 4 failures, 0 errors, every one an assertion;
+      `active_unbatched_is_unchanged` passes, which is the point of it.
+      `recorded_unbatched_before_returns_registers_recorded_before_the_cut_off` on "Expecting
+      actual: [] to contain exactly (and in same order): [328c634a-c279-4468-8bbb-5f2efeaf59fe]".
+      The shared-predicate case compares the two reads against each other rather than against two
+      lists the suite wrote out, so it cannot pass by agreeing with a copy.)
+- [x] T012 [P] `domain/LastScheduledRunTest` - the one most-recent-occurrence computation, which this
       increment needs **twice**: for the generation cron (a register the last scheduled generation
       run left unbatched) and for the report cron (the window `ReportWindow.sinceLastScheduledRun`
       opens). `the_most_recent_weekday_occurrence_before_an_instant_is_answered`,
@@ -311,7 +350,14 @@ these types.
       would make a domain type depend on a batch one - with a `before(String cron, String zone,
       Instant instant)` throwing. Red: the answered instant is the next occurrence, not the previous
       one.
-- [ ] T013 [P] `domain/ExceptionReportModelTest` - **the plan's test matrix gains this row in this
+      (red at `5afd2dd`: 5 tests, 5 failures, 0 errors, every one an assertion.
+      `the_most_recent_weekday_occurrence_before_an_instant_is_answered` on "expected:
+      2026-09-16T17:00:00Z but was: 1970-01-01T00:00:00Z" - the predicted red on the answered
+      instant, with the seam refusing rather than answering the next occurrence, which is the
+      shape the red-run convention asks for. The Monday case is asserted against a daily cron as
+      well as the weekday one, so it is about the schedule excluding the weekend rather than about
+      the arithmetic happening to reach two days back.)
+- [x] T013 [P] `domain/ExceptionReportModelTest` - **the plan's test matrix gains this row in this
       commit**, because two of these records carry behaviour and behaviour is pinned:
       `a_window_read_backwards_is_refused` (`from` must precede `to`, since a backwards
       window reports nothing and looks like a quiet morning),
@@ -327,34 +373,74 @@ these types.
       `domain/ReportSinkName`, `domain/DeliveryStatus` and `domain/ReportDeliveryReason` declared
       with their signatures and values per data-model.md, `ReportWindow`'s compact constructor empty
       and `counts()` throwing. Red: a backwards window is accepted.
+      (red at `94b0c9d`: 5 tests, 5 failures, 0 errors, every one an assertion.
+      `a_window_read_backwards_is_refused` on "Expecting code to raise a throwable" - the predicted
+      red exactly; `counts_answers_zero_for_every_kind_that_has_none` on "Expecting code not to
+      raise a throwable but caught UnsupportedOperationException: the report's counts are not
+      computed yet". Two deviations. **The plan's test matrix already carries the
+      `ExceptionReportModelTest` row**, written when the plan was, so no row was added and
+      `plan.md` is untouched by this commit. And `DeliveryOutcome` gains a static
+      `delivered(sink)` factory the data model does not spell out, because "a delivered LOG
+      outcome is one accepted and none refused" is a shape, and a case asserting it over a
+      constructor call would be asserting its own argument list. The window factory is asserted at
+      the instant a run really asks - fifty milliseconds after its own occurrence - which is what
+      decides whether the window opens at the run that last reported or at the one firing.)
 
 ### Implementation
 
-- [ ] T014 [P] `persistence/ProcessedRequestRepository` - the three reads written as data-model.md's
+- [x] T014 [P] `persistence/ProcessedRequestRepository` - the three reads written as data-model.md's
       SQL writes them, each returning `extract(epoch from (now() - <column>))::bigint AS age_seconds`
       in the same statement that selects the row, and each wrapped in `StoreOutage.translating(...)`
       like every other statement in the class. `failedSince` measures age from `updated_at` (the
       moment the row was parked); the other two from `created_at` (the moment it arrived).
       Green: T008.
-- [ ] T015 [P] `persistence/RegisterNotificationRepository.failedSince(Instant)` - the join onto
+      (green at `4d80259`: ProcessedRequestReportReadsIT, 7 tests, 0 failures, 0 errors; both
+      scheduled reads plan onto `idx_request_status_updated` and
+      `idx_request_non_terminal_created`. `checkstyleMain` and `pmdMain` exit 0. The three
+      statements share one column-list constant and close it with their own age expression, the
+      idiom `RegisterBatchRepository`'s `SELECT_BATCH` already uses; the in-flight predicate is
+      the V4 index's own text, character for character.)
+- [x] T015 [P] `persistence/RegisterNotificationRepository.failedSince(Instant)` - the join onto
       `register_batch` for the court centre id and register date, `ORDER BY n.sent_at`, age from
       `sent_at` **in SQL**, `email_address` deliberately not in the select list. Green: T009.
-- [ ] T016 [P] `persistence/RegisterBatchRepository` - the four new reads exactly as data-model.md's
+      (green at `b58cd42`: RegisterNotificationReportReadsIT, 5 tests, 0 failures, 0 errors; the
+      one captured statement mentions no address column. `checkstyleMain` and `pmdMain` exit 0.)
+- [x] T016 [P] `persistence/RegisterBatchRepository` - the four new reads exactly as data-model.md's
       SQL writes them, each answering `BatchException` and each computing `age_seconds` from its own
       stage timestamp in the same statement; `failure_reason` in every select list and `sdg_reason`
       in none. 002's `pendingSince`, `generatingSince` and `generatedSince` are **not** touched,
       renamed or widened: they answer entities for the generation leg and keep their callers.
       Green: T010.
-- [ ] T017 [P] `persistence/JdbcRegisterStore.recordedUnbatchedBefore(Instant)` and the matching
+      (green at `5c81087`: RegisterBatchReportReadsIT, 8 tests, 0 failures, 0 errors; the four
+      captured statements mention no `sdg_reason`, and the three 002 entity reads still answer
+      what their own suite expects. `checkstyleMain` and `pmdMain` exit 0. The four share one
+      column-list constant and one private binding helper, because they are one shape asked of
+      four stages and four copies of the binding would be four places for the projection to
+      drift.)
+- [x] T017 [P] `persistence/JdbcRegisterStore.recordedUnbatchedBefore(Instant)` and the matching
       `application/RegisterStore` port method - the projection carrying `age_seconds` from
       `register_time` in SQL, over `activeUnbatched()`'s **own** predicate extracted to one place and
       called by both reads, plus the `register_time < :recordedBefore` cut-off and
       `ORDER BY register_time`. `activeUnbatched()` itself is unchanged. Green: T011.
-- [ ] T018 [P] `domain/LastScheduledRun` - the most recent occurrence of a **given** cron in a
+      (green at `5dbc9ac`: RegisterStoreReportReadsIT 5 tests, RegisterStoreIT 71 tests,
+      RegisterBatchRepositoryIT 34 tests, 0 failures and 0 errors across all three.
+      `checkstyleMain` and `pmdMain` exit 0. The predicate is now
+      `ACTIVE_UNBATCHED_PREDICATE`, concatenated into both statements; the new read does not
+      select the document, because nothing about a late register needs reading. Two column names
+      the row views share are named once, which is what PMD's fourth occurrence of a literal
+      asks for.)
+- [x] T018 [P] `domain/LastScheduledRun` - the most recent occurrence of a **given** cron in a
       **given** zone strictly before a given instant, via Spring's `CronExpression`. One computation
       for two schedules: the generation cron for the never-batched `BATCH_LATE` rule, the report
       cron for the window. Green: T012.
-- [ ] T019 [P] The eight domain types of T013 filled in: `ExceptionKind` (**five** values, closed:
+      (green at `c08cb9c`: LastScheduledRunTest, 5 tests, 0 failures, 0 errors. `checkstyleMain`
+      and `pmdMain` exit 0. `CronExpression` answers forwards only, so the most recent occurrence
+      is found by walking one local day forwards at a time and stepping back until a day has one,
+      with every candidate checked to still be on the day being searched - which is what keeps
+      the walk from wandering into the next one across a clock change, where a local day is
+      twenty-three or twenty-five hours long. The search is bounded at a year and a day so a cron
+      that matches nothing is a refusal rather than an unbounded walk.)
+- [x] T019 [P] The eight domain types of T013 filled in: `ExceptionKind` (**five** values, closed:
       `REQUEST_FAILED`, `REQUEST_LATE`, `BATCH_LATE`, `BATCH_FAILED`, `NOTIFICATION_FAILED`),
       `ReportWindow` (refusing a backwards window, plus the
       `sinceLastScheduledRun(cron, zone, now)` factory over `LastScheduledRun`), `ExceptionEntry`
@@ -363,7 +449,14 @@ these types.
       `snapshotAt`, `entries` oldest first, plus `counts()` zero-filling all five kinds),
       `DeliveryOutcome`, `ReportSinkName`, `DeliveryStatus` and `ReportDeliveryReason` (the eight
       bounded values of data-model.md, `NONE` included, never raw exception text). Green: T013.
-- [ ] T020 [P] Ports: `application/ExceptionReportSink` exactly as the plan's port contract writes it
+      (green at `11d7bab`: ExceptionReportModelTest, 5 tests, 0 failures, 0 errors.
+      `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` exit 0.
+      `sinceLastScheduledRun` takes **two** steps back through `LastScheduledRun`: the most recent
+      occurrence before `now` is the run currently firing, so the window opens at the occurrence
+      before that. One test line moved with the implementation - the window helper's backstop was
+      a window at the epoch with no width, which the record now refuses before a case can read it;
+      it runs forwards now and no assertion moved.)
+- [x] T020 [P] Ports: `application/ExceptionReportSink` exactly as the plan's port contract writes it
       (`DeliveryOutcome deliver(ExceptionReport report)`, answering how it went rather than
       throwing); `application/PayloadFileStore` gains
       `storeText(UUID, String, PayloadMetadata) throws PayloadStoreUnavailableException` with the
@@ -378,9 +471,17 @@ these types.
       `storeText` that throws `UnsupportedOperationException`; the real one lands at T065. No Azure,
       JDBC, HTTP or logging type appears in any of the signatures. Infrastructure: a port declaration
       with its seams, recorded as a compiling `./gradlew compileJava`.
+      (`a040f69`: `./gradlew compileJava compileTestJava` BUILD SUCCESSFUL, exit 0;
+      `checkstyleMain` and `pmdMain` exit 0. Both `storeText` implementers refuse rather than
+      pretend, because a store that accepted a CSV and wrote nothing would mint an id for a file
+      notificationnotify would later find nothing under.)
 - [ ] T021 Phase close: `./gradlew build` green; **review gate 2** (ports and adapters, the
       read-only claim, no infrastructure type in `application/` or `domain/`); findings land as
       red/green pairs before Phase 3 starts.
+      (build half done at `a040f69`: `./gradlew build` BUILD SUCCESSFUL, exit 0, 3337 tests over
+      546 suites, 0 failures, 0 errors; Checkstyle at `maxWarnings = 0` over main and test, PMD
+      over both, and the JaCoCo gate at LINE 0.88 / BRANCH 0.85, none of them loosened. **Review
+      gate 2 is still owed** and this task stays open until it has run.)
 
 **Checkpoint**: the report's model, its two ports and its nine reads exist and the reads are proven
 against a real Postgres. The three story phases below can now be worked independently.
