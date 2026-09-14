@@ -4,6 +4,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -182,6 +183,34 @@ public class RegisterNotificationRepository {
             RETURNING notification_id
             """;
 
+    /**
+     * Statement 6 - the sends settled FAILED inside the window, oldest first.
+     *
+     * <p>Joined to {@code register_batch} for the court centre and the register day, and the join
+     * is what makes this one statement rather than one per row: {@code RegisterNotification}
+     * carries neither its batch's key nor an age, and looking each batch up separately would be
+     * N+1 reads on precisely the morning the list is longest.
+     *
+     * <p><strong>{@code email_address} is deliberately not in the select list.</strong> It is the
+     * one personal value in the table, the report never carries it, and a column that is never read
+     * cannot be logged by accident - so there is no value to mask and none to forget to mask. A
+     * failed send is identified by its notification id and its batch, which is what a resend needs
+     * anyway.
+     *
+     * <p>Ordered oldest first, because the team that has been waiting longest is the one a
+     * morning's resend starts with.
+     */
+    private static final String FAILED_SINCE = """
+            SELECT n.notification_id, n.batch_id, n.status, n.response_code, n.attempts, n.sent_at,
+                   b.court_centre_id, b.register_date,
+                   extract(epoch from (now() - n.sent_at))::bigint AS age_seconds
+              FROM register_notification n
+              JOIN register_batch b ON b.batch_id = n.batch_id
+             WHERE n.status = 'FAILED'
+               AND n.sent_at >= :since
+             ORDER BY n.sent_at
+            """;
+
     private final JdbcClient jdbcClient;
 
     /**
@@ -333,8 +362,11 @@ public class RegisterNotificationRepository {
      * @return every refused or unanswered send settled at or after it, oldest first
      */
     public List<FailedNotification> failedSince(final Instant since) {
-        throw new UnsupportedOperationException(
-                "the report's failed-notification read is not written yet");
+        return StoreOutage.translating("read the sends refused inside a window",
+                () -> jdbcClient.sql(FAILED_SINCE)
+                        .param("since", offsetOf(since))
+                        .query((rs, rowNumber) -> failed(rs))
+                        .list());
     }
 
     /**
@@ -377,6 +409,22 @@ public class RegisterNotificationRepository {
                 .param("status", notification.status().name())
                 .param("responseCode", notification.responseCode(), Types.INTEGER)
                 .param("sentAt", offsetOf(notification.sentAt()), Types.TIMESTAMP_WITH_TIMEZONE);
+    }
+
+    /**
+     * One refused send as the report reads it, with the age the statement computed and no address.
+     */
+    private static FailedNotification failed(final ResultSet rs) throws SQLException {
+        return new FailedNotification(
+                rs.getObject("notification_id", UUID.class),
+                rs.getObject("batch_id", UUID.class),
+                rs.getObject("court_centre_id", UUID.class),
+                rs.getObject("register_date", LocalDate.class),
+                NotificationStatus.valueOf(rs.getString("status")),
+                rs.getObject("response_code", Integer.class),
+                rs.getInt("attempts"),
+                instant(rs.getObject("sent_at", OffsetDateTime.class)),
+                rs.getLong("age_seconds"));
     }
 
     private static RegisterNotification notification(final ResultSet rs) throws SQLException {
