@@ -41,8 +41,8 @@ import uk.gov.hmcts.cp.courtregister.support.WorkloadIdentityStub;
  * ({@link CliModeConfig} says why for each). A consumer would take a delivery from the pod whose job
  * it is and record a register as a side effect of listing one; a scheduler would be a second replica
  * of the 18:00 run, and a command still running at 18:00 London would generate the night twice; a
- * listener container would take the durable subscription - which admits exactly one consumer - away
- * from the pod waiting for the outcomes and give it to a process about to exit.
+ * listener container would be one more consumer the shared durable subscription load-balances
+ * outcomes to, taking deliveries a process about to exit will not finish.
  *
  * <p>Both contexts are a generating pod's: generation enabled, the four modes LIVE, intake enabled.
  * That is the point of the pairing. The property is <strong>not</strong> the inverse of
@@ -233,9 +233,8 @@ class CliModeConfigTest {
         @DisplayName("runs no listener container, so the durable subscription is left alone")
         void a_cli_context_should_run_no_jms_listener_container() {
             assertThat(listenerContainers(context))
-                    .as("the durable subscription admits exactly one consumer, so a command that "
-                            + "subscribed would take the topic away from the pod waiting for the "
-                            + "outcomes and give it to a process about to exit")
+                    .as("the durable subscription is shared, so a command that subscribed would "
+                            + "be handed a share of the outcomes and exit without finishing them")
                     .isEmpty();
             assertThat(context.getBeanNamesForType(DocumentEventListener.class))
                     .as("the listener the subscription would deliver to, and therefore the "
