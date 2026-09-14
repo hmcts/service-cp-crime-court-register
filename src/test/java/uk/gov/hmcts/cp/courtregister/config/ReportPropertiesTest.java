@@ -125,6 +125,29 @@ class ReportPropertiesTest {
     }
 
     /**
+     * The other half of the resolution rule, and the half that says the borrowing is a default
+     * rather than an override: a deployment that states its own rendering limit gets its own, and
+     * the grace period sitting beside it does not quietly win. One answer applies at a time, which
+     * is the whole reason the key has no default of its own.
+     */
+    @Test
+    @DisplayName("an explicitly set rendering limit is the deployment's own, not the grace period")
+    void an_explicit_batch_generated_within_is_honoured() {
+        runner.withPropertyValues("courtregister.report.batch-generated-within=20m",
+                "courtregister.generation.grace-period=10m").run(context -> {
+                    assertThat(context).hasNotFailed();
+                    final GenerationProperties generation =
+                            context.getBean(GenerationProperties.class);
+
+                    assertThat(PropertiesValidator.resolvedBatchGeneratedWithin(
+                            context.getBean(ReportProperties.class), generation))
+                            .isEqualTo(Duration.ofMinutes(20))
+                            .as("the deployment's own limit, not the grace period beside it")
+                            .isNotEqualTo(generation.gracePeriod());
+                });
+    }
+
+    /**
      * SC-005, user story 5 scenario 3: a threshold is per environment and takes effect on the next
      * run, without a release.
      *

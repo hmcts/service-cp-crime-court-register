@@ -2223,6 +2223,15 @@ class ConfigurationValidationTest {
         private static final String A_TEMPLATE =
                 TEMPLATE + "=8f1d5c30-27b4-4f6a-9d18-0c3b7a2e5164";
 
+        /** The words only the JVM-unknown branch of the zone rule says. */
+        private static final String NOT_A_ZONE_THIS_JVM_KNOWS = "is not a zone this JVM knows";
+
+        /** The words only the unacknowledged branch says, so the two cannot be confused. */
+        private static final String MUST_BE_EUROPE_LONDON = "must be Europe/London";
+
+        /** The grace period the unset rendering limit resolves from, by its own key. */
+        private static final String GRACE_PERIOD = "courtregister.generation.grace-period";
+
         @Test
         void a_negative_request_threshold_refuses_to_start() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
@@ -2300,6 +2309,13 @@ class ConfigurationValidationTest {
                     });
         }
 
+        /**
+         * Asserted on the wording that belongs to <em>this</em> rule and to no other. Naming the
+         * setting alone is not enough here: the unacknowledged refusal names the same setting, so a
+         * case that asked only for that would still pass if the acknowledgement stopped being read
+         * at all - which is precisely the regression that would leave {@code @Scheduled} to fail at
+         * refresh with nothing pointing at the setting that caused it.
+         */
         @Test
         void an_acknowledged_override_must_still_be_a_zone_the_jvm_knows() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
@@ -2307,7 +2323,11 @@ class ConfigurationValidationTest {
                     REPORT + ".zone-override-acknowledged=true").run(context -> {
                         assertThat(context).hasFailed();
                         assertThat(context.getStartupFailure())
-                                .hasMessageContaining(REPORT + ".zone");
+                                .hasMessageContaining(REPORT + ".zone")
+                                .hasMessageContaining(NOT_A_ZONE_THIS_JVM_KNOWS)
+                                .as("the unacknowledged refusal names the same setting, so the"
+                                        + " distinguishing words are what pins this rule")
+                                .hasMessageNotContaining(MUST_BE_EUROPE_LONDON);
                     });
         }
 
@@ -2360,6 +2380,105 @@ class ConfigurationValidationTest {
         void an_enabled_email_output_with_both_settings_should_start() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
                     A_RECIPIENT).run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /**
+         * A blank id is an unset one. A deployed environment overrides the local binding with an
+         * empty value rather than deleting the key, which is the exact shape fix P9 was: the
+         * register's own template arrived blank, every send was refused, and the only thing that
+         * said so was a log line nobody read.
+         */
+        @Test
+        void a_blank_template_id_with_email_enabled_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_RECIPIENT,
+                    TEMPLATE + "=  ").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(TEMPLATE)
+                                .hasMessageContaining(REPORT + ".email.enabled");
+                    });
+        }
+
+        /**
+         * Non-blank is not the same as usable. notificationnotify refuses the command on anything
+         * that is not its own canonical UUID, so a template id of the wrong shape is a morning
+         * report nobody receives - refused here rather than at 07:00, and never quoted back,
+         * because a startup refusal is a log line in the same index as every other.
+         */
+        @Test
+        void a_malformed_template_id_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_RECIPIENT,
+                    TEMPLATE + "=not-a-uuid").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(TEMPLATE)
+                                .hasMessageContaining(REPORT + ".email.enabled")
+                                .hasMessageNotContaining("not-a-uuid");
+                    });
+        }
+
+        /**
+         * An empty entry in the list is the stray-separator failure the address rule exists to
+         * catch, and it is the one the list arrives from Key Vault carrying: a trailing comma and a
+         * list pasted with a separator too many look identical to a correct list in a chart diff.
+         * notificationnotify refuses the command on it, every recipient of every morning.
+         *
+         * <p>Two spellings, because they reach the binder differently and must reach the same
+         * answer: a separator with nothing between two addresses, and a separator with nothing
+         * after the last one.
+         */
+        @Test
+        void a_recipient_list_with_an_empty_entry_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
+                    RECIPIENTS + "=cr-support@justice.gov.uk,,duty@justice.gov.uk")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(RECIPIENTS)
+                                .hasMessageNotContaining("cr-support@justice.gov.uk");
+                    });
+
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
+                    RECIPIENTS + "=cr-support@justice.gov.uk, ").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(RECIPIENTS)
+                                .hasMessageNotContaining("cr-support@justice.gov.uk");
+                    });
+        }
+
+        /**
+         * The schedule is also the window, so a cron nothing can read is two failures at once: a
+         * job Spring refuses to schedule at refresh, and a window neither the run nor the command
+         * can open. Both are discovered at 07:00 on a morning nobody is watching, which is why they
+         * are discovered at startup instead. The value is not quoted back.
+         */
+        @Test
+        void an_unparseable_cron_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".cron=every morning please").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".cron")
+                                .hasMessageNotContaining("every morning please");
+                    });
+        }
+
+        /**
+         * The rendering limit is the one duration with no default of its own: unset, it <em>is</em>
+         * the generation half's grace period. A zero there is therefore a zero here, and a
+         * rendering limit of zero reports every batch in the estate as late on its first morning -
+         * so the resolved value is held to being positive too, and the refusal names the key the
+         * value really came from rather than the key that was left unset.
+         */
+        @Test
+        void a_zero_grace_period_makes_the_unset_rendering_limit_refuse() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, REPORT + ".enabled=true",
+                    GRACE_PERIOD + "=0s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(GRACE_PERIOD);
+                    });
         }
     }
 }
