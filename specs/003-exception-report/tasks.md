@@ -35,6 +35,22 @@ be formed, the exception is written into this section with the design owner's da
 **before** the commit lands, in the shape 002's exception blocks use - never argued for afterwards
 in a commit body.
 
+**Proposed, awaiting design owner approval - NOT granted.** Review gate 1 found one rule in
+`config/PropertiesValidator` that landed at `0e0e7b1`, inside T003's green commit, with no test of
+its own: the `UUID_SHAPE` shape check on `courtregister.report.email.template-id`. The rule is
+correct and is fix P9's rule one morning earlier, but it was written without a red run, and no
+exception was recorded here before that commit landed - which is exactly what the paragraph above
+requires. The characterisation
+`ConfigurationValidationTest.ReportRefusals.a_malformed_template_id_refuses_to_start` landed at
+`de21621` and was **green on introduction**; its commit body records it as an `[A]` characterisation
+of an already-shipped rule and claims no exception for it. **The proposal** is to record a one-off
+TDD exception covering the `UUID_SHAPE` rule alone, dated to the design owner's approval, on the
+grounds that the rule is a verbatim reuse of one already pinned by
+`ConfigurationValidationTest.a_template_id_that_is_not_a_uuid_should_fail_startup` and that
+re-landing it as a pair would mean reverting a correct refusal in order to watch it fail.
+**Status: awaiting the design owner's approval.** Until that approval is given and dated in this
+block, this is not an approved exception, and the gap stands recorded as a gap.
+
 **No `doc/DEFECT-FIXES.md` row is added, amended or flipped anywhere in this increment.** There is
 no legacy oracle for an exception report: neither the function app nor progression's leg produced
 one, and the four instruments are design section 11 promises that were never built rather than
@@ -158,16 +174,30 @@ nothing, and the two indexes that make the scheduled reads index scans rather th
       where the sweep is and where the setting is; it is still one of T001's ten. The three
       duration refusals reuse `requirePositive`, which quotes the offending **duration** back as
       every other refusal in the class does - the "quote no operator-supplied value" rule is kept
-      strictly where it matters, the template id and the recipients, neither of which is quoted.)
+      strictly where it matters, the template id and the recipients, neither of which is quoted.
+      The same allowance covers the **zone id**, which the shared
+      `GenerationProperties.requireTheCourtsZone` echoes in both its branches: that is generation's
+      own wording, reused unchanged rather than restated, and a zone id is a tz-database name an
+      operator typed rather than personal data or a credential. Review gate 1 asked for this to be
+      said out loud rather than left to the reader, and it is now said: a duration and a zone id are
+      echoed, a template id, an address and - since `789357d` - a cron expression are not.)
 - [x] T004 [P] [US5] The `courtregister.report` block and the one `courtregister.intake.gauge-refresh`
       key in `src/main/resources/application.yaml` (and the matching keys in
       `src/main/resources/application-test.yaml` where the test profile needs them), every key
       written with a comment saying **what breaks without it**, following the
       `courtregister.generation` block's shape and its "LOCAL DEFAULT ONLY" convention.
       **One mechanism per defaulted duration**, per data-model.md's resolution table:
-      `lock-at-most-for` is the only key double-written, because `@SchedulerLock`'s attribute is
-      resolved by the placeholder resolver and cannot see a record; `batch-generated-within` gets
-      **no** placeholder at all; and `courtregister.intake.gauge-refresh` carries its own literal
+      `lock-at-most-for` and `courtregister.intake.gauge-refresh` are the two keys double-written
+      **because something reads them through the placeholder resolver** - `@SchedulerLock`'s
+      attribute and `@Scheduled(fixedDelayString)`'s, neither of which can see a record's
+      `@DefaultValue`. They are not the only keys written in both places, and review gate 1 was
+      right that the original wording said they were: the `courtregister.report` block follows the
+      `courtregister.generation` block's convention and restates `enabled`, `cron`, `zone`,
+      `zone-override-acknowledged`, `request-terminal-within`, `notified-within` and
+      `email.enabled` beside their `@DefaultValue`s, so an operator reads a deployment's settings
+      out of one file. What those seven have and the two above do not is a **single** reader - the
+      record - so a yaml copy is documentation rather than a second mechanism.
+      `batch-generated-within` gets **no** placeholder and no yaml key at all; and `courtregister.intake.gauge-refresh` carries its own literal
       `10m` and borrows nothing from `courtregister.generation.grace-period`, which an intake-only
       pod would not bind. There is no `courtregister.report.window` key to write. Infrastructure: the
       commit records `./gradlew bootRun` still refusing for the documented reasons.
@@ -208,13 +238,46 @@ nothing, and the two indexes that make the scheduled reads index scans rather th
       Additive and forward-only; never edited once applied. Green: T005.
       (green at `76fea55`: SchemaMigrationV4IT, 4 tests, 0 failures, 0 errors. The file is the
       data-model.md block verbatim, header comment included.)
-- [ ] T007 Phase close: `./gradlew build` green (PMD, Checkstyle at `maxWarnings = 0`, the JaCoCo
+- [x] T007 Phase close: `./gradlew build` green (PMD, Checkstyle at `maxWarnings = 0`, the JaCoCo
       gate unchanged and not loosened); **review gate 1** in a new session against
       `.claude/rules/workflow.md`; findings land as red/green pairs before Phase 2 starts.
       (build half done at `76fea55`: `./gradlew build` BUILD SUCCESSFUL, exit 0, 3302 tests over
       537 suites, 0 failures, 0 errors; Checkstyle at `maxWarnings = 0` over main and test, PMD
-      over both, and the JaCoCo gate at LINE 0.88 / BRANCH 0.85, none of them loosened. **Review
-      gate 1 is still owed** and this task stays open until it has run.)
+      over both, and the JaCoCo gate at LINE 0.88 / BRANCH 0.85, none of them loosened.
+      **Review gate 1 ran against the committed Phase 1 content** with three read-only reviewers.
+      Verdicts: `code-reviewer` **PASS** (1 medium, 2 low), `spec-validator` **DRIFT DETECTED**
+      (1 medium, 4 low), `qa` **FAIL** - the last on coverage rather than on a failing suite, the
+      build having been green throughout.
+      Findings, and where each was closed:
+      * a resolved rendering limit of zero was never checked positive - `resolvedBatchGeneratedWithin`
+        was called for its side effect and had none - so `courtregister.generation.grace-period=0s`
+        started a pod whose every batch is late on its first morning. Red
+        `a_zero_grace_period_makes_the_unset_rendering_limit_refuse` at `de21621`, green at
+        `789357d`, which also names the key the value came from rather than the key nobody set.
+      * `courtregister.report.cron` had no validation at all, although `@Scheduled` reads it at
+        refresh and `ReportWindow.sinceLastScheduledRun` reads it every run. Red
+        `an_unparseable_cron_refuses_to_start` at `de21621`, green at `789357d` over
+        `CronExpression.isValidExpression`.
+      * the `UUID_SHAPE` refusal on the report's template id shipped at `0e0e7b1` untested.
+        Characterised by `a_malformed_template_id_refuses_to_start` at `de21621`, **green on
+        introduction and recorded as such**; the TDD gap is written into the "Approved TDD
+        exceptions" block above as a proposal **awaiting the design owner's approval**, not as an
+        approved exception.
+      * `an_acknowledged_override_must_still_be_a_zone_the_jvm_knows` asserted only that the message
+        named the setting, which the unacknowledged refusal also does, so it would have passed with
+        the acknowledgement no longer read. Sharpened at `de21621` onto the words only the
+        JVM-unknown branch says, with the other branch's words asserted absent.
+      * an explicitly set `batch-generated-within`, a blank template id, and a recipient list with
+        an empty entry (both spellings) had no case of their own. All three landed at `de21621` and
+        all three were **green on introduction**, which their commit body says.
+      * the `recipient == null` branch was unreachable - `List.copyOf` in `ReportProperties.Email`
+        refuses a null element first - and the javadoc "Spring's own key ... the broker the
+        completion events arrive on" sat above `INTAKE_GAUGE_REFRESH` rather than above
+        `BROKER_URL`. Both closed at `789357d`.
+      * two narrative corrections, closed in this commit: T004's "the ONLY key double-written", and
+        T003's echo allowance, which covered the duration and not the zone id the shared zone helper
+        also echoes.
+      Nothing in the gate asked for a `doc/DEFECT-FIXES.md` row and none was added.)
 
 **Checkpoint**: the settings exist, a bad one cannot start a pod, and the reads Phase 2 writes have
 their indexes.
