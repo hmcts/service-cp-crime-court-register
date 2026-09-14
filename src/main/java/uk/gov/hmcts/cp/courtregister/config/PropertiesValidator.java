@@ -10,6 +10,7 @@ import java.util.regex.Pattern;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.env.Environment;
+import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Component;
 
 /**
@@ -143,6 +144,7 @@ public class PropertiesValidator implements InitializingBean {
     private static final String RUN_DEADLINE = GENERATION + ".run-deadline";
     private static final String LOCK_AT_MOST_FOR = GENERATION + ".lock-at-most-for";
     private static final String GENERATION_COMPLETION = GENERATION + ".completion";
+    private static final String GENERATION_GRACE_PERIOD = GENERATION + ".grace-period";
     private static final String NN_MODE = GENERATION + ".nn-mode";
     private static final String FILESERVICE_URL = "courtregister.fileservice.url";
     private static final String FEATURE_ENDPOINT = "courtregister.feature.endpoint";
@@ -158,10 +160,17 @@ public class PropertiesValidator implements InitializingBean {
     private static final String NN_ENDPOINT = "courtregister.endpoints.notificationnotify";
     private static final String EMAIL_TEMPLATE = "courtregister.email.templates.cr_standard";
 
-    /** Spring's own key, not this service's: the broker the completion events arrive on. */
+    /**
+     * The sweep's own interval, on the intake half rather than under {@code courtregister.report}.
+     *
+     * <p>The sweep that reads it runs in every service JVM, including one with the report and the
+     * generation half both switched off - which binds neither of their records, and could not read
+     * a key that lived on one of them.
+     */
     private static final String INTAKE_GAUGE_REFRESH = "courtregister.intake.gauge-refresh";
 
     private static final String REPORT = "courtregister.report";
+    private static final String REPORT_CRON = REPORT + ".cron";
     private static final String REPORT_ZONE = REPORT + ".zone";
     private static final String REPORT_ZONE_OVERRIDE_ACKNOWLEDGED =
             REPORT + ".zone-override-acknowledged";
@@ -176,6 +185,7 @@ public class PropertiesValidator implements InitializingBean {
     /** The hour the report's schedule is a wall-clock requirement in, for the zone refusal. */
     private static final String REPORT_HOUR = "07:00";
 
+    /** Spring's own key, not this service's: the broker the completion events arrive on. */
     private static final String BROKER_URL = "spring.artemis.broker-url";
 
     /** Shared so the wording of a lower-bound refusal is one string and not five. */
@@ -1293,8 +1303,9 @@ public class PropertiesValidator implements InitializingBean {
     }
 
     /**
-     * The morning report's own refusals - a threshold that reports everything as late, a schedule
-     * read in the wrong zone, a lock that cannot cover the run it locks, and an e-mail output
+     * The morning report's own refusals - a schedule nothing can read, a threshold that reports
+     * everything as late, a schedule read in the wrong zone, a rendering limit of zero whichever of
+     * its two sources it came from, a lock that cannot cover the run it locks, and an e-mail output
      * enabled with nobody to send to or no template to send under.
      *
      * <p>Unconditional on {@link ReportProperties#enabled()}, for the reason the generation half's
@@ -1313,21 +1324,57 @@ public class PropertiesValidator implements InitializingBean {
      */
     /* default */ static void validateReport(final ReportProperties report,
             final GenerationProperties generation) {
+        validateTheScheduleCanBeRead(report);
         GenerationProperties.requireTheCourtsZone(report.zone(), report.zoneOverrideAcknowledged(),
                 REPORT_ZONE, REPORT_ZONE_OVERRIDE_ACKNOWLEDGED, REPORT_HOUR);
         requirePositive(report.requestTerminalWithin(), REPORT_REQUEST_TERMINAL_WITHIN);
         requirePositive(report.notifiedWithin(), REPORT_NOTIFIED_WITHIN);
-        if (report.batchGeneratedWithin() != null) {
-            // An explicitly set value is the deployment's own and is held to being usable. Only an
-            // UNSET one resolves: "unset" and "zero" are different things an operator can mean, and
-            // a zero quietly read as the grace period is a rendering limit nobody chose.
-            requirePositive(report.batchGeneratedWithin(), REPORT_BATCH_GENERATED_WITHIN);
-        }
+        validateTheRenderingLimitIsUsableWhereverItCameFrom(report, generation);
         validateTheReportLockOutlivesItsRun(report);
         validateTheReportCanReachSomebody(report);
-        // Read here so a deployment that set neither is refused by whichever rule bites first rather
-        // than by a null at 07:00.
-        resolvedBatchGeneratedWithin(report, generation);
+    }
+
+    /**
+     * A schedule nothing can read is two failures at once, and neither is discovered before 07:00.
+     *
+     * <p>The cron is the run's trigger <em>and</em> the window it reads back over
+     * ({@code ReportWindow.sinceLastScheduledRun}), so an unparseable one is a job
+     * {@code @Scheduled} refuses at refresh and a window neither the run nor the command can open.
+     * Unconditional on {@link ReportProperties#enabled()}, like the zone rule beside it: a schedule
+     * that would be wrong in the next deployment is not made right by this one having the report
+     * switched off.
+     *
+     * <p>The value is not quoted back. It is an operator's own text and this refusal is a log line;
+     * naming the setting is what is needed in order to fix it.
+     */
+    private static void validateTheScheduleCanBeRead(final ReportProperties report) {
+        if (!CronExpression.isValidExpression(report.cron())) {
+            throw new IllegalStateException(
+                    REPORT_CRON + " must be a schedule Spring's six-field dialect can read - it is"
+                            + " both the run's trigger and the window the run reads back over, so"
+                            + " an unreadable one is a job that never fires and a window nothing"
+                            + " can open");
+        }
+    }
+
+    /**
+     * The rendering limit has to be usable whichever of its two sources it came from.
+     *
+     * <p>An explicitly set value is the deployment's own and is held to being usable under its own
+     * key. Only an <strong>unset</strong> one resolves: "unset" and "zero" are different things an
+     * operator can mean, and a zero quietly read as the grace period is a rendering limit nobody
+     * chose. A zero that arrives <em>through</em> the resolution is refused too, and under
+     * {@link #GENERATION_GRACE_PERIOD} rather than under the report's own key - because that is the
+     * key an operator has to edit, and a refusal naming a key nobody set is a refusal nobody can
+     * act on. Left unchecked it is a limit of zero seconds, under which every batch in the estate
+     * is late on its first morning and the report says nothing useful ever again.
+     */
+    private static void validateTheRenderingLimitIsUsableWhereverItCameFrom(
+            final ReportProperties report, final GenerationProperties generation) {
+        requirePositive(resolvedBatchGeneratedWithin(report, generation),
+                report.batchGeneratedWithin() == null
+                        ? GENERATION_GRACE_PERIOD
+                        : REPORT_BATCH_GENERATED_WITHIN);
     }
 
     /**
@@ -1379,8 +1426,12 @@ public class PropertiesValidator implements InitializingBean {
                             + " is true - an e-mail output with nobody to send to is a morning"
                             + " report nobody receives, and nothing says so");
         }
+        // No null check on the entry: ReportProperties.Email freezes the list with List.copyOf,
+        // which refuses a null element before the validator ever sees it. An empty entry is not a
+        // null one and is refused here, by the address rule, which is where the stray separator
+        // that produces it belongs.
         for (final String recipient : report.email().recipients()) {
-            if (recipient == null || !ADDRESS_SHAPE.matcher(recipient.trim()).matches()) {
+            if (!ADDRESS_SHAPE.matcher(recipient.trim()).matches()) {
                 throw new IllegalStateException(
                         REPORT_EMAIL_RECIPIENTS + " must be a comma-separated list of addresses"
                                 + " when " + REPORT_EMAIL_ENABLED + " is true - one entry is not"
