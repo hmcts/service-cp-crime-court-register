@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import uk.gov.hmcts.cp.courtregister.domain.FailedNotification;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
 import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
@@ -319,6 +320,21 @@ public class RegisterNotificationRepository {
                         .query(UUID.class)
                         .optional()
                         .isPresent());
+    }
+
+    /**
+     * The report's NOTIFICATION_FAILED read: the sends settled FAILED inside the window.
+     *
+     * <p>One statement, joined to {@code register_batch} for the court centre and the register day
+     * the entry names, and ordered oldest first. {@code email_address} is deliberately not among
+     * the columns it selects.
+     *
+     * @param since the window's start
+     * @return every refused or unanswered send settled at or after it, oldest first
+     */
+    public List<FailedNotification> failedSince(final Instant since) {
+        throw new UnsupportedOperationException(
+                "the report's failed-notification read is not written yet");
     }
 
     /**
