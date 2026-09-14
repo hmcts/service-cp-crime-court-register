@@ -127,18 +127,43 @@ public record GenerationProperties(
      * refresh with nothing pointing at the setting that caused it.
      */
     private void validateTheScheduleIsReadInTheCourtsZone() {
+        requireTheCourtsZone(zone, zoneOverrideAcknowledged, ZONE, ZONE_OVERRIDE_ACKNOWLEDGED,
+                "18:00");
+    }
+
+    /**
+     * The zone rule itself, stated once for every schedule this service runs.
+     *
+     * <p>The nightly generation run is 18:00 wall clock and the morning exception report is 07:00
+     * wall clock, and the rule they are held to is the <em>same</em> rule rather than a similar one:
+     * both are the court's own hour in BST and GMT alike, both permit another zone only under a
+     * deliberate acknowledgement, and both hold an acknowledged override to naming a zone the JVM
+     * knows - because {@code @Scheduled} would otherwise fail at refresh with nothing pointing at
+     * the setting that caused it. Two copies of this would be two rules that agree until somebody
+     * edits one of them.
+     *
+     * @param zone                    the zone the schedule is read in
+     * @param acknowledged            whether another zone has been deliberately acknowledged
+     * @param zoneSetting             the key the refusal names, so it names the caller's own
+     * @param acknowledgementSetting  the acknowledgement key the refusal points at
+     * @param wallClock               the hour the requirement is written in, for the message
+     * @throws IllegalStateException if the zone is not the court's and nobody has said so, or if an
+     *                               acknowledged override names a zone the JVM does not know
+     */
+    /* default */ static void requireTheCourtsZone(final String zone, final boolean acknowledged,
+            final String zoneSetting, final String acknowledgementSetting, final String wallClock) {
         if (!COURTS_ZONE.equals(zone)) {
-            if (zoneOverrideAcknowledged) {
+            if (acknowledged) {
                 if (!ZoneId.getAvailableZoneIds().contains(zone)) {
                     throw new IllegalStateException(
-                            ZONE + " (" + zone + ") is not a zone this JVM knows, so the"
+                            zoneSetting + " (" + zone + ") is not a zone this JVM knows, so the"
                                     + " acknowledged override names no schedule at all");
                 }
             } else {
                 throw new IllegalStateException(
-                        ZONE + " (" + zone + ") must be " + COURTS_ZONE + ", because the run is"
-                                + " 18:00 wall clock in BST and GMT alike; set "
-                                + ZONE_OVERRIDE_ACKNOWLEDGED + "=true to run in another zone"
+                        zoneSetting + " (" + zone + ") must be " + COURTS_ZONE + ", because the run"
+                                + " is " + wallClock + " wall clock in BST and GMT alike; set "
+                                + acknowledgementSetting + "=true to run in another zone"
                                 + " deliberately");
             }
         }
