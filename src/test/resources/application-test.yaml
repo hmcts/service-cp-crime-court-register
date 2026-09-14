@@ -50,6 +50,16 @@ courtregister:
     # off" is not a reason to let a misconfigured schedule through.
     zone: Europe/London
 
+  report:
+    # Off, and off UNCONDITIONALLY, for the reason `generation.enabled` above is: `application.yaml`
+    # reads COURTREGISTER_REPORT_ENABLED, and a developer who exported it for a local run would
+    # otherwise turn the 07:00 job on inside every context-load test. The e-mail output is pinned
+    # off beside it because its two settings become REQUIRED at startup the moment it is true, and
+    # this profile deliberately mounts neither a template nor a recipient.
+    enabled: false
+    email:
+      enabled: false
+
   # Deliberately absent from this profile: courtregister.feature.*, courtregister.fileservice.*,
   # courtregister.endpoints.* and courtregister.email.templates.*. They are required only when
   # generation is enabled, and it is disabled above; leaving them unset is what proves the refusals
