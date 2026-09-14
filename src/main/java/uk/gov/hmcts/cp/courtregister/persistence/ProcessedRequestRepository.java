@@ -1,7 +1,10 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -152,6 +155,71 @@ public class ProcessedRequestRepository {
                AND request_id = :requestId
                AND status = 'FAILED'
                AND exhausted_message_id <> :messageId
+            """;
+
+    /**
+     * The columns the report reads a request through, which are not the columns a claim decision
+     * reads it through.
+     *
+     * <p>Shared by the three statements below and closed by each of them with its own age
+     * expression, because which moment a row's age is measured from is the whole difference between
+     * them.
+     */
+    private static final String SUMMARY_COLUMNS = """
+            SELECT source, request_id, hearing_id, hearing_day, status, attempts, failure_reason,
+                   created_at, updated_at,
+            """;
+
+    /**
+     * Statement 6 - the requests parked inside the window, oldest first.
+     *
+     * <p>The boundary is on {@code updated_at} because that is when a row reached the state being
+     * asked about; {@code created_at} would answer which requests that <em>arrived</em> yesterday
+     * failed, which is a different and less useful question on the morning after an outage. The age
+     * is measured from the same column, so what the report says is how long ago the request was
+     * parked.
+     *
+     * <p>Served by {@code idx_request_status_updated}, which V4 adds for it.
+     */
+    private static final String FAILED_SINCE = SUMMARY_COLUMNS + """
+                   extract(epoch from (now() - updated_at))::bigint AS age_seconds
+              FROM processed_request
+             WHERE status = 'FAILED'
+               AND updated_at >= :since
+             ORDER BY updated_at
+            """;
+
+    /**
+     * Statement 7 - the requests still in flight that arrived before the cut-off, oldest first.
+     *
+     * <p><strong>The predicate is spelled exactly as {@code idx_request_non_terminal_created}
+     * spells it.</strong> Postgres matches a partial index by proving the query's predicate implies
+     * the index's, and a differently spelled equivalent is a planner coin toss - so the two are the
+     * same text and the implication is trivial.
+     *
+     * <p>Oldest first: the worst problem is the one read first, on a screen and in a table.
+     */
+    private static final String NON_TERMINAL_OLDER_THAN = SUMMARY_COLUMNS + """
+                   extract(epoch from (now() - created_at))::bigint AS age_seconds
+              FROM processed_request
+             WHERE status IN ('RECEIVED', 'RETRYING')
+               AND created_at < :createdBefore
+             ORDER BY created_at
+            """;
+
+    /**
+     * Statement 8 - the oldest request that has not finished, which is the sweep's first gauge.
+     *
+     * <p>The same predicate and the same index, without the cut-off and with a limit: the sweep
+     * asks how old the oldest unfinished request is and nothing else, and reading the whole list to
+     * answer one number would be a read that grows with the backlog it is reporting.
+     */
+    private static final String OLDEST_NON_TERMINAL = SUMMARY_COLUMNS + """
+                   extract(epoch from (now() - created_at))::bigint AS age_seconds
+              FROM processed_request
+             WHERE status IN ('RECEIVED', 'RETRYING')
+             ORDER BY created_at
+             LIMIT 1
             """;
 
     private final JdbcClient jdbcClient;
@@ -321,8 +389,11 @@ public class ProcessedRequestRepository {
      * @return every parked request settled at or after it, oldest first
      */
     public List<ProcessedRequestSummary> failedSince(final Instant since) {
-        throw new UnsupportedOperationException(
-                "the report's failed-since read is not written yet");
+        return StoreOutage.translating("read the requests parked inside a window",
+                () -> jdbcClient.sql(FAILED_SINCE)
+                        .param("since", offsetOf(since))
+                        .query((rs, rowNumber) -> summary(rs))
+                        .list());
     }
 
     /**
@@ -337,8 +408,11 @@ public class ProcessedRequestRepository {
      * @return every RECEIVED or RETRYING request that arrived before it, oldest first
      */
     public List<ProcessedRequestSummary> nonTerminalOlderThan(final Instant createdBefore) {
-        throw new UnsupportedOperationException(
-                "the report's non-terminal read is not written yet");
+        return StoreOutage.translating("read the requests still in flight past a cut-off",
+                () -> jdbcClient.sql(NON_TERMINAL_OLDER_THAN)
+                        .param("createdBefore", offsetOf(createdBefore))
+                        .query((rs, rowNumber) -> summary(rs))
+                        .list());
     }
 
     /**
@@ -350,8 +424,10 @@ public class ProcessedRequestRepository {
      * @return the oldest unfinished request, or empty where nothing is unfinished
      */
     public Optional<ProcessedRequestSummary> oldestNonTerminal() {
-        throw new UnsupportedOperationException(
-                "the sweep's oldest-unfinished read is not written yet");
+        return StoreOutage.translating("read the oldest unfinished request",
+                () -> jdbcClient.sql(OLDEST_NON_TERMINAL)
+                        .query((rs, rowNumber) -> summary(rs))
+                        .optional());
     }
 
     /** The three outcome writes differ only in what they set; the predicate is common to all. */
@@ -368,8 +444,33 @@ public class ProcessedRequestRepository {
         return claimLease.toString();
     }
 
+    /**
+     * One row as the report reads it, with the age the statement computed.
+     *
+     * <p>{@code age_seconds} is read off the result set rather than derived here, which is the
+     * whole point of the three statements above computing it: no reading of this JVM's clock is
+     * ever subtracted from a stored timestamp.
+     */
+    private static ProcessedRequestSummary summary(final ResultSet rs) throws SQLException {
+        return new ProcessedRequestSummary(
+                rs.getString("source"),
+                rs.getObject("request_id", UUID.class),
+                rs.getObject("hearing_id", UUID.class),
+                rs.getObject("hearing_day", LocalDate.class),
+                RequestStatus.valueOf(rs.getString("status")),
+                rs.getInt("attempts"),
+                rs.getString("failure_reason"),
+                instant(rs.getObject("created_at", OffsetDateTime.class)),
+                instant(rs.getObject("updated_at", OffsetDateTime.class)),
+                rs.getLong("age_seconds"));
+    }
+
     private static boolean affected(final int rows) {
         return rows > 0;
+    }
+
+    private static OffsetDateTime offsetOf(final Instant value) {
+        return OffsetDateTime.ofInstant(value, ZoneOffset.UTC);
     }
 
     private static Instant instant(final OffsetDateTime value) {
