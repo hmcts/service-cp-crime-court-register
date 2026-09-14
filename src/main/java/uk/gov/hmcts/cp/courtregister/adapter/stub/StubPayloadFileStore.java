@@ -42,4 +42,9 @@ public class StubPayloadFileStore implements PayloadFileStore {
                         + "fileSize={}",
                 fileId, metadata.templateName(), metadata.conversionFormat(), metadata.fileSize());
     }
+
+    @Override
+    public void storeText(final UUID fileId, final String text, final PayloadMetadata metadata) {
+        throw new UnsupportedOperationException("the stubbed text write is not written yet");
+    }
 }

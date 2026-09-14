@@ -125,6 +125,20 @@ public class FileServicePayloadStore implements PayloadFileStore {
     }
 
     /**
+     * {@inheritDoc}
+     *
+     * <p>The real write lands with the e-mail sink that needs it. Until then this refuses rather
+     * than pretending: a store that accepted a CSV and wrote nothing would mint an id for a file
+     * notificationnotify would later find nothing under, and the Youth Offending Team's report
+     * would arrive with an empty attachment.
+     */
+    @Override
+    public void storeText(final UUID fileId, final String text, final PayloadMetadata metadata)
+            throws PayloadStoreUnavailableException {
+        throw new UnsupportedOperationException("the file service's text write is not written yet");
+    }
+
+    /**
      * Issues one insert and insists it wrote the one row it is an insert of.
      *
      * <p>Two catches rather than one. The first is the one a file service that is away actually

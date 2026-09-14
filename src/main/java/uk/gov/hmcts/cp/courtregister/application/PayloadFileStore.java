@@ -34,4 +34,19 @@ public interface PayloadFileStore {
      */
     void store(UUID fileId, JsonNode payload, PayloadMetadata metadata)
             throws PayloadStoreUnavailableException;
+
+    /**
+     * Stores a text file (the exception CSV) under an id the caller has already minted and
+     * written down, through the same two inserts in the same order as {@link #store}: content
+     * first, because {@code metadata.file_id} is a foreign key onto {@code content.file_id}.
+     *
+     * @param fileId   the file-service id, minted and persisted before this call
+     * @param text     the file's content, which is written as UTF-8
+     * @param metadata the metadata row that goes beside it
+     * @throws PayloadStoreUnavailableException if the file is not durably stored, for any reason;
+     *     the e-mail sink reports ATTACHMENT_STORE_UNAVAILABLE and sends nothing, because an
+     *     e-mail whose attachment is not there is an e-mail with nothing attached
+     */
+    void storeText(UUID fileId, String text, PayloadMetadata metadata)
+            throws PayloadStoreUnavailableException;
 }
