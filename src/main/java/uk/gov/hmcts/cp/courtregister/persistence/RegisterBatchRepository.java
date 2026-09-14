@@ -302,6 +302,72 @@ public class RegisterBatchRepository {
     private static final String TOKEN = "token";
     private static final String LEASE_PARAM = "lease";
 
+    /**
+     * The columns the report reads a batch through, which are not the columns the generation leg
+     * reads it through.
+     *
+     * <p>Seven of the row's twenty-one, and {@code sdg_reason} is not among them. That column is
+     * systemdocgenerator's own words about a document whose every defendant is a child, and
+     * constitution Principle VII keeps free text this service did not write out of a line, a label,
+     * an event and the CSV alike - so none of the four statements below reads it, and there is no
+     * value for anything downstream to leak.
+     *
+     * <p>Each statement closes the list with its own age expression, because "waiting" means a
+     * different moment in each of the four.
+     */
+    private static final String EXCEPTION_COLUMNS = """
+            SELECT batch_id, court_centre_id, register_date, status, failure_reason, attempts,
+            """;
+
+    /**
+     * Statement 10 - the batches nothing has been asked of the renderer for, oldest first.
+     *
+     * <p>Deliberately not {@link #PENDING_SINCE}, which serves the reconciler and so admits only
+     * the batches that minted a payload: systemdocgenerator can only be asked about a payload, and
+     * a batch that never minted one is a batch there is nothing to ask about. The report is saying
+     * that a court centre's day has been waiting, and that batch has been waiting longest of all.
+     */
+    private static final String LATE_PENDING = EXCEPTION_COLUMNS + """
+                   extract(epoch from (now() - assembled_at))::bigint AS age_seconds
+              FROM register_batch
+             WHERE status = 'PENDING'
+               AND assembled_at < :assembledBefore
+             ORDER BY assembled_at
+            """;
+
+    /** Statement 11 - the batches whose accepted render has not been answered, oldest first. */
+    private static final String LATE_GENERATING = EXCEPTION_COLUMNS + """
+                   extract(epoch from (now() - requested_at))::bigint AS age_seconds
+              FROM register_batch
+             WHERE status = 'GENERATING'
+               AND requested_at < :requestedBefore
+             ORDER BY requested_at
+            """;
+
+    /** Statement 12 - the batches holding a document nobody was told about, oldest first. */
+    private static final String LATE_GENERATED = EXCEPTION_COLUMNS + """
+                   extract(epoch from (now() - generated_at))::bigint AS age_seconds
+              FROM register_batch
+             WHERE status = 'GENERATED'
+               AND generated_at < :generatedBefore
+             ORDER BY generated_at
+            """;
+
+    /**
+     * Statement 13 - the batches that ended inside the window, oldest first.
+     *
+     * <p>{@code failure_reason} is in the select list and {@code sdg_reason} is not, which is the
+     * whole difference between a reason a support engineer can paste into a ticket and a sentence
+     * another system wrote about somebody's document.
+     */
+    private static final String FAILED_SINCE = EXCEPTION_COLUMNS + """
+                   extract(epoch from (now() - failed_at))::bigint AS age_seconds
+              FROM register_batch
+             WHERE status = 'FAILED'
+               AND failed_at >= :since
+             ORDER BY failed_at
+            """;
+
     private final JdbcClient jdbcClient;
 
     /**
@@ -434,7 +500,7 @@ public class RegisterBatchRepository {
      * @return every PENDING batch assembled before it, oldest first
      */
     public List<BatchException> latePending(final Instant assembledBefore) {
-        throw new UnsupportedOperationException("the report's late-pending read is not written yet");
+        return exceptions(LATE_PENDING, "assembledBefore", assembledBefore);
     }
 
     /**
@@ -444,8 +510,7 @@ public class RegisterBatchRepository {
      * @return every GENERATING batch requested before it, oldest first
      */
     public List<BatchException> lateGenerating(final Instant requestedBefore) {
-        throw new UnsupportedOperationException(
-                "the report's late-generating read is not written yet");
+        return exceptions(LATE_GENERATING, "requestedBefore", requestedBefore);
     }
 
     /**
@@ -455,8 +520,7 @@ public class RegisterBatchRepository {
      * @return every GENERATED batch generated before it, oldest first
      */
     public List<BatchException> lateGenerated(final Instant generatedBefore) {
-        throw new UnsupportedOperationException(
-                "the report's late-generated read is not written yet");
+        return exceptions(LATE_GENERATED, "generatedBefore", generatedBefore);
     }
 
     /**
@@ -470,7 +534,7 @@ public class RegisterBatchRepository {
      * @return every batch failed at or after it, oldest first
      */
     public List<BatchException> failedSince(final Instant since) {
-        throw new UnsupportedOperationException("the report's failed-batch read is not written yet");
+        return exceptions(FAILED_SINCE, "since", since);
     }
 
     /**
@@ -699,6 +763,38 @@ public class RegisterBatchRepository {
                         Types.TIMESTAMP_WITH_TIMEZONE)
                 .param("failedAt", offsetOf(batch.failedAt()), Types.TIMESTAMP_WITH_TIMEZONE)
                 .param("attempts", batch.attempts());
+    }
+
+    /**
+     * The four report reads, which differ only in their statement and their one cut-off.
+     *
+     * <p>Written once because they are one shape: the report is asking each of the four stages the
+     * same question, and four copies of the binding would be four places for the projection to
+     * drift apart.
+     */
+    private List<BatchException> exceptions(final String sql, final String parameter,
+            final Instant cutoff) {
+        return jdbcClient.sql(sql)
+                .param(parameter, offsetOf(cutoff))
+                .query((rs, rowNumber) -> exception(rs))
+                .list();
+    }
+
+    /**
+     * One batch as the report reads it, with the age its own statement computed.
+     *
+     * <p>There is no {@code sdg_reason} to read and no component to put one in, which is the
+     * containment rather than a rule somebody has to remember.
+     */
+    private static BatchException exception(final ResultSet rs) throws SQLException {
+        return new BatchException(
+                rs.getObject("batch_id", UUID.class),
+                rs.getObject("court_centre_id", UUID.class),
+                rs.getObject("register_date", LocalDate.class),
+                BatchStatus.valueOf(rs.getString("status")),
+                failureReason(rs.getString("failure_reason")),
+                rs.getInt("attempts"),
+                rs.getLong("age_seconds"));
     }
 
     private static RegisterBatch batch(final ResultSet rs) throws SQLException {
