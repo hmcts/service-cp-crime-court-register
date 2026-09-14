@@ -14,6 +14,7 @@ import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.support.TransactionOperations;
+import uk.gov.hmcts.cp.courtregister.domain.BatchException;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
@@ -418,6 +419,58 @@ public class RegisterBatchRepository {
                 .param("generatedBefore", offsetOf(generatedBefore))
                 .query((rs, rowNumber) -> batch(rs))
                 .list();
+    }
+
+    /**
+     * The report's BATCH_LATE read for a batch nothing has been asked of the renderer for.
+     *
+     * <p>A projection rather than {@link #pendingSince(Instant)}, and the two are different
+     * questions. That read serves the reconciler, which can only ask systemdocgenerator about a
+     * payload, so it admits only the batches that minted one; this one is the report saying a court
+     * centre's day has been waiting, and a batch that never minted a payload has been waiting
+     * longest of all.
+     *
+     * @param assembledBefore the cut-off, measured from assembly
+     * @return every PENDING batch assembled before it, oldest first
+     */
+    public List<BatchException> latePending(final Instant assembledBefore) {
+        throw new UnsupportedOperationException("the report's late-pending read is not written yet");
+    }
+
+    /**
+     * The report's BATCH_LATE read for a batch whose render has not been answered.
+     *
+     * @param requestedBefore the cut-off, measured from the render request
+     * @return every GENERATING batch requested before it, oldest first
+     */
+    public List<BatchException> lateGenerating(final Instant requestedBefore) {
+        throw new UnsupportedOperationException(
+                "the report's late-generating read is not written yet");
+    }
+
+    /**
+     * The report's BATCH_LATE read for a batch holding a document nobody was told about.
+     *
+     * @param generatedBefore the cut-off, measured from the document
+     * @return every GENERATED batch generated before it, oldest first
+     */
+    public List<BatchException> lateGenerated(final Instant generatedBefore) {
+        throw new UnsupportedOperationException(
+                "the report's late-generated read is not written yet");
+    }
+
+    /**
+     * The report's BATCH_FAILED read: the batches that ended inside the window.
+     *
+     * <p>The downstream half's equivalent of a parked request. It carries the bounded
+     * {@link BatchFailureReason} and never {@code sdg_reason}, which is not among the columns the
+     * statement selects at all.
+     *
+     * @param since the window's start
+     * @return every batch failed at or after it, oldest first
+     */
+    public List<BatchException> failedSince(final Instant since) {
+        throw new UnsupportedOperationException("the report's failed-batch read is not written yet");
     }
 
     /**
