@@ -41,7 +41,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 public record CourtRegisterProperties(
         @DefaultValue("RECORD") OutputMode output,
         @DefaultValue Consumer consumer,
-        Intake intake,
+        @DefaultValue Intake intake,
         @DefaultValue Servicebus servicebus,
         @DefaultValue Claim claim,
         @DefaultValue Notification notification,
@@ -75,7 +75,7 @@ public record CourtRegisterProperties(
      * @param gaugeRefresh how often the intake gauges are refreshed, and therefore the longest an
      *                     alert on them can lag the thing it is about
      */
-    public record Intake(Duration gaugeRefresh) {
+    public record Intake(@DefaultValue("10m") Duration gaugeRefresh) {
     }
 
     /**

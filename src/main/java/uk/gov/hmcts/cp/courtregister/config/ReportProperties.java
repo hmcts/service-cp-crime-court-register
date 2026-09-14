@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.config;
 import java.time.Duration;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
  * The settings the morning exception report runs under.
@@ -47,15 +48,15 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "courtregister.report")
 public record ReportProperties(
-        boolean enabled,
-        String cron,
-        String zone,
-        boolean zoneOverrideAcknowledged,
-        Duration lockAtMostFor,
-        Duration requestTerminalWithin,
-        Duration notifiedWithin,
+        @DefaultValue("false") boolean enabled,
+        @DefaultValue("0 0 7 * * MON-FRI") String cron,
+        @DefaultValue(GenerationProperties.COURTS_ZONE) String zone,
+        @DefaultValue("false") boolean zoneOverrideAcknowledged,
+        @DefaultValue("15m") Duration lockAtMostFor,
+        @DefaultValue("30m") Duration requestTerminalWithin,
+        @DefaultValue("15m") Duration notifiedWithin,
         Duration batchGeneratedWithin,
-        Email email) {
+        @DefaultValue Email email) {
 
     /**
      * The e-mail output, and the two settings it makes required.
@@ -71,7 +72,10 @@ public record ReportProperties(
      *                   value in this repository - they are people's addresses, and they arrive from
      *                   Key Vault through the CSI driver
      */
-    public record Email(boolean enabled, String templateId, List<String> recipients) {
+    public record Email(
+            @DefaultValue("false") boolean enabled,
+            String templateId,
+            List<String> recipients) {
 
         /** Freezes the list, and treats an unconfigured one as none rather than as absent. */
         public Email {
