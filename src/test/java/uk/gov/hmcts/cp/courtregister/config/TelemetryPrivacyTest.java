@@ -1390,6 +1390,7 @@ class TelemetryPrivacyTest {
         return new CourtRegisterProperties(
                 OutputMode.RECORD,
                 new CourtRegisterProperties.Consumer(true),
+                new CourtRegisterProperties.Intake(Duration.ofMinutes(10)),
                 new CourtRegisterProperties.Servicebus(
                         connectionString, null, "courtregister.requests", 2, MAX_DELIVERY_COUNT,
                         Duration.ofMinutes(5), Duration.ofSeconds(60)),

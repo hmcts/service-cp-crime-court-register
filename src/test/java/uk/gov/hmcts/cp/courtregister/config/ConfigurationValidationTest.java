@@ -134,7 +134,7 @@ class ConfigurationValidationTest {
 
     @Configuration(proxyBeanMethods = false)
     @EnableConfigurationProperties({CourtRegisterProperties.class, GenerationProperties.class,
-        FeatureFlagProperties.class})
+        FeatureFlagProperties.class, ReportProperties.class})
     @Import(PropertiesValidator.class)
     static class PropertiesTestConfiguration {
     }
@@ -2183,6 +2183,183 @@ class ConfigurationValidationTest {
                                 + " point")
                         .isNullOrEmpty();
             });
+        }
+    }
+
+    /**
+     * The morning exception report's own refusals.
+     *
+     * <p>The same family as the generation half's, and the same argument carries them: a zero
+     * threshold reports every request as late, a schedule read in UTC fires at 08:00 through the
+     * summer, a lock shorter than the run it locks lets a second replica report the same morning
+     * twice, and an e-mail output enabled with no template or nobody to send to is a deployment that
+     * sends nothing every morning and says so only in a log line. Every one of them is discovered at
+     * 07:00 the next morning if it is not discovered at startup.
+     *
+     * <p>The duration, zone and lock rules are unconditional on {@code courtregister.report.enabled}
+     * for the reason the generation half's zone rule is unconditional on its own switch: a report
+     * that happens to be disabled in this deployment is not a reason to accept a setting that would
+     * be wrong in the next one. The two e-mail rules are conditional on the e-mail output, because
+     * neither setting is required until something sends.
+     *
+     * <p><strong>No refusal quotes an address or a template id back.</strong> Recipients are
+     * people's addresses, and a startup failure is a log line in the same index as everything else.
+     */
+    @Nested
+    @DisplayName("the morning report must be able to run and to reach somebody")
+    class ReportRefusals {
+
+        private static final String REPORT = "courtregister.report";
+
+        private static final String RECIPIENTS = REPORT + ".email.recipients";
+
+        private static final String TEMPLATE = REPORT + ".email.template-id";
+
+        private static final String EMAIL_ENABLED = REPORT + ".email.enabled=true";
+
+        /** A recipient that parses, for the cases whose subject is one of the other settings. */
+        private static final String A_RECIPIENT = RECIPIENTS + "=cr-support@justice.gov.uk";
+
+        private static final String A_TEMPLATE =
+                TEMPLATE + "=8f1d5c30-27b4-4f6a-9d18-0c3b7a2e5164";
+
+        @Test
+        void a_negative_request_threshold_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".request-terminal-within=-1m").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".request-terminal-within");
+                    });
+        }
+
+        /**
+         * An explicitly set zero is refused; only an <em>unset</em> value resolves. "Unset" and
+         * "zero" are different things an operator can mean, and a zero silently read as the grace
+         * period is a rendering limit nobody chose.
+         */
+        @Test
+        void a_zero_batch_generated_within_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".batch-generated-within=0s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".batch-generated-within");
+                    });
+        }
+
+        @Test
+        void a_zero_notified_within_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".notified-within=0s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".notified-within");
+                    });
+        }
+
+        /**
+         * The sweep's interval, and the one key in this family that is not under
+         * {@code courtregister.report}: a refresh of zero is a fixed delay Spring refuses to
+         * schedule, on a pod whose gauges are then dark for the life of it.
+         */
+        @Test
+        void a_zero_gauge_refresh_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.intake.gauge-refresh=0s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.intake.gauge-refresh");
+                    });
+        }
+
+        /**
+         * The shipped fifteen minutes is exactly the fixed run budget plus the <em>existing</em>
+         * scheduler margin, so a value below it is a lock that can expire under a run still going
+         * on - and the replica that takes it reports the same morning to the same people again.
+         */
+        @Test
+        void a_lock_below_budget_plus_margin_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".lock-at-most-for=14m").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".lock-at-most-for");
+                    });
+        }
+
+        @Test
+        void a_zone_other_than_europe_london_refuses_without_the_acknowledgement() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".zone=Europe/Paris").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".zone")
+                                .hasMessageContaining("Europe/London")
+                                .hasMessageContaining(REPORT + ".zone-override-acknowledged");
+                    });
+        }
+
+        @Test
+        void an_acknowledged_override_must_still_be_a_zone_the_jvm_knows() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".zone=Mars/Olympus",
+                    REPORT + ".zone-override-acknowledged=true").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".zone");
+                    });
+        }
+
+        @Test
+        void an_acknowledged_override_of_a_known_zone_should_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".zone=Europe/Paris",
+                    REPORT + ".zone-override-acknowledged=true")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        @Test
+        void email_enabled_with_no_template_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_RECIPIENT)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(TEMPLATE)
+                                .hasMessageContaining(REPORT + ".email.enabled");
+                    });
+        }
+
+        @Test
+        void email_enabled_with_no_recipient_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(RECIPIENTS)
+                                .hasMessageContaining(REPORT + ".email.enabled");
+                    });
+        }
+
+        /**
+         * The address is never quoted back. It is somebody's address, the refusal is a log line, and
+         * naming the setting is what an operator needs in order to fix it.
+         */
+        @Test
+        void an_unparseable_recipient_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
+                    RECIPIENTS + "=cr-support@justice.gov.uk,not-an-address").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(RECIPIENTS)
+                                .hasMessageNotContaining("not-an-address");
+                    });
+        }
+
+        @Test
+        void an_enabled_email_output_with_both_settings_should_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
+                    A_RECIPIENT).run(context -> assertThat(context).hasNotFailed());
         }
     }
 }

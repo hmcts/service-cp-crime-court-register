@@ -17,6 +17,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param output        what the pipeline does with an assembled register - record it here, or POST
  *                      it to progression
  * @param consumer      whether intake runs at all
+ * @param intake        the intake half's own settings, read where neither other half runs
  * @param servicebus    broker connection and consumer settings
  * @param claim         the single-runner claim's timings
  * @param notification  the notifying leg's own claim timing
@@ -40,6 +41,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 public record CourtRegisterProperties(
         @DefaultValue("RECORD") OutputMode output,
         @DefaultValue Consumer consumer,
+        Intake intake,
         @DefaultValue Servicebus servicebus,
         @DefaultValue Claim claim,
         @DefaultValue Notification notification,
@@ -60,6 +62,20 @@ public record CourtRegisterProperties(
      * @param enabled master switch for starting the processor at all; false in the test profile
      */
     public record Consumer(@DefaultValue("true") boolean enabled) {
+    }
+
+    /**
+     * The intake half's own settings, bound where neither of the other two halves is switched on.
+     *
+     * <p>Its own block rather than a member of {@code courtregister.report}, because the sweep that
+     * reads it belongs to the intake half: it refreshes the two intake gauges in every JVM that is
+     * not a command, whichever halves are enabled, so a pod that binds neither the generation record
+     * nor the report one must still be able to read this.
+     *
+     * @param gaugeRefresh how often the intake gauges are refreshed, and therefore the longest an
+     *                     alert on them can lag the thing it is about
+     */
+    public record Intake(Duration gaugeRefresh) {
     }
 
     /**

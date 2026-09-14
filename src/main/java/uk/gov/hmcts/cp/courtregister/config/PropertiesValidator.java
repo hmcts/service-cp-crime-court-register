@@ -42,7 +42,7 @@ import org.springframework.stereotype.Component;
 // the packaged application starts no context at all ("No qualifying bean of type
 // CourtRegisterProperties"), which the container smoke finds and no JUnit suite does.
 @EnableConfigurationProperties({CourtRegisterProperties.class, GenerationProperties.class,
-    FeatureFlagProperties.class})
+    FeatureFlagProperties.class, ReportProperties.class})
 public class PropertiesValidator implements InitializingBean {
 
     /**
@@ -70,6 +70,19 @@ public class PropertiesValidator implements InitializingBean {
      * {@code lock-at-most-for} is longer than the shipped {@code run-deadline} by.
      */
     public static final Duration SCHEDULER_LOCK_MARGIN = Duration.ofMinutes(10);
+
+    /**
+     * The fixed bound on how long one exception-report run may take.
+     *
+     * <p>Fixed rather than configured, for the reason {@link #SCHEDULER_LOCK_MARGIN} is: it is not an
+     * environment's choice how long reading five bounded lists and handing them to two sinks may
+     * take, and the only thing an operator can do with a number like this is make it large enough to
+     * hide the run that has stopped answering.
+     *
+     * <p><strong>Seam (T001).</strong> Declared zero here; T003 gives it the five minutes the
+     * shipped fifteen-minute lock is budget plus {@link #SCHEDULER_LOCK_MARGIN} of.
+     */
+    public static final Duration REPORT_RUN_BUDGET = Duration.ZERO;
 
     /**
      * The factor the notification claim's lease has to exceed one recipient's POST cycle by.
@@ -220,6 +233,8 @@ public class PropertiesValidator implements InitializingBean {
 
     private final FeatureFlagProperties feature;
 
+    private final ReportProperties report;
+
     /**
      * The broker the completion events arrive on, read from the environment rather than bound.
      *
@@ -236,21 +251,24 @@ public class PropertiesValidator implements InitializingBean {
      * @param properties  the bound settings
      * @param generation  the downstream half's settings
      * @param feature     where the one lever is read from
+     * @param report      the morning exception report's settings
      * @param environment the resolved environment, for Spring's own broker key
      */
     public PropertiesValidator(final CourtRegisterProperties properties,
                                final GenerationProperties generation,
                                final FeatureFlagProperties feature,
+                               final ReportProperties report,
                                final Environment environment) {
         this.properties = properties;
         this.generation = generation;
         this.feature = feature;
+        this.report = report;
         this.brokerUrl = environment.getProperty(BROKER_URL);
     }
 
     @Override
     public void afterPropertiesSet() {
-        validate(properties, generation, feature, brokerUrl);
+        validate(properties, generation, feature, report, brokerUrl);
     }
 
     /**
@@ -259,14 +277,17 @@ public class PropertiesValidator implements InitializingBean {
      * @param properties the bound settings
      * @param generation the downstream half's settings
      * @param feature    where the one lever is read from
+     * @param report     the morning exception report's settings
      * @param brokerUrl  {@code spring.artemis.broker-url}, empty or null where none is configured
      * @throws IllegalStateException if any rule is broken
      */
     public static void validate(final CourtRegisterProperties properties,
                                 final GenerationProperties generation,
                                 final FeatureFlagProperties feature,
+                                final ReportProperties report,
                                 final String brokerUrl) {
         validate(properties);
+        validateReport(report, generation);
         generation.validate();
         validateTheSchedulerLockOutlivesTheRun(generation);
         validateTheNotificationClaimOutlastsOnePostCycle(properties);
@@ -1222,6 +1243,43 @@ public class PropertiesValidator implements InitializingBean {
                             + " starts or a client that cannot reach anything, read as an"
                             + " unreadable flag every night");
         }
+    }
+
+    /**
+     * The morning report's own refusals - a threshold that reports everything as late, a schedule
+     * read in the wrong zone, a lock that cannot cover the run it locks, and an e-mail output
+     * enabled with nobody to send to or no template to send under.
+     *
+     * <p><strong>Seam (T001).</strong> Returns without looking; T003 writes the ten refusals and the
+     * resolution the report's one undefaulted duration takes.
+     *
+     * @param report     the report's settings
+     * @param generation the downstream half's settings, which the rendering limit borrows from
+     */
+    /* default */ static void validateReport(final ReportProperties report,
+            final GenerationProperties generation) {
+        // T003.
+    }
+
+    /**
+     * The rendering limit the report reads, resolved once.
+     *
+     * <p>{@code batch-generated-within} is the one duration this increment leaves undefaulted, and
+     * it resolves to the generation half's grace period: that is already the interval after which
+     * the reconciler decides a render has not happened, and two different answers to "how long is
+     * too long for a render" is the shape that makes an alert argue with a batch state. An
+     * explicitly set value is the deployment's own and is used as it stands - a set zero is refused
+     * rather than resolved, because "unset" and "zero" are different things an operator can mean.
+     *
+     * <p><strong>Seam (T001).</strong> Answers the bound value, resolved or not; T003 resolves it.
+     *
+     * @param report     the report's settings
+     * @param generation the downstream half's settings
+     * @return how long a batch may stay PENDING or GENERATING before the report calls it late
+     */
+    public static Duration resolvedBatchGeneratedWithin(final ReportProperties report,
+            final GenerationProperties generation) {
+        return report.batchGeneratedWithin();
     }
 
     private static void requirePositive(final Duration value, final String setting) {
