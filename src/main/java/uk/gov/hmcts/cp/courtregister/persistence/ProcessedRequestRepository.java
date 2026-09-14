@@ -4,11 +4,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.ProcessedRequestRecord;
+import uk.gov.hmcts.cp.courtregister.domain.ProcessedRequestSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 
@@ -305,6 +307,51 @@ public class ProcessedRequestRepository {
                 .param(MESSAGE_ID, runClaim.messageId())
                 .param("note", auditNote)
                 .update()));
+    }
+
+    /**
+     * The report's REQUEST_FAILED read: the requests parked inside the window, oldest first.
+     *
+     * <p>Bounded by the window on {@code updated_at}, because that is when the row reached the
+     * state being asked about: {@code created_at} would answer "which requests that arrived
+     * yesterday failed", which is a different and less useful question on the morning after an
+     * outage.
+     *
+     * @param since the window's start
+     * @return every parked request settled at or after it, oldest first
+     */
+    public List<ProcessedRequestSummary> failedSince(final Instant since) {
+        throw new UnsupportedOperationException(
+                "the report's failed-since read is not written yet");
+    }
+
+    /**
+     * The report's REQUEST_LATE read: the requests still in flight that arrived too long ago.
+     *
+     * <p><strong>Not bounded by the window, and it must not be.</strong> A request that has been
+     * stuck for three days is late this morning whether or not it arrived inside the last
+     * twenty-four hours, and a window filter would make the longest-running problem the first one
+     * to disappear from the report.
+     *
+     * @param createdBefore the cut-off: now less the intake threshold
+     * @return every RECEIVED or RETRYING request that arrived before it, oldest first
+     */
+    public List<ProcessedRequestSummary> nonTerminalOlderThan(final Instant createdBefore) {
+        throw new UnsupportedOperationException(
+                "the report's non-terminal read is not written yet");
+    }
+
+    /**
+     * The intake sweep's first gauge: the oldest request that has not reached a terminal state.
+     *
+     * <p>Empty is an ordinary answer and the one a healthy service gives, which is why it is an
+     * {@link Optional} rather than a row the caller has to know might not be there.
+     *
+     * @return the oldest unfinished request, or empty where nothing is unfinished
+     */
+    public Optional<ProcessedRequestSummary> oldestNonTerminal() {
+        throw new UnsupportedOperationException(
+                "the sweep's oldest-unfinished read is not written yet");
     }
 
     /** The three outcome writes differ only in what they set; the predicate is common to all. */
