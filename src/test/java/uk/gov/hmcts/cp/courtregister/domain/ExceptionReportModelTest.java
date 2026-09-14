@@ -130,9 +130,16 @@ class ExceptionReportModelTest {
 
     // --- the model, asked so that a seam's refusal is recorded rather than thrown ---------------
 
+    /**
+     * The window a scheduled run would ask for, with a refusal recorded rather than thrown.
+     *
+     * <p>The backstop is a window at the epoch rather than a null, so a case that could not get an
+     * answer fails on the instant it read and not on a null pointer - and it runs forwards, because
+     * the record refuses one that does not.
+     */
     private ReportWindow window(final Instant now) {
         return answered(() -> ReportWindow.sinceLastScheduledRun(REPORT_CRON, COURTS_ZONE, now),
-                new ReportWindow(Instant.EPOCH, Instant.EPOCH));
+                new ReportWindow(Instant.EPOCH, Instant.EPOCH.plusSeconds(1)));
     }
 
     private Map<ExceptionKind, Integer> counts(final ExceptionReport report) {

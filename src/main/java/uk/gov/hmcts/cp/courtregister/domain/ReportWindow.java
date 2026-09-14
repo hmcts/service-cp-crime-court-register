@@ -24,7 +24,10 @@ public record ReportWindow(Instant from, Instant to) {
      * Refuses a window read backwards, which would report nothing and look like a quiet morning.
      */
     public ReportWindow {
-        // The refusal lands with the implementation.
+        if (from == null || to == null || !from.isBefore(to)) {
+            throw new IllegalArgumentException(
+                    "a report window runs forwards, from a moment strictly before its end");
+        }
     }
 
     /**
@@ -43,7 +46,7 @@ public record ReportWindow(Instant from, Instant to) {
      */
     public static ReportWindow sinceLastScheduledRun(final String cron, final String zone,
             final Instant now) {
-        throw new UnsupportedOperationException(
-                "the scheduled run's window is not computed yet");
+        final Instant firing = LastScheduledRun.before(cron, zone, now);
+        return new ReportWindow(LastScheduledRun.before(cron, zone, firing), now);
     }
 }

@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
 import java.time.Instant;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
@@ -24,6 +25,11 @@ public record ExceptionReport(
         Instant snapshotAt,
         List<ExceptionEntry> entries) {
 
+    /** Freezes the entries, so what a sink writes is what the reads found. */
+    public ExceptionReport {
+        entries = entries == null ? List.of() : List.copyOf(entries);
+    }
+
     /**
      * How many of each kind, <strong>zero-filled</strong>.
      *
@@ -35,6 +41,13 @@ public record ExceptionReport(
      * @return one count per kind, including the kinds that have none
      */
     public Map<ExceptionKind, Integer> counts() {
-        throw new UnsupportedOperationException("the report's counts are not computed yet");
+        final Map<ExceptionKind, Integer> counted = new EnumMap<>(ExceptionKind.class);
+        for (final ExceptionKind kind : ExceptionKind.values()) {
+            counted.put(kind, 0);
+        }
+        for (final ExceptionEntry entry : entries) {
+            counted.merge(entry.kind(), 1, Integer::sum);
+        }
+        return Map.copyOf(counted);
     }
 }

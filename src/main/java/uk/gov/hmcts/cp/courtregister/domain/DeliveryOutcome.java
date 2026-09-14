@@ -24,6 +24,12 @@ public record DeliveryOutcome(
         int accepted,
         int refused) {
 
+    /** A sink with a single audience that took the report told one. */
+    private static final int ONE_AUDIENCE = 1;
+
+    /** And refused none, which is not the same statement as "refused is not applicable". */
+    private static final int NONE_REFUSED = 0;
+
     /**
      * The outcome of a sink with one audience that took the report.
      *
@@ -35,6 +41,7 @@ public record DeliveryOutcome(
      * @return its outcome
      */
     public static DeliveryOutcome delivered(final ReportSinkName sink) {
-        throw new UnsupportedOperationException("the delivered outcome is not composed yet");
+        return new DeliveryOutcome(sink, DeliveryStatus.DELIVERED, ReportDeliveryReason.NONE,
+                ONE_AUDIENCE, NONE_REFUSED);
     }
 }
