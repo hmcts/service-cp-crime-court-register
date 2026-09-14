@@ -2,7 +2,7 @@
 
 **Feature Branch**: `003-exception-report`
 **Created**: 2026-09-14
-**Status**: Draft
+**Status**: Planned
 **Input**: User description: "Exception report for production support: a scheduled and on-demand report of failed and late requests, batches and notifications, written to Azure Log Analytics and e-mailed to support, with the intake instruments the design promised; every threshold configurable"
 
 ## Context
@@ -31,8 +31,8 @@ Every weekday morning, before the working day starts, the service examines its o
 previous reporting window and writes one summary event and one event per exception into its logs,
 where the platform's log collection carries them into Log Analytics. Support opens a saved query
 and sees, without touching a database, which requests failed and why, which requests have been
-unfinished for longer than allowed, which batches missed a stage deadline, and which notifications
-failed. Every event carries only identifiers, bounded reason codes and timings, never a defendant's
+unfinished for longer than allowed, which batches missed a stage deadline, which batches failed
+outright, and which notifications failed. Every event carries only identifiers, bounded reason codes and timings, never a defendant's
 name or a recipient's address.
 
 **Why this priority**: This is the reason the increment exists. Everything the report says is
@@ -40,9 +40,9 @@ already recorded; making it visible where support looks is the whole value, and 
 dependency on anyone outside the team.
 
 **Independent Test**: Seed the processed log with a failed request, an unfinished request older
-than the threshold, a batch past its rendering deadline and a failed notification; trigger the
-morning run; confirm one summary event with the four counts and four exception events, each
-carrying the expected identifiers and nothing else.
+than the threshold, a batch past its rendering deadline, a batch that reached FAILED and a failed
+notification; trigger the morning run; confirm one summary event with the five counts and five
+exception events, each carrying the expected identifiers and nothing else.
 
 **Acceptance Scenarios**:
 
@@ -59,13 +59,17 @@ carrying the expected identifiers and nothing else.
    register date, status and age.
 4. **Given** a notification that ended FAILED inside the window, **When** the run completes,
    **Then** one exception event of kind "notification failed" names the batch and the notification,
-   with the recipient address masked.
+   and carries no recipient address at all: the address is never read from the store, so it cannot
+   reach the event.
 5. **Given** a window with nothing to report, **When** the run completes, **Then** exactly one
    summary event is written with every count at zero, so that "nothing was wrong" and "the report
    did not run" are distinguishable.
 6. **Given** the same exception across two consecutive runs (a request still late on Tuesday that
    was late on Monday), **When** both runs complete, **Then** it appears in both reports; a report
    is a snapshot of the window, not a ledger of new arrivals.
+7. **Given** a batch that ended FAILED inside the window, **When** the run completes, **Then** one
+   exception event of kind "batch failed" names the batch, its court centre, its register date and
+   its bounded failure reason, and carries no free text the generating system wrote about it.
 
 ---
 
@@ -73,8 +77,8 @@ carrying the expected identifiers and nothing else.
 
 The intake half publishes, continuously, the age of its oldest unfinished request and the number
 of unfinished requests older than the threshold, alongside how long each request took to reach a
-terminal state. An alert on the age can fire within minutes of a request being stranded, rather
-than the next morning.
+terminal state. An alert on the age can fire within one refresh interval of a request being
+stranded, rather than the next morning.
 
 **Why this priority**: The morning report answers "what went wrong yesterday"; the gauges answer
 "is something wrong now". The design promised both and the second is the cheaper of the two.
@@ -87,7 +91,8 @@ count is one; complete the request; wait one interval; confirm both return to ze
 
 1. **Given** no unfinished requests, **When** the instruments are read, **Then** the oldest-age
    gauge and the over-threshold count are both zero, and both existed from start-up rather than
-   appearing on first use.
+   appearing on first use. Each instance publishes its own reading, so an alert aggregates the
+   gauge across pods with `max()`.
 2. **Given** one unfinished request forty minutes old and a thirty-minute threshold, **When** one
    refresh interval has elapsed, **Then** the oldest-age gauge reports at least 2,400 seconds and the
    count reports one.
@@ -118,7 +123,7 @@ refusal that names the argument.
 **Acceptance Scenarios**:
 
 1. **Given** exceptions in the last two hours, **When** support runs the command with `--since 2h`,
-   **Then** the output lists each exception once, oldest first, and ends with the four counts.
+   **Then** the output lists each exception once, oldest first, and ends with the five counts.
 2. **Given** the command is run with `--since` as an instant, **When** it runs, **Then** the window
    is from that instant to now.
 3. **Given** the command is run with `--email`, **When** the e-mail output is enabled and its
@@ -133,7 +138,7 @@ refusal that names the argument.
 
 ### User Story 4 - Support receives the report by e-mail with the detail attached (Priority: P3)
 
-Each morning the configured support recipients receive one e-mail per run: the four counts and
+Each morning the configured support recipients receive one e-mail per run: the five counts and
 the window in the body, and the full list of exceptions attached as a CSV file. The e-mail is sent
 through the platform's notification service, like the register itself, and is switchable
 independently of the Log Analytics output.
@@ -163,9 +168,10 @@ attachment carries identifiers only.
 
 ### User Story 5 - Every threshold and schedule is a setting, with a safe default (Priority: P1)
 
-An operator can change what "late" means, when the report runs, how far back it looks, how often
-the instruments refresh, who receives the e-mail and which template is used, per environment,
-without a code change. Every setting has a documented default and start-up refuses a value that
+An operator can change what "late" means, when the report runs (which is also how far back it
+looks, since the window reaches back to the previous scheduled run), how often the instruments
+refresh, who receives the e-mail and which template is used, per environment, without a code
+change. Every setting has a documented default and start-up refuses a value that
 cannot work.
 
 **Why this priority**: The thresholds are guesses. The increment is only useful if the guesses can
@@ -179,9 +185,11 @@ the offending setting.
 **Acceptance Scenarios**:
 
 1. **Given** no report settings are provided, **When** the service starts, **Then** the report is
-   disabled, and enabling it with nothing else set gives a 07:00 London weekday schedule, a 24-hour
-   window, a 30-minute intake threshold, a rendering threshold equal to the generation grace period
-   and a 15-minute notification threshold.
+   disabled, and enabling it with nothing else set gives a 07:00 London weekday schedule, a window
+   reaching back to the previous scheduled run of that schedule, a 30-minute intake threshold, a
+   rendering threshold equal to the generation grace period and a 15-minute notification threshold.
+   The gauge-refresh interval is the intake half's own setting and defaults to ten minutes whether
+   or not the report is enabled.
 2. **Given** a threshold of zero, **When** the service starts, **Then** it refuses and the message
    names the setting.
 3. **Given** the intake threshold is changed in one environment, **When** that environment's
@@ -198,8 +206,9 @@ the offending setting.
 - **The window is empty.** A summary with zero counts is still written and still e-mailed.
 - **The report run overlaps the 18:00 generation run or the reconciler.** They never share a
   thread or a lock; the report reads while the others write and reports the state it saw.
-- **Two pods.** Only one pod produces the morning report; the instruments are refreshed by one pod
-  at a time; the on-demand command works from any pod.
+- **Two pods.** Only one pod produces the morning report. The instruments are per pod and every
+  pod refreshes its own, because a gauge describes the JVM that publishes it; an alert therefore
+  aggregates across pods with `max()`. The on-demand command works from any pod.
 - **The report is asked for on a command-line JVM.** The scheduled run and the instrument refresh
   never start there; the on-demand command is the only path.
 - **A request is late and then fails.** It appears as "request failed" once it has failed, and no
@@ -211,9 +220,10 @@ the offending setting.
   processed log holds; it does not invent history.
 - **Clock and time zone.** The schedule is expressed in London time like the generation run;
   ages are computed against the database's own clock, never a pod's.
-- **Recipient addresses.** They never appear in a log event or in the attachment; a failed send
-  is identified by its position and its response, and addresses are masked in operator output as
-  the existing listing command masks them.
+- **Recipient addresses.** They never appear in a log event, in the attachment or in the operator
+  table; the address column is never selected by any read this feature makes, so a failed send is
+  identified by its notification id, its batch and its response. Masking applies only where an
+  address genuinely flows - the e-mail sink's own lines about who it sent to.
 
 ## Requirements *(mandatory)*
 
@@ -224,16 +234,24 @@ the offending setting.
   than the intake threshold at the time of the report, every batch past its stage limit at the time
   of the report (awaiting render longer than the rendering limit, generated but not notified longer
   than the notification limit, or recorded and unbatched after the most recent scheduled generation
-  run), and every notification that reached FAILED inside the window.
-- **FR-002**: Each exception MUST carry exactly one kind from a bounded set of four, and MUST carry
-  only: the kind, source, request id, hearing id, hearing day, batch id, court centre id, register
-  date, status, attempts, bounded reason code and age in seconds, as applicable to its kind. No
-  personal data of a defendant or a recipient is ever included.
+  run), every batch that reached FAILED inside the window, and every notification that reached
+  FAILED inside the window. The scheduled run's window MUST begin at the previous scheduled report
+  time and end at the moment the run started, so that every failure lands in exactly one report and
+  none falls between two.
+- **FR-002**: Each exception MUST carry exactly one kind from a bounded set of five, and MUST carry
+  only: the kind, source, request id, hearing id, hearing day, batch id, notification id, court
+  centre id, register date, status, attempts, bounded reason code and age in seconds, as applicable
+  to its kind. No personal data of a defendant or a recipient is ever included, and no free text
+  written by another system is carried: a reason is a bounded code of this service's own.
 - **FR-003**: The scheduled run MUST execute on a configurable schedule, by default at 07:00
-  Europe/London on Monday to Friday, exactly once per scheduled time across all running instances.
-- **FR-004**: The scheduled run MUST run whether or not the generation half is enabled, MUST never
-  run on a JVM started for an operations command, and MUST never delay or block the 18:00
-  generation run or the reconciler.
+  Europe/London on Monday to Friday, exactly once per scheduled time across all running instances,
+  and MUST derive its window from that same schedule: from the previous scheduled time to now.
+  A Monday run therefore covers from Friday's run, and the window is not a separate setting that
+  could disagree with the schedule.
+- **FR-004**: The scheduled run MUST run whether or not the generation half is enabled, and the
+  intake instruments MUST refresh whether or not either half is enabled. Neither MUST ever run on a
+  JVM started for an operations command, and neither MUST ever delay or block the 18:00 generation
+  run or the reconciler.
 - **FR-005**: The Log Analytics output MUST write one summary event per run carrying the run
   identifier, the window, and the count per kind, and one event per exception carrying the fields of
   FR-002 as individually queryable fields rather than inside free text.
@@ -247,16 +265,22 @@ the offending setting.
 - **FR-008**: The service MUST publish continuously the age in seconds of the oldest unfinished
   request, the number of unfinished requests older than the intake threshold, and a request-duration
   measurement from receipt to terminal state labelled by outcome only; the two gauges MUST exist
-  from start-up and MUST be refreshed on a configurable interval by one instance at a time.
+  from start-up and MUST be refreshed on a configurable interval in every instance that is not a
+  command JVM. Each instance publishes its own reading of a shared store, so an alert on either
+  gauge aggregates across pods with `max()`.
 - **FR-009**: The service MUST provide an operations command that produces the same report on
   demand for a window given either as an instant or as a duration before now, writes it as a table
   to standard output, and optionally sends it by e-mail; the command MUST refuse the e-mail option
-  when the e-mail output is disabled, and MUST require no cutover flag.
-- **FR-010**: The schedule, its time zone, the reporting window, the three thresholds, the refresh
-  interval, the e-mail switch, the recipients and the template MUST each be a configuration setting
-  with a documented default, and start-up MUST refuse a non-positive threshold or interval, a
-  schedule outside London time without explicit acknowledgement, or an enabled e-mail output with
-  no recipients or no template, naming the setting in each case.
+  when the e-mail output is disabled, and MUST require no cutover flag. When no window is given the
+  command MUST use the same window the scheduled run would have used - back to the previous
+  scheduled report time - so that the bare command answers what the morning run would have answered
+  rather than a different question.
+- **FR-010**: The schedule, its time zone, the three thresholds, the gauge-refresh interval (which
+  belongs to the intake half and not to the report), the e-mail switch, the recipients and the
+  template MUST each be a configuration setting with a documented default, and start-up MUST refuse
+  a non-positive threshold or interval, a schedule outside London time without explicit
+  acknowledgement, or an enabled e-mail output with no recipients or no template, naming the
+  setting in each case. There is no separate window setting to refuse: the window is the schedule.
 - **FR-011**: Every log line and event of the report and of the refresh MUST carry the run
   identifier of the run it belongs to, and MUST carry no defendant or recipient personal data at
   any level that is enabled in a deployed environment.
@@ -273,10 +297,11 @@ the offending setting.
   moment the snapshot was taken, the count per kind, and the list of exceptions.
 - **Exception**: One thing wrong, of one kind, identified by the identifiers of the record it
   concerns and carrying its status, attempts, bounded reason and age.
-- **Exception kind**: The bounded set: request failed, request late, batch late, notification
-  failed.
-- **Report settings**: The schedule, zone, window, intake threshold, rendering threshold,
-  notification threshold, refresh interval, e-mail switch, recipients and template identifier.
+- **Exception kind**: The bounded set of five: request failed, request late, batch late, batch
+  failed, notification failed.
+- **Report settings**: The schedule, zone, intake threshold, rendering threshold, notification
+  threshold, e-mail switch, recipients and template identifier - plus the intake half's own
+  gauge-refresh interval, which is a setting of the intake half rather than of the report.
 - **Delivery record**: For each run and each output, whether it was delivered, and if not, the
   bounded reason.
 
@@ -294,10 +319,11 @@ the offending setting.
   and by batch id as separate fields, with no field parsing of message text needed.
 - **SC-004**: When the e-mail output is enabled, every configured recipient receives one e-mail per
   run, and a refused send for one recipient does not prevent the others or the events.
-- **SC-005**: Changing any threshold, the window or the schedule takes effect on the next run or
-  refresh in that environment alone, with no release.
-- **SC-006**: The on-demand command returns its table within ten seconds for a 24-hour window
-  over a processed log holding one week of production-scale data.
+- **SC-005**: Changing any threshold or the schedule takes effect on the next run or refresh in
+  that environment alone, with no release. There is no separate window to change: the window is the
+  schedule.
+- **SC-006**: The on-demand command returns its table within ten seconds for a `--since 24h`
+  window over a processed log holding one week of production-scale data.
 - **SC-007**: No event, line, table row or attachment produced by this feature contains a
   defendant's name, date of birth, address, ASN or URN, or an unmasked recipient address, verified
   by the existing privacy sweep extended to every new component.
@@ -329,10 +355,11 @@ the offending setting.
 - The recipients list and the template identifier are provided per environment as secrets in the
   same way every other per-environment value is, never in a chart value.
 - The default thresholds (30 minutes intake, the generation grace period for rendering, 15 minutes
-  notification) and the 24-hour window are provisional and will be tuned from production
-  experience.
-- A Monday run reports over its 24-hour window like any other day; weekend failures are visible
-  through the continuous gauges and through any request still unfinished on Monday, and a longer
-  Monday window is a configuration choice, not a requirement.
+  notification) are provisional and will be tuned from production experience. The window is not
+  among them: it is derived from the schedule rather than guessed.
+- A Monday run reports back to Friday's run, because the window is the interval since the previous
+  scheduled run rather than a fixed duration. That is what makes every FAILED request and every
+  FAILED notification land in exactly one report, weekends included, without an operator having to
+  remember to widen a Monday window; changing the schedule changes the window with it.
 - The processed log is the only source of the report; nothing is queried from the platform's
   services at report time.
