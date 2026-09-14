@@ -455,7 +455,9 @@ GENERATED / FAILED with reason; grace period → reconciler.
 - [x] T046 [P] [US2] `adapter/publicevents/DocumentEventListener` (`@JmsListener`, destination /
       subscription / selector from properties) + `PublicEventEnvelope` + `config/PublicEventsConfig`
       (listener container factory, durable, client-id, `auto-startup` tied to generation enabled).
-      Green: T035, T036.
+      Green: T035, T036. (Client id since removed, 2026-09-14: the subscription is shared and durable,
+      keyed by its name alone, so every replica attaches; `PublicEventsConfigTest` and
+      `DocumentEventListenerIT.ScaledPastOnePod` pin it.)
 - [x] T047 [US2] `application/DocumentOutcomeSinkImpl` (one code path for event and reconciler).
       Green: T037 - **flip P2 to FIXED in this commit.**
 - [x] T048 [US2] `batch/GenerationReconciler`. Green: T038.
@@ -3178,7 +3180,9 @@ are decisions rather than defects; 15 to 22 came out of the phase gate's own fiv
       leg ending at `RegisterStore` and the 18:00 leg, with the batch state machine written out
       beside the request one and the topic beside the queue - a durable subscription admitting one
       consumer is a design constraint and the reason a CLI JVM must not subscribe, so it is stated
-      where the queue rules are. The idempotency section drops the absorbed-duplicate-POST argument
+      where the queue rules are (superseded 2026-09-14: the subscription is now shared so that
+      replicas can attach, and the CLI rule stands for the reason that a command process would take
+      deliveries it will not finish). The idempotency section drops the absorbed-duplicate-POST argument
       for supersession at the write, which V3 makes a constraint. "The Four Contracts" is now eight
       in three groups - two owned, four consumed, two properties of this service's shape - and the
       validator's checks gain the generation leg, the events, the flag and the batch terminal

@@ -168,10 +168,11 @@ public class DocumentEventListener {
      * Handles one message from the public-event topic.
      *
      * <p>The three configured values are the subscription's identity as much as its address: the
-     * destination is the estate's one multicast topic, the subscription name is half of what the
-     * broker recognises this consumer by across a restart (the client id is the other half, and it
-     * is set where the connection is), and the selector is the broker-side filter that keeps a
-     * subscriber to everybody's topic from being handed everybody's traffic.
+     * destination is the estate's one multicast topic, the subscription name is the whole of what
+     * the broker recognises this subscriber by across a restart - the subscription is shared and so
+     * carries no client id, which is what lets every replica attach to that one name - and the
+     * selector is the broker-side filter that keeps a subscriber to everybody's topic from being
+     * handed everybody's traffic.
      *
      * @param message the framework {@code JsonEnvelope} as text, with {@code CPPNAME} as a string
      *                property

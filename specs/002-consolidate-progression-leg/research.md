@@ -43,7 +43,9 @@ Service*, rev 2.1) is the authority; this file records what the plan derived fro
   `application-artemis-jms.yml`; STE values for it and `cp-court-list-publishing-service`); the
   listener shape is `service-cp-crime-results-enforcementgateway`'s `ListingPublicEventListener`
   (`@JmsListener` with `CPPNAME` selector; `spring.jms.pub-sub-domain`, `subscription-durable`,
-  `client-id`; `build.gradle:57-60` javax/jakarta exclusions). The distinct `originatingSource`
+  `client-id`; `build.gradle:57-60` javax/jakarta exclusions). This service departs from that shape
+  in one respect (2026-09-14): the subscription is shared, with no client id, so that a deployment
+  of many replicas can attach to the one subscription instead of the second pod being refused. The distinct `originatingSource`
   keeps progression's still-deployed branch (`COURT_REGISTER.equalsIgnoreCase`) inert for our
   documents, so there is no two-subscriber window.
 - **Alternatives**: poll-only — kept as `completion=poll-only`, an explicit escape hatch; rejected as

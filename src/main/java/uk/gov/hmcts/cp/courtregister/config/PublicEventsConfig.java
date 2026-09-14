@@ -21,13 +21,15 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
  * <p>Five settings make it the subscription this service needs rather than a queue consumer that
  * happens to work: {@code pub-sub-domain}, because {@code public.event} is a topic and a consumer
  * that read it as a queue would compete with every other subscriber on the estate;
- * {@code subscription-durable} with a {@code client-id}, because a document rendered while this pod
- * was restarting must still be delivered, which is one of the things
- * {@code DocumentEventListenerIT} proves; the {@code CPPNAME} selector, so the broker filters
- * the topic rather than this service filtering it after delivery; and a <strong>transacted
- * session</strong>, which is the subject of the next paragraph. The selector, the destination and
- * the subscription's name are on the listener itself, read from {@code courtregister.publicevents.*};
- * the three broker-shape settings are Spring's own {@code spring.jms.*} keys and are read from there.
+ * {@code subscription-durable}, because a document rendered while every pod was restarting must
+ * still be delivered, which is one of the things {@code DocumentEventListenerIT} proves;
+ * <strong>shared</strong>, which is the subject of its own paragraph below; the {@code CPPNAME}
+ * selector, so the broker filters the topic rather than this service filtering it after delivery;
+ * and a <strong>transacted session</strong>. The selector, the destination and the subscription's
+ * name are on the listener itself, read from {@code courtregister.publicevents.*}; the durable flag
+ * and the topic domain are Spring's own {@code spring.jms.*} keys and are read from there. Shared is
+ * not among them - Spring binds no property for it - so it is stated here, which is also where it
+ * belongs: it is not a per-environment choice.
  *
  * <p><strong>The session is transacted, and the listener's contract depends on it.</strong>
  * {@link DocumentEventListener} absorbs every message it cannot make sense of and hands exactly one
@@ -47,12 +49,13 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
  * batch it was about is named by the listener's own line, which is where the identity is known.
  *
  * <p><strong>The container is given the native connection factory.</strong> Boot's shared
- * {@code jmsConnectionFactory} is a caching one, and a container that carries the client id cannot
- * set it on a shared connection - {@code setClientID call not supported on proxy for shared
- * Connection}. The durable subscription's identity therefore has to be established where the
- * connection is, so the container is handed the unwrapped factory and opens a connection of its own,
- * which is in any case the arrangement {@code DefaultMessageListenerContainer} is built for: it
- * caches the connection, the session and the consumer itself.
+ * {@code jmsConnectionFactory} is a caching one, and {@code DefaultMessageListenerContainer} caches
+ * the connection, the session and the consumer itself - two caches over one subscription, the outer
+ * of which hands out a shared connection the container then cannot configure. So the container is
+ * handed the unwrapped factory and opens a connection of its own, which is the arrangement it is
+ * built for. This started as the only way to set a client id ({@code setClientID call not supported
+ * on proxy for shared Connection}); the client id has since gone and the unwrapping has not, because
+ * the double caching was always the better half of the reason.
  *
  * <p><strong>Its auto-startup is tied to {@code courtregister.generation.enabled} and to
  * {@code completion=event}.</strong> A deployment running the intake half alone has no use for
@@ -61,16 +64,34 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
  * own condition, so an intake-only pod builds none of this at all; the second is the
  * {@code poll-only} escape hatch, which asks for no broker and must therefore subscribe to nothing.
  *
- * <p><strong>One consumer, deliberately.</strong> A non-shared durable subscription admits exactly
- * one, and a second would be refused by the broker rather than double the throughput. Outcomes
- * arrive at the rate court centres are rendered at, which is tens a night.
+ * <p><strong>The subscription is shared, and that is what lets the deployment have replicas.</strong>
+ * A <em>non-shared</em> durable subscription admits exactly one consumer: the second pod's container
+ * is refused by the broker, says so at ERROR and retries for ever - up, ready, and reading nothing.
+ * Shared, every pod attaches to the one subscription - which is identified by its name alone - and
+ * the broker load-balances the outcomes across them
+ * ({@code DocumentEventListenerIT.ScaledPastOnePod}). <strong>No client id is set</strong>: a shared
+ * durable subscription needs none, and a client id every pod would carry is precisely what the
+ * broker refuses a second connection for - {@code clientID=courtregister-service was already set
+ * into another connection} is what it says, and what it said before this was shared.
  *
- * <p><strong>And none of it on a JVM started to run one operations command.</strong> That one
- * consumer is the whole reason: a command that subscribed would take the topic away from the pod
- * waiting for the outcomes and give it to a process about to exit. The whole configuration goes
- * rather than the listener alone, because the container factory is here too and a factory with no
- * {@code @JmsListener} to create a container from is a half-absence to reason about
- * ({@link CliModeConfig}).
+ * <p><strong>Changing the shape of a subscription abandons it.</strong> A shared subscription and a
+ * non-shared one of the same name are different subscriptions to the broker, and the backlog of the
+ * one being left behind goes with it. This change is made while no environment holds one - the STE
+ * wiring is unmerged - which is the only time it is free.
+ *
+ * <p><strong>Still one consumer per pod.</strong> Outcomes arrive at the rate court centres are
+ * rendered at, which is tens a night; the replicas are what the throughput is for, and a second
+ * thread inside one of them buys nothing. What makes more than one consumer safe is not this
+ * container: an outcome for a batch already standing where it would put it has nothing left to
+ * record and is counted rather than re-stamped, and the store's compare-and-set refuses the second
+ * of two marks ({@code DocumentOutcomeSinkImpl}).
+ *
+ * <p><strong>And none of it on a JVM started to run one operations command.</strong> A command that
+ * subscribed would be one more consumer the broker load-balances outcomes to - and it would take
+ * deliveries it is about to exit without finishing, leaving each of them to a redelivery or to the
+ * reconciler's grace period. The whole configuration goes rather than the listener alone, because
+ * the container factory is here too and a factory with no {@code @JmsListener} to create a container
+ * from is a half-absence to reason about ({@link CliModeConfig}).
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
@@ -86,18 +107,18 @@ public class PublicEventsConfig {
 
     private static final Logger LOG = LoggerFactory.getLogger(PublicEventsConfig.class);
 
-    /** The concurrency a non-shared durable subscription permits, which is one. */
-    private static final String ONE_CONSUMER = "1";
+    /** One consumer per pod: the deployment scales on replicas, not on threads inside one of them. */
+    private static final String ONE_PER_POD = "1";
 
     /**
      * The container factory the listener's subscription is created from.
      *
      * @param connectionFactory the broker connection, unwrapped to the native factory so the
-     *                          container may establish the client id on its own connection
-     * @param jms               Spring's own JMS settings: the topic domain, the durable flag and the
-     *                          client id that is half the subscription's identity
+     *                          container caches a connection of its own rather than sharing one
+     * @param jms               Spring's own JMS settings: the topic domain and the durable flag.
+     *                          {@code spring.jms.client-id} is deliberately not read - see above
      * @param generation        the downstream half's settings, for the completion mechanism
-     * @return the factory, durable and topic-scoped
+     * @return the factory: durable, shared and topic-scoped
      */
     @Bean(LISTENER_CONTAINER_FACTORY)
     public DefaultJmsListenerContainerFactory publicEventListenerContainerFactory(
@@ -110,8 +131,11 @@ public class PublicEventsConfig {
         factory.setConnectionFactory(ConnectionFactoryUnwrapper.unwrap(connectionFactory));
         factory.setPubSubDomain(jms.isPubSubDomain());
         factory.setSubscriptionDurable(jms.isSubscriptionDurable());
-        factory.setClientId(jms.getClientId());
-        factory.setConcurrency(ONE_CONSUMER);
+        // Shared, so every replica attaches to the one subscription instead of the second being
+        // refused; and no client id, because a shared durable subscription is keyed by name and a
+        // client id the pods share is what the broker refuses the second connection for.
+        factory.setSubscriptionShared(true);
+        factory.setConcurrency(ONE_PER_POD);
         // The listener hands the sink's failure back on purpose; this is what leaves the broker
         // something to hand back to.
         factory.setSessionTransacted(true);

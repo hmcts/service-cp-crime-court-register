@@ -104,7 +104,7 @@ Check the built document against the vendored schemas (path in the table above):
 - **notificationnotify**: one e-mail per matched Youth Offending Team, each with the PDF by file-service id; 202 is success; a 4xx is not retried. Recipients batched into one call is drift. A batch's ending distinguishes `NOTIFIED`, `PARTIALLY_NOTIFIED` and `NOTIFIED_NOBODY` — collapsing them is a MEDIUM finding.
 - **The file service** is written, never read through, and its schema is pinned to changesets 001–006. A migration of it in this repo is a HIGH finding.
 - **The flag** is read **once per run, no cache**, and every failure to read it fails closed (the legacy stays in charge). A cached read, a default-open fallback, or any second switch that decides which implementation is live — a Helm value, a static-data patch, an endpoint — is a HIGH finding against the Cutover Rule. The regeneration CLI must refuse without `--ignore-flag`.
-- **`courtregister.cli`** switches off the consumer, the scheduler and the event listener, and nothing else. A CLI JVM that subscribes to `public.event` takes the topic from the pod waiting on it (the durable subscription admits one consumer) — a HIGH finding.
+- **`courtregister.cli`** switches off the consumer, the scheduler and the event listener, and nothing else. A CLI JVM that subscribes to `public.event` becomes one more consumer the shared durable subscription load-balances outcomes to, taking deliveries a process about to exit will not finish — a HIGH finding.
 
 ### 4. Fixed-or-legacy behaviour contract
 

@@ -20,9 +20,10 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
  *   <li><strong>The nightly scheduler.</strong> The lock makes the 18:00 run one run; a CLI pod
  *       that held a scheduler would be a second replica of it, and a command that ran long enough
  *       to reach 18:00 London would generate the night twice.</li>
- *   <li><strong>The public-event listener container.</strong> The durable subscription admits
- *       exactly one consumer, so a command that subscribed would take the topic away from the pod
- *       waiting for the outcomes and give them to a process about to exit.</li>
+ *   <li><strong>The public-event listener container.</strong> The durable subscription is shared,
+ *       so a command that subscribed would be one more consumer the broker load-balances outcomes
+ *       to - and it would take deliveries a process about to exit will not finish, leaving each of
+ *       them to a redelivery or to the reconciler's grace period.</li>
  * </ul>
  *
  * <p>It is deliberately not the inverse of {@code courtregister.generation.enabled}: the point of

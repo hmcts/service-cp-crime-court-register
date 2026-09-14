@@ -257,8 +257,8 @@ Queue **`courtregister.requests`** (+ its dead-letter queue), owned by this serv
   stateless.
 - **ASB health MUST NEVER gate readiness.** A broker blip must not restart the pod.
 
-Topic **`public.event`** on Artemis, the estate's shared topic, consumed through a **durable
-subscription that admits exactly one consumer**.
+Topic **`public.event`** on Artemis, the estate's shared topic, consumed through a **shared durable
+subscription that every replica attaches to**.
 
 - The subscription is a filter, not a guarantee: every context publishes here, and
   systemdocgenerator announces every document it renders for anybody. Three things must hold before
@@ -269,7 +269,14 @@ subscription that admits exactly one consumer**.
   ever, and a foreign document is never going to become ours.
 - Every drop is counted under a bounded reason. Nothing of an unreadable body reaches the log or a
   label.
-- Because the subscription admits one consumer, a CLI JVM must not subscribe — see the
+- **Shared, and therefore scalable.** A non-shared durable subscription admits exactly one
+  consumer: a second pod is refused by the broker and retries at ERROR for ever. The subscription is
+  shared and keyed by its name alone — **no client id**, because a client id every replica carried is
+  what the broker refuses the second connection for. Concurrency stays at one consumer per pod.
+  Changing a subscription between shared and non-shared abandons the existing subscription and its
+  backlog, so it is a broker-visible change and not a local edit.
+- Because a CLI JVM would be one more consumer the broker load-balances outcomes to — taking
+  deliveries a process about to exit will not finish — a CLI JVM must not subscribe; see the
   `courtregister.cli` rule above.
 
 ## Idempotency and Supersession

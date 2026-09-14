@@ -40,14 +40,15 @@ spring:
     # `public.event` is a TOPIC, so the listener container has to be told so; a queue-shaped
     # container would silently receive nothing from a multicast address.
     pub-sub-domain: true
-    # A DURABLE subscription, so events published while this service is down or redeploying are
-    # still delivered afterwards. A batch's completion arrives exactly once and there is no second
-    # chance to hear it; the reconciler is the safety net, not the transport.
+    # A DURABLE subscription, so events published while every pod is down or redeploying are still
+    # delivered afterwards. A batch's completion arrives exactly once and there is no second chance
+    # to hear it; the reconciler is the safety net, not the transport.
     subscription-durable: true
-    # The client id the durable subscription is registered under. It is part of the subscription's
-    # identity on the broker: changing it abandons the existing subscription (and its backlog) and
-    # creates a new one, so it must be changed on the broker and here together.
-    client-id: courtregister-service
+    # There is deliberately NO `client-id`. The subscription is SHARED (set in PublicEventsConfig,
+    # for which Spring binds no property), so it is keyed by its name alone and needs none - and a
+    # client id every replica carried is exactly what makes the broker refuse the second pod's
+    # connection. Changing a subscription between shared and non-shared abandons the existing
+    # subscription and its backlog; this is done while no environment holds one.
 
 server:
   port: ${SERVER_PORT:8082}
@@ -419,14 +420,17 @@ courtregister:
     # subscribes to. Not this service's own topic and not configurable per environment in practice:
     # it is the estate's one multicast address.
     topic: public.event
-    # The durable subscription's name on the broker. It, with spring.jms.client-id above, IS the
-    # subscription's identity: changing either abandons the existing subscription and its backlog.
+    # The shared durable subscription's name on the broker, and - with no client id - the whole of
+    # its identity: every replica attaches to this one name and the broker load-balances the
+    # outcomes across them. Changing it abandons the existing subscription and its backlog.
     subscription: courtregister-service.sdg
     # The JMS selector, applied by the BROKER, so only the two systemdocgenerator outcome events
     # ever reach this service off a topic the whole estate publishes to. It is the coarse filter
     # only: the listener still keeps just the events whose originatingSource is CourtRegisterService
     # and correlates them to a batch by sourceCorrelationId, which is what keeps progression's
-    # still-deployed listener and this one out of each other's documents.
+    # still-deployed listener and this one out of each other's documents. Changing it, like
+    # changing the name, abandons the existing shared subscription and its backlog: under JMS 2.0 a
+    # shared subscription with a different selector is a different subscription.
     selector: "CPPNAME IN ('public.systemdocgenerator.events.document-available','public.systemdocgenerator.events.generation-failed')"
 
 # Application Insights is configured by the Java agent (lib/applicationinsights.json).
