@@ -70,7 +70,7 @@ nothing, and the two indexes that make the scheduled reads index scans rather th
 
 ### Tests first ⚠️
 
-- [ ] T001 [US5] `config/ConfigurationValidationTest` (extend) and `config/ReportPropertiesTest`
+- [x] T001 [US5] `config/ConfigurationValidationTest` (extend) and `config/ReportPropertiesTest`
       (new) - **the defaults and the refusals, both red before either is written**.
       `report_defaults_are_the_documented_ones` reads every default off an
       `ApplicationContextRunner` - `enabled=false`, `cron="0 0 7 * * MON-FRI"`, `zone="Europe/London"`,
@@ -101,10 +101,26 @@ nothing, and the two indexes that make the scheduled reads index scans rather th
       `REPORT_RUN_BUDGET` declared as `Duration.ZERO`; the margin is the **existing**
       `PropertiesValidator.SCHEDULER_LOCK_MARGIN` and no second constant is introduced.
       Red: the defaults case reads `null` where `30m` was expected.
+      (red at `814870a`: 152 tests, 12 failures, 0 errors, every one an assertion.
+      `an_unset_batch_generated_within_resolves_to_the_generation_grace_period` on
+      "expected: 10M but was: null" - the predicted red, on the resolution rather than on the
+      defaults case, because AssertJ stops that case at its first failure and `cron` is read before
+      the thresholds: `report_defaults_are_the_documented_ones` on
+      "expected: \"0 0 7 * * MON-FRI\" but was: null". All ten refusals on
+      "Expecting <Started application [...]> to have failed but context started successfully".
+      Two deviations, both additive: the ten refusals live in `ConfigurationValidationTest`
+      (the suite that owns every other startup refusal) and the defaults, the resolution and the
+      SC-005 case in the new `ReportPropertiesTest`, which is how both files are touched without
+      either restating the other; and `PropertiesValidator` gains a second new public member
+      besides `REPORT_RUN_BUDGET` - `resolvedBatchGeneratedWithin(report, generation)`, seamed to
+      answer the unresolved value, because the resolution case has to be able to read the resolved
+      one. Two "should start" counterparts were added beside the refusals in the suite's own style,
+      `an_acknowledged_override_of_a_known_zone_should_start` and
+      `an_enabled_email_output_with_both_settings_should_start`; no listed name was changed.)
 
 ### Implementation
 
-- [ ] T002 [US5] `config/ReportProperties` and `config/CourtRegisterProperties` - the record bound at
+- [x] T002 [US5] `config/ReportProperties` and `config/CourtRegisterProperties` - the record bound at
       `@ConfigurationProperties(prefix = "courtregister.report")` with its nested `Email` record and
       its `@DefaultValue`s, following `config/GenerationProperties`' style: `enabled=false`,
       `cron="0 0 7 * * MON-FRI"`, `zone="Europe/London"`, `zoneOverrideAcknowledged=false`,
@@ -117,7 +133,12 @@ nothing, and the two indexes that make the scheduled reads index scans rather th
       because the sweep refreshes the gauges on pods where the report and the generation half are
       both switched off, and a key on a record such a pod does not bind is a key it cannot read.
       **No validation logic here** - the refusals are T003's. Green: the defaults cases of T001.
-- [ ] T003 [US5] `config/PropertiesValidator` (extend) - the ten report refusals of T001 written
+      (green at `354855c`: `report_defaults_are_the_documented_ones` and
+      `a_changed_threshold_takes_effect_in_that_environment_alone` pass; the resolution case stays
+      red for T003. The zone default is written as `@DefaultValue(GenerationProperties.COURTS_ZONE)`
+      rather than a second `"Europe/London"` literal, since it is the same fact and not a similar
+      one.)
+- [x] T003 [US5] `config/PropertiesValidator` (extend) - the ten report refusals of T001 written
       as the class's existing helpers write generation's, each naming its setting and quoting no
       operator-supplied value back; `REPORT_RUN_BUDGET = 5m` as the one new fixed constant, with the
       existing `SCHEDULER_LOCK_MARGIN` (10m) **reused** as the margin, so the shipped `15m` is
@@ -127,7 +148,18 @@ nothing, and the two indexes that make the scheduled reads index scans rather th
       `GenerationProperties.gracePeriod()`, published as a resolved value for the job to read, per
       data-model.md's resolution table. The zone rule is the **same rule** generation's schedule
       carries, not a similar one. Green: the refusal and resolution cases of T001.
-- [ ] T004 [P] [US5] The `courtregister.report` block and the one `courtregister.intake.gauge-refresh`
+      (green at `0e0e7b1`: `ReportPropertiesTest` + `ConfigurationValidationTest`, 152 tests,
+      0 failures, 0 errors; `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` exit 0.
+      The zone rule is stated once, as the package-private
+      `GenerationProperties.requireTheCourtsZone(zone, acknowledged, zoneSetting, ackSetting,
+      hour)`, which the generation record's own check now delegates to with its existing wording
+      unchanged. `courtregister.intake.gauge-refresh` is refused on the intake half's own list
+      (`validate(CourtRegisterProperties)`) rather than inside `validateReport`, because that is
+      where the sweep is and where the setting is; it is still one of T001's ten. The three
+      duration refusals reuse `requirePositive`, which quotes the offending **duration** back as
+      every other refusal in the class does - the "quote no operator-supplied value" rule is kept
+      strictly where it matters, the template id and the recipients, neither of which is quoted.)
+- [x] T004 [P] [US5] The `courtregister.report` block and the one `courtregister.intake.gauge-refresh`
       key in `src/main/resources/application.yaml` (and the matching keys in
       `src/main/resources/application-test.yaml` where the test profile needs them), every key
       written with a comment saying **what breaks without it**, following the
@@ -139,7 +171,17 @@ nothing, and the two indexes that make the scheduled reads index scans rather th
       `10m` and borrows nothing from `courtregister.generation.grace-period`, which an intake-only
       pod would not bind. There is no `courtregister.report.window` key to write. Infrastructure: the
       commit records `./gradlew bootRun` still refusing for the documented reasons.
-- [ ] T005 [P] `persistence/SchemaMigrationV4IT` - `both_report_indexes_exist`,
+      (`1bbf07b`. `./gradlew bootRun` still refuses, for the documented reason and no new one:
+      "IllegalStateException: courtregister.results.system-user-id must be set when
+      courtregister.payload.mode is LIVE, because the payload fallback cannot be used without an
+      identity to authorise with". `intake.gauge-refresh` sits beside `consumer` on the intake
+      half rather than at the end of the file. `src/test/resources/application-test.yaml` gains
+      `report.enabled: false` and `report.email.enabled: false` - not to bind, but for the reason
+      it already pins `generation.enabled`: `application.yaml` reads
+      COURTREGISTER_REPORT_ENABLED, and the e-mail output's two settings become required at
+      startup the moment it is true. HttpSurfaceTest, CliModeConfigTest and
+      GenerationWiringContextTest, the three suites that boot the profile, are green.)
+- [x] T005 [P] `persistence/SchemaMigrationV4IT` - `both_report_indexes_exist`,
       `the_non_terminal_index_carries_its_predicate` (read from `pg_indexes.indexdef`, asserting the
       predicate is spelled exactly as the query's own `WHERE` clause spells it, because Postgres
       matches a partial index by proving implication and a differently spelled equivalent is a
@@ -148,14 +190,31 @@ nothing, and the two indexes that make the scheduled reads index scans rather th
       `src/main/resources/db/migration/V4__processed_request_report_indexes.sql` carrying only its
       header comment, so Flyway has a V4 to apply. Red: `idx_request_non_terminal_created` is not in
       `pg_indexes`.
-- [ ] T006 `src/main/resources/db/migration/V4__processed_request_report_indexes.sql` exactly as
+      (red at `5ecb612`: 4 tests, 3 failures, 0 errors, every one an assertion.
+      `both_report_indexes_exist` on Expecting actual {flyway_schema_history_pk=..., idx_output_...}
+      to contain key "idx_request_non_terminal_created";
+      `the_non_terminal_index_carries_its_predicate` on "Expecting actual not to be null";
+      `every_v1_to_v3_object_is_unchanged` on "Expected size: 16 but was: 14".
+      The suite migrates a database of its own to V3, snapshots tables, columns, constraints and
+      indexes, migrates the rest of the way and snapshots again - against the shared container,
+      already migrated by every other persistence suite, "V4 changed nothing" is unobservable. The
+      predicate is asserted on Postgres's own normalisation of the `IN` list, `status = ANY`
+      carrying both states and neither terminal one, which is what the identically spelled query
+      normalises to and therefore what the implication proof is trivial over.)
+- [x] T006 `src/main/resources/db/migration/V4__processed_request_report_indexes.sql` exactly as
       data-model.md writes it: `idx_request_non_terminal_created ON processed_request (created_at)
       WHERE status IN ('RECEIVED', 'RETRYING')` and `idx_request_status_updated ON processed_request
       (status, updated_at)`, with the header comment saying why one is partial and the other is not.
       Additive and forward-only; never edited once applied. Green: T005.
+      (green at `76fea55`: SchemaMigrationV4IT, 4 tests, 0 failures, 0 errors. The file is the
+      data-model.md block verbatim, header comment included.)
 - [ ] T007 Phase close: `./gradlew build` green (PMD, Checkstyle at `maxWarnings = 0`, the JaCoCo
       gate unchanged and not loosened); **review gate 1** in a new session against
       `.claude/rules/workflow.md`; findings land as red/green pairs before Phase 2 starts.
+      (build half done at `76fea55`: `./gradlew build` BUILD SUCCESSFUL, exit 0, 3302 tests over
+      537 suites, 0 failures, 0 errors; Checkstyle at `maxWarnings = 0` over main and test, PMD
+      over both, and the JaCoCo gate at LINE 0.88 / BRANCH 0.85, none of them loosened. **Review
+      gate 1 is still owed** and this task stays open until it has run.)
 
 **Checkpoint**: the settings exist, a bad one cannot start a pod, and the reads Phase 2 writes have
 their indexes.
