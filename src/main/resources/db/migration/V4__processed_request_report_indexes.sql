@@ -1,0 +1,6 @@
+-- V4 - the reads the exception report and the intake sweep make.
+--
+-- Neither index changes what the store holds. They exist because two of this service's reads are
+-- now made on a schedule rather than by a support engineer with time to wait: the sweep's read runs
+-- every gauge-refresh interval for the life of every pod, and the morning report's failed-since read
+-- runs over whatever a week of deliveries left behind.
