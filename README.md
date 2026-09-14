@@ -78,8 +78,8 @@ This repository carries no design narrative of its own. What it does carry:
 - **Cutover** is a separate step now that both increments are signed off: the producer's queue
   publisher and the legacy kill-switch already exist as patterns; the flag is the only lever. Two
   register rows are tracked to conclusion first — P6 and P7 depend on progression's retirement PR
-  merging, which nothing in this repository can assert — alongside the legacy-repo items C18, C28
-  and C34 and the SIT→STE replay gate.
+  merging, which nothing in this repository can assert — alongside the legacy-repo items C18a, C28
+  and C34, the producer-repo item C18b and the SIT→STE replay gate.
 
 This service exposes **no REST API**. The only HTTP surface is Spring Boot Actuator. Operational
 actions (regenerate a date, resend a batch's failed notifications, list batches, review rows recorded

@@ -307,7 +307,7 @@ This service **adapts to** four contracts it does not own, and never redefines t
 |---|---|---|
 | systemdocgenerator `generate-document` (REST, 202) + the `document-available` / `generation-failed` public events | systemdocgenerator | Add a field, treat any 2xx but 202 as success, or infer an outcome no event carried |
 | notificationnotify `send-email-notification` (REST, 202) | notificationnotify | Batch recipients into one call, or retry a 4xx |
-| the framework file-service `metadata` + `content` table schema (write-only, pinned to changesets 001–006) | the framework | Read through it, or migrate it |
+| the framework file-service `metadata` + `content` table schema (write-only, pinned to changesets 001–006) | the framework | Read through it, or migrate it. **The file service is the only store outside this service's own that may be written directly** (design owner, 2026-09-14, closing design Q20): no other context's tables are ever written |
 | the `CourtRegisterService` App Configuration flag | the cutover | Cache it, default it open, or add a second reader with different semantics |
 
 Plus the two this service's own increments froze: the **inbound queue message**
@@ -376,6 +376,7 @@ court-register leg for the downstream half. The register is `doc/DEFECT-FIXES.md
   shared kernel this port produces is what the PCR migration will consume.
 - SJP hearings — the court register has no SJP leg at all (unlike informant).
 - Any change to the register document's shape, or to the four consumed platform contracts.
-- The legacy function-app repo and progression's retirement PR. C18, C28, C34 (legacy repo) and P6,
+- The legacy function-app repo, the results producer and progression's retirement PR. C18a, C28,
+  C34 (legacy repo), C18b (the producer's flag-gated publisher in `cpp-context-results`) and P6,
   P7 (progression's deletions) are registered items owned elsewhere and tracked to conclusion
   before cutover.

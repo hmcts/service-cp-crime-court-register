@@ -74,8 +74,10 @@ never an assumption.
       assert it, so `RETIRED` is the disposition agreed for the row and not an observation.
 - [ ] **P7 — five-year-old informant-register residue.** Same PR, same owner, same trigger. This row
       had an owner and **no trigger at all** until T074 gave it one.
-- [ ] **C18, C28, C34** — legacy-repo items, unchanged: the kill-switch wiring in the legacy
+- [ ] **C18a, C28, C34** — legacy-repo items, unchanged: the kill-switch wiring in the legacy
       triggers, its dead test file, and its packaging.
+- [ ] **C18b** — the producer's flag-gated publisher in `cpp-context-results`, split from C18 on
+      2026-09-14: owner the Results team, trigger the court-register sibling of CRA-221 merging.
 - [ ] **The SIT→STE replay gate** — a hard pre-cutover gate held outside the repo README.
 - [ ] **Finding 12's counter, refused with its reason.** The design owner ruled that
       `CliMain.reported` keeps ERROR; Principle VI would ordinarily pair an ERROR with a metric an
