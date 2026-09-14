@@ -40,6 +40,7 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
+import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
@@ -1226,6 +1227,12 @@ public class JdbcRegisterStore implements RegisterStore {
                 () -> jdbcClient.sql(ACTIVE_UNBATCHED)
                         .query((rs, rowNumber) -> registerRecord(rs))
                         .list());
+    }
+
+    @Override
+    public List<RecordedRegisterSummary> recordedUnbatchedBefore(final Instant recordedBefore) {
+        throw new UnsupportedOperationException(
+                "the report's recorded-unbatched read is not written yet");
     }
 
     @Override
