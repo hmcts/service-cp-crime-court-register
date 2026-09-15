@@ -29,7 +29,7 @@ import org.slf4j.MDC;
  * worse than no correlation at all, because it reads as a true one. There is no way to call this
  * and forget the {@code finally}.
  */
-final class RunCorrelation {
+public final class RunCorrelation {
 
     /**
      * The MDC key, camel-cased like the delivery path's four rather than snake-cased like the run
@@ -49,7 +49,7 @@ final class RunCorrelation {
      * @param <T>  what it answers
      * @return whatever the work answered
      */
-    /* default */ static <T> T under(final Supplier<T> work) {
+    public static <T> T under(final Supplier<T> work) {
         final boolean owned = MDC.get(KEY) == null;
         if (owned) {
             MDC.put(KEY, UUID.randomUUID().toString());
@@ -68,7 +68,7 @@ final class RunCorrelation {
      *
      * @param work the unit of work
      */
-    /* default */ static void under(final Runnable work) {
+    public static void under(final Runnable work) {
         under(() -> {
             work.run();
             return null;
@@ -80,7 +80,7 @@ final class RunCorrelation {
      *
      * @return the id, or {@code null} outside any correlation
      */
-    /* default */ static String current() {
+    public static String current() {
         return MDC.get(KEY);
     }
 }

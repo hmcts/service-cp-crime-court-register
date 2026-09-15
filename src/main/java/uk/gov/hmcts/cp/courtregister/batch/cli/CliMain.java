@@ -112,6 +112,9 @@ public class CliMain {
     /** Reads the one lever and says what it says. */
     public static final String CHECK_FLAG = "check-flag";
 
+    /** Lists what has gone wrong over a window an operator names, and optionally e-mails it. */
+    public static final String REPORT_EXCEPTIONS = "report-exceptions";
+
     /**
      * The five names, stated once.
      *
