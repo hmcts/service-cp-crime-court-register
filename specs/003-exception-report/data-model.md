@@ -86,6 +86,31 @@ Notes that matter:
   `now()` minus a pod-written timestamp. The error is at most a pod's clock skew, it affects a
   reported number and never a decision about a claim, and changing it would mean a migration that
   rewrote the 002 state machines' defaults.
+- **The two window reads rely on a write-path invariant, and it holds** (review gate 2 asked, and the
+  write paths were read before the reads were left alone). `BATCH_FAILED` bounds on `failed_at` and
+  measures its age from it, and `NOTIFICATION_FAILED` does the same with `sent_at`; a null in either
+  would drop the row out of the predicate silently, which is a dead batch or an untold Youth
+  Offending Team missing from the morning report. **Neither can be null on a FAILED row.**
+  `JdbcRegisterStore.MARK_FAILED` writes `failed_at = now()` in the same `UPDATE` that writes the
+  status, and it is the only production path a batch reaches FAILED by -
+  `RegisterBatchRepository.compareAndSet`'s whole-row write has no production caller.
+  `RegisterNotifierService.settledAs` stamps `clock.instant()` on every terminal attempt, an
+  acceptance and a refusal alike, including a connection that reached no status line at all; a minted
+  PENDING row is the one shape with no stamp, and PENDING is not FAILED. So the reads carry **no
+  `COALESCE`**: a fallback there would be a second answer to a question the write path only ever
+  answers one way, and it would hide the day that stopped being true. The invariant is pinned where
+  it is produced, by `RegisterStoreIT.a_failed_batch_always_carries_its_failed_at` and
+  `RegisterNotifierServiceTest.a_failed_notification_always_carries_its_sent_at`.
+- **Every window predicate is inclusive at its start** (`>= :since`) and exclusive at the cut-off
+  (`< :before`). Consecutive windows therefore abut: a row settled on the very instant a run closed
+  its window belongs to the next report rather than to neither, which is the boundary a run is
+  likeliest to have been in the middle of writing. Pinned by
+  `failed_since_includes_a_row_failed_exactly_at_the_window_start` in the request and notification
+  suites.
+- **`recordedUnbatchedBefore` orders on `register_time, output_id`**, the two columns
+  `activeUnbatched()` has always ordered on. A court centre's registers are recorded inside a single
+  microsecond often enough that the timestamp alone is no order at all, and two readings of one
+  predicate that disagree about a morning are two answers waiting to be compared.
 
 ## New repository reads
 
@@ -259,17 +284,38 @@ ones would be reporting the symptom and hiding the outcome.
 | `from` | `Instant` | The window's start: the **previous scheduled report time** for a scheduled run, `--since` for a command |
 | `to` | `Instant` | The window's end, which is always the moment the run started |
 
-`from` must be before `to`; the record refuses otherwise, because a window read backwards would
-report nothing and look like a quiet morning.
+`from` must be **strictly** before `to`; the record refuses otherwise, a window of no width included,
+because either reports nothing and looks exactly like a quiet morning.
 
 ```java
+static ReportWindow forScheduledRun(String cron, String zone, Instant firedAt);
 static ReportWindow sinceLastScheduledRun(String cron, String zone, Instant now);
 ```
 
-The factory is the scheduled run's only way of making a window, and it reuses
-`domain/LastScheduledRun` - the most-recent-occurrence computation the never-batched `BATCH_LATE`
-rule already needs for the **generation** cron - given the **report** cron and the report zone
-instead. It lives in `domain/` rather than `batch/` because it is a pure computation over a cron
+**Two factories, because two callers ask two different questions** (review gate 2).
+
+`forScheduledRun` is the scheduled run's only way of making a window. The run **has an occurrence of
+its own** - the schedule is what woke it - so the first step back through `LastScheduledRun` is
+`atOrBefore(cron, zone, firedAt)`, and the second is `before(...)` that occurrence. A strictly
+earlier first step would skip the run's own occurrence whenever it fired on the instant it was due,
+opening the window a whole period early and reporting the same failures twice. `to` is `firedAt` and
+not the occurrence, so a run held up covers its own period **and** the delay: the window widens and
+never shrinks, and nothing falls into a gap between two reports. There is deliberately **no
+tolerance** around the occurrence - "near enough to count as on it" is a second boundary to get
+wrong, and the at-or-before step answers the only case a tolerance was ever for.
+
+`sinceLastScheduledRun` is what a caller with **no occurrence of its own** asks, which is the bare
+`report-exceptions` command (FR-009). One step: nothing woke it on a schedule, so the most recent
+occurrence strictly before `now` is the run that last reported. An operator asking at 06:59 reads the
+window this morning's run is about to read; one asking at 09:00 reads what has gone wrong since that
+run reported rather than repeating it. A scheduled run must never use it - the moment it fires is its
+own occurrence or a hair past it, and one step from there is a window a few milliseconds wide and a
+morning that looks quiet.
+
+Both reuse `domain/LastScheduledRun` - the most-recent-occurrence computation the never-batched
+`BATCH_LATE` rule already needs for the **generation** cron - given the **report** cron and the
+report zone instead. That class answers both boundaries: `before(cron, zone, instant)` strictly, and
+`atOrBefore(cron, zone, instant)` inclusively, one search with the comparison written once. It lives in `domain/` rather than `batch/` because it is a pure computation over a cron
 expression, a zone and an instant: it reaches nothing, holds nothing, and `ReportWindow` - itself a
 domain record - is one of its two callers, so a `domain` type would otherwise depend on a `batch`
 one. There is no
@@ -515,11 +561,13 @@ form that parses wins; nothing falls through to a default once a value was given
 | Shorthand hours | `2h` | `now` minus two hours |
 | Shorthand minutes | `30m` | `now` minus thirty minutes |
 | Shorthand seconds | `90s` | `now` minus ninety seconds |
-| absent | | the previous scheduled report time, exactly as the 07:00 run computes it (`ReportWindow.sinceLastScheduledRun`) |
+| absent | | the most recent scheduled report occurrence before now (`ReportWindow.sinceLastScheduledRun`) |
 
-`to` is always `now`, read from the injected `Clock`. An absent `--since` gives the command the same
-window the schedule would have given it, so an operator who types the bare command reads the report
-the morning run would have written rather than a different one. A zero or negative duration, a shorthand with
+`to` is always `now`, read from the injected `Clock`. An absent `--since` opens the window at the most
+recent scheduled occurrence **before now** - `sinceLastScheduledRun`, not `forScheduledRun`, because
+the command has no occurrence of its own to be at. Before this morning's run that is yesterday's run,
+which is the window this morning's run is about to read; after it, it is this morning's run, so the
+bare command answers what has gone wrong since the report was written rather than repeating it. A zero or negative duration, a shorthand with
 no digits, an instant in the future and anything else are refused as `unreadable-argument` naming
 `--since`, with the class of the reader that refused it on the log line and **the token never
 quoted** - an operator's terminal is pasted into tickets, and `--since` is as likely to receive a

@@ -271,10 +271,11 @@ the offending setting.
 - **FR-009**: The service MUST provide an operations command that produces the same report on
   demand for a window given either as an instant or as a duration before now, writes it as a table
   to standard output, and optionally sends it by e-mail; the command MUST refuse the e-mail option
-  when the e-mail output is disabled, and MUST require no cutover flag. When no window is given the
-  command MUST use the same window the scheduled run would have used - back to the previous
-  scheduled report time - so that the bare command answers what the morning run would have answered
-  rather than a different question.
+  when the e-mail output is disabled, and MUST require no cutover flag. When `--since` is absent the
+  window MUST start at the most recent scheduled occurrence before now, so the bare command answers
+  what has happened since the last report was written rather than a different question: asked before
+  the morning run it reads the window that run is about to read, and asked after it, it reads what
+  has gone wrong since.
 - **FR-010**: The schedule, its time zone, the three thresholds, the gauge-refresh interval (which
   belongs to the intake half and not to the report), the e-mail switch, the recipients and the
   template MUST each be a configuration setting with a documented default, and start-up MUST refuse

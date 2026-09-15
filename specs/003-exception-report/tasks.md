@@ -538,13 +538,84 @@ these types.
       `checkstyleMain` and `pmdMain` exit 0. Both `storeText` implementers refuse rather than
       pretend, because a store that accepted a CSV and wrote nothing would mint an id for a file
       notificationnotify would later find nothing under.)
-- [ ] T021 Phase close: `./gradlew build` green; **review gate 2** (ports and adapters, the
+- [x] T021 Phase close: `./gradlew build` green; **review gate 2** (ports and adapters, the
       read-only claim, no infrastructure type in `application/` or `domain/`); findings land as
       red/green pairs before Phase 3 starts.
       (build half done at `a040f69`: `./gradlew build` BUILD SUCCESSFUL, exit 0, 3337 tests over
       546 suites, 0 failures, 0 errors; Checkstyle at `maxWarnings = 0` over main and test, PMD
-      over both, and the JaCoCo gate at LINE 0.88 / BRANCH 0.85, none of them loosened. **Review
-      gate 2 is still owed** and this task stays open until it has run.)
+      over both, and the JaCoCo gate at LINE 0.88 / BRANCH 0.85, none of them loosened.
+      **Review gate 2 ran against the committed Phase 2 content** with three read-only reviewers.
+      Verdicts: `code-reviewer` **PASS** (2 medium, 5 low), `qa` **PASS**, `spec-validator`
+      **DRIFT DETECTED** (1 medium, 1 low). Nothing in the gate asked for a
+      `doc/DEFECT-FIXES.md` row and none was added; the ports-and-adapters and read-only claims the
+      gate was called for were found clean - no Azure, JDBC, HTTP or logging type in `application/`
+      or `domain/`, and every new statement a `SELECT`.
+      Findings, and where each was closed:
+      * **the window was one computation answering two questions.** `sinceLastScheduledRun` stepped
+        back twice, which is right only for a caller that fired on its own occurrence: the 07:00
+        run got the right period because it fires a few milliseconds late, and the bare CLI call
+        FR-009 sends through the same factory reached a whole period too far back every time - at
+        06:59 on a Tuesday it opened at the previous **Friday**. The design owner decided two
+        factories: `forScheduledRun(cron, zone, firedAt)`, whose first step is
+        `LastScheduledRun.atOrBefore` so an exact fire is not skipped past its own occurrence and
+        whose `to` is `firedAt` so a late run widens its window rather than shrinking it, and
+        `sinceLastScheduledRun(cron, zone, now)`, one step, for a caller with no occurrence of its
+        own. No "near the occurrence" tolerance was added: it is a second boundary to get wrong.
+        Red at `653be6c` (six window cases plus
+        `LastScheduledRunTest.an_occurrence_at_the_instant_itself_is_answered_by_at_or_before_and_not_by_before`),
+        green at `df050d5`. The FIRING_DELAY_MILLIS two-step reasoning moved into
+        `forScheduledRun`'s javadoc, where it is now true.
+      * the four `RegisterBatchRepository` report reads were the only statements in the class not
+        wrapped in `StoreOutage.translating`, so an unreachable store reached the report as
+        `CannotGetJdbcConnectionException` rather than as this service's own signal. Red
+        `every_read_goes_through_store_outage_translating` at `bb836f2`, green at `0e58e9b`.
+      * `RECORDED_UNBATCHED_BEFORE` ordered on `register_time` alone while `activeUnbatched()` -
+        the read it shares a predicate with - has always ordered on `register_time, output_id`.
+        Red `registers_recorded_at_the_same_moment_are_answered_in_output_id_order` at `bb836f2`
+        (six registers on one instant, answered in scan order), green at `0e58e9b`.
+      * the null-stage-timestamp question the gate raised was **answered by reading the write
+        paths, and the reads were left alone**. A FAILED batch cannot carry a null `failed_at`:
+        `JdbcRegisterStore.MARK_FAILED` writes `failed_at = now()` in the same `UPDATE` as the
+        status and is the only production path to FAILED, `RegisterBatchRepository.compareAndSet`'s
+        whole-row write having no production caller. A FAILED notification cannot carry a null
+        `sent_at`: `RegisterNotifierService.settledAs` stamps `clock.instant()` on every terminal
+        attempt, a refusal and an unanswered connection alike. So **no `COALESCE`** - a fallback
+        would be a second answer to a question the write path only ever answers one way - and the
+        invariant is pinned where it is produced, by
+        `RegisterStoreIT.a_failed_batch_always_carries_its_failed_at` and
+        `RegisterNotifierServiceTest.a_failed_notification_always_carries_its_sent_at`, both
+        **green on introduction** at `bb836f2`. data-model.md now says the reads rely on it.
+      * the window predicates' inclusive start had no case.
+        `failed_since_includes_a_row_failed_exactly_at_the_window_start` landed in the request and
+        notification suites at `bb836f2`, both **green on introduction**, each seeding at the row's
+        own stored instant rather than near it.
+      * five model gaps, all closed at `653be6c`/`df050d5`: `ExceptionEntry` admitted a null
+        `kind`, `ExceptionReport` read a null entries list as an empty morning (which is the report
+        a quiet night produces), `ReportWindow`'s refusal of a zero-width window was unasserted,
+        `ReportMail`'s compact constructor was unpinned, and
+        `counts_answers_zero_for_every_kind_that_has_none` closed on `containsValue(0)`, which a
+        map holding one nought among four absences satisfies. The two refusals are red; the other
+        three were **green on introduction**.
+      * the four `age_seconds_is_computed_by_the_database_not_the_jvm` cases were vacuous: they
+        advanced an `AdjustableClock` no repository holds and then asserted the database's answer
+        had not moved, which it could not have. All four are now
+        `age_seconds_is_answered_in_seconds_from_the_stage_timestamp` - the value against the
+        seeded age, and the read's own recorded statement against `now()` and `extract(epoch` -
+        and the `AdjustableClock` pretence is gone from the four suites. `bb836f2`, green on
+        introduction, and the plan's matrix carries the new names.
+      * `ReportReadsDatabase` created a database per suite and never dropped it, so a second
+        `migrated(...)` under one name would fail in a `@BeforeAll` where no case could report it.
+        A `drop()` over the new `PostgresTestSupport.dropDatabase` runs in each suite's
+        `@AfterAll`; the outage mechanism is untouched. `0e58e9b`.
+      * `StubPayloadFileStore.storeText` refused with no explanation of what it was. Its javadoc
+        now says it is a seam - a stub that accepted a CSV and wrote nothing would mint an id
+        notificationnotify would find no file under - and that it **must become a logging no-op**,
+        in the shape `store` beside it is written in, when the e-mail sink lands at T065.
+        `0e58e9b`.
+      Phase-close build **after** the findings landed, at `0e58e9b`: `./gradlew build` BUILD
+      SUCCESSFUL, exit 0, 3359 tests over 548 suites, 0 failures, 0 errors; Checkstyle at
+      `maxWarnings = 0` over main and test, PMD over both, and the JaCoCo gate at LINE 0.88 /
+      BRANCH 0.85, none of them loosened. Phase 3 may start.)
 
 **Checkpoint**: the report's model, its two ports and its nine reads exist and the reads are proven
 against a real Postgres. The three story phases below can now be worked independently.
