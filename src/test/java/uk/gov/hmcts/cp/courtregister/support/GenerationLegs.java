@@ -37,6 +37,7 @@ import uk.gov.hmcts.cp.courtregister.adapter.notificationnotify.NotificationNoti
 import uk.gov.hmcts.cp.courtregister.adapter.notificationnotify.NotificationNotifyReportMailer;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DeliveryObserver;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DocumentEventListener;
+import uk.gov.hmcts.cp.courtregister.adapter.report.EmailReportSink;
 import uk.gov.hmcts.cp.courtregister.adapter.report.LogEventReportSink;
 import uk.gov.hmcts.cp.courtregister.adapter.systemdocgenerator.SystemDocGeneratorClient;
 import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSinkImpl;
@@ -144,7 +145,7 @@ public final class GenerationLegs implements AutoCloseable {
             UUID.fromString("66666666-7777-4888-8999-aaaaaaaaaaaa");
 
     /**
-     * The three classes the exception report writes its own lines from.
+     * The four classes the exception report writes its own lines from.
      *
      * <p>Named on their own as well as inside {@link #THE_LEGS}, because a class that declares no
      * statement contributes nothing to a sweep over declarations and is passed over in silence. A
@@ -154,6 +155,7 @@ public final class GenerationLegs implements AutoCloseable {
     public static final List<Class<?>> THE_REPORT = List.of(
             ExceptionReportService.class,
             LogEventReportSink.class,
+            EmailReportSink.class,
             ReportExceptionsCli.class);
 
     /**
@@ -419,6 +421,7 @@ public final class GenerationLegs implements AutoCloseable {
         theNotifyingLeg();
         theNotifiersClient();
         theExceptionReport();
+        theReportsEmail();
         theReportsMailer();
         theMorningRun();
         theOnDemandReport();
@@ -1132,6 +1135,58 @@ public final class GenerationLegs implements AutoCloseable {
                 "the store could not be reached to read what went wrong overnight",
                 new IllegalStateException("the connection pool is empty")));
         whateverItAnswers(reportJob::run);
+    }
+
+    /**
+     * The five lines the report's e-mail sink can write, over one morning it is given four times.
+     *
+     * <p>The sink is the one class in this increment that has a <em>list</em> of addresses in its
+     * hands, and every line it writes about one of them has to be masked - so the arrangements
+     * below hand it the marked address and the sweep reads what came out. It is driven over the
+     * report {@link #theExceptionReport()} has just built, so the counts in the body and the rows
+     * in the file are a real morning's.
+     *
+     * <p>Four arrangements for five lines: a recipient who took it (the minted id, and the line
+     * about the recipient), one who refused it, a file service that would not take the attachment -
+     * where nobody is told at all, because an e-mail whose attachment is missing is an e-mail with
+     * nothing in it - and a recipient list that is empty under a running pod.
+     */
+    private void theReportsEmail() {
+        final ExceptionReport report =
+                reporting.build(new ReportWindow(AT.minus(Duration.ofDays(1)), AT), RUN_ID);
+
+        emailCommandAnswering(HttpStatus.ACCEPTED.value());
+        whateverItAnswers(() -> emailSink(List.of(PersonalDataMarkers.RECIPIENT_EMAIL))
+                .deliver(report));
+
+        emailCommandAnswering(HttpStatus.BAD_REQUEST.value());
+        whateverItAnswers(() -> emailSink(List.of(PersonalDataMarkers.RECIPIENT_EMAIL))
+                .deliver(report));
+
+        doRefuseTheText();
+        whateverItAnswers(() -> emailSink(List.of(PersonalDataMarkers.RECIPIENT_EMAIL))
+                .deliver(report));
+
+        reset(payloadFileStore);
+        whateverItAnswers(() -> emailSink(List.of()).deliver(report));
+    }
+
+    /**
+     * The sink over this fixture's file store and its real mailer.
+     *
+     * @param recipients who this deployment is configured to tell
+     * @return the sink
+     */
+    private EmailReportSink emailSink(final List<String> recipients) {
+        return new EmailReportSink(payloadFileStore, reportMailer, TEMPLATE_ID, recipients);
+    }
+
+    /** A file service that will not take the CSV, in its own words and with a cause of its own. */
+    private void doRefuseTheText() {
+        org.mockito.Mockito.doThrow(new PayloadStoreUnavailableException(
+                        "the file service could not be reached to write the report's content row"))
+                .when(payloadFileStore).storeText(any(UUID.class), any(String.class),
+                        any(uk.gov.hmcts.cp.courtregister.application.PayloadMetadata.class));
     }
 
     /**

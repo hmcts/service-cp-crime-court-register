@@ -94,6 +94,7 @@ import uk.gov.hmcts.cp.courtregister.domain.GateDecision;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
+import uk.gov.hmcts.cp.courtregister.domain.ReportDeliveryReason;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.inbound.CourtRegisterMessageListener;
@@ -234,6 +235,10 @@ class TelemetryPrivacyTest {
                     // RegisterGenerationJobTest.BOUNDED_FIELDS_ONLY; this set is only about which
                     // words may sit in a reason slot.
                     Arrays.stream(GateDecision.Reason.values()).map(GateDecision.Reason::code),
+                    // The report's own delivery vocabulary, for the same reason the batch's is
+                    // here by name: the e-mail sink writes the constant into a reason slot, and a
+                    // delivery that could not be made is exactly the line somebody alerts on.
+                    Arrays.stream(ReportDeliveryReason.values()).map(Enum::name),
                     Stream.of("flag-on"))
             .flatMap(codes -> codes)
             .collect(Collectors.toUnmodifiableSet());
