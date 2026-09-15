@@ -29,9 +29,10 @@ sink does not exist yet is configuration nothing reads.
       # needs no setting: a run reports from the previous scheduled run to now, so Monday reads
       # back to Friday and nothing falls between two windows.
       COURTREGISTER_REPORT_ENABLED: "true"
-      # The intake gauges refresh on this interval in EVERY service JVM, whether or not the report
-      # or the generation half is enabled, and under no lock: a gauge describes the JVM that
-      # publishes it, so alerts aggregate across pods with max(). Ten minutes by default.
+      # The intake gauges refresh on this interval in every service JVM that is not a command,
+      # whether or not the report or the generation half is enabled, and under no lock: a gauge
+      # describes the JVM that publishes it, so alerts aggregate across pods with max(). Ten
+      # minutes by default.
       COURTREGISTER_INTAKE_GAUGE_REFRESH: 10m
       # The e-mail output, switched separately from the Log Analytics output. On locally so the
       # WireMock notificationnotify stub is exercised; off in every environment until the
