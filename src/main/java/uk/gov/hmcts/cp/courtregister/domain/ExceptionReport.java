@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * What one run of the exception report found.
@@ -25,9 +26,18 @@ public record ExceptionReport(
         Instant snapshotAt,
         List<ExceptionEntry> entries) {
 
-    /** Freezes the entries, so what a sink writes is what the reads found. */
+    /**
+     * Freezes the entries, so what a sink writes is what the reads found - and refuses an absent
+     * list.
+     *
+     * <p>A null is not an empty morning. Read as one it would produce five zero counts and no
+     * entries, which is precisely the report a quiet night produces, so a composition that lost its
+     * list would announce that nothing was wrong. The rest of this model refuses a null rather than
+     * interpreting one, and this is the place it would cost the most.
+     */
     public ExceptionReport {
-        entries = entries == null ? List.of() : List.copyOf(entries);
+        entries = List.copyOf(Objects.requireNonNull(entries,
+                "a report states what the reads found, and an absent list is not an empty morning"));
     }
 
     /**

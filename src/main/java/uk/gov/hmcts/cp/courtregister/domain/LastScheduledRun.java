@@ -58,11 +58,15 @@ public final class LastScheduledRun {
      * @return the most recent occurrence at or before it
      */
     public static Instant atOrBefore(final String cron, final String zone, final Instant instant) {
-        throw new UnsupportedOperationException("the at-or-before occurrence is not computed yet");
+        return lastOccurrence(cron, zone, instant, Boundary.INCLUSIVE);
     }
 
     /**
      * The most recent occurrence of a cron, in a zone, strictly before an instant.
+     *
+     * <p>The one a caller with no occurrence of its own asks: an operator typing the bare command
+     * at some moment between two runs wants the run that last reported, and the moment asked about
+     * is not itself an occurrence.
      *
      * @param cron    the schedule, in Spring's six-field dialect
      * @param zone    the zone the schedule is read in
@@ -70,11 +74,26 @@ public final class LastScheduledRun {
      * @return the most recent occurrence strictly before it
      */
     public static Instant before(final String cron, final String zone, final Instant instant) {
+        return lastOccurrence(cron, zone, instant, Boundary.STRICT);
+    }
+
+    /**
+     * The search the two public answers share, differing only in what they do with the boundary.
+     *
+     * @param cron     the schedule, in Spring's six-field dialect
+     * @param zone     the zone the schedule is read in
+     * @param instant  the moment to look back from
+     * @param boundary whether an occurrence at that moment is one of the answers
+     * @return the most recent occurrence the boundary admits
+     */
+    private static Instant lastOccurrence(final String cron, final String zone,
+            final Instant instant, final Boundary boundary) {
         final CronExpression schedule = CronExpression.parse(cron);
         final ZonedDateTime moment = instant.atZone(ZoneId.of(zone));
         ZonedDateTime latest = null;
         for (int daysBack = 0; daysBack <= SEARCH_DAYS && latest == null; daysBack++) {
-            latest = lastOccurrenceOn(schedule, moment.minusDays(daysBack).toLocalDate(), moment);
+            latest = lastOccurrenceOn(schedule, moment.minusDays(daysBack).toLocalDate(), moment,
+                    boundary);
         }
         if (latest == null) {
             throw new IllegalArgumentException("the schedule fired at no point in the "
@@ -94,20 +113,55 @@ public final class LastScheduledRun {
      *
      * @param schedule the parsed cron
      * @param day      the local day being searched
-     * @param moment   the moment every occurrence must fall strictly before
-     * @return the last occurrence on that day before the moment, or {@code null} where there is
+     * @param moment   the moment every occurrence must fall before, or at, as the boundary says
+     * @param boundary whether an occurrence at the moment itself is admitted
+     * @return the last occurrence on that day the boundary admits, or {@code null} where there is
      *     none
      */
     private static ZonedDateTime lastOccurrenceOn(final CronExpression schedule,
-            final LocalDate day, final ZonedDateTime moment) {
+            final LocalDate day, final ZonedDateTime moment, final Boundary boundary) {
         ZonedDateTime latest = null;
         ZonedDateTime candidate =
                 schedule.next(day.atStartOfDay(moment.getZone()).minusNanos(1));
-        while (candidate != null && candidate.isBefore(moment)
+        while (candidate != null && boundary.admits(candidate, moment)
                 && candidate.toLocalDate().equals(day)) {
             latest = candidate;
             candidate = schedule.next(candidate);
         }
         return latest;
+    }
+
+    /**
+     * What the moment asked about is: a boundary an occurrence may sit on, or one it may not.
+     *
+     * <p>The whole difference between the two answers this class gives, written once as the
+     * comparison itself rather than twice as two nearly identical searches.
+     */
+    private enum Boundary {
+
+        /** Strictly before: an occurrence at the moment itself is not one of the answers. */
+        STRICT {
+            @Override
+            /* default */ boolean admits(final ZonedDateTime candidate, final ZonedDateTime moment) {
+                return candidate.isBefore(moment);
+            }
+        },
+
+        /** At or before: an occurrence at the moment itself is the answer. */
+        INCLUSIVE {
+            @Override
+            /* default */ boolean admits(final ZonedDateTime candidate, final ZonedDateTime moment) {
+                return !candidate.isAfter(moment);
+            }
+        };
+
+        /**
+         * Whether one occurrence is early enough to be an answer.
+         *
+         * @param candidate the occurrence being considered
+         * @param moment    the moment asked about
+         * @return whether it counts
+         */
+        /* default */ abstract boolean admits(ZonedDateTime candidate, ZonedDateTime moment);
     }
 }

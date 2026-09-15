@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
 import java.time.LocalDate;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -50,4 +51,16 @@ public record ExceptionEntry(
         Integer attempts,
         String reason,
         long ageSeconds) {
+
+    /**
+     * Refuses an entry with no kind.
+     *
+     * <p>The one field all five carry, and the one every count, every query and every CSV column
+     * is taken over. An entry without it is a row a dashboard cannot count and a support engineer
+     * cannot select - and, because the log sink omits absent fields rather than emitting nulls, one
+     * that would leave no trace of its own absence.
+     */
+    public ExceptionEntry {
+        Objects.requireNonNull(kind, "an exception is of one of the five kinds");
+    }
 }
