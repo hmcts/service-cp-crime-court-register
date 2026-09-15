@@ -96,6 +96,7 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.ReportDeliveryReason;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
+import uk.gov.hmcts.cp.courtregister.domain.SweepFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.inbound.CourtRegisterMessageListener;
 import uk.gov.hmcts.cp.courtregister.inbound.DistributionCommandParser;
@@ -242,6 +243,11 @@ class TelemetryPrivacyTest {
                     // here by name: the e-mail sink writes the constant into a reason slot, and a
                     // delivery that could not be made is exactly the line somebody alerts on.
                     Arrays.stream(ReportDeliveryReason.values()).map(Enum::name),
+                    // The sweep's two, by name for the same reason. This is the service's one
+                    // absorbed refusal, so the reason beside it is the only evidence it leaves -
+                    // and an outage of theirs and a bug of ours have to stay tellable apart, which
+                    // is why there are two of them and why both belong in the vocabulary.
+                    Arrays.stream(SweepFailureReason.values()).map(Enum::name),
                     Stream.of("flag-on"))
             .flatMap(codes -> codes)
             .collect(Collectors.toUnmodifiableSet());

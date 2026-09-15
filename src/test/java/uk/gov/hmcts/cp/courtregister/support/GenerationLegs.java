@@ -48,6 +48,7 @@ import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.application.ReportMailer;
 import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
@@ -238,6 +239,9 @@ public final class GenerationLegs implements AutoCloseable {
 
     /** The shipped entry cap, stated rather than defaulted: no case here is about truncation. */
     private static final int MAX_ENTRIES = 5000;
+
+    /** The cap a morning too bad to carry is read under, so the truncation line is written. */
+    private static final int ONE_ENTRY = 1;
 
     private static final UUID PAYLOAD_FILE_ID =
             UUID.fromString("bbbbbbbb-cccc-4ddd-8eee-ffffffffffff");
@@ -1073,6 +1077,24 @@ public final class GenerationLegs implements AutoCloseable {
         final ExceptionReport report =
                 reporting.build(new ReportWindow(AT.minus(Duration.ofDays(1)), AT), RUN_ID);
         whateverItAnswers(() -> reporting.deliver(report, List.of(logSink, aSinkThatBreaks())));
+
+        aMorningTooBadToCarry();
+    }
+
+    /**
+     * The morning the entry cap reached, which is the one line the service writes about itself.
+     *
+     * <p>Over the same eight reads, through a service of its own capped at one, so the arrangement
+     * above is left as the whole morning it is. What the line has to say is two numbers and the
+     * run's correlation and nothing else: a cap that named the exceptions it dropped would be
+     * writing the very lines the cap exists to stop it writing.
+     */
+    private void aMorningTooBadToCarry() {
+        final ExceptionReportService capped = new ExceptionReportService(requestLog, batches,
+                notifications, store, REPORT_LIMIT, REPORT_LIMIT, REPORT_LIMIT, ONE_ENTRY,
+                GENERATION_CRON, GenerationProperties.COURTS_ZONE, intakeMetrics, clock);
+        whateverItAnswers(() ->
+                capped.build(new ReportWindow(AT.minus(Duration.ofDays(1)), AT), RUN_ID));
     }
 
     /** A request the intake half parked, carrying the bounded reason it was parked under. */
@@ -1163,6 +1185,28 @@ public final class GenerationLegs implements AutoCloseable {
 
         reset(payloadFileStore);
         whateverItAnswers(() -> emailSink(List.of()).deliver(report));
+
+        emailCommandAnswering(HttpStatus.ACCEPTED.value());
+        whateverItAnswers(() -> new EmailReportSink(payloadFileStore, aMailerThatBreaks(),
+                TEMPLATE_ID, List.of(PersonalDataMarkers.RECIPIENT_EMAIL)).deliver(report));
+    }
+
+    /**
+     * A mailer that throws rather than answering, which is a port that has broken its contract.
+     *
+     * <p>Its refusal names a team and an address on purpose, for the reason the sink that breaks
+     * does: the rule is that a caught failure is named by class and never by message, and a failure
+     * whose message said nothing about anybody would leave that rule asserted against a string that
+     * could not have leaked in the first place.
+     *
+     * @return a mailer that throws
+     */
+    private static ReportMailer aMailerThatBreaks() {
+        return mail -> {
+            throw new IllegalStateException("the mail client refused to build a request for "
+                    + PersonalDataMarkers.RECIPIENT_ORGANISATION + " at "
+                    + PersonalDataMarkers.RECIPIENT_EMAIL);
+        };
     }
 
     /**
