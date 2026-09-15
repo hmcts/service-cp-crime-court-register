@@ -638,7 +638,7 @@ on a pod with the report and the generation half both switched off - which is th
 
 ### Tests first ⚠️
 
-- [ ] T022 [P] [US2] `config/ProcessingMetricsTest` (extend) -
+- [x] T022 [P] [US2] `config/ProcessingMetricsTest` (extend) -
       `the_two_intake_gauges_exist_from_construction_and_read_zero` (registered in the constructor,
       not on first use: a gauge that appears after the first incident is not an alerting surface, and
       it is the argument the class already makes for `courtregister_intake_suspended`),
@@ -659,7 +659,19 @@ on a pod with the report and the generation half both switched off - which is th
       `Timing` type and no-op recording methods. Red:
       `SimpleMeterRegistry.find(OLDEST_NON_TERMINAL_REQUEST_AGE).gauge()` is null on a freshly
       constructed `ProcessingMetrics`.
-- [ ] T023 [P] [US2] `application/DistributionPipelineTest` (extend) -
+      (red at `7a486fd`: `ProcessingMetricsTest`, ten cases failing, every one an assertion.
+      `the_two_intake_gauges_exist_from_construction_and_read_zero` on "expected: 0.0 but was:
+      -1.0" - the suite's absent-meter sentinel, so a gauge that was never registered fails as an
+      assertion rather than as a null. Four of the ten are the existing `Surface` cases widened:
+      the gauge list is four rather than two
+      (`the_two_gauges_should_be_registered_before_anything_happens` renamed to say so), the
+      exercised-instrument list gains the seven new ones, and the label sets gain `sink` and
+      `kind`.
+      `the_timing_token_is_opaque_and_carries_no_micrometer_type_into_the_caller` was **green on
+      introduction** and the commit records it as such: it characterises the seam's own shape -
+      the start method answers this class's own token and the stop method takes it back - and had
+      no earlier shape to fail against. It claims no TDD exception.)
+- [x] T023 [P] [US2] `application/DistributionPipelineTest` (extend) -
       `a_completed_run_records_one_duration_sample_tagged_completed`,
       `a_parked_run_records_one_duration_sample_tagged_failed`,
       `a_write_the_guard_refused_records_no_sample` (a superseded runner's completion affects no rows
@@ -669,7 +681,14 @@ on a pod with the report and the generation half both switched off - which is th
       `the_pipeline_holds_a_timing_token_and_imports_no_micrometer_type`, asserted over the class's
       declared fields and its import list. Red: no sample is recorded at all, so the
       `assertThat(timer.count()).isOne()` fails on zero.
-- [ ] T024 [P] [US2] `batch/IntakeAgeSweepTest` -
+      (red at `2e371f3`: five cases over `courtregister_request_duration`, two of them failing,
+      both assertions. `a_completed_run_records_one_duration_sample_tagged_completed` on
+      "expected: 1.0 but was: -1.0", and the same against `outcome=failed` for the parked run, the
+      pipeline being untouched at that commit. The three negative cases pass on introduction,
+      which is what a negative case does before the behaviour it bounds exists: they are what
+      stops T026 recording a sample from a superseded runner's write, or from an attempt the queue
+      is going to deliver again.)
+- [x] T024 [P] [US2] `batch/IntakeAgeSweepTest` -
       `both_gauges_move_from_the_repositorys_answers`,
       `both_gauges_return_to_zero_when_nothing_is_unfinished`,
       `a_failed_read_leaves_the_gauges_at_their_last_reading_counted_and_does_not_cancel_the_schedule` -
@@ -694,10 +713,18 @@ on a pod with the report and the generation half both switched off - which is th
       Seams: `batch/IntakeAgeSweep` with a constructor taking the repository, the metrics and the
       resolved threshold, `sweepScheduled()` `void` and a body method that throws. Red: the gauge is
       still zero after the sweep ran.
+      (red at `b2fdfc2`: `IntakeAgeSweepTest`, five cases, four failing, every one an assertion.
+      `both_gauges_move_from_the_repositorys_answers` on "expected: 900.0 but was: 0.0" - the seam
+      publishes nothing, so the age the database computed never reaches the gauge.
+      `both_gauges_return_to_zero_when_nothing_is_unfinished` passes on introduction, as a case
+      about a reading coming back down must while no reading goes up; T027 is what gives it
+      something to assert. The unlocked-schedule case is the reflection one, written the way
+      `GenerationReconcilerTest.ItsOwnSchedule` writes its own: `void sweepScheduled()`,
+      `fixedDelayString` `${courtregister.intake.gauge-refresh}`, and no `@SchedulerLock` at all.)
 
 ### Implementation
 
-- [ ] T025 [US2] `config/ProcessingMetrics` (extend) - gauge
+- [x] T025 [US2] `config/ProcessingMetrics` (extend) - gauge
       `courtregister_oldest_non_terminal_request_age` (seconds) and gauge
       `courtregister_non_terminal_requests_over_threshold`, both **registered at zero in the
       constructor** behind an `AtomicLong`/`AtomicInteger` with `Gauge.builder(...).register(registry)`;
@@ -710,7 +737,15 @@ on a pod with the report and the generation half both switched off - which is th
       `courtregister_intake_sweep_failures_total{reason}`. Naming and style follow
       `config/GenerationMetrics`. Queue depth and dead-letter depth stay absent, as the class's
       javadoc already records. Green: T022.
-- [ ] T026 [US2] `application/DistributionPipeline` - a `ProcessingMetrics.Timing` token taken where
+      (green at `5301f6c`: `./gradlew test --tests ProcessingMetricsTest` - 49 tests, 0 failures,
+      0 errors; `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` exit 0. Both gauges are
+      registered at zero in the constructor behind an `AtomicLong` and an `AtomicInteger`, because
+      a gauge that appears only after the first incident is not an alerting surface and a dashboard
+      has to read them from a pod that has swept nothing yet. Seven instrument-name constants land
+      rather than the six the task's seam note counts - two gauges, one timer and four counters -
+      and `code(Enum)` is shared with `GenerationMetrics`, whose naming and style the class
+      follows. Queue depth and dead-letter depth stay absent, as the javadoc records.)
+- [x] T026 [US2] `application/DistributionPipeline` - a `ProcessingMetrics.Timing` token taken where
       the guard admits the run (the `admission instanceof GuardDecision.Run admitted` branch) and
       handed back with the terminal outcome in **`settled(GuardDecision, RunClaim, CompletionReason)`**
       under `outcome instanceof GuardDecision.Complete` and in **`parked(GuardDecision)`** under
@@ -719,7 +754,16 @@ on a pod with the report and the generation half both switched off - which is th
       behind the token is monotonic and in-process; no JVM reading is compared against a stored
       timestamp, and the wall-clock answer is carried by the report's own database-computed
       `age_seconds`. The pipeline holds the token and imports no Micrometer type. Green: T023.
-- [ ] T027 [US2] `batch/IntakeAgeSweep` - `@Scheduled(fixedDelayString =
+      (green at `daa8b59`: `./gradlew test --tests 'uk.gov.hmcts.cp.courtregister.application.*'
+      --tests 'uk.gov.hmcts.cp.courtregister.inbound.*'` - 291 tests, 0 failures, 0 errors;
+      `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` exit 0. The token is threaded as
+      an ordinary parameter rather than held on the class, so `settled(...)` and `parked(...)` each
+      gain one parameter over the signature the task names - the only deviation, and the
+      alternative was thread-local state that reads as a correlation and is not one: the pipeline
+      is a singleton and two deliveries run through it at once, so a field would time whichever run
+      finished last. The sample is monotonic and in-process, no JVM reading is subtracted from a
+      stored timestamp, and the class imports no Micrometer type.)
+- [x] T027 [US2] `batch/IntakeAgeSweep` - `@Scheduled(fixedDelayString =
       "${courtregister.intake.gauge-refresh}")` and **no** `@SchedulerLock` on a `void`
       `sweepScheduled()` that opens `RunCorrelation.under(...)` and delegates to a directly callable
       body; the body reads `oldestNonTerminal()` and the over-threshold count and sets the two
@@ -732,10 +776,25 @@ on a pod with the report and the generation half both switched off - which is th
       lock budget to state and none is stated. **Its bean is declared in Phase 5's
       `IntakeSweepConfig`, which is also where its `scheduler` attribute comes from (T048)**; nothing
       schedules it yet. Green: T024.
+      (green at `ffd22f3`: `./gradlew test --tests 'uk.gov.hmcts.cp.courtregister.batch.*'` green,
+      all five `IntakeAgeSweepTest` cases passing in the phase-close run too; `checkstyleMain`,
+      `checkstyleTest`, `pmdMain` and `pmdTest` exit 0. Both readings come from the one pass, so
+      the age and the count describe one moment, and the age is the one the database computed in
+      the statement that selected the row. The second catch is total on purpose and the PMD rule
+      against it is suppressed with its reason: a fixed-delay schedule cancels the task that
+      throws, so a failure this method let out would take both readings off the air for the life of
+      the pod. Its bean is Phase 5's `IntakeSweepConfig`, along with the `scheduler` attribute
+      (T048); nothing schedules it yet.)
 - [ ] T028 Phase close: `./gradlew build` green; **review gate 3** (the instruments' bounded labels,
       no PII, the Micrometer containment behind the `Timing` token, the sweep's
       absorbed-and-counted read failure as the one permitted absorbed refusal, quoted against
       `.claude/rules/design_rules.md`); findings land as red/green pairs.
+      (build half done at `ffd22f3`: `./gradlew build` BUILD SUCCESSFUL, exit 0, 3375 tests over
+      551 suites, 0 failures, 0 errors. `checkstyleMain` and `checkstyleTest` at `maxWarnings = 0`,
+      `pmdMain` and `pmdTest`, and `jacocoTestCoverageVerification` at LINE 0.88 / BRANCH 0.85 all
+      ran in that one invocation and none of them was loosened: nothing under `gradle/`, `config/`,
+      `.github/` or `build.gradle` moved anywhere in Phase 3. **Review gate 3 has not run**, so
+      this task stays open until its findings have landed as red/green pairs.)
 
 **Checkpoint**: US2 is independently demonstrable through the actuator's Prometheus endpoint, on a
 pod with the report and the generation half both switched off, once Phase 5 declares the bean in
