@@ -23,9 +23,9 @@ import jakarta.jms.TextMessage;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -327,15 +327,6 @@ public final class GenerationLegs implements AutoCloseable {
     private final ExceptionReportService reporting;
 
     private final LogEventReportSink logSink = new LogEventReportSink();
-
-    /**
-     * How long each line of the on-demand report's table was, which is all that is kept of it.
-     *
-     * <p>The lines themselves are another suite's subject; what this one needs is a destination
-     * that is real enough for the command to write to and empty enough to hold nothing an
-     * operator's terminal would have shown.
-     */
-    private final List<Integer> linesNobodyReads = new ArrayList<>();
 
     /**
      * The intake half's instruments, on a registry of their own.
@@ -1252,12 +1243,15 @@ public final class GenerationLegs implements AutoCloseable {
      *
      * <p>What it prints is {@code batch/cli/ReportExceptionsCliTest}'s claim, over a consumer that
      * suite hands in. This fixture's subject is the log, which is a command's stderr and reaches
-     * the index the whole estate reads.
+     * the index the whole estate reads. Nothing of the table is kept - a fixture that collected
+     * what it never reads is a field a later reader has to work out the purpose of - but a null
+     * line is still refused, because a destination that accepted one would let the command stop
+     * writing without any suite noticing.
      *
-     * @param line one line of a report nobody is reading, counted and not kept
+     * @param line one line of a report nobody is reading
      */
     private void nowhere(final String line) {
-        linesNobodyReads.add(line.length());
+        Objects.requireNonNull(line, "a command writes a line, never a null, to its terminal");
     }
 
     /**
