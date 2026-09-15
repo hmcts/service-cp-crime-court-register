@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
@@ -22,10 +23,12 @@ import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryStatus;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionKind;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.ReportRunOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
 import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
+import uk.gov.hmcts.cp.courtregister.domain.SweepFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 
 /**
@@ -585,6 +588,61 @@ class ProcessingMetricsTest {
         }
 
         @Test
+        void the_run_outcome_label_is_one_of_three_bounded_words() {
+            // Review gate 3. `.claude/rules/design_rules.md` requires every metric label to be a
+            // bounded code, and the only enforcement this counter had was that its three callers
+            // happened to spell the three words correctly. A mistyped label is not a wrong reading
+            // - it is a brand new series, on which the alert written against the right one is
+            // silent. Bounded by the compiler costs nothing and cannot be forgotten.
+            for (final ReportRunOutcome outcome : ReportRunOutcome.values()) {
+                metrics.exceptionReportRun(outcome);
+            }
+
+            assertThat(seriesOf(ProcessingMetrics.EXCEPTION_REPORT_RUNS))
+                    .as("the same three words the run line carries, and no fourth a caller "
+                            + "could invent")
+                    .containsExactlyInAnyOrder("delivered", "partial", "failed");
+            assertThat(soleParameterTypesOf("exceptionReportRun"))
+                    .as("and no String-taking way in beside them, because an overload that "
+                            + "accepts free text is the bound not being one")
+                    .containsExactly(ReportRunOutcome.class);
+        }
+
+        @Test
+        void the_sweep_failure_reason_label_is_one_of_two_bounded_codes() {
+            // Two, and a third would mean a third thing was being absorbed. This counter is the
+            // only evidence the sweep's absorbed refusal leaves, so a label nobody can mistype is
+            // the difference between evidence and a series nobody queries.
+            for (final SweepFailureReason reason : SweepFailureReason.values()) {
+                metrics.intakeSweepFailure(reason);
+            }
+
+            assertThat(seriesOf(ProcessingMetrics.INTAKE_SWEEP_FAILURES))
+                    .as("an outage of theirs and a bug of ours, told apart")
+                    .containsExactlyInAnyOrder("store-unavailable", "unexpected");
+            assertThat(soleParameterTypesOf("intakeSweepFailure"))
+                    .containsExactly(SweepFailureReason.class);
+        }
+
+        @Test
+        void a_non_terminal_status_is_refused_by_the_timer() {
+            // RETRYING is an attempt the broker is going to make again, not an outcome. A sample
+            // taken from it would make `courtregister_request_duration` a histogram of attempts
+            // under a fifth `outcome` value that nothing documents and no alert reads - and the
+            // caller that did it would never find out, because a timer records in silence.
+            final ProcessingMetrics.Timing timing = metrics.startRequestTiming();
+
+            assertThatThrownBy(() -> metrics.requestSettled(timing, RequestStatus.RETRYING))
+                    .as("refused at the instrument, which is the only place that can refuse it")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("RETRYING")
+                    .hasMessageContaining("not a terminal state");
+            assertThat(timer(ProcessingMetrics.REQUEST_DURATION, "outcome", "retrying"))
+                    .as("and no series is left behind by the attempt to record it")
+                    .isEqualTo(ABSENT);
+        }
+
+        @Test
         void no_identifier_is_ever_a_label() {
             metrics.oldestNonTerminalRequestAge(Duration.ofSeconds(90));
             metrics.nonTerminalRequestsOverThreshold(2);
@@ -601,7 +659,7 @@ class ProcessingMetricsTest {
 
         /** Every one of the four report counters, over every value its label can take. */
         private void exerciseTheReportCounters() {
-            for (final String outcome : List.of("delivered", "partial", "failed")) {
+            for (final ReportRunOutcome outcome : ReportRunOutcome.values()) {
                 metrics.exceptionReportRun(outcome);
             }
             for (final ReportSinkName sink : ReportSinkName.values()) {
@@ -612,7 +670,25 @@ class ProcessingMetricsTest {
             for (final ExceptionKind kind : ExceptionKind.values()) {
                 metrics.exceptionsReported(kind, 1);
             }
-            metrics.intakeSweepFailure("store-unavailable");
+            metrics.intakeSweepFailure(SweepFailureReason.STORE_UNAVAILABLE);
+        }
+
+        /**
+         * The parameter type of every single-argument method of one name.
+         *
+         * <p>Read by reflection because the claim is about the surface rather than about a call:
+         * "there is one way in and it takes a bounded type" is not something a call site can
+         * assert, and it is exactly what stops the next caller passing a string.
+         *
+         * @param method the method name
+         * @return one entry per overload, in no particular order
+         */
+        private List<Class<?>> soleParameterTypesOf(final String method) {
+            return Stream.of(ProcessingMetrics.class.getDeclaredMethods())
+                    .filter(candidate -> candidate.getName().equals(method))
+                    .filter(candidate -> candidate.getParameterCount() == 1)
+                    .map(candidate -> candidate.getParameterTypes()[0])
+                    .toList();
         }
 
         /** Every distinct label value one instrument's series carry. */
@@ -682,10 +758,10 @@ class ProcessingMetricsTest {
             metrics.lockLost();
             metrics.staleRunnerRejected();
             metrics.requestSettled(metrics.startRequestTiming(), RequestStatus.COMPLETED);
-            metrics.exceptionReportRun("delivered");
+            metrics.exceptionReportRun(ReportRunOutcome.DELIVERED);
             metrics.exceptionReportDelivery(ReportSinkName.LOG, DeliveryStatus.DELIVERED);
             metrics.exceptionsReported(ExceptionKind.REQUEST_LATE, 1);
-            metrics.intakeSweepFailure("store-unavailable");
+            metrics.intakeSweepFailure(SweepFailureReason.STORE_UNAVAILABLE);
 
             assertThat(registry.getMeters().stream()
                     .map(meter -> meter.getId().getName())
@@ -859,11 +935,11 @@ class ProcessingMetricsTest {
                 scraped.intakeSuspended();
                 scraped.intakeSuspensionFailed();
                 scraped.requestSettled(scraped.startRequestTiming(), RequestStatus.FAILED);
-                scraped.exceptionReportRun("partial");
+                scraped.exceptionReportRun(ReportRunOutcome.PARTIAL);
                 scraped.exceptionReportDelivery(ReportSinkName.EMAIL,
                         DeliveryStatus.PARTIALLY_DELIVERED);
                 scraped.exceptionsReported(ExceptionKind.NOTIFICATION_FAILED, 1);
-                scraped.intakeSweepFailure("store-unavailable");
+                scraped.intakeSweepFailure(SweepFailureReason.STORE_UNAVAILABLE);
 
                 assertThat(scrapedLabelKeys())
                         .containsExactly("classification", "kind", "operation", "outcome", "reason",

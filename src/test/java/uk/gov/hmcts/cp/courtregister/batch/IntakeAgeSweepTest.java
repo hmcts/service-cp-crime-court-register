@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -17,17 +18,20 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.scheduling.annotation.Scheduled;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.ProcessedRequestSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
+import uk.gov.hmcts.cp.courtregister.domain.SweepFailureReason;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedRequestRepository;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
@@ -66,6 +70,25 @@ class IntakeAgeSweepTest {
 
     private static final Instant NOW = Instant.parse("2026-09-15T09:00:00Z");
 
+    /** Scenario 2.2's unfinished request: forty minutes old against a thirty-minute threshold. */
+    private static final long FORTY_MINUTES = 2400;
+
+    /**
+     * The message the store's own refusal carries, asserted <em>absent</em> from the log.
+     *
+     * <p>Both halves matter and review gate 3's QA pass found only one of them asserted: a caught
+     * exception's message belongs to whatever raised it, so neither the cause's text nor the
+     * wrapper's own may be repeated - a connection string turns up in either.
+     */
+    private static final String STORE_REFUSAL =
+            "the store could not be reached to read the oldest unfinished request";
+
+    private static final String STORE_CAUSE = "connection refused to cp-nle-01.postgres:5432";
+
+    /** A bug of ours rather than an outage of theirs, and it names a request in passing. */
+    private static final String UNEXPECTED_REFUSAL =
+            "claim_owner was null for RESULTS:9b1f2c74-0f1e-4f4e-9d6b-3a0f5f9a1c22";
+
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final ProcessingMetrics metrics = new ProcessingMetrics(registry);
     private final ProcessedRequestRepository requests = mock(ProcessedRequestRepository.class);
@@ -76,24 +99,64 @@ class IntakeAgeSweepTest {
 
     @Test
     void both_gauges_move_from_the_repositorys_answers() {
-        stillRunning(unfinishedFor(900), unfinishedFor(2400));
+        // Spec scenario 2.2 as it is written: one unfinished request forty minutes old against a
+        // thirty-minute threshold. Review gate 3's QA pass found the old fixture contradicting
+        // itself - it answered a 900-second row as the oldest while a 2400-second row was in the
+        // same store, and then counted the 900-second one as over a 1800-second threshold - so it
+        // could have passed against a sweep that had the two readings the wrong way round.
+        stillRunning(unfinishedFor(FORTY_MINUTES), 1);
 
         sweep.sweepScheduled();
 
         assertThat(gauge(ProcessingMetrics.OLDEST_NON_TERMINAL_REQUEST_AGE))
                 .as("the age the database computed, not one this JVM worked out from a stored "
                         + "timestamp")
-                .isEqualTo(900);
-        assertThat(gauge(ProcessingMetrics.NON_TERMINAL_REQUESTS_OVER_THRESHOLD)).isEqualTo(2);
-        verify(requests).nonTerminalOlderThan(NOW.minus(THRESHOLD));
+                .isGreaterThanOrEqualTo(FORTY_MINUTES);
+        assertThat(gauge(ProcessingMetrics.NON_TERMINAL_REQUESTS_OVER_THRESHOLD)).isEqualTo(1);
+        verify(requests).countNonTerminalOlderThan(NOW.minus(THRESHOLD));
+        verify(requests, never()).nonTerminalOlderThan(any(Instant.class));
+    }
+
+    @Test
+    void the_over_threshold_gauge_is_set_from_the_count_read_not_from_a_materialised_list() {
+        // The number is the whole reading. Sizing a list to get it makes the sweep's cost grow
+        // with the backlog it is reporting - and it is the backlog that makes the reading
+        // interesting, so the read is slowest on exactly the morning it matters most. Every row
+        // materialised here is also a row of somebody's case carried into a JVM to be counted and
+        // dropped, which on this register is a youth's.
+        stillRunning(unfinishedFor(FORTY_MINUTES), 4);
+
+        sweep.sweepScheduled();
+
+        assertThat(gauge(ProcessingMetrics.NON_TERMINAL_REQUESTS_OVER_THRESHOLD))
+                .as("the number the store answered with, published as it stands")
+                .isEqualTo(4);
+        verify(requests, never()).nonTerminalOlderThan(any(Instant.class));
+    }
+
+    @Test
+    void the_cut_off_is_the_threshold_ago_exactly_and_is_not_nudged_either_way() {
+        // The read behind it is `created_at < :cutOff`, so a request created exactly the threshold
+        // ago is not over it. That boundary is shared with the report's REQUEST_LATE read, which
+        // computes its cut-off the same way: a tolerance added here to make the boundary friendlier
+        // would make the gauge and the morning report disagree about the same request.
+        stillRunning(unfinishedFor(FORTY_MINUTES), 1);
+
+        sweep.sweepScheduled();
+
+        final ArgumentCaptor<Instant> cutOff = ArgumentCaptor.forClass(Instant.class);
+        verify(requests).countNonTerminalOlderThan(cutOff.capture());
+        assertThat(cutOff.getValue())
+                .as("now less the threshold, to the instant, from the clock the sweep was given")
+                .isEqualTo(NOW.minus(THRESHOLD));
     }
 
     @Test
     void both_gauges_return_to_zero_when_nothing_is_unfinished() {
-        stillRunning(unfinishedFor(900), unfinishedFor(2400));
+        stillRunning(unfinishedFor(FORTY_MINUTES), 1);
         sweep.sweepScheduled();
 
-        stillRunning();
+        nothingRunning();
         sweep.sweepScheduled();
 
         assertThat(gauge(ProcessingMetrics.OLDEST_NON_TERMINAL_REQUEST_AGE))
@@ -104,12 +167,11 @@ class IntakeAgeSweepTest {
 
     @Test
     void a_failed_read_leaves_the_gauges_at_their_last_reading_counted_and_does_not_cancel_the_schedule() {
-        stillRunning(unfinishedFor(900), unfinishedFor(2400));
+        stillRunning(unfinishedFor(FORTY_MINUTES), 1);
         sweep.sweepScheduled();
 
-        when(requests.oldestNonTerminal()).thenThrow(new StoreUnavailableException(
-                "the store could not be reached to read the oldest unfinished request",
-                new IllegalStateException("connection refused to cp-nle-01.postgres:5432")));
+        when(requests.oldestNonTerminal()).thenThrow(
+                new StoreUnavailableException(STORE_REFUSAL, new IllegalStateException(STORE_CAUSE)));
 
         try (CapturedLog log = CapturedLog.capturing(IntakeAgeSweep.class)) {
             assertThatCode(sweep::sweepScheduled)
@@ -120,26 +182,56 @@ class IntakeAgeSweepTest {
 
             assertThat(gauge(ProcessingMetrics.OLDEST_NON_TERMINAL_REQUEST_AGE))
                     .as("the last reading, not a zero the store never said")
-                    .isEqualTo(900);
-            assertThat(gauge(ProcessingMetrics.NON_TERMINAL_REQUESTS_OVER_THRESHOLD)).isEqualTo(2);
-            assertThat(counter(ProcessingMetrics.INTAKE_SWEEP_FAILURES, "store-unavailable"))
+                    .isGreaterThanOrEqualTo(FORTY_MINUTES);
+            assertThat(gauge(ProcessingMetrics.NON_TERMINAL_REQUESTS_OVER_THRESHOLD)).isEqualTo(1);
+            assertThat(counter(ProcessingMetrics.INTAKE_SWEEP_FAILURES,
+                    SweepFailureReason.STORE_UNAVAILABLE))
                     .as("a path that drops something moves a counter - it is what makes the "
                             + "absorption visible at all")
                     .isEqualTo(1);
+            assertThat(counter(ProcessingMetrics.INTAKE_SWEEP_FAILURES,
+                    SweepFailureReason.UNEXPECTED))
+                    .as("an outage of theirs is not counted as a bug of ours")
+                    .isEqualTo(ABSENT);
 
-            final List<ILoggingEvent> warnings = log.events().stream()
-                    .filter(event -> event.getLevel() == Level.WARN)
-                    .toList();
-            assertThat(warnings).hasSize(1);
-            assertThat(warnings.getFirst().getFormattedMessage())
-                    .as("named by class; the message belongs to whatever raised it and is exactly "
-                            + "where a connection string turns up")
-                    .contains("StoreUnavailableException")
-                    .doesNotContain("cp-nle-01")
-                    .doesNotContain("connection refused");
-            assertThat(warnings.getFirst().getThrowableProxy())
-                    .as("and no throwable this service did not write is attached")
-                    .isNull();
+            assertTheOneWarningNames(log, "StoreUnavailableException");
+        }
+    }
+
+    @Test
+    void a_read_that_fails_for_any_other_reason_is_counted_unexpected() {
+        // The second catch is total on purpose - this method may not throw - and a total catch is
+        // exactly the shape that hides a bug of ours inside an outage of theirs. It does not,
+        // because the two are counted apart: `store-unavailable` is a series that moves during
+        // somebody else's incident and stops when it ends, and `unexpected` is one that should
+        // never move at all. One counter for both would make the second invisible inside the first.
+        stillRunning(unfinishedFor(FORTY_MINUTES), 1);
+        sweep.sweepScheduled();
+
+        when(requests.oldestNonTerminal())
+                .thenThrow(new IllegalStateException(UNEXPECTED_REFUSAL));
+
+        try (CapturedLog log = CapturedLog.capturing(IntakeAgeSweep.class)) {
+            assertThatCode(sweep::sweepScheduled)
+                    .as("a bug of ours must not take the two readings off the air for the life "
+                            + "of the pod either")
+                    .doesNotThrowAnyException();
+
+            assertThat(gauge(ProcessingMetrics.OLDEST_NON_TERMINAL_REQUEST_AGE))
+                    .as("the last reading is kept whichever way the read refused")
+                    .isGreaterThanOrEqualTo(FORTY_MINUTES);
+            assertThat(gauge(ProcessingMetrics.NON_TERMINAL_REQUESTS_OVER_THRESHOLD)).isEqualTo(1);
+            assertThat(counter(ProcessingMetrics.INTAKE_SWEEP_FAILURES,
+                    SweepFailureReason.UNEXPECTED))
+                    .as("under its own reason, so an alert can be written on a series that is "
+                            + "supposed to be flat at zero for ever")
+                    .isEqualTo(1);
+            assertThat(counter(ProcessingMetrics.INTAKE_SWEEP_FAILURES,
+                    SweepFailureReason.STORE_UNAVAILABLE))
+                    .as("and not hidden inside the reason that moves during every outage")
+                    .isEqualTo(ABSENT);
+
+            assertTheOneWarningNames(log, "IllegalStateException");
         }
     }
 
@@ -150,7 +242,7 @@ class IntakeAgeSweepTest {
             seen.set(RunCorrelation.current());
             return Optional.empty();
         });
-        when(requests.nonTerminalOlderThan(any(Instant.class))).thenReturn(List.of());
+        when(requests.countNonTerminalOlderThan(any(Instant.class))).thenReturn(0L);
 
         sweep.sweepScheduled();
 
@@ -185,11 +277,55 @@ class IntakeAgeSweepTest {
                 .isNull();
     }
 
-    /** What the two reads answer for a store holding the given unfinished requests. */
-    private void stillRunning(final ProcessedRequestSummary... unfinished) {
-        when(requests.oldestNonTerminal()).thenReturn(
-                unfinished.length == 0 ? Optional.empty() : Optional.of(unfinished[0]));
-        when(requests.nonTerminalOlderThan(any(Instant.class))).thenReturn(List.of(unfinished));
+    /**
+     * One WARN line, naming the caught failure by class and repeating none of its words.
+     *
+     * <p>Shared by the two absorbed-refusal cases because the claim is identical for both and it
+     * is the claim `.claude/rules/design_rules.md` makes: <em>"Never attach a throwable this
+     * service did not write. A caught exception is named by class; its message belongs to whatever
+     * library raised it and is exactly where a connection string or a fragment of a statement turns
+     * up."</em> Review gate 3's QA pass found the cause's text asserted absent and the caught
+     * exception's own text not - and the wrapper's message is the one that names the statement.
+     *
+     * @param log  the captured logger
+     * @param type the simple name of the class the line must name
+     */
+    private void assertTheOneWarningNames(final CapturedLog log, final String type) {
+        final List<ILoggingEvent> warnings = log.events().stream()
+                .filter(event -> event.getLevel() == Level.WARN)
+                .toList();
+
+        assertThat(warnings)
+                .as("said once - a refusal repeated per reading is an incident that looks twice "
+                        + "as bad as it is")
+                .hasSize(1);
+        assertThat(warnings.getFirst().getFormattedMessage())
+                .as("named by class; neither the caught exception's own message nor its cause's "
+                        + "reaches the log, and both are where a connection string turns up")
+                .contains(type)
+                .doesNotContain(STORE_REFUSAL)
+                .doesNotContain(STORE_CAUSE)
+                .doesNotContain(UNEXPECTED_REFUSAL)
+                .doesNotContain("cp-nle-01");
+        assertThat(warnings.getFirst().getThrowableProxy())
+                .as("and no throwable this service did not write is attached")
+                .isNull();
+    }
+
+    /**
+     * What the two reads answer for a store holding the given unfinished work.
+     *
+     * @param oldest        the oldest unfinished request, or null where nothing is unfinished
+     * @param overThreshold how many the count read answers with
+     */
+    private void stillRunning(final ProcessedRequestSummary oldest, final long overThreshold) {
+        when(requests.oldestNonTerminal()).thenReturn(Optional.ofNullable(oldest));
+        when(requests.countNonTerminalOlderThan(any(Instant.class))).thenReturn(overThreshold);
+    }
+
+    /** A store with nothing in flight, which is the ordinary answer a healthy service gives. */
+    private void nothingRunning() {
+        stillRunning(null, 0);
     }
 
     /**
@@ -217,9 +353,10 @@ class IntakeAgeSweepTest {
         return found == null ? ABSENT : found.value();
     }
 
-    private double counter(final String name, final String reason) {
+    private double counter(final String name, final SweepFailureReason reason) {
         final Counter found = registry.find(name)
-                .tag(ProcessingMetrics.REASON_TAG, reason)
+                .tag(ProcessingMetrics.REASON_TAG,
+                        reason.name().toLowerCase(Locale.ROOT).replace('_', '-'))
                 .counter();
         return found == null ? ABSENT : found.count();
     }

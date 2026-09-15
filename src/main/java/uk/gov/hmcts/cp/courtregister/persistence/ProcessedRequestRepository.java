@@ -416,6 +416,19 @@ public class ProcessedRequestRepository {
     }
 
     /**
+     * The intake sweep's second gauge: how many requests are over the threshold, as a number.
+     *
+     * <p>Seam. The statement lands with the paired implementation.
+     *
+     * @param createdBefore the cut-off: now less the intake threshold
+     * @return how many RECEIVED or RETRYING requests arrived before it
+     */
+    public long countNonTerminalOlderThan(final Instant createdBefore) {
+        throw new UnsupportedOperationException(
+                "the sweep's count read lands with its implementation; this is its red run");
+    }
+
+    /**
      * The intake sweep's first gauge: the oldest request that has not reached a terminal state.
      *
      * <p>Empty is an ordinary answer and the one a healthy service gives, which is why it is an

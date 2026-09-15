@@ -16,10 +16,12 @@ import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryStatus;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionKind;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.ReportRunOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
 import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
+import uk.gov.hmcts.cp.courtregister.domain.SweepFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 
 /**
@@ -326,6 +328,20 @@ public class ProcessingMetrics {
     }
 
     /**
+     * Counts one exception-report run under the bounded outcome its run line carries.
+     *
+     * <p>Seam. Review gate 3's finding is that the label must be bounded by the compiler rather
+     * than by review; this overload is the shape that bounds it, and the body that publishes it is
+     * the paired implementation's.
+     *
+     * @param outcome how the run as a whole went
+     */
+    public void exceptionReportRun(final ReportRunOutcome outcome) {
+        // Seam: the counter this publishes lands with the implementation that replaces the
+        // String-taking overload above.
+    }
+
+    /**
      * Counts one sink's delivery of one report.
      *
      * @param sink    which sink delivered it
@@ -356,6 +372,19 @@ public class ProcessingMetrics {
      */
     public void intakeSweepFailure(final String reason) {
         counter(INTAKE_SWEEP_FAILURES, REASON_TAG, reason).increment();
+    }
+
+    /**
+     * Counts a gauge refresh the intake sweep could not take, under a bounded reason.
+     *
+     * <p>Seam, for the same finding and in the same shape as
+     * {@link #exceptionReportRun(ReportRunOutcome)}.
+     *
+     * @param reason what stopped it, never a message
+     */
+    public void intakeSweepFailure(final SweepFailureReason reason) {
+        // Seam: the counter this publishes lands with the implementation that replaces the
+        // String-taking overload above.
     }
 
     /**

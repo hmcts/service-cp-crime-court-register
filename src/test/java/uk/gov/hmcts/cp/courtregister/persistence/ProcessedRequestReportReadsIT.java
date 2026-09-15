@@ -17,6 +17,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.assertj.core.api.SoftAssertions;
@@ -80,6 +81,9 @@ class ProcessedRequestReportReadsIT {
 
     /** Enough rows that the planner has a table worth choosing an index for. */
     private static final int SEEDED_ROWS = 2000;
+
+    /** The intake threshold, as `courtregister.report.request-terminal-within` defaults it. */
+    private static final Duration THRESHOLD = Duration.ofMinutes(30);
 
     private static ReportReadsDatabase database;
     private static ProcessedRequestRepository repository;
@@ -193,6 +197,50 @@ class ProcessedRequestReportReadsIT {
                             + "reads zero from an absence rather than from a row that is not there")
                     .isEmpty();
         }
+
+        @Test
+        void count_non_terminal_older_than_answers_the_number_without_the_rows() {
+            seed(RequestStatus.RECEIVED, null, Duration.ofHours(4), Duration.ofHours(4));
+            seed(RequestStatus.RETRYING, "store-unavailable", Duration.ofHours(3),
+                    Duration.ofMinutes(20));
+            seed(RequestStatus.RECEIVED, null, Duration.ofMinutes(5), Duration.ofMinutes(5));
+            seed(RequestStatus.COMPLETED, null, Duration.ofHours(4), Duration.ofHours(4));
+            seed(RequestStatus.FAILED, "store-unavailable", Duration.ofHours(4),
+                    Duration.ofHours(4));
+
+            softly.assertThat(countNonTerminalOlderThan(hoursAgo(1)))
+                    .as("the same predicate the list read spells, answered as a number: the "
+                            + "gauge needs the count and nothing else, and reading the rows to "
+                            + "size a list is a read that grows with the backlog it is reporting")
+                    .isEqualTo(2);
+        }
+
+        @Test
+        void count_non_terminal_older_than_answers_zero_on_an_empty_table() {
+            softly.assertThat(countNonTerminalOlderThan(hoursAgo(1)))
+                    .as("zero is a reading a healthy service gives every refresh interval, not "
+                            + "an absence the gauge has to interpret")
+                    .isZero();
+        }
+
+        @Test
+        void a_request_exactly_at_the_threshold_is_not_over_it() {
+            // The predicate is `created_at < :cutOff`, exclusive, and the boundary is shared with
+            // the report's REQUEST_LATE read. Both are asserted against the row's OWN stored
+            // instant, read back, rather than against one this suite derived from its own clock:
+            // a cut-off computed here would be NEAR the boundary, and near is what the case exists
+            // to rule out.
+            seed(RequestStatus.RECEIVED, null, THRESHOLD, THRESHOLD);
+            final Instant createdAt = createdAtOf(nonTerminalOlderThan(hoursAgo(-1)));
+
+            softly.assertThat(countNonTerminalOlderThan(createdAt))
+                    .as("a request created exactly the threshold ago has not yet been waiting "
+                            + "longer than the threshold")
+                    .isZero();
+            softly.assertThat(countNonTerminalOlderThan(createdAt.plusSeconds(1)))
+                    .as("and a second later it has")
+                    .isEqualTo(1);
+        }
     }
 
     /**
@@ -246,13 +294,17 @@ class ProcessedRequestReportReadsIT {
                         .as("and for the sweep's own, which runs every refresh interval for the "
                                 + "life of every pod and so meets an outage soonest")
                         .isInstanceOf(StoreUnavailableException.class);
+                softly.assertThatThrownBy(() -> repository.countNonTerminalOlderThan(hoursAgo(2)))
+                        .as("and for its second, which the sweep must be able to tell apart from "
+                                + "a bug of ours - it is counted under its own bounded reason")
+                        .isInstanceOf(StoreUnavailableException.class);
             } finally {
                 PostgresTestSupport.allowConnectionsTo(DATABASE);
             }
         }
 
         @Test
-        void both_scheduled_reads_use_the_v4_indexes() throws SQLException {
+        void every_scheduled_read_is_served_by_a_v4_index() throws SQLException {
             seedManyRows();
 
             softly.assertThat(planFor(hoursAgo(24), () -> repository.failedSince(hoursAgo(24))))
@@ -263,6 +315,13 @@ class ProcessedRequestReportReadsIT {
                             () -> repository.nonTerminalOlderThan(hoursAgo(1))))
                     .as("and the in-flight read by the partial one, whose predicate is spelled "
                             + "exactly as this statement spells it so the implication is trivial")
+                    .contains("idx_request_non_terminal_created");
+            softly.assertThat(planFor(hoursAgo(1),
+                            () -> repository.countNonTerminalOlderThan(hoursAgo(1))))
+                    .as("and the count read by the same partial index, which is the whole reason "
+                            + "it is spelled with the list read's predicate character for "
+                            + "character - the sweep runs it every refresh interval for the life "
+                            + "of every pod")
                     .contains("idx_request_non_terminal_created");
         }
     }
@@ -275,6 +334,15 @@ class ProcessedRequestReportReadsIT {
 
     private List<ProcessedRequestSummary> nonTerminalOlderThan(final Instant createdBefore) {
         return answered(() -> repository.nonTerminalOlderThan(createdBefore));
+    }
+
+    private long countNonTerminalOlderThan(final Instant createdBefore) {
+        final AtomicLong answer = new AtomicLong(-1);
+        softly.assertThatCode(
+                        () -> answer.set(repository.countNonTerminalOlderThan(createdBefore)))
+                .as(SEAM)
+                .doesNotThrowAnyException();
+        return answer.get();
     }
 
     private Optional<ProcessedRequestSummary> oldestNonTerminal() {
@@ -432,6 +500,16 @@ class ProcessedRequestReportReadsIT {
      */
     private Instant parkedAtOf(final List<ProcessedRequestSummary> answered) {
         return answered.isEmpty() ? Instant.EPOCH : answered.get(0).updatedAt();
+    }
+
+    /**
+     * The instant the database really recorded the first row answered, to the precision it holds.
+     *
+     * @param answered a read that found the row
+     * @return its {@code created_at}, or the epoch where nothing was answered
+     */
+    private Instant createdAtOf(final List<ProcessedRequestSummary> answered) {
+        return answered.isEmpty() ? Instant.EPOCH : answered.get(0).createdAt();
     }
 
     private static Instant hoursAgo(final long hours) {

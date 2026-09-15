@@ -22,5 +22,16 @@ public enum RequestStatus {
     COMPLETED,
 
     /** The permitted deliveries were exhausted; parked, and replayable under a fresh identity. */
-    FAILED
+    FAILED;
+
+    /**
+     * Whether this state is one a run stops in.
+     *
+     * <p>Seam. The answer the two terminal constants give lands with the paired implementation.
+     *
+     * @return whether the run has finished
+     */
+    public boolean isTerminal() {
+        return false;
+    }
 }

@@ -1606,6 +1606,29 @@ class DistributionPipelineTest {
         }
 
         @Test
+        void a_parked_run_that_was_not_dead_lettered_records_no_sample() {
+            // The other half of the guard's refusal, which review gate 3's QA pass found untested:
+            // `parked(...)` counts under `GuardDecision.DeadLetter` and nothing else, so a
+            // superseded runner whose parking write affects no rows leaves no sample either. The
+            // completion side of the same refusal is the case above; both matter, because the two
+            // are separate `instanceof` branches and one could be widened without the other.
+            when(guard.recordExhaustion(any(RunClaim.class), any(ReasonCode.class)))
+                    .thenReturn(new GuardDecision.Abandon(ReasonCode.CLAIM_NOT_ACQUIRED));
+            when(payloadSource.fetch(any(DistributionCommand.class)))
+                    .thenThrow(new PayloadUnavailableException(ReasonCode.PAYLOAD_UNAVAILABLE));
+
+            final GuardDecision decision = pipeline().process(command, lastDelivery());
+
+            assertThat(decision)
+                    .as("the guard refused the parking write, so the delivery is handed back")
+                    .isInstanceOf(GuardDecision.Abandon.class);
+            assertThat(durationSamples("failed"))
+                    .as("and a run another delivery is still doing is not one this one timed")
+                    .isEqualTo(ABSENT);
+            assertThat(durationSamples("completed")).isEqualTo(ABSENT);
+        }
+
+        @Test
         void a_transient_failure_short_of_the_budget_records_no_sample() {
             // RETRYING is not a terminal state. The redelivery will run the request again, and a
             // sample per attempt would make the timer a histogram of attempts rather than of runs.
