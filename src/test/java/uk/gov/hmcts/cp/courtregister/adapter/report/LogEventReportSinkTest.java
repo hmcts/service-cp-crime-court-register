@@ -120,6 +120,31 @@ class LogEventReportSinkTest {
         }
 
         @Test
+        void an_empty_report_writes_exactly_one_event() {
+            final List<ILoggingEvent> written = eventsFrom(reportOf());
+
+            assertThat(written)
+                    .as("a quiet morning is a report and not a silence: the summary is written "
+                            + "whether or not anything is wrong, which is what lets an index tell "
+                            + "a morning with nothing wrong from a morning the report did not run "
+                            + "at all (FR-012) - and it is one event, because an exception event "
+                            + "written for an empty report would be an exception nobody had")
+                    .singleElement()
+                    .satisfies(only -> {
+                        assertThat(fieldsOf(only))
+                                .containsEntry("event", "courtregister_exception_report")
+                                .containsOnlyKeys(THE_TEN_SUMMARY_FIELDS.toArray(new String[0]));
+                        assertThat(fieldsOf(only))
+                                .as("and the five counts are five noughts, present and readable")
+                                .containsEntry("request_failed", "0")
+                                .containsEntry("request_late", "0")
+                                .containsEntry("batch_late", "0")
+                                .containsEntry("batch_failed", "0")
+                                .containsEntry("notification_failed", "0");
+                    });
+        }
+
+        @Test
         void the_summary_event_carries_no_delivery_status_of_any_kind() {
             final Map<String, String> fields = fieldsOf(summaryFrom(reportOf(requestFailed())));
 

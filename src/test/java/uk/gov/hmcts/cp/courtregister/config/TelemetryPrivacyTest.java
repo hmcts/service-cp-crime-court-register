@@ -37,6 +37,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import javax.xml.parsers.DocumentBuilderFactory;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -51,6 +52,9 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.w3c.dom.Document;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.adapter.fileservice.FileServicePayloadStore;
@@ -979,15 +983,21 @@ class TelemetryPrivacyTest {
             assertThat(declared)
                     .as("a scan that found no statement would make the sweep above cover nothing")
                     .hasSizeGreaterThan(EVERY_LINE_THE_LEGS_WRITE);
-            assertThat(declared.stream()
-                            .filter(statement -> theReportsLoggers().contains(
-                                    statement.loggerName()))
-                            .toList())
-                    .as("the report's two classes are inside the enumeration now, and a class that "
+            assertThat(GenerationLegs.THE_REPORT)
+                    .as("the report's classes are inside the enumeration now, and a class that "
                             + "declares no statement contributes nothing for the reach assertion "
                             + "below to cover - it is widened past in silence, and the sweep says "
                             + "it covered them while covering nothing of theirs")
-                    .isNotEmpty();
+                    .isNotEmpty()
+                    .allSatisfy(reporting -> assertThat(declared.stream()
+                                    .filter(statement ->
+                                            reporting.getName().equals(statement.loggerName()))
+                                    .toList())
+                            .as("the statements %s declares; asked of each class rather than of "
+                                    + "the two together, because one of them writing two lines "
+                                    + "satisfies a claim about the pair while the other is "
+                                    + "covered by nothing", reporting.getSimpleName())
+                            .isNotEmpty());
             assertThat(LogStatement.keyCollisionsIn(declared))
                     .as("two statements one key cannot tell apart: the event from either satisfies "
                             + "both declarations, so the assertion below is met without the second "
@@ -1039,21 +1049,6 @@ class TelemetryPrivacyTest {
                             + "messages are bounded phrases written in this repository for that; a "
                             + "line of its own would be a second, unasserted way out")
                     .isEmpty();
-        }
-
-        /**
-         * The loggers of the report's two classes, which are inside {@link GenerationLegs#THE_LEGS}.
-         *
-         * <p>Read off the classes rather than listed, for the reason every enumeration in this
-         * suite is: a third class added to the report is inside the precondition from the moment
-         * it is named there.
-         *
-         * @return the logger name of each of the report's classes
-         */
-        private Set<String> theReportsLoggers() {
-            return GenerationLegs.THE_REPORT.stream()
-                    .map(Class::getName)
-                    .collect(Collectors.toUnmodifiableSet());
         }
 
         private List<String> renderings() {
@@ -1213,28 +1208,66 @@ class TelemetryPrivacyTest {
          * The provider without which the report's events are a sentence again.
          *
          * <p>{@code LogEventReportSink} writes both of its events through
-         * {@code StructuredArguments.kv(...)}, and an encoder with no {@code <arguments/>} provider
-         * renders those values into the message text and emits no fields at all - so every saved
-         * query would need {@code parse()}, which is precisely what SC-003 forbids. It is asserted
-         * over <strong>both</strong> files for the same reason the MDC claim above is: a command's
-         * lines reach the same index as a pod's, and {@code report-exceptions} writes the same two
-         * events the 07:00 run does.
+         * {@code StructuredArguments.value(...)}, and an encoder with no {@code <arguments/>}
+         * provider renders those values into the message text and emits no fields at all - so
+         * every saved query would need {@code parse()}, which is precisely what SC-003 forbids. It
+         * is asserted over <strong>both</strong> files for the same reason the MDC claim above is:
+         * a command's lines reach the same index as a pod's, and {@code report-exceptions} writes
+         * the same two events the 07:00 run does.
+         *
+         * <p><strong>Read as XML, not as characters.</strong> A search for the text
+         * {@code <arguments/>} is satisfied by the tag inside an XML comment, which is the one
+         * shape a well-meant edit actually takes - somebody commenting a provider out to quieten a
+         * local run - and it is equally satisfied by the tag sitting anywhere else in the file,
+         * where logback would never read it as a provider at all. So the file is parsed and the
+         * question asked of the encoder's own provider list.
          *
          * @param configuration which of the two shipped files is being read
-         * @throws Exception where the file cannot be read at all
+         * @throws Exception where the file cannot be read or parsed at all
          */
         @ParameterizedTest
         @ValueSource(strings = {"logback.xml", "logback-cli.xml"})
         @DisplayName("emits the structured arguments, without which the report's fields are prose")
         void both_logback_files_declare_the_arguments_provider(final String configuration)
                 throws Exception {
-            final String logback = Files.readString(
-                    Path.of("src", "main", "resources", configuration));
-
-            assertThat(logback)
+            assertThat(encoderProvidersOf(configuration))
                     .as("without the arguments provider every field of both report events is "
-                            + "rendered into the message and every query needs parse()")
-                    .contains("<arguments/>");
+                            + "rendered into the message and every query needs parse(); a "
+                            + "commented-out tag is not a provider, and neither is one outside "
+                            + "the encoder's list")
+                    .contains("arguments");
+        }
+
+        /**
+         * Every provider the shipped file declares, by element name, inside an encoder.
+         *
+         * @param configuration which of the two shipped files is being read
+         * @return the provider element names, in the order the encoder lists them
+         * @throws Exception where the file cannot be read or parsed
+         */
+        private List<String> encoderProvidersOf(final String configuration) throws Exception {
+            final DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setExpandEntityReferences(false);
+            final Document parsed = factory.newDocumentBuilder()
+                    .parse(Path.of("src", "main", "resources", configuration).toFile());
+
+            final List<String> providers = new ArrayList<>();
+            final NodeList lists = parsed.getElementsByTagName("providers");
+            for (int list = 0; list < lists.getLength(); list++) {
+                final Node declared = lists.item(list);
+                if (!"encoder".equals(declared.getParentNode().getNodeName())) {
+                    continue;
+                }
+                final NodeList children = declared.getChildNodes();
+                for (int child = 0; child < children.getLength(); child++) {
+                    final Node provider = children.item(child);
+                    if (provider.getNodeType() == Node.ELEMENT_NODE) {
+                        providers.add(provider.getNodeName());
+                    }
+                }
+            }
+            return providers;
         }
 
         @Test

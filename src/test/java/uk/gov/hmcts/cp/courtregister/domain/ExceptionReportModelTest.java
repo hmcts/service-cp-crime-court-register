@@ -220,6 +220,21 @@ class ExceptionReportModelTest {
         }
 
         @Test
+        void a_batch_failed_entry_with_no_bounded_reason_is_refused() {
+            softly.assertThatThrownBy(() -> new ExceptionEntry(ExceptionKind.BATCH_FAILED, null,
+                            null, null, null, UUID.randomUUID(), null, null, null,
+                            BatchStatus.FAILED.name(), null, null, 0))
+                    .as("the reason is the whole of what a dead batch tells an operator: BATCH_LATE "
+                            + "says which stage it stopped at and a support engineer knows what to "
+                            + "look at, and BATCH_FAILED without one says a batch ended and "
+                            + "nothing else. The read selects a NOT NULL column on a row whose "
+                            + "status is FAILED, so an absent one is a projection that has drifted "
+                            + "from the table - which is a thing to be told about, not a field to "
+                            + "leave out of an event")
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
         void a_report_without_entries_is_refused() {
             softly.assertThatThrownBy(
                             () -> new ExceptionReport(RUN_ID, aWindow(), aWindow().to(), null))

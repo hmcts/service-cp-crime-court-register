@@ -1,10 +1,12 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
@@ -40,6 +42,7 @@ import uk.gov.hmcts.cp.courtregister.domain.ProcessedRequestSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.ReportWindow;
 import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedRequestRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
@@ -95,11 +98,26 @@ class ExceptionReportServiceTest {
     private static final UUID REQUEST_ID =
             UUID.fromString("7a1c4d90-3e62-4b58-9f07-2d4a8c1e6503");
 
+    /**
+     * A second request, so that the eight rows the whole-report cases seed are eight problems.
+     *
+     * <p>{@code stuckSinceFriday()} used to carry {@link #REQUEST_ID} as well, which made the
+     * every-kind fixture seed the same request twice - as a failure and as a late row - and left
+     * the case that pins FR-013 unable to tell a partition from a fold. The identity is what that
+     * case is about, so it is the one thing the other cases must not also assert by accident.
+     */
+    private static final UUID LATE_REQUEST_ID =
+            UUID.fromString("5d3f8b21-6c04-4a97-b8e2-3f7a1c9d0e46");
+
     private static final UUID HEARING_ID =
             UUID.fromString("2e8b5f41-9c03-4d76-8a15-6b0e3f7c2d94");
 
     private static final UUID BATCH_ID =
             UUID.fromString("11111111-2222-4333-8444-555555555555");
+
+    /** A second batch, so the tie between two of one kind has something to be broken by. */
+    private static final UUID LATER_BATCH_ID =
+            UUID.fromString("99999999-8888-4777-8666-555555555555");
 
     private static final UUID NOTIFICATION_ID =
             UUID.fromString("66666666-7777-4888-8999-aaaaaaaaaaaa");
@@ -139,6 +157,9 @@ class ExceptionReportServiceTest {
 
     private static final long UNBATCHED_AGE = 12_000L;
 
+    /** One age, shared by everything the ordering case seeds, so only the tiebreak can order it. */
+    private static final long THE_SAME_AGE = 7_500L;
+
     private static final int ATTEMPTS = 3;
 
     private static final int RESPONSE_CODE = 502;
@@ -152,7 +173,9 @@ class ExceptionReportServiceTest {
 
     private final RegisterStore registers = mock(RegisterStore.class);
 
-    private final ProcessingMetrics metrics = new ProcessingMetrics(new SimpleMeterRegistry());
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+    private final ProcessingMetrics metrics = new ProcessingMetrics(registry);
 
     private ExceptionReportService service;
 
@@ -234,15 +257,51 @@ class ExceptionReportServiceTest {
         @Test
         void a_request_is_reported_under_at_most_one_kind_per_run() {
             when(requests.failedSince(WINDOW_FROM)).thenReturn(List.of(parked()));
+            when(requests.nonTerminalOlderThan(any()))
+                    .thenReturn(List.of(theSameRequestStillOpen()));
 
             final ExceptionReport report = service.build(WINDOW, RUN_ID);
 
             assertThat(report.entries())
-                    .as("the two intake predicates partition on status - FAILED is terminal and "
-                            + "RECEIVED and RETRYING are not - so a request that was late and has "
-                            + "since failed is reported once, as the failure (FR-013)")
-                    .extracting(ExceptionEntry::requestId)
-                    .containsExactly(REQUEST_ID);
+                    .as("the two intake predicates are meant to partition on status, but they are "
+                            + "two statements taken a moment apart against a log the pipeline is "
+                            + "still writing to: a request that fails between them comes back "
+                            + "from both, and so does one whose status column is wrong. One "
+                            + "request is one problem however it was answered (FR-013)")
+                    .singleElement()
+                    .satisfies(entry -> {
+                        assertThat(entry.kind())
+                                .as("and the failure is the one reported, because it is the "
+                                        + "outcome an operator acts on: a request that has been "
+                                        + "parked is not going to finish on its own")
+                                .isEqualTo(ExceptionKind.REQUEST_FAILED);
+                        assertThat(entry.requestId()).isEqualTo(REQUEST_ID);
+                        assertThat(entry.status()).isEqualTo(RequestStatus.FAILED.name());
+                        assertThat(entry.reason()).isEqualTo("schema-violation");
+                    });
+        }
+
+        @Test
+        void a_read_failure_leaves_the_service_and_makes_no_report() {
+            final StoreUnavailableException outage = new StoreUnavailableException(
+                    "the processed log could not be read for the report",
+                    new IllegalStateException("the connection pool is empty"));
+            when(requests.failedSince(WINDOW_FROM)).thenThrow(outage);
+
+            assertThatThrownBy(() -> service.build(WINDOW, RUN_ID))
+                    .as("a read that could not be taken has no answer to fold, and a report built "
+                            + "from seven of the eight reads is an all-clear about the half "
+                            + "nobody could see. The one absorbed refusal on this path is a "
+                            + "sink's, not a store's (FR-007): a sink that refuses has a report "
+                            + "to be classified against, and a read that refuses has nothing")
+                    .isSameAs(outage);
+
+            verifyNoInteractions(batches, notifications, registers);
+            assertThat(registry.find(ProcessingMetrics.EXCEPTIONS_REPORTED).counters())
+                    .as("and nothing is counted, because nothing was reported: five zeroes "
+                            + "published for a report that was never built is a dashboard saying "
+                            + "nothing is wrong on the morning the store is down")
+                    .isEmpty();
         }
 
         @Test
@@ -475,6 +534,34 @@ class ExceptionReportServiceTest {
         }
 
         @Test
+        void entries_at_the_same_age_are_ordered_by_kind_then_identifier() {
+            when(batches.failedSince(WINDOW_FROM))
+                    .thenReturn(List.of(deadAt(LATER_BATCH_ID), deadAt(BATCH_ID)));
+            when(registers.recordedUnbatchedBefore(any())).thenReturn(List.of(leftBehindAt()));
+
+            final ExceptionReport report = service.build(WINDOW, RUN_ID);
+
+            assertThat(report.entries())
+                    .as("the precondition the rest of this case rests on: age orders nothing "
+                            + "here, so whatever order comes back is the tiebreak's")
+                    .extracting(ExceptionEntry::ageSeconds)
+                    .containsOnly(THE_SAME_AGE);
+            assertThat(report.entries())
+                    .as("a report whose order depends on which read the service happens to make "
+                            + "first is one a support engineer cannot diff between two mornings, "
+                            + "and the never-batched register is read after the dead batches - so "
+                            + "the reads' own order is exactly what must not decide this")
+                    .extracting(ExceptionEntry::kind)
+                    .containsExactly(ExceptionKind.BATCH_LATE, ExceptionKind.BATCH_FAILED,
+                            ExceptionKind.BATCH_FAILED);
+            assertThat(report.entries())
+                    .as("and two of one kind at one age are ordered by the identifier they are "
+                            + "named by, which is the only thing left that is theirs")
+                    .extracting(ExceptionEntry::batchId)
+                    .containsExactly(null, BATCH_ID, LATER_BATCH_ID);
+        }
+
+        @Test
         void an_empty_window_yields_five_zero_counts_and_no_entries() {
             final ExceptionReport report = service.build(WINDOW, RUN_ID);
 
@@ -546,8 +633,23 @@ class ExceptionReportServiceTest {
                 WINDOW_FROM, WINDOW_FROM.plus(Duration.ofMinutes(1)), REQUEST_FAILED_AGE);
     }
 
-    private static ProcessedRequestSummary stuckSinceFriday() {
+    /**
+     * The same request as {@link #parked()}, answered by the other read as still open.
+     *
+     * <p>Which is what a log being written to while two statements read it produces, and what a
+     * status column that disagrees with itself produces. Either way the report is asked about one
+     * request twice.
+     *
+     * @return the parked request's identity, carrying a non-terminal status
+     */
+    private static ProcessedRequestSummary theSameRequestStillOpen() {
         return new ProcessedRequestSummary(SOURCE, REQUEST_ID, HEARING_ID, HEARING_DAY,
+                RequestStatus.RETRYING, ATTEMPTS, null,
+                WINDOW_FROM, WINDOW_FROM.plus(Duration.ofMinutes(1)), REQUEST_LATE_AGE);
+    }
+
+    private static ProcessedRequestSummary stuckSinceFriday() {
+        return new ProcessedRequestSummary(SOURCE, LATE_REQUEST_ID, HEARING_ID, HEARING_DAY,
                 RequestStatus.RETRYING, ATTEMPTS, null,
                 WINDOW_FROM.minus(Duration.ofDays(3)), WINDOW_FROM.minus(Duration.ofDays(2)),
                 REQUEST_LATE_AGE);
@@ -556,6 +658,18 @@ class ExceptionReportServiceTest {
     private static BatchException late(final BatchStatus status, final long ageSeconds) {
         return new BatchException(BATCH_ID, COURT_CENTRE, REGISTER_DATE, status, null,
                 ATTEMPTS, ageSeconds);
+    }
+
+    /** A dead batch of a named identity, at the one age the ordering case gives everything. */
+    private static BatchException deadAt(final UUID batchId) {
+        return new BatchException(batchId, COURT_CENTRE, REGISTER_DATE, BatchStatus.FAILED,
+                BatchFailureReason.GENERATION_FAILED, ATTEMPTS, THE_SAME_AGE);
+    }
+
+    /** A never-batched register at that same age, which the service reads last and reports first. */
+    private static RecordedRegisterSummary leftBehindAt() {
+        return new RecordedRegisterSummary(OUTPUT_ID, HEARING_ID, COURT_CENTRE, REGISTER_DATE,
+                WINDOW_FROM.minus(Duration.ofDays(1)), THE_SAME_AGE);
     }
 
     private static BatchException dead() {

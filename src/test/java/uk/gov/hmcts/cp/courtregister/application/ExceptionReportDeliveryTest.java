@@ -193,6 +193,32 @@ class ExceptionReportDeliveryTest {
         }
 
         @Test
+        void a_sink_whose_name_cannot_be_read_is_still_recorded_and_the_others_still_run() {
+            final RecordingSink log = RecordingSink.taking(ReportSinkName.LOG);
+            final ExceptionReportSink email = new BreakingSink(ReportSinkName.EMAIL);
+
+            final List<DeliveryOutcome> outcomes = new ArrayList<>();
+            assertThatCode(() -> outcomes.addAll(service.deliver(REPORT, List.of(email, log))))
+                    .as("a sink names itself off the thing it delivers through, so the sink that "
+                            + "has just broken is exactly the one that may not be able to answer "
+                            + "its own name any more. Asking it inside the catch makes the one "
+                            + "delivery nobody planned for the one that escapes - taking the "
+                            + "outcomes of every sink already asked with it")
+                    .doesNotThrowAnyException();
+
+            assertThat(outcomes)
+                    .as("its name was readable when it was asked, which is when it is read")
+                    .containsExactly(
+                            new DeliveryOutcome(ReportSinkName.EMAIL,
+                                    DeliveryStatus.NOT_DELIVERED, ReportDeliveryReason.SEND_FAILED,
+                                    0, 0),
+                            DeliveryOutcome.delivered(ReportSinkName.LOG));
+            assertThat(log.delivered)
+                    .as("and the sink behind it is still asked (FR-007)")
+                    .containsExactly(REPORT);
+        }
+
+        @Test
         void a_caught_failure_is_named_by_class_and_never_by_message() {
             try (CapturedLog log = CapturedLog.capturing(ExceptionReportService.class)) {
                 service.deliver(REPORT, List.of(throwing(ReportSinkName.EMAIL)));
@@ -292,6 +318,40 @@ class ExceptionReportDeliveryTest {
         @Override
         public DeliveryOutcome deliver(final ExceptionReport report) {
             asked++;
+            throw new IllegalStateException(
+                    "the far end refused " + PersonalDataMarkers.RECIPIENT_EMAIL);
+        }
+    }
+
+    /**
+     * A sink that answers its name until it breaks, and cannot answer it afterwards.
+     *
+     * <p>Which is what a sink whose name comes from the client it delivers through looks like once
+     * that client is gone: it named itself when it was asked, and the thing that would name it now
+     * is the thing that just failed.
+     */
+    private static final class BreakingSink implements ExceptionReportSink {
+
+        private final ReportSinkName sinkName;
+
+        private boolean broken;
+
+        BreakingSink(final ReportSinkName sinkName) {
+            this.sinkName = sinkName;
+        }
+
+        @Override
+        public ReportSinkName name() {
+            if (broken) {
+                throw new IllegalStateException(
+                        "the client this sink names itself from has been closed");
+            }
+            return sinkName;
+        }
+
+        @Override
+        public DeliveryOutcome deliver(final ExceptionReport report) {
+            broken = true;
             throw new IllegalStateException(
                     "the far end refused " + PersonalDataMarkers.RECIPIENT_EMAIL);
         }
