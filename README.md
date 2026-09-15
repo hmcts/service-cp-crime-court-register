@@ -133,7 +133,9 @@ Two cases in `ExceptionReportEndToEndIT` carry `@Tag("timing")`: SC-006's "ten t
 reported on inside ten seconds" and SC-008's "both schedules fired". They are real acceptance
 criteria and they stay in the default selection, but their answer depends on how busy the host is -
 so a developer building something else on the same machine can leave them out by name rather than by
-disabling the suite.
+disabling the suite. **`-PexcludeTags` is a local hatch only: CI runs every tag** - the one workflow
+that tests, `ci-build-publish.yml`, runs `./gradlew jacocoTestReport check` and passes no
+`excludeTags`, so nothing an acceptance criterion pins can be skipped on the way to a merge.
 
 Local dependencies:
 
