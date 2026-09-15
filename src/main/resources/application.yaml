@@ -411,8 +411,12 @@ courtregister:
     notificationnotify: ${NOTIFICATIONNOTIFY_BASE_URL:}
     # The CJSCPPUID both downstream calls are made under. One identity, because the nightly run is
     # one caller: it asks systemdocgenerator to render a batch and notificationnotify to e-mail it,
-    # inside one run. The same service identity the results and reference-data reads already use;
-    # empty locally, because a run that has no endpoints to call needs nobody to call them as.
+    # inside one run, and the morning report's own send is made under it too. The same service
+    # identity the results and reference-data reads already use; empty locally, because a run that
+    # has no endpoints to call needs nobody to call them as. REQUIRED at startup wherever either
+    # outward half sends - generation enabled, or the report's e-mail output on - because
+    # notificationnotify refuses a command carrying no CJSCPPUID, and a pod that set the endpoint
+    # and forgot this one starts clean and fails every send.
     system-user-id: ${COURT_REGISTER_SYSTEM_USER_ID:}
     # The transport the two clients share, at the estate's own defaults. Both timeouts are set
     # deliberately: a render request with no read timeout can outlive the run deadline that was

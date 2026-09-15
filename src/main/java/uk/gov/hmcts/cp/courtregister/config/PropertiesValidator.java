@@ -158,6 +158,7 @@ public class PropertiesValidator implements InitializingBean {
             "courtregister.notification.claim-lease";
     private static final String SDG_ENDPOINT = "courtregister.endpoints.systemdocgenerator";
     private static final String NN_ENDPOINT = "courtregister.endpoints.notificationnotify";
+    private static final String ENDPOINTS_SYSTEM_USER_ID = ENDPOINTS + ".system-user-id";
     private static final String EMAIL_TEMPLATE = "courtregister.email.templates.cr_standard";
 
     /**
@@ -338,6 +339,7 @@ public class PropertiesValidator implements InitializingBean {
         validateGenerationHasTheDownstreamsItNeeds(properties, generation, feature);
         validateWhicheverHalfWritesAFileCanReachTheFileService(properties, generation, report);
         validateWhicheverHalfSendsCanReachNotificationnotify(properties, generation, report);
+        validateWhicheverHalfSendsHasAnIdentityToSendUnder(properties, generation, report);
         validateTheCompletionMechanismCanHearAnOutcome(generation, brokerUrl);
     }
 
@@ -1291,11 +1293,6 @@ public class PropertiesValidator implements InitializingBean {
      * with no base URL - the shape review gate 7 had just moved the file-service URL out of, one
      * setting along.
      *
-     * <p>It is the endpoint and not the identity, because the identity is asked of neither half
-     * today: {@code courtregister.endpoints.system-user-id} has no rule here at all, and giving it
-     * one under this heading would be a new refusal wearing a bug fix's clothes. That gap belongs to
-     * whichever gate catalogues it.
-     *
      * <p>The refusal names <strong>which half asked</strong>, for the reason the file service's
      * does: the value to set is the same either way, and what an operator has to know is why a pod
      * that renders nothing wants a notificationnotify endpoint at all.
@@ -1317,6 +1314,44 @@ public class PropertiesValidator implements InitializingBean {
                     + " is true - the report's own client is built over it, so a morning with"
                     + " nowhere to post is support told nothing, on a pod that renders no document"
                     + " at all");
+        }
+    }
+
+    /**
+     * Whichever half sends has to have an identity to send under.
+     *
+     * <p>The gap review gate 7 named and deliberately left: it fixed the endpoint and recorded that
+     * {@code courtregister.endpoints.system-user-id} was asked of neither half, because giving it a
+     * rule inside a remediation commit would have been a new refusal wearing a bug fix's clothes.
+     * This is the gate that catalogues it.
+     *
+     * <p>Both outward legs put the value in the {@code CJSCPPUID} header of every
+     * {@code send-email-notification} they make, and the framework refuses a command without one.
+     * So a deployment that sets the endpoint and forgets the identity is a pod that starts clean,
+     * reports itself healthy, and has every send refused - the Youth Offending Teams at 18:00, or
+     * support at 07:00. It is the same shape as the endpoint rule beside it, one setting along.
+     *
+     * <p>The value is <strong>never quoted back</strong>: it is a secret, and a startup failure is a
+     * log line in the same index as every other (constitution Principle VII).
+     */
+    private static void validateWhicheverHalfSendsHasAnIdentityToSendUnder(
+            final CourtRegisterProperties properties, final GenerationProperties generation,
+            final ReportProperties report) {
+
+        if (hasText(properties.endpoints().systemUserId())) {
+            return;
+        }
+        if (generation.enabled()) {
+            throw new IllegalStateException(ENDPOINTS_SYSTEM_USER_ID + MUST_BE_SET_WHEN
+                    + GENERATION_ENABLED + " is true - every send-email-notification is made under"
+                    + " it, and a command with no CJSCPPUID is refused: every Youth Offending Team"
+                    + " on every batch goes untold");
+        }
+        if (report.email().enabled()) {
+            throw new IllegalStateException(ENDPOINTS_SYSTEM_USER_ID + MUST_BE_SET_WHEN
+                    + REPORT_EMAIL_ENABLED + " is true - the report's own send is made under it, so"
+                    + " a morning with no identity to post under is support told nothing, on a pod"
+                    + " that renders no document at all");
         }
     }
 
