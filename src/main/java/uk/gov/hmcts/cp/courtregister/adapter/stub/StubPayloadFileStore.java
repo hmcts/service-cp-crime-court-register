@@ -42,4 +42,27 @@ public class StubPayloadFileStore implements PayloadFileStore {
                         + "fileSize={}",
                 fileId, metadata.templateName(), metadata.conversionFormat(), metadata.fileSize());
     }
+
+    /**
+     * The same no-op {@link #store} is, for the exception report's CSV.
+     *
+     * <p>It says the same thing in the same shape: nothing was written, and under which id. A
+     * context on the stub profile can therefore compose a report e-mail end to end without a
+     * refusal from a store nobody asked to be real - and what it sends carries a file id the file
+     * service has nothing under, which is exactly what the line says out loud.
+     *
+     * <p>The CSV itself is never logged. It is a list of identifiers about a register whose every
+     * defendant is a child, and its size says as much about a run as its contents would.
+     *
+     * @param fileId   the id the caller minted and wrote down before asking
+     * @param text     the CSV
+     * @param metadata what the file service would have been told about it
+     */
+    @Override
+    public void storeText(final UUID fileId, final String text, final PayloadMetadata metadata) {
+        LOG.info("STUB payload file store invoked for text: nothing is written to the file "
+                        + "service, and the id is minted against no row. fileId={} template={} "
+                        + "format={} fileSize={}",
+                fileId, metadata.templateName(), metadata.conversionFormat(), metadata.fileSize());
+    }
 }

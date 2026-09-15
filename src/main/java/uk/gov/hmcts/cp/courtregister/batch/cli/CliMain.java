@@ -14,6 +14,8 @@ import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import uk.gov.hmcts.cp.Application;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
@@ -22,6 +24,7 @@ import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.config.CliModeConfig;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
+import uk.gov.hmcts.cp.courtregister.config.ReportProperties;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 
@@ -32,10 +35,10 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * recipients, listing what a date holds, superseding what was recorded before an instant and
  * reading the flag are all commands in the image rather than endpoints on the pod (FR-016,
  * constitution Principle III). {@code docker/startup.sh} dispatches here when its first argument is
- * one of the five names below, so the tool runs with the pod's own identity and network path and
+ * one of the six names below, so the tool runs with the pod's own identity and network path and
  * support needs no data-plane credential of its own (research §13). A container started with no
  * arguments - every deployed pod - starts the application unchanged, and any other first argument
- * is answered by the script with the same five names and {@link #FAILED}: a mistyped name dropped
+ * is answered by the script with the same six names and {@link #FAILED}: a mistyped name dropped
  * into the application would start a second one inside the pod rather than tell an operator what
  * this image offers.
  *
@@ -112,15 +115,18 @@ public class CliMain {
     /** Reads the one lever and says what it says. */
     public static final String CHECK_FLAG = "check-flag";
 
+    /** Lists what has gone wrong over a window an operator names, and optionally e-mails it. */
+    public static final String REPORT_EXCEPTIONS = "report-exceptions";
+
     /**
-     * The five names, stated once.
+     * The six names, stated once.
      *
      * <p>{@code docker/startup.sh} recognises exactly these, and dispatch below accepts exactly
      * these: one list rather than two, so a command added to the image cannot be missing from the
      * script or the script's list from the registry.
      */
     public static final List<String> COMMANDS = List.of(GENERATE_REGISTER, NOTIFY_REGISTER,
-            LIST_BATCHES, SUPERSEDE_BEFORE, CHECK_FLAG);
+            LIST_BATCHES, SUPERSEDE_BEFORE, CHECK_FLAG, REPORT_EXCEPTIONS);
 
     /** A name this command does not take was given, whatever it was. */
     public static final String UNEXPECTED_ARGUMENT = "unexpected-argument";
@@ -176,10 +182,10 @@ public class CliMain {
     private static final String CLI_LOGGING = "--logging.config=classpath:logback-cli.xml";
 
     /**
-     * Written where an invocation named none of the five, so a log line can say which command it
+     * Written where an invocation named none of the six, so a log line can say which command it
      * was about without repeating what was typed.
      *
-     * <p>The five names are this service's own text and may be written down; a sixth token is an
+     * <p>The six names are this service's own text and may be written down; a seventh token is an
      * operator's typing and may not ({@link #NO_ARGUMENT_NAMED}, constitution Principle VII).
      */
     private static final String NOT_A_COMMAND = "unnamed";
@@ -193,7 +199,7 @@ public class CliMain {
     /**
      * What the registry holds: one command, asked with the arguments that followed its name.
      *
-     * <p>Shaped as the five command classes' own {@code run} so each can be registered as a method
+     * <p>Shaped as the six command classes' own {@code run} so each can be registered as a method
      * reference, which is what keeps the registry a mapping of names to commands rather than a
      * second place a command's behaviour is described.
      */
@@ -332,7 +338,7 @@ public class CliMain {
      *
      * <p>The null is answered before {@link #COMMANDS} is asked, because an immutable list refuses
      * a null lookup with an exception of its own - which is how an invocation whose argument was
-     * never set once ended on a stack trace instead of on the five names.
+     * never set once ended on a stack trace instead of on the six names.
      *
      * @param args the command name followed by its own arguments, either of which may be absent
      * @return the name, or {@link #NOT_A_COMMAND}
@@ -370,7 +376,7 @@ public class CliMain {
         // A missing name is answered before the registry is asked about it, because COMMANDS is an
         // immutable list and those refuse a null lookup with an exception of their own: an
         // invocation whose argument was never set would have ended on a stack trace and, out of
-        // main, on the exit code that means "declined" - having printed none of the five names the
+        // main, on the exit code that means "declined" - having printed none of the six names the
         // person who typed it needs.
         if (name == null || !COMMANDS.contains(name)) {
             usage(output);
@@ -553,7 +559,7 @@ public class CliMain {
     }
 
     /**
-     * The five names an operator may have meant, and nothing about the one they typed.
+     * The six names an operator may have meant, and nothing about the one they typed.
      *
      * <p>What was typed is not echoed. It is a string from outside this service, an operator's
      * terminal is pasted into tickets, and the list of what this image offers is the whole of what
@@ -567,7 +573,7 @@ public class CliMain {
     }
 
     /**
-     * The five commands over this context's own beans, each resolved when it is run.
+     * The six commands over this context's own beans, each resolved when it is run.
      *
      * <p>Resolved at the moment of running rather than while the registry is built, so that a
      * context which holds one command's collaborators and not another's can still run the one it
@@ -578,9 +584,15 @@ public class CliMain {
      * <p>Package-visible so that {@code CliMainTest} can build the same registry over a context
      * that holds none of the beans, which is the shape an intake-only pod is.
      *
+     * <p>{@code report-exceptions} asks for its sinks through a provider rather than by type,
+     * because two of them ship: the log sink is on every context and the e-mail sink only where
+     * that output is configured, and {@code getBean} over an interface with two implementations
+     * refuses rather than choosing. Which of the two it then delivers to is the command's decision
+     * and not this registry's.
+     *
      * @param context the CLI-mode context
      * @param output  where every command's lines are written
-     * @return the five commands, by name
+     * @return the six commands, by name
      */
     /* default */ static Map<String, Command> registryOf(
             final ConfigurableApplicationContext context, final Consumer<String> output) {
@@ -608,7 +620,15 @@ public class CliMain {
                                 .run(args)),
                 CHECK_FLAG, args -> wired(CHECK_FLAG, CheckFlagCli.USAGE, args, output,
                         () -> new CheckFlagCli(context.getBean(FeatureFlagReader.class), output)
-                                .run(args)));
+                                .run(args)),
+                REPORT_EXCEPTIONS, args -> wired(REPORT_EXCEPTIONS, ReportExceptionsCli.USAGE,
+                        args, output,
+                        () -> new ReportExceptionsCli(
+                                context.getBean(ExceptionReportService.class),
+                                context.getBeanProvider(ExceptionReportSink.class).stream()
+                                        .toList(),
+                                context.getBean(ReportProperties.class),
+                                context.getBean(Clock.class), output).run(args)));
     }
 
     /**
@@ -622,7 +642,7 @@ public class CliMain {
      * <p><strong>{@code --help} is answered before a bean is resolved.</strong> The registry's
      * lambdas ask this context for their collaborators as the command is <em>built</em>, which is
      * before the command has looked at what was typed - so on an intake-only pod every one of the
-     * five answered "not wired" to a question that reads nothing, sends nothing and needs none of
+     * six answered "not wired" to a question that reads nothing, sends nothing and needs none of
      * them. What a command takes is a fact about the image rather than about the deployment, and an
      * operator on that pod is exactly the person asking.
      *

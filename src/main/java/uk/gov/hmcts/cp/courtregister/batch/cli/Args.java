@@ -11,7 +11,7 @@ import java.util.stream.Collectors;
  * What an operator typed after a command's name, read once and read the same way by every command.
  *
  * <p>Plain {@code --name value} pairs and bare {@code --name} switches, parsed here rather than by
- * a library: the five commands between them take seven arguments, and a dependency that brought
+ * a library: the six commands between them take nine arguments, and a dependency that brought
  * usage text, type conversion and a shell-completion generator with it would be a larger surface
  * than the thing it parses (research §13). One parser also means one answer to the questions that
  * actually cause trouble - an option given twice, an option given no value, a value that looks like
@@ -69,17 +69,31 @@ public record Args(Map<String, String> options, Set<String> flags) {
     public static final String HELP = "help";
 
     /**
-     * Every name the five commands between them take, and the whole of what a refusal may repeat.
+     * How far back the report reaches, as an instant or as a duration before now.
      *
-     * <p>These eight are this service's own text, fixed by research §13, so a refusal that names
-     * one is saying something the repository already says out loud. A token that is not one of them
-     * is an operator's own typing - a contact detail where a court house belongs, a credential
-     * pasted over an argument - and a refusal's message is written down by whoever catches it, so
-     * repeating that token would publish it to an index the whole estate reads (constitution
-     * Principle VII). What is not in this set is therefore not written into a message at all.
+     * <p>Read by {@code report-exceptions} and by nothing else. The value is not interpreted here:
+     * an instant, an ISO-8601 duration and the {@code 2d}/{@code 2h}/{@code 30m}/{@code 90s}
+     * shorthands are all tokens to this parser, and the refusal for a window that cannot be read
+     * belongs where the command can say which argument it could not use.
+     */
+    public static final String SINCE = "since";
+
+    /** Send the report to the configured recipients as well as printing it. */
+    public static final String EMAIL = "email";
+
+    /**
+     * Every name the six commands between them take, and the whole of what a refusal may repeat.
+     *
+     * <p>These ten are this service's own text, fixed by research §13 and §9, so a refusal that
+     * names one is saying something the repository already says out loud. A token that is not one
+     * of them is an operator's own typing - a contact detail where a court house belongs, a
+     * credential pasted over an argument, a half-remembered runbook step where a window belongs -
+     * and a refusal's message is written down by whoever catches it, so repeating that token would
+     * publish it to an index the whole estate reads (constitution Principle VII). What is not in
+     * this set is therefore not written into a message at all.
      */
     public static final Set<String> NAMES = Set.of(DATE, COURT_HOUSE, BATCH, RECORDED_BEFORE,
-            SHARED_BEFORE, IGNORE_FLAG, RECORDED_WHILE_OFF, HELP);
+            SHARED_BEFORE, IGNORE_FLAG, RECORDED_WHILE_OFF, HELP, SINCE, EMAIL);
 
     /** How a name is written, and the only way this parser recognises one. */
     private static final String NAME_PREFIX = "--";
@@ -90,7 +104,7 @@ public record Args(Map<String, String> options, Set<String> flags) {
      * <p>A token beginning {@code --} is a name; the token after it is its value unless that token
      * is a name too, in which case the first was a bare switch. That is the whole grammar, and it
      * is deliberately the whole of it: a value beginning {@code --} would be indistinguishable from
-     * the next option, and none of the seven arguments the five commands take is ever written that
+     * the next option, and none of the nine arguments the six commands take is ever written that
      * way.
      *
      * <p>Three shapes are refused rather than read charitably - a value where a name was expected,
@@ -151,7 +165,7 @@ public record Args(Map<String, String> options, Set<String> flags) {
      * them would be choosing which invocation the operator meant.
      *
      * <p>The name is repeated only where this service owns it ({@link #NAMES}), because which
-     * argument was doubled is the whole of what a reader can act on and those eight words are the
+     * argument was doubled is the whole of what a reader can act on and those ten words are the
      * repository's own. A name it does not own is a token an operator typed after two dashes, which
      * is no more this parser's to write down than a value would be.
      *

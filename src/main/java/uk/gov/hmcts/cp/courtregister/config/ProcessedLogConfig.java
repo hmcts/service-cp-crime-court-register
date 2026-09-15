@@ -1,17 +1,23 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
+import java.time.Clock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import uk.gov.hmcts.cp.courtregister.adapter.report.LogEventReportSink;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.persistence.JdbcRegisterStore;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedLogProbe;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedOutputRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedRequestRepository;
+import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
+import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 
 /**
  * The processed log and the guard over it.
@@ -23,6 +29,17 @@ import uk.gov.hmcts.cp.courtregister.persistence.ProcessedRequestRepository;
  * <p>Excluded from the {@code test} profile because everything in it needs a {@code DataSource}, and
  * that profile deliberately has none: the plain context-load tests must keep running with no broker,
  * no database and therefore without Docker.
+ *
+ * <p><strong>The batch and notification repositories are here rather than with the generation
+ * half.</strong> They were declared in {@link GenerationConfig}, which is conditional on
+ * {@code courtregister.generation.enabled}, and the morning exception report reads both - so
+ * {@code courtregister.report.enabled=true} with the generation half switched off, which is FR-004's
+ * deployment and the MVP's own shape, could not start. This configuration is generation-neutral and
+ * already declares every other reader of the same database over the same {@link JdbcClient} and the
+ * same {@link PlatformTransactionManager} those two constructors take, so it is where they belong in
+ * any case. A second copy of each declared in the report's own configuration was rejected for the
+ * reason a second lock provider is: two beans of one repository over one table is a race with a
+ * different name, and the pair would drift.
  */
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
@@ -96,6 +113,113 @@ public class ProcessedLogConfig {
     public RegisterStore registerStore(
             final JdbcClient jdbcClient, final PlatformTransactionManager transactionManager) {
         return new JdbcRegisterStore(jdbcClient, new TransactionTemplate(transactionManager));
+    }
+
+    /**
+     * The {@code register_batch} table.
+     *
+     * <p>Over the register store's own client, because a batch is the store's neighbour: the two
+     * write the same database and the reconciler reads this one while the store writes the other.
+     *
+     * <p>The transaction manager is the register store's own, so the two statements the
+     * notification claim is taken in - the advisory lock and the compare-and-set - run on the
+     * connection this client already joins. It is the only thing here that needs a transaction at
+     * all; every other statement is one statement.
+     *
+     * <p>The lease is {@code courtregister.notification.claim-lease} and not the reconciler's grace
+     * period. The two answer different questions: how long a batch may hold a document before the
+     * safety net looks is no bound at all on telling that batch's recipients, whose cost is the
+     * number of Youth Offending Teams it is addressed to times whatever notificationnotify makes of
+     * each of them. Startup refuses a lease that cannot cover one recipient's POST cycle twice over
+     * ({@link PropertiesValidator#NOTIFICATION_LEASE_MARGIN}).
+     *
+     * @param jdbcClient         the processed log's client, which is the register store's
+     * @param transactionManager the register store's transaction manager, for the claim's two
+     *                           statements
+     * @param properties         the bound settings, for the notification claim's lease
+     * @return the repository
+     */
+    @Bean
+    public RegisterBatchRepository registerBatchRepository(final JdbcClient jdbcClient,
+            final PlatformTransactionManager transactionManager,
+            final CourtRegisterProperties properties) {
+        return new RegisterBatchRepository(jdbcClient,
+                new TransactionTemplate(transactionManager),
+                properties.notification().claimLease());
+    }
+
+    /**
+     * The {@code register_notification} table.
+     *
+     * <p>Over the same client, and beside {@link #registerBatchRepository} rather than inside the
+     * store, for the reason that read is: one recipient's row is a single-table read and write that
+     * the register store has no business owning, and the notifier is the only thing that touches it.
+     *
+     * @param jdbcClient the processed log's client, which is the register store's
+     * @return the repository
+     */
+    @Bean
+    public RegisterNotificationRepository registerNotificationRepository(
+            final JdbcClient jdbcClient) {
+        return new RegisterNotificationRepository(jdbcClient);
+    }
+
+    /**
+     * The morning exception report: eight reads over the tables declared above it, and no writes.
+     *
+     * <p>Here rather than in {@link ReportSchedulingConfig} on purpose. The report is asked for by
+     * two callers that never share a context - the 07:00 job, which only exists where the schedule
+     * is switched on, and the operations command, which runs on a JVM that contributes no
+     * scheduling configuration at all ({@link CliModeConfig}) - so a report declared beside the
+     * schedule would be a report the command could not ask for. It is a read of exactly the tables
+     * this configuration declares the readers for, so this is also where it reads from: the two
+     * halves of the processed log, the batches, the notifications and the register store, over one
+     * client and one clock.
+     *
+     * <p>The two thresholds it is given are the report's own settings; the third is resolved,
+     * because {@code batch-generated-within} is deliberately undefaulted and falls back to the
+     * generation half's grace period - one answer to "how long is too long for a render", not two
+     * that can disagree ({@link PropertiesValidator#resolvedBatchGeneratedWithin}). The generation
+     * schedule is handed in because it is what "the last scheduled run left this register behind"
+     * means, and the report has no business guessing it.
+     *
+     * @param requests      the request half of the processed log
+     * @param batches       the {@code register_batch} table
+     * @param notifications the {@code register_notification} table
+     * @param registers     the recorded registers, through the store's own port
+     * @param report        the report's own settings, for the three limits
+     * @param generation    the downstream half's settings, for the schedule and the fallback limit
+     * @param metrics       where the five kinds and each delivery are counted
+     * @param clock         the one clock the snapshot and the three cut-offs are taken from
+     * @return the report
+     */
+    @Bean
+    public ExceptionReportService exceptionReportService(
+            final ProcessedRequestRepository requests, final RegisterBatchRepository batches,
+            final RegisterNotificationRepository notifications, final RegisterStore registers,
+            final ReportProperties report, final GenerationProperties generation,
+            final ProcessingMetrics metrics, final Clock clock) {
+
+        return new ExceptionReportService(requests, batches, notifications, registers,
+                report.requestTerminalWithin(),
+                PropertiesValidator.resolvedBatchGeneratedWithin(report, generation),
+                report.notifiedWithin(), report.maxEntries(), generation.cron(), generation.zone(),
+                metrics, clock);
+    }
+
+    /**
+     * The structured events the platform's container-log collection carries into Log Analytics.
+     *
+     * <p>Unconditional, beside the report itself and for the same reason: it is the sink both
+     * callers always deliver to, and a context that could build a report but had nowhere to write
+     * it would be a morning nobody is told about. The e-mail sink is the one that is switched, and
+     * it is contributed elsewhere.
+     *
+     * @return the log sink
+     */
+    @Bean
+    public ExceptionReportSink logEventReportSink() {
+        return new LogEventReportSink();
     }
 
     /**

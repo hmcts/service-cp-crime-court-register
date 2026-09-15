@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
+import net.javacrumbs.shedlock.core.LockProvider;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,8 @@ import org.springframework.scheduling.config.ScheduledTask;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DocumentEventListener;
+import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
+import uk.gov.hmcts.cp.courtregister.batch.IntakeAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 import uk.gov.hmcts.cp.courtregister.inbound.ConsumerLifecycleController;
 import uk.gov.hmcts.cp.courtregister.support.WorkloadIdentityStub;
@@ -227,6 +230,46 @@ class CliModeConfigTest {
             assertThat(context.getBeanNamesForType(RegisterGenerationJob.class))
                     .as("the nightly run itself, which a command has no business holding")
                     .isEmpty();
+        }
+
+        @Test
+        @DisplayName("contributes no scheduling infrastructure at all")
+        void a_cli_context_contributes_no_scheduling_infrastructure() {
+            assertThat(context.getBeanNamesForType(SchedulingInfrastructureConfig.class))
+                    .as("the configuration that owns @EnableScheduling and the one LockProvider "
+                            + "carries no other condition, so this is the assertion that keeps a "
+                            + "command JVM out of every schedule in the service at once")
+                    .isEmpty();
+            assertThat(context.getBeanNamesForType(ScheduledAnnotationBeanPostProcessor.class))
+                    .as("without the post-processor nothing reads @Scheduled off a bean, which is "
+                            + "what makes \"a command schedules nothing\" a claim about all four "
+                            + "scheduled methods rather than about the ones it happens to hold")
+                    .isEmpty();
+            assertThat(context.getBeanNamesForType(LockProvider.class))
+                    .as("and no lock provider, so a command takes no lock from the pod whose "
+                            + "schedules those locks belong to")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("contributes no report scheduling, so a command never fires the 07:00 run")
+        void a_cli_context_contributes_no_report_scheduling() {
+            assertThat(context.getBeanNamesForType(ReportSchedulingConfig.class))
+                    .as("a command that ran until 07:00 London would e-mail support a second "
+                            + "copy of the morning's exceptions and write them to the index twice")
+                    .isEmpty();
+            assertThat(context.getBeanNamesForType(ExceptionReportJob.class)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("and no intake sweep, whose configuration has no other condition either")
+        void a_cli_context_contributes_no_intake_sweep() {
+            assertThat(context.getBeanNamesForType(IntakeSweepConfig.class))
+                    .as("the sweep is conditional on nothing but this, because the gauges belong "
+                            + "wherever the intake half runs - so if this condition were wrong, a "
+                            + "command JVM would publish a pod's readings for as long as it ran")
+                    .isEmpty();
+            assertThat(context.getBeanNamesForType(IntakeAgeSweep.class)).isEmpty();
         }
 
         @Test

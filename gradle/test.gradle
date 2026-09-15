@@ -1,5 +1,14 @@
 tasks.named('test') {
   useJUnitPlatform {
+    // Nothing is excluded by default, and `timing` is the only tag this repository uses: the two
+    // wall-clock cases in ExceptionReportEndToEndIT are real acceptance criteria (SC-006's ten
+    // seconds, SC-008's two schedules) and stay in every run that does not ask otherwise. What this
+    // gives a developer building something else on the same machine is a way to leave them out BY
+    // NAME - `./gradlew test -PexcludeTags=timing` - rather than by disabling the suite that holds
+    // them, which would take the other two cases with it.
+    if (project.hasProperty('excludeTags')) {
+      excludeTags(*project.property('excludeTags').toString().split(',').collect { it.trim() })
+    }
   }
   systemProperty 'API_SPEC_VERSION', project.version
   failFast = !Boolean.getBoolean("test.noFailFast")

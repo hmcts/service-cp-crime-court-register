@@ -6,6 +6,8 @@ baked into the image. Everything below assumes that shape.
 
 Since increment 002 the service owns **both halves** of the court-register flow: the intake half
 ported from the function app, and the downstream half absorbed from `cpp-context-progression`.
+Since increment 003 it also reports on itself: a third scheduled run at 07:00 that reads what the
+two halves left behind and tells support about everything that is wrong.
 
 ## The two legs
 
@@ -41,6 +43,22 @@ DocumentEventListener                   inbound adapter on Artemis public.event 
 DocumentOutcomeSink              «port» document-available / generation-failed → the batch
    ▼
 RegisterNotifier                 «port» notificationnotify send-email-notification, one per YOT
+
+──────────────────────────────  07:00 Europe/London, Mon–Fri  ──────────────────────────────
+
+ExceptionReportJob                      the morning run, one ShedLock-held run per weekday, on a
+   │                                    scheduler of its own — never behind the 18:00 run, and on
+   │                                    no cutover circuit: it reads the flag nowhere
+   ├─▶ ExceptionReportService           the eight reads over one window, oldest first
+   └─▶ ExceptionReportSink       «port» every sink on the context, each asked whatever the last said
+          ├─▶ LogEventReportSink        courtregister_exception per entry + one summary per run
+          └─▶ EmailReportSink           the list as a CSV, then one send per support address
+                 ├─▶ PayloadFileStore   «port» the same write the 18:00 run makes, second caller
+                 └─▶ ReportMailer «port» notificationnotify send-email-notification, one per address
+
+IntakeAgeSweep                          its own fixed delay, in EVERY non-command JVM and under NO
+                                        lock — a gauge describes the JVM that publishes it, so an
+                                        alert aggregates the replicas with max()
 ```
 
 - **Inbound adapters** (`CourtRegisterMessageListener`, `DocumentEventListener`) deserialise, and
@@ -48,15 +66,17 @@ RegisterNotifier                 «port» notificationnotify send-email-notifica
   performs exactly one settlement (`complete` / `abandon` / `deadLetter`) on every path; the topic
   listener acknowledges by returning and counts every drop under a bounded reason.
 - **Application services** (`DistributionPipeline`, `RegisterGenerationService`,
-  `DocumentOutcomeSinkImpl`, `RegisterNotifierService`) orchestrate against **ports only**. They
+  `DocumentOutcomeSinkImpl`, `RegisterNotifierService`, `ExceptionReportService`) orchestrate
+  against **ports only**. They
   MUST NOT import Azure, Redis, JMS or HTTP client types, nor any other infrastructure wire type.
   Jackson is the one qualified exception: the hearing payload crosses the core as the platform
   Jackson generation's `JsonNode` by design (Principle IV, "canonical JSON in"), treated as
   immutable — read it, derive from it, never mutate a node the core did not construct. That
   permission covers `JsonNode` and its subtypes only; Jackson's binding, streaming and
   `ObjectMapper` configuration machinery stays in the adapters and in `config/`.
-- **The job is application code too.** `RegisterGenerationJob` may hold a clock, a lock and ports;
-  it may not hold a driver, a broker client or an HTTP client.
+- **The job is application code too.** `RegisterGenerationJob` and `ExceptionReportJob` may hold a
+  clock, a lock and ports; neither may hold a driver, a broker client or an HTTP client.
+  `IntakeAgeSweep` holds a clock, a repository and the instruments, and no lock at all.
 - **Ports:** Java interfaces owned by the application package. One port per external capability.
   Adapters implement them and live in their own package.
 - **Adapters:** the only place infrastructure types appear. Stub adapters (logging no-ops behind the
@@ -65,7 +85,13 @@ RegisterNotifier                 «port» notificationnotify send-email-notifica
   fetching them. If swapping an adapter forces a pipeline edit, the port is wrong — fix the port,
   not the pipeline.
 - **Persistence:** JdbcClient repositories, accessed only by `ProcessingStateService`,
-  `IdempotencyGuard` and `JdbcRegisterStore`. Never from a listener, never from the job directly.
+  `IdempotencyGuard`, `JdbcRegisterStore`, `ExceptionReportService` and `IntakeAgeSweep`. Never
+  from a listener, never from the job directly. The last two are readers and nothing else: the
+  report and the sweep take the eight report reads and the two gauge reads, and write no row.
+- **The report is not on the cutover lever's circuit.** `ExceptionReportJob` reads the
+  `CourtRegisterService` flag nowhere and is gated by it nowhere, and it runs whatever
+  `courtregister.generation.enabled` says — a pod that renders nothing still says every morning
+  what is wrong with what it recorded. It is therefore not a second reader of the one lever.
 
 NEVER put business logic in a message listener.
 NEVER call a repository or an HTTP client from a listener.
@@ -78,9 +104,10 @@ outside the topic's.
 uk.gov.hmcts.cp.courtregister
 ├── inbound/       ServiceBusProcessorClient config, message listener, DistributionCommand parsing
 ├── application/   DistributionPipeline, RegisterGenerationService, DocumentOutcomeSinkImpl,
-│                  RegisterNotifierService, IdempotencyGuard, ProcessingStateService, and the
-│                  twelve port interfaces (RegisterStore, DocumentRenderer, PayloadFileStore,
-│                  RegisterNotifier, DocumentOutcomeSink, FeatureFlagReader, RenderProgress, …)
+│                  RegisterNotifierService, ExceptionReportService, IdempotencyGuard,
+│                  ProcessingStateService, and the fourteen port interfaces (RegisterStore,
+│                  DocumentRenderer, PayloadFileStore, RegisterNotifier, DocumentOutcomeSink,
+│                  FeatureFlagReader, RenderProgress, ExceptionReportSink, ReportMailer, …)
 ├── domain/        records + enums (DistributionCommand, RequestStatus, BatchStatus,
 │                  BatchFailureReason, NotificationStatus, CompletionReason, RegisterBatch, …)
 ├── adapter/
@@ -92,11 +119,13 @@ uk.gov.hmcts.cp.courtregister
 │   ├── notificationnotify/ send-email-notification command client
 │   ├── publicevents/       the Artemis public.event listener and envelope parsing
 │   ├── appconfig/          the Azure App Configuration flag reader
+│   ├── report/             the exception report's two sinks: the structured events, and the
+│   │                       CSV-and-e-mail one
 │   ├── http/               the shared HTTP concerns the four clients above sit on
 │   └── progression/        the 001 add-court-register client, retained for progression-post mode
 ├── batch/         RegisterGenerationJob, BatchAssembler, FeatureFlagGate, GenerationReconciler,
-│                  RecipientSet
-│   └── cli/       CliMain and the five operations commands
+│                  RecipientSet, ExceptionReportJob, IntakeAgeSweep
+│   └── cli/       CliMain and the six operations commands
 ├── pipeline/      ported transformation: RegisterBuilder, SubscriptionMatcher, AggregationMapper
 ├── persistence/   repositories; Flyway migrations in src/main/resources/db/migration
 └── config/        typed @ConfigurationProperties, ObjectMapper, health indicators, the two
@@ -307,7 +336,7 @@ This service **adapts to** four contracts it does not own, and never redefines t
 |---|---|---|
 | systemdocgenerator `generate-document` (REST, 202) + the `document-available` / `generation-failed` public events | systemdocgenerator | Add a field, treat any 2xx but 202 as success, or infer an outcome no event carried |
 | notificationnotify `send-email-notification` (REST, 202) | notificationnotify | Batch recipients into one call, or retry a 4xx |
-| the framework file-service `metadata` + `content` table schema (write-only, pinned to changesets 001–006) | the framework | Read through it, or migrate it. **The file service is the only store outside this service's own that may be written directly** (design owner, 2026-09-14, closing design Q20): no other context's tables are ever written |
+| the framework file-service `metadata` + `content` table schema (write-only, pinned to changesets 001–006) | the framework | Read through it, or migrate it. **The file service is the only store outside this service's own that may be written directly** (design owner, 2026-09-14, closing design Q20): no other context's tables are ever written. Two callers write through it since 003, not one - the nightly run's render payload and the morning report's exception CSV - through the same pinned changesets and the same write-only port |
 | the `CourtRegisterService` App Configuration flag | the cutover | Cache it, default it open, or add a second reader with different semantics |
 
 Plus the two this service's own increments froze: the **inbound queue message**

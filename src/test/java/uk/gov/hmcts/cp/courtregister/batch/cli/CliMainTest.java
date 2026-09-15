@@ -35,6 +35,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.context.support.GenericApplicationContext;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
@@ -43,6 +45,7 @@ import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties.SourceMode;
+import uk.gov.hmcts.cp.courtregister.config.ReportProperties;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
@@ -126,6 +129,9 @@ class CliMainTest {
 
     /** Stood in for an exit code an invocation threw instead of answering with. */
     private static final int NOT_ANSWERED = -1;
+
+    /** The shipped entry cap, stated rather than defaulted: no case here is about truncation. */
+    private static final int MAX_ENTRIES = 5000;
 
     /** What an operator's terminal shows, one entry per line a command wrote. */
     private final List<String> printed = new ArrayList<>();
@@ -224,35 +230,58 @@ class CliMainTest {
     }
 
     /**
-     * The five names it dispatches by, which are also the five the image's script recognises.
+     * The six names it dispatches by, which are also the six the image's script recognises.
      */
     @Nested
-    @DisplayName("the five names, stated once")
+    @DisplayName("the six names, stated once")
     class Names {
 
         @Test
-        void the_registry_should_carry_exactly_the_five_names_operations_has() {
+        void the_registry_should_carry_exactly_the_six_names_operations_has() {
             softly.assertThat(CliMain.COMMANDS)
                     .as("the names are a published interface: they are typed into runbook steps "
                             + "and matched by the image's own script, so one being renamed or "
                             + "dropped is a change to what support can do at 18:30")
                     .containsExactly("generate-register", "notify-register", "list-batches",
-                            "supersede-before", "check-flag");
+                            "supersede-before", "check-flag", "report-exceptions");
             softly.assertThat(CliMain.COMMANDS)
                     .as("and each is reachable as the constant the commands report themselves by")
                     .containsExactly(CliMain.GENERATE_REGISTER, CliMain.NOTIFY_REGISTER,
-                            CliMain.LIST_BATCHES, CliMain.SUPERSEDE_BEFORE, CliMain.CHECK_FLAG);
+                            CliMain.LIST_BATCHES, CliMain.SUPERSEDE_BEFORE, CliMain.CHECK_FLAG,
+                            CliMain.REPORT_EXCEPTIONS);
         }
 
         @Test
-        void the_script_that_dispatches_should_recognise_the_same_five_and_no_others()
+        void report_exceptions_should_be_in_commands() {
+            softly.assertThat(CliMain.COMMANDS)
+                    .as("the sixth command is dispatched by name against this list, so a name "
+                            + "missing from it is a command an operator cannot reach at all - and "
+                            + "the one they reach for is the one they reach for during an incident")
+                    .contains(CliMain.REPORT_EXCEPTIONS);
+        }
+
+        @Test
+        void report_exceptions_should_be_in_the_registry() {
+            try (GenericApplicationContext anyContext = new GenericApplicationContext()) {
+                anyContext.refresh();
+
+                softly.assertThat(CliMain.registryOf(anyContext, output))
+                        .as("a name in COMMANDS with no entry in the registry is answered with the "
+                                + "usage and a refusal, which reads exactly like a mistyped name: "
+                                + "the two lists are one list")
+                        .containsKey(CliMain.REPORT_EXCEPTIONS);
+            }
+        }
+
+        @Test
+        void the_script_that_dispatches_should_recognise_the_same_six_and_no_others()
                 throws IOException {
 
             softly.assertThat(namesTheScriptDispatchesOn())
                     .as("one list rather than two: a name the script does not recognise starts the "
                             + "application instead of running a command, and a name this class "
-                            + "does not know is answered with a refusal - so a sixth command "
-                            + "missing from either side is a command that silently does nothing")
+                            + "does not know is answered with a refusal - so a name missing from "
+                            + "either side is a command that silently does nothing")
                     .containsExactlyInAnyOrderElementsOf(CliMain.COMMANDS);
         }
 
@@ -275,7 +304,7 @@ class CliMainTest {
     class UnknownName {
 
         @Test
-        void a_name_this_image_does_not_carry_should_be_refused_with_the_five_names() {
+        void a_name_this_image_does_not_carry_should_be_refused_with_the_six_names() {
             final int code = cli.run(new String[] {MISTYPED}, registryAnswering(CliMain.SUCCESS),
                     output);
 
@@ -293,7 +322,25 @@ class CliMainTest {
         }
 
         @Test
-        void no_command_name_at_all_should_be_refused_with_the_five_names() {
+        void the_usage_line_should_list_six_names() {
+            cli.run(new String[] {MISTYPED}, registryAnswering(CliMain.SUCCESS), output);
+
+            softly.assertThat(printed)
+                    .as("stated as the six literals rather than derived from COMMANDS, because a "
+                            + "list compared against itself agrees with itself however many names "
+                            + "it holds: this is what an operator who mistyped a runbook step is "
+                            + "actually shown")
+                    .containsExactly(USAGE,
+                            "  generate-register",
+                            "  notify-register",
+                            "  list-batches",
+                            "  supersede-before",
+                            "  check-flag",
+                            "  report-exceptions");
+        }
+
+        @Test
+        void no_command_name_at_all_should_be_refused_with_the_six_names() {
             final int code = cli.run(new String[0], registryAnswering(CliMain.SUCCESS), output);
 
             softly.assertThat(code)
@@ -302,7 +349,7 @@ class CliMainTest {
                             + "meant")
                     .isEqualTo(CliMain.REFUSED);
             softly.assertThat(printed)
-                    .as("the same five names, said the same way")
+                    .as("the same six names, said the same way")
                     .containsExactlyElementsOf(usageLines());
         }
 
@@ -646,7 +693,7 @@ class CliMainTest {
     }
 
     /**
-     * The one argument every command takes, asked of all five of them at once.
+     * The one argument every command takes, asked of all six of them at once.
      */
     @Nested
     @DisplayName("asking a command what it takes")
@@ -662,15 +709,17 @@ class CliMainTest {
         private final RegisterNotificationRepository notifications =
                 mock(RegisterNotificationRepository.class);
         private final FeatureFlagReader reader = mock(FeatureFlagReader.class);
+        private final ExceptionReportService reporting = mock(ExceptionReportService.class);
+        private final ExceptionReportSink logSink = mock(ExceptionReportSink.class);
 
         /**
-         * The five commands over doubled collaborators, by the names the registry knows them by.
+         * The six commands over doubled collaborators, by the names the registry knows them by.
          *
          * <p>Built the way {@code CliMain}'s own registry builds them - one command per name, over
          * whatever this context holds - so a name added to {@link CliMain#COMMANDS} without a
          * command behind it fails the first case below rather than being quietly untested.
          *
-         * @return the five commands, by name
+         * @return the six commands, by name
          */
         private Map<String, CliMain.Command> commands() {
             final Map<String, CliMain.Command> registry = new LinkedHashMap<>();
@@ -682,7 +731,23 @@ class CliMainTest {
                     new ListBatchesCli(batches, notifications, store, output)::run);
             registry.put(CliMain.SUPERSEDE_BEFORE, new SupersedeBeforeCli(store, output)::run);
             registry.put(CliMain.CHECK_FLAG, new CheckFlagCli(reader, output)::run);
+            registry.put(CliMain.REPORT_EXCEPTIONS, new ReportExceptionsCli(reporting,
+                    List.of(logSink), reportSettings(), Clock.fixed(
+                    Instant.parse("2026-08-21T07:00:00Z"), ZoneOffset.UTC), output)::run);
             return registry;
+        }
+
+        /**
+         * The report's settings a deployed command works to, with the e-mail output off as every
+         * environment ships it until the Notify template exists.
+         *
+         * @return the report on, at seven in the court's zone, with no e-mail output
+         */
+        private static ReportProperties reportSettings() {
+            return new ReportProperties(true, "0 0 7 * * MON-FRI", "Europe/London", false,
+                    Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(15),
+                    Duration.ofMinutes(30), MAX_ENTRIES,
+                    new ReportProperties.Email(false, null, List.of()));
         }
 
         /**
@@ -703,7 +768,7 @@ class CliMainTest {
             final Map<String, CliMain.Command> registry = commands();
 
             softly.assertThat(registry.keySet())
-                    .as("all five, so the loop below is about the image's whole surface")
+                    .as("all six, so the loop below is about the image's whole surface")
                     .containsExactlyElementsOf(CliMain.COMMANDS);
             CliMain.COMMANDS.forEach(name -> {
                 printed.clear();
@@ -714,7 +779,7 @@ class CliMainTest {
                                 + "T067 exits 0 on generate-register --help inside the built image")
                         .isEqualTo(CliMain.SUCCESS);
                 softly.assertThat(printed)
-                        .as("usage says which command it is about, so an operator with five of "
+                        .as("usage says which command it is about, so an operator with six of "
                                 + "them in a runbook can tell the answers apart")
                         .anyMatch(line -> line.startsWith("usage: " + name));
             });
@@ -728,7 +793,7 @@ class CliMainTest {
                     output));
 
             verifyNoInteractions(gate, store, assembler, generation, notifier, batches,
-                    notifications, reader);
+                    notifications, reader, reporting, logSink);
         }
     }
 

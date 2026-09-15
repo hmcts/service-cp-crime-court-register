@@ -16,6 +16,7 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
 import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
+import uk.gov.hmcts.cp.courtregister.config.SchedulingConfig;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
@@ -306,7 +307,8 @@ public class GenerationReconciler {
      * has only just started has a database that may not be migrated yet and a batch that became
      * overdue during the restart is overdue for a while longer.
      */
-    @Scheduled(initialDelayString = GRACE_PERIOD, fixedDelayString = GRACE_PERIOD)
+    @Scheduled(initialDelayString = GRACE_PERIOD, fixedDelayString = GRACE_PERIOD,
+            scheduler = SchedulingConfig.GENERATION_SCHEDULER)
     @SchedulerLock(name = LOCK_NAME, lockAtMostFor = LOCK_AT_MOST_FOR)
     public void reconcileScheduled() {
         RunCorrelation.under(this::reconcileUnderItsOwnCorrelation);

@@ -277,10 +277,23 @@ class NotificationNotifyClientTest {
 
     /** The body the command actually carried, parsed. */
     private JsonNode sentBody() {
-        return MAPPER.readTree(notificationNotify
+        return MAPPER.readTree(sentBodyText());
+    }
+
+    /**
+     * The same body as the characters that went down the socket, unparsed.
+     *
+     * <p>Parsing normalises away exactly what a byte-identity claim is about - the order the four
+     * fields were written in, and whether anything was written between them - so the case that
+     * pins those reads this instead.
+     *
+     * @return the request body, verbatim
+     */
+    private String sentBodyText() {
+        return notificationNotify
                 .findAll(postRequestedFor(urlEqualTo(commandPath(NOTIFICATION_ID))))
                 .getFirst()
-                .getBodyAsString());
+                .getBodyAsString();
     }
 
     /** The text of the vendored schema, or a failure that names the copy that is missing. */
@@ -394,6 +407,32 @@ class NotificationNotifyClientTest {
             assertThat(body.get("fileId").stringValue()).isEqualTo(DOCUMENT_FILE_ID.toString());
             assertThat(body.get("personalisation").get("yotsName").stringValue())
                     .isEqualTo(RECIPIENT_NAME);
+        }
+
+        /**
+         * The register leg's body, to the character.
+         *
+         * <p>The claim the shared request builder has to keep, said in the only form that cannot
+         * quietly weaken: the four fields, in this order, with nothing between them. Every other
+         * case here reads a parsed body, which normalises away the order the builder wrote and
+         * would go on passing if a refactor reordered or reshaped it - and reordering somebody
+         * else's command body is a change to their contract whether or not their parser tolerates
+         * it. This is the assertion that says the report's arrival changed nothing on this path.
+         */
+        @Test
+        @DisplayName("is byte for byte the body the register leg has always sent")
+        void the_body_is_byte_for_byte_what_the_register_leg_has_always_sent() {
+            commandAnswering(ACCEPTED);
+
+            sendEmail(CALLER);
+
+            assertThat(sentBodyText())
+                    .as("a reordered or re-spelled body is a change to notificationnotify's "
+                            + "contract made inside a refactor about a different e-mail")
+                    .isEqualTo("{\"templateId\":\"" + TEMPLATE_ID + "\","
+                            + "\"sendToAddress\":\"" + EMAIL_ADDRESS + "\","
+                            + "\"fileId\":\"" + DOCUMENT_FILE_ID + "\","
+                            + "\"personalisation\":{\"yotsName\":\"" + RECIPIENT_NAME + "\"}}");
         }
 
         /**

@@ -60,6 +60,9 @@ class ArgsTest {
     /** One court house of it, as the narrowing argument's value. */
     private static final String COURT_HOUSE = "Leeds Youth Court";
 
+    /** How many names the six commands between them take, {@code --help} included. */
+    private static final int TEN_NAMES = 10;
+
     @InjectSoftAssertions
     private SoftAssertions softly;
 
@@ -105,6 +108,29 @@ class ArgsTest {
                 arguments("a name nobody owns, given twice",
                         List.of("--" + PersonalDataMarkers.OPERATOR_TOKEN,
                                 "--" + PersonalDataMarkers.OPERATOR_TOKEN)));
+    }
+
+
+    /**
+     * What each of the five commands that came before {@code report-exceptions} declares it takes.
+     *
+     * <p>Written out rather than reached for, because each command declares its own two sets inside
+     * its own {@code run} and there is nothing to ask: what this suite holds down is that neither
+     * of the sixth command's names is in any of them, which is a claim about five separate literals
+     * and is worth stating as five rows.
+     *
+     * @return each command's name, the names it takes a value for, and the switches it takes
+     */
+    static Stream<Arguments> whatTheOtherFiveCommandsTake() {
+        return Stream.of(
+                arguments(CliMain.GENERATE_REGISTER,
+                        Set.of(Args.DATE, Args.COURT_HOUSE, Args.BATCH, Args.RECORDED_BEFORE),
+                        Set.of(Args.IGNORE_FLAG)),
+                arguments(CliMain.NOTIFY_REGISTER, Set.of(Args.BATCH), Set.of()),
+                arguments(CliMain.LIST_BATCHES, Set.of(Args.DATE),
+                        Set.of(Args.RECORDED_WHILE_OFF)),
+                arguments(CliMain.SUPERSEDE_BEFORE, Set.of(Args.SHARED_BEFORE), Set.of()),
+                arguments(CliMain.CHECK_FLAG, Set.of(), Set.of()));
     }
 
     /**
@@ -356,6 +382,85 @@ class ArgsTest {
                     .isFalse();
             softly.assertThat(Args.parse(List.of()).askedForHelp())
                     .as("and an empty invocation is not a request for help either")
+                    .isFalse();
+        }
+    }
+
+    /**
+     * The sixth command's two arguments, and the five commands they are not for.
+     *
+     * <p>{@code report-exceptions} is the only command that takes a window or asks for an e-mail,
+     * and the parser's contribution to that is two constants and the set that owns them: a name in
+     * {@link Args#NAMES} may be repeated by a refusal, and a name outside it is an operator's own
+     * typing and may not (constitution Principle VII). A {@code --since} whose name this service
+     * did not own would be refused by a message that said nothing about which argument it was.
+     *
+     * <p>The third case is the other half of the claim, and it is about the five commands rather
+     * than about the sixth: a window handed to {@code generate-register} is a mistyped invocation,
+     * not a narrowing that command silently drops - and an operator who regenerated a register date
+     * believing they had bounded it would have e-mailed a Youth Offending Team about hearings they
+     * did not mean to include.
+     */
+    @Nested
+    @DisplayName("the window and the e-mail the sixth command takes")
+    class TheReportsOwnArguments {
+
+        @Test
+        void since_should_be_an_option_and_email_should_be_a_flag() {
+            final Args parsed = Args.parse(List.of("--since", "2h", "--email"));
+
+            softly.assertThat(parsed.options())
+                    .as("the window is a name with a value after it, which is the only shape a "
+                            + "duration or an instant can arrive in")
+                    .containsExactly(Map.entry(Args.SINCE, "2h"));
+            softly.assertThat(parsed.flags())
+                    .as("and the second output is asked for rather than given a value: a token "
+                            + "after it is a token nobody meant to type")
+                    .containsExactly(Args.EMAIL);
+        }
+
+        @Test
+        void both_should_be_in_names() {
+            softly.assertThat(Args.NAMES)
+                    .as("a refusal may repeat a name this service owns and nothing else, so an "
+                            + "argument outside this set can only be refused by a message that "
+                            + "declines to say which argument it was")
+                    .contains(Args.SINCE, Args.EMAIL);
+            softly.assertThat(Args.NAMES)
+                    .as("and the set is the whole of what the six commands take, stated once")
+                    .hasSize(TEN_NAMES);
+        }
+
+        @Test
+        void since_and_email_given_twice_should_be_refused_by_name() {
+            softly.assertThatThrownBy(() -> Args.parse(List.of("--since", "2h", "--since", "1h")))
+                    .as("two windows is two questions, and a parser that kept either of them "
+                            + "would be choosing which incident the operator was asking about")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("--" + Args.SINCE);
+            softly.assertThatThrownBy(() -> Args.parse(List.of("--email", "--email")))
+                    .as("and the sixth command's two names are both this service's own, so both "
+                            + "are named when they are doubled rather than refused by a message "
+                            + "that says only that something was")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("--" + Args.EMAIL);
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @MethodSource("uk.gov.hmcts.cp.courtregister.batch.cli.ArgsTest"
+                + "#whatTheOtherFiveCommandsTake")
+        void permits_should_reject_since_and_email_on_the_other_five_commands(final String command,
+                final Set<String> permittedOptions, final Set<String> permittedFlags) {
+
+            softly.assertThat(Args.parse(List.of("--since", "2h"))
+                            .permits(permittedOptions, permittedFlags))
+                    .as("a window is the sixth command's argument, and %s taking it silently would "
+                            + "be a bound an operator believed they had set", command)
+                    .isFalse();
+            softly.assertThat(Args.parse(List.of("--email"))
+                            .permits(permittedOptions, permittedFlags))
+                    .as("and the second output is the sixth command's too: %s does not e-mail "
+                            + "anybody a report", command)
                     .isFalse();
         }
     }

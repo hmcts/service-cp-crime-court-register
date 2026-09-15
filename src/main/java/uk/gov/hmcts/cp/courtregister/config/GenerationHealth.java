@@ -17,13 +17,19 @@ import org.springframework.jms.listener.MessageListenerContainer;
 /**
  * Registers the two health components the downstream half brings with it.
  *
- * <p>Deliberately not inside {@link FileServiceDataSourceConfig}, which
- * {@code courtregister.generation.enabled} switches off. Spring validates health-group membership at
- * startup, so a readiness group naming a contributor that a property had removed would fail the
- * context with a message about health groups rather than about the setting somebody changed - the
- * same reason {@link IntakeStartupHealth} sits outside the consumer's configuration. The
- * file-service component therefore always exists and asks for the datasource rather than requiring
- * one; on an intake-only pod no run ever starts, so it answers idle for ever and probes nothing.
+ * <p>Deliberately not inside {@link FileServiceDataSourceConfig}, which {@link FileServiceNeeded}
+ * switches off. Spring validates health-group membership at startup, so a readiness group naming a
+ * contributor that a property had removed would fail the context with a message about health groups
+ * rather than about the setting somebody changed - the same reason {@link IntakeStartupHealth} sits
+ * outside the consumer's configuration. The file-service component therefore always exists and asks
+ * for the datasource rather than requiring one; on a pod that starts no generation run it answers
+ * idle for ever and probes nothing.
+ *
+ * <p><strong>Which pods have a pool to probe followed the condition.</strong> Since review gate 7
+ * the second datasource is built wherever either half writes a file, so a report pod with the
+ * e-mail output on has one - and this component finds it rather than the unconfigured answer below.
+ * It still gates readiness only while a <em>generation</em> run is in progress, and such a pod
+ * starts none, so nothing about readiness changes on any deployment.
  *
  * <p>The subscription's component is the other way round, and for a reason that is not symmetry: it
  * is contributed only where generation is enabled, because it is in no group and is therefore part
@@ -54,15 +60,16 @@ public class GenerationHealth {
      * over a datasource nothing will touch until six in the evening. It exists only behind
      * {@link FileServiceRunHealthIndicator}, which decides when it may be asked.
      *
-     * @param fileServiceDataSource the write-only pool, by name and only where generation is enabled
+     * @param fileServiceDataSource the write-only pool, by name and only where a half needs it
      * @return the probe, or one that answers DOWN where there is no pool to probe
      */
     private static HealthIndicator probe(final ObjectProvider<DataSource> fileServiceDataSource) {
         final DataSource dataSource = fileServiceDataSource.getIfAvailable();
         // The unconfigured answer is DOWN rather than UP, and it is unreachable rather than
-        // pessimistic: a pod with no file-service pool starts no run, and a run is the whole of when
-        // this probe is asked anything. Answering UP would mean an enabled generation that had
-        // somehow lost its datasource reported a healthy payload store while failing every batch.
+        // pessimistic: a pod with no file-service pool needs none, so it starts no generation run,
+        // and such a run is the whole of when this probe is asked anything. Answering UP would mean
+        // an enabled generation that had somehow lost its datasource reported a healthy payload
+        // store while failing every batch.
         return dataSource == null
                 ? () -> Health.down().build()
                 : new DataSourceHealthIndicator(dataSource);
@@ -72,7 +79,7 @@ public class GenerationHealth {
      * Named so that Spring's contributor naming yields {@code fileServiceRun} - the name the
      * readiness group, a probe and a runbook all use.
      *
-     * @param fileServiceDataSource the write-only pool, present only where generation is enabled
+     * @param fileServiceDataSource the write-only pool, present only where a half writes a file
      * @return the readiness contribution the nightly run switches on and off
      */
     @Bean

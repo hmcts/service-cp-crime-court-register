@@ -150,7 +150,8 @@ class PdfPayloadMapperTest {
      * The header of a batch whose members do not agree, which no recorded golden exercises.
      *
      * <p>progression's generator reads the header fields from {@code stream().findAny()} and this
-     * port reproduces that, deliberately and by name in {@code .claude/rules/design_rules.md}. The
+     * port reproduces that, deliberately and by name in the service's design rules on behaviours
+     * kept. The
      * 127-member golden was thought to pin it and does not: all six base fixtures behind it carry
      * the same court centre, the same LJA and the same address, so whichever member is picked the
      * header is identical and the recording says nothing about which one was.

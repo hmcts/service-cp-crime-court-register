@@ -10,8 +10,8 @@ import tools.jackson.databind.JsonNode;
 /**
  * Compares a ported result against a golden file captured from the legacy function app.
  *
- * <p>The comparison rules are fixed by {@code .claude/rules/technical-rules.md} and are not
- * preferences:
+ * <p>The comparison rules are fixed by the service's technical rules on golden-parity tests and
+ * are not preferences:
  *
  * <ul>
  *   <li><strong>Field-order-insensitive.</strong> Object key order is an artefact of how each

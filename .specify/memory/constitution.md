@@ -1,7 +1,49 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 3.0.1 → 3.1.0
+Version change: 3.1.0 → 3.2.0
+Bump rationale: MINOR - increment 003 adds an obligation without changing a
+                principle's wording (2026-09-15). Two things this service must
+                now do that it did not have to before:
+
+                The morning report's output is **structured events**, not prose.
+                `courtregister_exception` carries one exception per line and
+                `courtregister_exception_report` one summary per run, each field
+                reaching the encoder as a field rather than rendered into the
+                message text - because Log Analytics has to read `kind`,
+                `request_id` and `batch_id` as columns, and a value inside a
+                message is a value every saved query has to parse back out.
+                Principle VII's bounded-code rule governs every one of those
+                fields and labels exactly as it governs a log line; what is new
+                is that the obligation now falls on an indexed event as well.
+
+                And the `runId` Principle VII names for a scheduled run now
+                covers **three** runs rather than two: the 18:00 generation run,
+                its grace-period reconciler, and the 07:00 report. The sweep's
+                own lines carry it too where it runs inside a run, and mint one
+                where they do not - `batch/RunCorrelation` is unchanged and
+                handles the nesting it already handled, but the rule now has a
+                third caller and a fourth kind of line under it.
+
+                No principle's wording changes. Principles I to VIII stand
+                exactly as amended at 3.1.0.
+
+Modified sections (this amendment): the Increments list only - 003
+"exception-report" added, 002 moved from "current" to "complete".
+
+Templates / guidance reviewed:
+  - .claude/rules/design_rules.md   ✅ updated in the same increment (T074): the
+      07:00 leg and the sweep in the two-legs diagram, the fourteen ports, the
+      two new permitted repository readers, and the statement that the report is
+      not on the cutover lever's circuit.
+  - README.md                       ✅ Status entry for 003 (T073), including the
+      e-mail output's deployment gate on the notificationnotify template.
+  - CLAUDE.md                       ✅ Specifications row and Setup pointer (T076).
+  - doc/DEFECT-FIXES.md             ✅ deliberately untouched: a new capability is
+      not a deviation from a legacy oracle, and inventing a C or P number for one
+      would make the register say a defect existed where none was catalogued.
+
+Previous amendment (3.0.1 → 3.1.0):
 Bump rationale: MINOR - Principle VII's correlation rule is made satisfiable,
                 and doing so adds an obligation (2026-09-10). The rule said
                 every log line about processing MUST carry `requestId` and
@@ -44,7 +86,7 @@ Templates / guidance reviewed:
       handed over for the Confluence page moves from twenty-one fields to
       twenty-two. Corrected in that note before handover.
 
-Previous amendment (3.0.0 → 3.0.1):
+Earlier amendment (3.0.0 → 3.0.1):
 Bump rationale: PATCH - the commit-type list is completed (2026-09-05). The
                 Commits bullet of Principle VIII (Estate Conventions) listed six
                 Conventional Commit types (feat, fix, chore, docs, refactor, test), but
@@ -760,7 +802,7 @@ them read it the same way they read everything else.
   adapter, and the progression submission adapter — finished by the
   differential audit against the legacy oracle (381 runs, zero unattributed
   differences).
-- **002 "consolidate-progression-leg" — current.** Record instead of POST
+- **002 "consolidate-progression-leg" — complete.** Record instead of POST
   with write-time supersession; the 18:00 Europe/London flag-gated batch job;
   `DefendantTypeResolver` and `PdfPayloadMapper` ported Java→Java from
   progression with goldens recorded from progression's classes; the
@@ -770,6 +812,23 @@ them read it the same way they read everything else.
   `P1`–`P9` (six FIXED, two RETIRED, one MOOT). Every phase is built
   test-first under Principle II; every fix lands with its DEFECT-FIXES row
   under Principle I.
+- **003 "exception-report" — complete.** The capability design section 11
+  promised and neither half ever had: a 07:00 Europe/London weekday run, on a
+  scheduler and a lock of its own, reporting every FAILED request, every request
+  still in flight past its threshold, every batch late at one of its three
+  stages, every failed batch and every refused notification over the window that
+  opens at the previous scheduled run. Two sinks — the structured events Log
+  Analytics indexes, and the CSV written into the file service and e-mailed to
+  support, one send per address; `IntakeAgeSweep`'s two intake gauges on their
+  own fixed delay in every non-command JVM and under no lock; the
+  request-duration timer and the report's own counters, which complete the four
+  instruments; and `report-exceptions`, the sixth operations command. It is not
+  on the cutover lever's circuit: it reads the flag nowhere and runs whatever
+  `courtregister.generation.enabled` says. **No `doc/DEFECT-FIXES.md` row is
+  added or amended** — there is no legacy oracle for a capability that was never
+  built, and a new capability is not a deviation from one (Principle I). The
+  e-mail output ships switched off in every environment until the
+  notificationnotify team provides the template it is sent under.
 
 ## Development Workflow & Quality Gates
 
@@ -847,4 +906,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 3.1.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-10
+**Version**: 3.2.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-15

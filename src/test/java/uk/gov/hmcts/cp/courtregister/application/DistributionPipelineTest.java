@@ -16,8 +16,12 @@ import static org.mockito.Mockito.when;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
@@ -31,6 +35,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -1542,6 +1547,128 @@ class DistributionPipelineTest {
     }
 
     /**
+     * How long a run took, recorded once, where the guard accepted the write.
+     *
+     * <p>The pipeline already has the two places a request reaches a terminal state the guard has
+     * <em>accepted</em>: {@code settled(...)}, under {@code GuardDecision.Complete}, and
+     * {@code parked(...)}, under {@code GuardDecision.DeadLetter}. Both already refuse to count a
+     * write the guard rejected, which is precisely the behaviour a duration timer needs - a
+     * superseded runner's completion affects no rows, so a sample from it would time a run whose
+     * work another delivery is still doing.
+     *
+     * <p>The sample is monotonic and in-process, taken where the guard admits the run. No JVM
+     * reading is subtracted from a stored timestamp, which keeps the single-time-authority rule
+     * intact; the wall-clock answer to "how long has this request been going" is the exception
+     * report's own database-computed {@code age_seconds}, and the two instruments answer two
+     * different questions.
+     */
+    @Nested
+    @DisplayName("the request-duration timer")
+    class TheDurationTimer {
+
+        @Test
+        void a_completed_run_records_one_duration_sample_tagged_completed() {
+            run();
+
+            assertThat(durationSamples("completed"))
+                    .as("one sample for the run, tagged by the state it reached")
+                    .isEqualTo(1);
+            assertThat(durationSamples("failed")).isEqualTo(ABSENT);
+        }
+
+        @Test
+        void a_parked_run_records_one_duration_sample_tagged_failed() {
+            when(payloadSource.fetch(any(DistributionCommand.class)))
+                    .thenThrow(new PayloadUnavailableException(ReasonCode.PAYLOAD_UNAVAILABLE));
+
+            final GuardDecision decision = pipeline().process(command, lastDelivery());
+
+            assertThat(decision).isInstanceOf(GuardDecision.DeadLetter.class);
+            assertThat(durationSamples("failed"))
+                    .as("a run that ended parked took as long as it took, and support asks how "
+                            + "long the failures are running before they park")
+                    .isEqualTo(1);
+            assertThat(durationSamples("completed")).isEqualTo(ABSENT);
+        }
+
+        @Test
+        void a_write_the_guard_refused_records_no_sample() {
+            // A superseded runner: the completion it writes affects no rows and comes back as a
+            // hand-back rather than a Complete. Timing it would report a run that finished while
+            // the delivery that really holds the claim is still working.
+            when(guard.recordCompletion(any(RunClaim.class), any(CompletionReason.class)))
+                    .thenReturn(new GuardDecision.Abandon(ReasonCode.CLAIM_NOT_ACQUIRED));
+
+            run();
+
+            assertThat(durationSamples("completed")).isEqualTo(ABSENT);
+            assertThat(durationSamples("failed")).isEqualTo(ABSENT);
+        }
+
+        @Test
+        void a_parked_run_that_was_not_dead_lettered_records_no_sample() {
+            // The other half of the guard's refusal, which review gate 3's QA pass found untested:
+            // `parked(...)` counts under `GuardDecision.DeadLetter` and nothing else, so a
+            // superseded runner whose parking write affects no rows leaves no sample either. The
+            // completion side of the same refusal is the case above; both matter, because the two
+            // are separate `instanceof` branches and one could be widened without the other.
+            when(guard.recordExhaustion(any(RunClaim.class), any(ReasonCode.class)))
+                    .thenReturn(new GuardDecision.Abandon(ReasonCode.CLAIM_NOT_ACQUIRED));
+            when(payloadSource.fetch(any(DistributionCommand.class)))
+                    .thenThrow(new PayloadUnavailableException(ReasonCode.PAYLOAD_UNAVAILABLE));
+
+            final GuardDecision decision = pipeline().process(command, lastDelivery());
+
+            assertThat(decision)
+                    .as("the guard refused the parking write, so the delivery is handed back")
+                    .isInstanceOf(GuardDecision.Abandon.class);
+            assertThat(durationSamples("failed"))
+                    .as("and a run another delivery is still doing is not one this one timed")
+                    .isEqualTo(ABSENT);
+            assertThat(durationSamples("completed")).isEqualTo(ABSENT);
+        }
+
+        @Test
+        void a_transient_failure_short_of_the_budget_records_no_sample() {
+            // RETRYING is not a terminal state. The redelivery will run the request again, and a
+            // sample per attempt would make the timer a histogram of attempts rather than of runs.
+            when(payloadSource.fetch(any(DistributionCommand.class)))
+                    .thenThrow(new PayloadUnavailableException(ReasonCode.PAYLOAD_UNAVAILABLE));
+
+            final GuardDecision decision = run();
+
+            assertThat(decision).isEqualTo(
+                    new GuardDecision.Abandon(ReasonCode.PAYLOAD_UNAVAILABLE));
+            assertThat(durationSamples("completed")).isEqualTo(ABSENT);
+            assertThat(durationSamples("failed")).isEqualTo(ABSENT);
+        }
+
+        @Test
+        void the_pipeline_holds_a_timing_token_and_imports_no_micrometer_type() throws IOException {
+            // Principle V, asserted rather than reviewed. The timer lives behind an opaque token
+            // for exactly this reason: a `Timer.Sample` crossing into `application/` would put the
+            // metrics library in the layer that is supposed to depend on ports alone.
+            final List<String> micrometerFields = Stream.of(
+                            DistributionPipeline.class.getDeclaredFields())
+                    .map(field -> field.getType().getName())
+                    .filter(name -> name.startsWith("io.micrometer"))
+                    .toList();
+            final List<String> micrometerImports = Files.readAllLines(Path.of(
+                            System.getProperty("user.dir"),
+                            "src/main/java/uk/gov/hmcts/cp/courtregister/application",
+                            "DistributionPipeline.java")).stream()
+                    .filter(line -> line.startsWith("import io.micrometer"))
+                    .toList();
+
+            assertThat(micrometerFields)
+                    .as("the pipeline holds ports, a clock and a deadline — and a token it can do "
+                            + "nothing with but give back")
+                    .isEmpty();
+            assertThat(micrometerImports).isEmpty();
+        }
+    }
+
+    /**
      * The pipeline over its four ports and a policy that suppresses nothing.
      *
      * @return the pipeline
@@ -1690,6 +1817,19 @@ class DistributionPipelineTest {
                 .tag(ProcessingMetrics.REASON_TAG, reason)
                 .counter();
         return counter == null ? ABSENT : counter.count();
+    }
+
+    /**
+     * How many duration samples have been recorded under a terminal outcome.
+     *
+     * @param outcome the bounded outcome label
+     * @return the sample count, or {@link #ABSENT} where the series does not exist
+     */
+    private double durationSamples(final String outcome) {
+        final Timer timer = registry.find(ProcessingMetrics.REQUEST_DURATION)
+                .tag(ProcessingMetrics.OUTCOME_TAG, outcome)
+                .timer();
+        return timer == null ? ABSENT : timer.count();
     }
 
     /**

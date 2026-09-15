@@ -1,10 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
 import java.time.Clock;
-import javax.sql.DataSource;
-import net.javacrumbs.shedlock.core.LockProvider;
-import net.javacrumbs.shedlock.provider.jdbctemplate.JdbcTemplateLockProvider;
-import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -13,9 +9,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.TaskScheduler;
-import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
@@ -25,14 +19,16 @@ import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 
 /**
- * What makes the nightly job one run rather than one run per replica, and what fires it.
+ * The nightly run's own executor, and the run itself.
  *
- * <p>ShedLock over the service's own Postgres, against the {@code shedlock} table V2 creates. The
- * service deploys with a single replica today, so this is insurance rather than a fix: relying on
+ * <p>What makes it one run rather than one run per replica is ShedLock, and what makes
+ * {@code @Scheduled} mean anything at all is {@code @EnableScheduling} - both of which now live in
+ * {@link SchedulingInfrastructureConfig}, because a pod that generates nothing still has a gauge
+ * refresh to run and a report to write. What is left here is what is genuinely the downstream
+ * half's: the thread the 18:00 run happens on, and the job that happens on it. The service deploys
+ * with a single replica today, so the lock is insurance rather than a fix: relying on
  * {@code replicas: 1} is a deployment fact and not a code guarantee, and the cost of being wrong is
- * two documents and two e-mails for every court centre in the country. The lock is taken on the
- * database's own clock rather than on the pods', because two JVMs a few seconds apart is exactly the
- * skew a lock is supposed to survive.
+ * two documents and two e-mails for every court centre in the country.
  *
  * <p>The zone the schedule is read in is validated by {@link GenerationProperties#validate()},
  * because 18:00 is a wall-clock requirement that has to hold in BST and in GMT alike. The legacy
@@ -40,11 +36,11 @@ import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
  * that ambiguity is not inherited: an override needs
  * {@code courtregister.generation.zone-override-acknowledged}, and startup refuses without it.
  *
- * <p><strong>The run has an executor of its own.</strong> A scheduler this configuration declares is
- * the only one on the context, so the run cannot land on a thread anything else is using - a
- * listener's above all, since a delivery being recorded and a night being generated are the two
- * things this service must be able to do at once. One thread, because the run is sequential by
- * design and a pool would only make it look otherwise.
+ * <p><strong>The run has an executor of its own.</strong> There are three schedulers on a fully
+ * enabled context now - this one, the report's and the intake sweep's - and each scheduled method
+ * names the one it belongs on, so the run still cannot land on a thread anything else is using. One
+ * thread, because the run is sequential by design and a pool would only make it look otherwise. The
+ * grace-period reconciler shares this scheduler and always has; what changed is that it says so.
  *
  * <p><strong>Only where the downstream half is deployed.</strong> The whole of this is conditional
  * on {@code courtregister.generation.enabled}, so an intake-only pod holds no lock, keeps no
@@ -54,22 +50,28 @@ import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
  *
  * <p><strong>And not on a JVM started to run one operations command.</strong> The lock makes the
  * 18:00 run one run, so a CLI process holding a scheduler would be a second replica of it, and a
- * command running long enough to reach 18:00 London would generate the night twice. The whole
- * configuration goes rather than the job alone, because {@code @EnableScheduling} is here too and
- * {@code GenerationReconciler} carries a schedule of its own: without the annotation nothing
- * processes {@code @Scheduled} at all, which is what makes "a command schedules nothing" a claim
- * about both ({@link CliModeConfig}).
+ * command running long enough to reach 18:00 London would generate the night twice. The condition
+ * stays on the whole configuration rather than on the job alone: a scheduler with nothing on it is
+ * a half-absence to reason about instead of a plain one. The claim that a command schedules
+ * <em>nothing</em> now rests on {@link SchedulingInfrastructureConfig}, which owns the annotation
+ * and carries the same condition ({@link CliModeConfig}).
  */
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
 @Conditional(CliModeConfig.NotCliMode.class)
-@EnableScheduling
-@EnableSchedulerLock(defaultLockAtMostFor = RegisterGenerationJob.LOCK_AT_MOST_FOR)
 public class SchedulingConfig {
 
-    /** The table V2 creates for the lock, named here because the provider will not guess it. */
-    private static final String SHEDLOCK_TABLE = "shedlock";
+    /**
+     * The bean name of the scheduler the two generation surfaces run on.
+     *
+     * <p>The name of the bean {@link #registerGenerationScheduler()} already declares, published so
+     * that {@code @Scheduled(scheduler = ...)} on {@code RegisterGenerationJob.run} and
+     * {@code GenerationReconciler.reconcileScheduled} names a constant rather than a string spelled
+     * twice. No bean is added, renamed or moved by it: the two surfaces go on sharing one scheduler
+     * exactly as they do today, and only the routing stops being implicit.
+     */
+    public static final String GENERATION_SCHEDULER = "registerGenerationScheduler";
 
     /** The one thread the run has, and the prefix its name is read by in a thread dump. */
     private static final String RUN_THREAD_PREFIX = "register-generation-";
@@ -77,22 +79,11 @@ public class SchedulingConfig {
     private static final Logger LOG = LoggerFactory.getLogger(SchedulingConfig.class);
 
     /**
-     * The lock the job holds while it runs.
+     * The executor the run and the grace-period reconciler happen on.
      *
-     * @param dataSource the processed log's own datasource, which is where {@code shedlock} is
-     * @return the JDBC lock provider, taking the lock on the database's clock
-     */
-    @Bean
-    public LockProvider lockProvider(final DataSource dataSource) {
-        return new JdbcTemplateLockProvider(JdbcTemplateLockProvider.Configuration.builder()
-                .withJdbcTemplate(new JdbcTemplate(dataSource))
-                .withTableName(SHEDLOCK_TABLE)
-                .usingDbTime()
-                .build());
-    }
-
-    /**
-     * The executor the run happens on, and the only scheduler this service has.
+     * <p>Named by {@link #GENERATION_SCHEDULER}, which both of their {@code @Scheduled} methods
+     * carry: with three schedulers on the context, a method that named none would be routed to
+     * whichever one Spring resolved for the context as a whole.
      *
      * @return a single-threaded scheduler named for the run it carries
      */

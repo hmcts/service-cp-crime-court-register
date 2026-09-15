@@ -1800,6 +1800,28 @@ class RegisterStoreIT {
     class Failure {
 
         @Test
+        void a_failed_batch_always_carries_its_failed_at() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markFailed(monday.batchId(),
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(failedAtOn(MONDAY))
+                    .as("the stamp is written by the statement that writes the status, in the "
+                            + "same UPDATE, so a FAILED batch with no failed_at is a row this "
+                            + "service has no way to produce. The exception report's "
+                            + "BATCH_FAILED read relies on exactly that: it bounds the batch by "
+                            + "failed_at and measures its age from it, so a null there would be "
+                            + "a dead batch silently missing from the morning report")
+                    .isPresent();
+        }
+
+        @Test
         void a_failure_that_never_left_this_service_should_release_its_rows_for_the_next_run() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
@@ -3682,6 +3704,20 @@ class RegisterStoreIT {
                 .param("registerDate", registerDate)
                 .query((rs, rowNumber) -> new BatchOutcome(rs.getString("status"),
                         rs.getString("failure_reason"), rs.getString("sdg_reason")))
+                .optional();
+    }
+
+    /** When the batch was failed, read back out of the column the report's window reads. */
+    private Optional<OffsetDateTime> failedAtOn(final LocalDate registerDate) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT failed_at
+                          FROM register_batch
+                         WHERE court_centre_id = :courtCentre AND register_date = :registerDate
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("registerDate", registerDate)
+                .query(OffsetDateTime.class)
                 .optional();
     }
 

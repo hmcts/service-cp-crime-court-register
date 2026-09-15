@@ -40,6 +40,7 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
+import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
@@ -147,6 +148,10 @@ public class JdbcRegisterStore implements RegisterStore {
     private static final String PAYLOAD_FILE_ID = "payloadFileId";
     private static final String COURT_CENTRE_ID = "courtCentreId";
     private static final String REGISTER_DATE = "registerDate";
+
+    /** The two key columns every row view reads back, named once for all of them. */
+    private static final String COURT_CENTRE_ID_COLUMN = "court_centre_id";
+    private static final String REGISTER_DATE_COLUMN = "register_date";
     private static final String REGISTER_TIME = "registerTime";
     private static final String HEARING_ID = "hearingId";
 
@@ -284,6 +289,23 @@ public class JdbcRegisterStore implements RegisterStore {
             """;
 
     /**
+     * The four predicates of statement 2, written once because two readers ask them.
+     *
+     * <p>The nightly job asks for the registers it may pick up and the exception report asks which
+     * of them the last scheduled run left behind. Two spellings of "RECORDED, unsuperseded,
+     * unbatched and recorded while the flag was ON" are two answers waiting to disagree, and the
+     * one they would disagree about is the fourth: a register recorded while the flag was not ON
+     * may already have been sent by the legacy, and a report that named it would send a support
+     * engineer after a register that is not missing.
+     */
+    private static final String ACTIVE_UNBATCHED_PREDICATE = """
+             WHERE status = 'RECORDED'
+               AND superseded_at IS NULL
+               AND batch_id IS NULL
+               AND recorded_flag_state = 'ON'
+            """;
+
+    /**
      * Statement 2 - the registers the nightly job may pick up.
      *
      * <p>Four predicates, and the fourth is the one that is easy to forget and expensive to get
@@ -298,10 +320,35 @@ public class JdbcRegisterStore implements RegisterStore {
             SELECT output_id, hearing_id, hearing_date, court_centre_id, register_date,
                    register_time, file_name, defendant_type, recorded_flag_state, document
               FROM processed_output
-             WHERE status = 'RECORDED'
-               AND superseded_at IS NULL
-               AND batch_id IS NULL
-               AND recorded_flag_state = 'ON'
+            """ + ACTIVE_UNBATCHED_PREDICATE + """
+             ORDER BY register_time, output_id
+            """;
+
+    /**
+     * Statement 2a - the same registers, older than a cut-off, as a projection carrying an age.
+     *
+     * <p>The report's fourth BATCH_LATE source. It is a projection rather than
+     * {@code activeUnbatched()} filtered in the JVM for the reason every other age in that report
+     * is computed by the database: an age derived here from a stored timestamp is the cross-clock
+     * comparison V1's header comment forbids, and it would leave one report carrying two kinds of
+     * age. The document is not selected, because nothing about a late register needs reading.
+     *
+     * <p>The cut-off is the most recent scheduled generation run, which the caller computed and
+     * passed in; a boundary a caller chose is a statement of what was asked for rather than a
+     * comparison of two clocks.
+     *
+     * <p>Ordered on the same two columns {@code ACTIVE_UNBATCHED} orders on, and for the same
+     * reason: a court centre's registers are recorded inside one microsecond often enough that
+     * {@code register_time} alone is no order at all, so without the tie-break two runs of one
+     * report list the same morning two ways and this read stops agreeing with the one it shares a
+     * predicate with.
+     */
+    private static final String RECORDED_UNBATCHED_BEFORE = """
+            SELECT output_id, hearing_id, court_centre_id, register_date, register_time,
+                   extract(epoch from (now() - register_time))::bigint AS age_seconds
+              FROM processed_output
+            """ + ACTIVE_UNBATCHED_PREDICATE + """
+               AND register_time < :recordedBefore
              ORDER BY register_time, output_id
             """;
 
@@ -1229,6 +1276,15 @@ public class JdbcRegisterStore implements RegisterStore {
     }
 
     @Override
+    public List<RecordedRegisterSummary> recordedUnbatchedBefore(final Instant recordedBefore) {
+        return StoreOutage.translating("read the registers the last scheduled run left waiting",
+                () -> jdbcClient.sql(RECORDED_UNBATCHED_BEFORE)
+                        .param("recordedBefore", offsetOf(recordedBefore))
+                        .query((rs, rowNumber) -> recordedSummary(rs))
+                        .list());
+    }
+
+    @Override
     public List<RegisterRecord> batched(final UUID batchId) {
         return StoreOutage.translating("read the registers of a batch",
                 () -> jdbcClient.sql(BATCH_REGISTERS)
@@ -1637,8 +1693,8 @@ public class JdbcRegisterStore implements RegisterStore {
                 rs.getObject("output_id", UUID.class),
                 rs.getObject("hearing_id", UUID.class),
                 instant(rs.getObject("hearing_date", OffsetDateTime.class)),
-                new CourtCentreDay(rs.getObject("court_centre_id", UUID.class),
-                        rs.getObject("register_date", LocalDate.class)),
+                new CourtCentreDay(rs.getObject(COURT_CENTRE_ID_COLUMN, UUID.class),
+                        rs.getObject(REGISTER_DATE_COLUMN, LocalDate.class)),
                 instant(rs.getObject("register_time", OffsetDateTime.class)),
                 rs.getString("file_name"),
                 rs.getString("defendant_type"),
@@ -1646,14 +1702,30 @@ public class JdbcRegisterStore implements RegisterStore {
                 objectMapper.readValue(rs.getString("document"), CourtRegisterDocument.class));
     }
 
+    /**
+     * The row view the report reads: the key, the moment it was recorded, and the age of that.
+     *
+     * <p>No document, because nothing about a register that is late needs reading, and the less a
+     * report carries the less there is to keep out of a log line.
+     */
+    private static RecordedRegisterSummary recordedSummary(final ResultSet rs) throws SQLException {
+        return new RecordedRegisterSummary(
+                rs.getObject("output_id", UUID.class),
+                rs.getObject("hearing_id", UUID.class),
+                rs.getObject(COURT_CENTRE_ID_COLUMN, UUID.class),
+                rs.getObject(REGISTER_DATE_COLUMN, LocalDate.class),
+                instant(rs.getObject("register_time", OffsetDateTime.class)),
+                rs.getLong("age_seconds"));
+    }
+
     /** The batch as the insert left it, so every stamp on it is the database's own. */
     private static RegisterBatch assembledBatch(final ResultSet rs) throws SQLException {
         return new RegisterBatch(
                 rs.getObject("batch_id", UUID.class),
-                rs.getObject("court_centre_id", UUID.class),
+                rs.getObject(COURT_CENTRE_ID_COLUMN, UUID.class),
                 rs.getString("court_centre_ou_code"),
                 rs.getString("court_house"),
-                rs.getObject("register_date", LocalDate.class),
+                rs.getObject(REGISTER_DATE_COLUMN, LocalDate.class),
                 rs.getString("file_name"),
                 null,
                 null,
@@ -1683,10 +1755,10 @@ public class JdbcRegisterStore implements RegisterStore {
     private static RegisterBatch recordedBatch(final ResultSet rs) throws SQLException {
         return new RegisterBatch(
                 rs.getObject("batch_id", UUID.class),
-                rs.getObject("court_centre_id", UUID.class),
+                rs.getObject(COURT_CENTRE_ID_COLUMN, UUID.class),
                 rs.getString("court_centre_ou_code"),
                 rs.getString("court_house"),
-                rs.getObject("register_date", LocalDate.class),
+                rs.getObject(REGISTER_DATE_COLUMN, LocalDate.class),
                 rs.getString("file_name"),
                 rs.getObject("payload_file_id", UUID.class),
                 rs.getObject("document_file_id", UUID.class),

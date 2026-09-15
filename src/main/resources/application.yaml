@@ -76,6 +76,24 @@ courtregister:
     # The master switch for intake. Off in the `test` profile, so context-load tests need no broker.
     enabled: true
 
+  intake:
+    # How often IntakeAgeSweep refreshes the two intake gauges - the age of the oldest unfinished
+    # request and the count of unfinished requests over the threshold. Without it the gauges hold
+    # whatever they were born with for the life of the pod, and an alert on a gauge that never moves
+    # is an alert that never fires.
+    #
+    # The interval is also how long an alert can lag the thing it is about, which is why it is
+    # minutes rather than the hours a scheduled report would give: a stuck intake is visible within
+    # one refresh rather than at 07:00 the next morning.
+    #
+    # ITS OWN KEY, on the intake record, and NOT under courtregister.report: the sweep belongs to the
+    # intake half and runs in every JVM that is not a command, whichever of the other two halves this
+    # deployment switched on. A pod with both of them off binds neither of their records, so a value
+    # borrowed from courtregister.generation.grace-period would be a value it could not read.
+    # Written here as well as on the record because @Scheduled(fixedDelayString = ...) resolves it
+    # through the placeholder resolver, which cannot see a record's @DefaultValue.
+    gauge-refresh: 10m
+
   servicebus:
     # LOCAL AND CI ONLY — the Service Bus emulator's well-known development string, which is why it
     # ends UseDevelopmentEmulator=true. A deployed environment sets `namespace` instead and clears
@@ -393,8 +411,12 @@ courtregister:
     notificationnotify: ${NOTIFICATIONNOTIFY_BASE_URL:}
     # The CJSCPPUID both downstream calls are made under. One identity, because the nightly run is
     # one caller: it asks systemdocgenerator to render a batch and notificationnotify to e-mail it,
-    # inside one run. The same service identity the results and reference-data reads already use;
-    # empty locally, because a run that has no endpoints to call needs nobody to call them as.
+    # inside one run, and the morning report's own send is made under it too. The same service
+    # identity the results and reference-data reads already use; empty locally, because a run that
+    # has no endpoints to call needs nobody to call them as. REQUIRED at startup wherever either
+    # outward half sends - generation enabled, or the report's e-mail output on - because
+    # notificationnotify refuses a command carrying no CJSCPPUID, and a pod that set the endpoint
+    # and forgot this one starts clean and fails every send.
     system-user-id: ${COURT_REGISTER_SYSTEM_USER_ID:}
     # The transport the two clients share, at the estate's own defaults. Both timeouts are set
     # deliberately: a render request with no read timeout can outlive the run deadline that was
@@ -432,6 +454,94 @@ courtregister:
     # changing the name, abandons the existing shared subscription and its backlog: under JMS 2.0 a
     # shared subscription with a different selector is a different subscription.
     selector: "CPPNAME IN ('public.systemdocgenerator.events.document-available','public.systemdocgenerator.events.generation-failed')"
+
+  report:
+    # The master switch for the morning exception report: the 07:00 job and its own scheduler. LOCAL
+    # DEFAULT ONLY - false here so a developer's run and the plain context-load tests write nobody a
+    # report; deployed environments set COURTREGISTER_REPORT_ENABLED to true.
+    #
+    # NOT A CUTOVER LEVER. The report reads and writes nothing the cutover decides and never reads
+    # the CourtRegisterService flag; it runs on a pod whose generation half is switched off, which is
+    # what makes it its own switch rather than a second reading of somebody else's.
+    enabled: ${COURTREGISTER_REPORT_ENABLED:false}
+    # 07:00, Monday to Friday. Six fields, Spring's cron dialect (second first). It is also the
+    # window: the run reads back to the PREVIOUS occurrence of this cron, so a Monday run reads back
+    # to Friday and every FAILED request, batch and notification lands in exactly one report. Change
+    # it and the window follows; there is deliberately no separate window setting to disagree with
+    # it.
+    cron: "0 0 7 * * MON-FRI"
+    # The zone the cron above is read in, and the requirement is 07:00 WALL CLOCK in BST and GMT
+    # alike - support reads this before the day's hearings either way. The same rule the nightly
+    # run's zone carries, stated once in GenerationProperties.requireTheCourtsZone: startup refuses
+    # any other value unless zone-override-acknowledged below is true.
+    zone: Europe/London
+    # An explicit acknowledgement, and the only way to run in another zone. It exists so a zone
+    # change is a deliberate, reviewable act rather than a typo that silently moves the run.
+    zone-override-acknowledged: false
+    # How long the ShedLock lock over the morning run is held, and the value the job's
+    # @SchedulerLock reads as a placeholder - which is why this key is written here as well as on
+    # the record, unlike batch-generated-within below: the annotation's attribute is resolved by the
+    # placeholder resolver and cannot see a @DefaultValue. It is the fixed five-minute run budget
+    # (PropertiesValidator.REPORT_RUN_BUDGET) plus the ten-minute SCHEDULER_LOCK_MARGIN the nightly
+    # run's 70m already uses. Anything lower is refused at startup rather than discovered as support
+    # being sent the same morning twice by two replicas.
+    lock-at-most-for: 15m
+    # The intake threshold. A request still RECEIVED or RETRYING for longer than this is reported
+    # late and counted on courtregister_non_terminal_requests_over_threshold. Per environment and
+    # changeable without a release: a stack whose broker is slower wants a wider one, and the next
+    # run reads whatever it says.
+    request-terminal-within: 30m
+    # The notification limit. A batch GENERATED but not NOTIFIED for longer than this is reported
+    # late. Without it a document that was rendered and never e-mailed looks exactly like one that
+    # was e-mailed, which is the failure this report exists to surface.
+    notified-within: 15m
+    #
+    # There is deliberately NO batch-generated-within key here, and no placeholder for one. The
+    # rendering limit resolves from courtregister.generation.grace-period in PropertiesValidator,
+    # because that is already the interval after which the reconciler decides a render has not
+    # happened, and two different answers to "how long is too long for a render" is the shape that
+    # makes an alert argue with a batch state. Nothing reads it through the placeholder resolver, so
+    # a copy written here would be a second place for the number to live and a morning for the two to
+    # disagree. An environment that genuinely wants its own limit sets the key; a set zero is
+    # refused, because unset and zero are different things to mean.
+    #
+    # There is also NO window key. The window is the cron above.
+    #
+    # How many REQUEST_LATE and BATCH_LATE entries one report may carry. A morning can be arbitrarily
+    # bad and the log sink writes one event per exception, so without a ceiling a single outage is a
+    # write that outlives the run's own lock and the events anybody needed are behind the fifty
+    # thousand nobody read. Over the cap the OLDEST are kept - they have been wrong longest - and the
+    # rest are counted as truncated on the summary event and on both run lines.
+    #
+    # It bounds the recurring late kinds; a failure is never dropped, because a failure a window
+    # dropped is a failure no window would ever report again. The two late kinds are read against a
+    # cut-off, so whatever this run leaves out the next run reads again, older; REQUEST_FAILED,
+    # BATCH_FAILED and NOTIFICATION_FAILED are read over a half-open window aligned to the schedule,
+    # and no later run reads that window a second time.
+    #
+    # The five counts are NOT capped either: they are what the reads found, because a count that
+    # shrank with the list would make the worst morning of the year read as a quieter one. A zero is
+    # refused at startup: a report that carries no late entry is indistinguishable from a morning
+    # with nothing wrong on it.
+    max-entries: ${COURTREGISTER_REPORT_MAX_ENTRIES:5000}
+    email:
+      # The e-mail output, switchable independently of the Log Analytics output: a stack whose
+      # notificationnotify template has not been provided yet still writes the events, and support
+      # reads the report either way. False until that template exists - and the moment it is true,
+      # the two settings below become required at startup.
+      enabled: ${COURTREGISTER_REPORT_EMAIL_ENABLED:false}
+      # The notificationnotify template the report is sent under, by UUID. REQUIRED and validated
+      # for shape at startup once the output above is enabled, not at send time - the same argument
+      # fix P9 makes for the register's own template, one morning earlier. A binding, never a value:
+      # the id belongs to the environment's notificationnotify configuration.
+      template-id: ${CR_REPORT_TEMPLATE_ID:}
+      # Who the report goes to, comma-separated. NEVER a value in this repository and never a chart
+      # value: they are people's addresses, and they arrive from Key Vault through the Secrets Store
+      # CSI driver. Required and non-empty once the output above is enabled, and every entry has to
+      # parse as an address - a list with a stray separator in it is refused every recipient of every
+      # morning by notificationnotify otherwise, and the refusal names the setting without quoting
+      # the address back.
+      recipients: ${COURTREGISTER_REPORT_RECIPIENTS:}
 
 # Application Insights is configured by the Java agent (lib/applicationinsights.json).
 # The per-environment connection string is supplied as APPLICATIONINSIGHTS_CONNECTION_STRING,

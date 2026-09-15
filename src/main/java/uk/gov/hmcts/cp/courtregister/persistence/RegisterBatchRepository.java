@@ -14,6 +14,7 @@ import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.support.TransactionOperations;
+import uk.gov.hmcts.cp.courtregister.domain.BatchException;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
@@ -301,6 +302,73 @@ public class RegisterBatchRepository {
     private static final String TOKEN = "token";
     private static final String LEASE_PARAM = "lease";
 
+    /**
+     * The columns the report reads a batch through, which are not the columns the generation leg
+     * reads it through.
+     *
+     * <p>Seven of the row's twenty-one, and {@code sdg_reason} is not among them. That column is
+     * systemdocgenerator's own words about a document whose every defendant is a child, and
+     * constitution Principle VII keeps free text this service did not write out of a line, a label,
+     * an event and the CSV alike - so none of the four statements below reads it, and there is no
+     * value for anything downstream to leak.
+     *
+     * <p>Each statement closes the list with its own age expression, because "waiting" means a
+     * different moment in each of the four.
+     */
+    private static final String EXCEPTION_COLUMNS = """
+            SELECT batch_id, court_centre_id, register_date, status, failure_reason, attempts,
+            """;
+
+    /**
+     * Statement 10 - the batches nothing has been asked of the renderer for, oldest first.
+     *
+     * <p>Deliberately not {@link #PENDING_SINCE}, which serves the reconciler and so admits only
+     * the batches that minted a payload: systemdocgenerator can only be asked about a payload, and
+     * a batch that never minted one is a batch there is nothing to ask about. The report is saying
+     * that a court centre's day has been waiting, and that batch has been waiting longest of all.
+     */
+    private static final String LATE_PENDING = EXCEPTION_COLUMNS + """
+                   extract(epoch from (now() - assembled_at))::bigint AS age_seconds
+              FROM register_batch
+             WHERE status = 'PENDING'
+               AND assembled_at < :assembledBefore
+             ORDER BY assembled_at
+            """;
+
+    /** Statement 11 - the batches whose accepted render has not been answered, oldest first. */
+    private static final String LATE_GENERATING = EXCEPTION_COLUMNS + """
+                   extract(epoch from (now() - requested_at))::bigint AS age_seconds
+              FROM register_batch
+             WHERE status = 'GENERATING'
+               AND requested_at < :requestedBefore
+             ORDER BY requested_at
+            """;
+
+    /** Statement 12 - the batches holding a document nobody was told about, oldest first. */
+    private static final String LATE_GENERATED = EXCEPTION_COLUMNS + """
+                   extract(epoch from (now() - generated_at))::bigint AS age_seconds
+              FROM register_batch
+             WHERE status = 'GENERATED'
+               AND generated_at < :generatedBefore
+             ORDER BY generated_at
+            """;
+
+    /**
+     * Statement 13 - the batches that ended inside the window, oldest first.
+     *
+     * <p>{@code failure_reason} is in the select list and {@code sdg_reason} is not, which is the
+     * whole difference between a reason a support engineer can paste into a ticket and a sentence
+     * another system wrote about somebody's document.
+     */
+    private static final String FAILED_BETWEEN = EXCEPTION_COLUMNS + """
+                   extract(epoch from (now() - failed_at))::bigint AS age_seconds
+              FROM register_batch
+             WHERE status = 'FAILED'
+               AND failed_at >= :from
+               AND failed_at < :to
+             ORDER BY failed_at
+            """;
+
     private final JdbcClient jdbcClient;
 
     /**
@@ -418,6 +486,65 @@ public class RegisterBatchRepository {
                 .param("generatedBefore", offsetOf(generatedBefore))
                 .query((rs, rowNumber) -> batch(rs))
                 .list();
+    }
+
+    /**
+     * The report's BATCH_LATE read for a batch nothing has been asked of the renderer for.
+     *
+     * <p>A projection rather than {@link #pendingSince(Instant)}, and the two are different
+     * questions. That read serves the reconciler, which can only ask systemdocgenerator about a
+     * payload, so it admits only the batches that minted one; this one is the report saying a court
+     * centre's day has been waiting, and a batch that never minted a payload has been waiting
+     * longest of all.
+     *
+     * @param assembledBefore the cut-off, measured from assembly
+     * @return every PENDING batch assembled before it, oldest first
+     */
+    public List<BatchException> latePending(final Instant assembledBefore) {
+        return exceptions(LATE_PENDING, "assembledBefore", assembledBefore);
+    }
+
+    /**
+     * The report's BATCH_LATE read for a batch whose render has not been answered.
+     *
+     * @param requestedBefore the cut-off, measured from the render request
+     * @return every GENERATING batch requested before it, oldest first
+     */
+    public List<BatchException> lateGenerating(final Instant requestedBefore) {
+        return exceptions(LATE_GENERATING, "requestedBefore", requestedBefore);
+    }
+
+    /**
+     * The report's BATCH_LATE read for a batch holding a document nobody was told about.
+     *
+     * @param generatedBefore the cut-off, measured from the document
+     * @return every GENERATED batch generated before it, oldest first
+     */
+    public List<BatchException> lateGenerated(final Instant generatedBefore) {
+        return exceptions(LATE_GENERATED, "generatedBefore", generatedBefore);
+    }
+
+    /**
+     * The report's BATCH_FAILED read: the batches that ended inside the window.
+     *
+     * <p>The downstream half's equivalent of a parked request. It carries the bounded
+     * {@link BatchFailureReason} and never {@code sdg_reason}, which is not among the columns the
+     * statement selects at all.
+     *
+     * <p>Both ends, and the end exclusive: a court centre's dead day belongs to one morning's
+     * report, and a batch on the boundary of two windows would otherwise be chased twice.
+     *
+     * @param from the window's start, inclusive
+     * @param to   the window's end, exclusive
+     * @return every batch failed inside it, oldest first
+     */
+    public List<BatchException> failedBetween(final Instant from, final Instant to) {
+        return StoreOutage.translating("read the batches that ended inside a window",
+                () -> jdbcClient.sql(FAILED_BETWEEN)
+                        .param("from", offsetOf(from))
+                        .param("to", offsetOf(to))
+                        .query((rs, rowNumber) -> exception(rs))
+                        .list());
     }
 
     /**
@@ -646,6 +773,44 @@ public class RegisterBatchRepository {
                         Types.TIMESTAMP_WITH_TIMEZONE)
                 .param("failedAt", offsetOf(batch.failedAt()), Types.TIMESTAMP_WITH_TIMEZONE)
                 .param("attempts", batch.attempts());
+    }
+
+    /**
+     * The four report reads, which differ only in their statement and their one cut-off.
+     *
+     * <p>Written once because they are one shape: the report is asking each of the four stages the
+     * same question, and four copies of the binding would be four places for the projection to
+     * drift apart.
+     *
+     * <p>Translated like every other statement in this class. A morning the database is away must
+     * reach the report as this service's own signal, under a bounded reason it can count the run
+     * failed by - not as a {@code org.springframework.dao} type the application layer never
+     * classified (Principle V).
+     */
+    private List<BatchException> exceptions(final String sql, final String parameter,
+            final Instant cutoff) {
+        return StoreOutage.translating("read the batches the report asks about",
+                () -> jdbcClient.sql(sql)
+                        .param(parameter, offsetOf(cutoff))
+                        .query((rs, rowNumber) -> exception(rs))
+                        .list());
+    }
+
+    /**
+     * One batch as the report reads it, with the age its own statement computed.
+     *
+     * <p>There is no {@code sdg_reason} to read and no component to put one in, which is the
+     * containment rather than a rule somebody has to remember.
+     */
+    private static BatchException exception(final ResultSet rs) throws SQLException {
+        return new BatchException(
+                rs.getObject("batch_id", UUID.class),
+                rs.getObject("court_centre_id", UUID.class),
+                rs.getObject("register_date", LocalDate.class),
+                BatchStatus.valueOf(rs.getString("status")),
+                failureReason(rs.getString("failure_reason")),
+                rs.getInt("attempts"),
+                rs.getLong("age_seconds"));
     }
 
     private static RegisterBatch batch(final ResultSet rs) throws SQLException {

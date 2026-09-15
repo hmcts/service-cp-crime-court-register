@@ -23,7 +23,7 @@ import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
-import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
+import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
@@ -65,11 +65,6 @@ import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
  * own store or POSTs it to progression, and the pipeline is handed the answer rather than reading a
  * setting. It is not a second cutover lever: the value is fixed for the life of a release, the one
  * lever is the App Configuration flag, and {@link OutputMode} says so at length.
- *
- * <p><strong>The transformation port is not implemented yet</strong>, and a pipeline constructed
- * without one — the walking skeleton the transport suites use — ends every run it admits as
- * {@code no-defendants}, which is the outcome a payload with no register in it earns anyway. The
- * chain behind that port arrives with the mapper phase; nothing above it changes when it does.
  *
  * <p><strong>The run bounds itself, across every stage.</strong> Before the ports are touched the
  * deadline is fixed at {@code courtregister.claim.processing-deadline} from now, and what is left of
@@ -345,8 +340,10 @@ public class DistributionPipeline {
         final GuardDecision admission = guard.admit(command, delivery);
         final GuardDecision decision;
         if (admission instanceof GuardDecision.Run admitted) {
+            // The token is taken here and nowhere else: a run that was never admitted never
+            // started, and timing one would measure a guard decision rather than a run.
             decision = runUnder(command, admitted.claim(), delivery.finalPermittedDelivery(),
-                    flagState);
+                    flagState, metrics.startRequestTiming());
         } else {
             // Already completed, contested, or a collision: the guard has decided, and a run would
             // either duplicate work or overwrite a record that belongs to a different request.
@@ -389,18 +386,19 @@ public class DistributionPipeline {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private GuardDecision runUnder(
             final DistributionCommand command, final RunClaim claim, final boolean lastChance,
-            final RecordedFlagState flagState) {
+            final RecordedFlagState flagState, final ProcessingMetrics.Timing timing) {
         GuardDecision outcome;
         try {
-            outcome = runToOutcome(command, claim, lastChance, flagState);
+            outcome = runToOutcome(command, claim, lastChance, flagState, timing);
         } catch (PayloadUnavailableException | ReferenceDataUnavailableException
                 | TransformationFailedException | SubmissionFailedException
                 | RegisterNotRecordedException classified) {
-            outcome = failed(claim, classified.classification(), classified.reason(), lastChance);
+            outcome = failed(claim, classified.classification(), classified.reason(), lastChance,
+                    timing);
         } catch (StoreUnavailableException storeGone) {
             throw storeGone;
         } catch (RuntimeException unexpected) {
-            outcome = unexpectedFailure(claim, unexpected, lastChance);
+            outcome = unexpectedFailure(claim, unexpected, lastChance, timing);
         }
         return outcome;
     }
@@ -412,20 +410,22 @@ public class DistributionPipeline {
      * @param claim      the claim this run holds
      * @param unexpected what was thrown
      * @param lastChance whether the queue will deliver this message again
+     * @param timing     how long this run has been going
      * @return the settlement the outcome calls for
      */
     private GuardDecision unexpectedFailure(
-            final RunClaim claim, final RuntimeException unexpected, final boolean lastChance) {
+            final RunClaim claim, final RuntimeException unexpected, final boolean lastChance,
+            final ProcessingMetrics.Timing timing) {
         LOG.error("Run failed unexpectedly; recording it so the claim is released. "
                         + "source={} requestId={} type={}",
                 claim.source(), claim.requestId(), unexpected.getClass().getName());
         return failed(claim, FailureClassification.TRANSIENT,
-                ReasonCode.UNEXPECTED_FAILURE, lastChance);
+                ReasonCode.UNEXPECTED_FAILURE, lastChance, timing);
     }
 
     private GuardDecision runToOutcome(
             final DistributionCommand command, final RunClaim claim, final boolean lastChance,
-            final RecordedFlagState flagState) {
+            final RecordedFlagState flagState, final ProcessingMetrics.Timing timing) {
         final RunBudget budget =
                 new RunBudget(clock.instant().plus(processingDeadline), lastChance);
 
@@ -437,11 +437,11 @@ public class DistributionPipeline {
 
         final GuardDecision outcome;
         if (spent(budget)) {
-            outcome = overran(claim, budget);
+            outcome = overran(claim, budget, timing);
         } else if (transformer == null) {
-            outcome = completed(claim, CompletionReason.NO_DEFENDANTS);
+            outcome = completed(claim, CompletionReason.NO_DEFENDANTS, timing);
         } else {
-            outcome = distribute(command, payload, claim, budget, flagState);
+            outcome = distribute(command, payload, claim, budget, flagState, timing);
         }
         return outcome;
     }
@@ -475,11 +475,13 @@ public class DistributionPipeline {
      *
      * @param claim  the claim this run holds
      * @param budget the run's budget
+     * @param timing how long this run has been going
      * @return the settlement the overrun calls for
      */
-    private GuardDecision overran(final RunClaim claim, final RunBudget budget) {
+    private GuardDecision overran(final RunClaim claim, final RunBudget budget,
+            final ProcessingMetrics.Timing timing) {
         return failed(claim, FailureClassification.TRANSIENT,
-                ReasonCode.PROCESSING_DEADLINE_EXCEEDED, budget.lastChance());
+                ReasonCode.PROCESSING_DEADLINE_EXCEEDED, budget.lastChance(), timing);
     }
 
     /**
@@ -512,6 +514,7 @@ public class DistributionPipeline {
      * @param claim     the claim this run holds
      * @param budget    what is left of the run's time
      * @param flagState the cutover flag as the intake side last read it
+     * @param timing    how long this run has been going
      * @return the settlement the outcome calls for
      */
     private GuardDecision distribute(
@@ -519,19 +522,20 @@ public class DistributionPipeline {
             final JsonNode payload,
             final RunClaim claim,
             final RunBudget budget,
-            final RecordedFlagState flagState) {
+            final RecordedFlagState flagState,
+            final ProcessingMetrics.Timing timing) {
 
         final GuardDecision outcome;
         if (groupProceedings.suppresses(command, hearingOf(payload))) {
-            outcome = completed(claim, CompletionReason.GROUP_PROCEEDINGS);
+            outcome = completed(claim, CompletionReason.GROUP_PROCEEDINGS, timing);
         } else {
             final LocalDate registerDay = dates.subscriptionDay(sharedTimeOf(payload));
             final JsonNode subscriptions =
                     subscriptionsSource.subscriptionsOn(registerDay, CallerIdentity.of(command));
             outcome = spent(budget)
-                    ? overran(claim, budget)
+                    ? overran(claim, budget, timing)
                     : transformed(command, payload, subscriptions, registerDay, claim, budget,
-                            flagState);
+                            flagState, timing);
         }
         return outcome;
     }
@@ -560,7 +564,8 @@ public class DistributionPipeline {
             final LocalDate registerDay,
             final RunClaim claim,
             final RunBudget budget,
-            final RecordedFlagState flagState) {
+            final RecordedFlagState flagState,
+            final ProcessingMetrics.Timing timing) {
 
         final RunAnomalies anomalies = new RunAnomalies();
         final TransformationResult result =
@@ -571,12 +576,12 @@ public class DistributionPipeline {
             case TransformationResult.NoRegister nothing -> {
                 reported(command, anomalies);
                 yield spent(budget)
-                        ? overran(claim, budget)
-                        : completed(claim, nothing.reason().completion());
+                        ? overran(claim, budget, timing)
+                        : completed(claim, nothing.reason().completion(), timing);
             }
             case TransformationResult.Register register ->
                 output(command, register, anomalies.counts(), registerDay, claim, budget,
-                        flagState);
+                        flagState, timing);
         };
     }
 
@@ -600,6 +605,7 @@ public class DistributionPipeline {
      * @param claim       the claim this run holds
      * @param budget      what is left of the run's time
      * @param flagState   the cutover flag as the intake side last read it
+     * @param timing      how long this run has been going
      * @return the settlement the outcome calls for
      */
     private GuardDecision output(
@@ -609,12 +615,13 @@ public class DistributionPipeline {
             final LocalDate registerDay,
             final RunClaim claim,
             final RunBudget budget,
-            final RecordedFlagState flagState) {
+            final RecordedFlagState flagState,
+            final ProcessingMetrics.Timing timing) {
 
         return switch (outputMode) {
-            case RECORD -> record(command, register, claim, budget, flagState);
+            case RECORD -> record(command, register, claim, budget, flagState, timing);
             case PROGRESSION_POST ->
-                submit(command, register, anomalies, registerDay, claim, budget);
+                submit(command, register, anomalies, registerDay, claim, budget, timing);
         };
     }
 
@@ -665,6 +672,7 @@ public class DistributionPipeline {
      * @param claim     the claim this run holds
      * @param budget    what is left of the run's time
      * @param flagState the cutover flag as the intake side last read it, recorded as the row's own
+     * @param timing    how long this run has been going
      * @return the settlement the outcome calls for
      */
     private GuardDecision record(
@@ -672,11 +680,12 @@ public class DistributionPipeline {
             final TransformationResult.Register register,
             final RunClaim claim,
             final RunBudget budget,
-            final RecordedFlagState flagState) {
+            final RecordedFlagState flagState,
+            final ProcessingMetrics.Timing timing) {
 
         final GuardDecision outcome;
         if (spent(budget)) {
-            outcome = overran(claim, budget);
+            outcome = overran(claim, budget, timing);
         } else {
             validated(command, register.document());
             final RecordedCompletion recorded = registerStore.recordAndComplete(command,
@@ -694,7 +703,7 @@ public class DistributionPipeline {
                         command.source(), command.requestId(), command.hearingId(),
                         recorded.recording().outputId(), recorded.recording().supersededOutputId());
             }
-            outcome = settled(recorded.completion(), claim, CompletionReason.RECORDED);
+            outcome = settled(recorded.completion(), claim, CompletionReason.RECORDED, timing);
         }
         return outcome;
     }
@@ -861,6 +870,7 @@ public class DistributionPipeline {
      * @param registerDay the day the register covers, as its recipients were read for it (C12)
      * @param claim       the claim this run holds
      * @param budget      what is left of the run's time
+     * @param timing      how long this run has been going
      * @return the settlement the outcome calls for
      */
     private GuardDecision submit(
@@ -869,11 +879,12 @@ public class DistributionPipeline {
             final Map<TransformationAnomaly, Integer> anomalies,
             final LocalDate registerDay,
             final RunClaim claim,
-            final RunBudget budget) {
+            final RunBudget budget,
+            final ProcessingMetrics.Timing timing) {
 
         final GuardDecision outcome;
         if (spent(budget)) {
-            outcome = overran(claim, budget);
+            outcome = overran(claim, budget, timing);
         } else {
             final SubmissionReceipt receipt = submissionClient.submit(new RegisterSubmission(
                     claim, budget.deadline(), register.document(), register.courtCentreOuCode(),
@@ -885,7 +896,7 @@ public class DistributionPipeline {
             LOG.info("Register submitted. source={} requestId={} hearingId={} status={} sentNow={}",
                     command.source(), command.requestId(), command.hearingId(),
                     receipt.responseCode(), receipt.sentByThisDelivery());
-            outcome = completed(claim, CompletionReason.SUBMITTED);
+            outcome = completed(claim, CompletionReason.SUBMITTED, timing);
         }
         return outcome;
     }
@@ -896,12 +907,15 @@ public class DistributionPipeline {
      * <p>A superseded runner's completion affects no rows and comes back as an abandon; counting it
      * as a completed request would report work that was never recorded.
      *
-     * <p>Two counters, answering two questions. {@code requestSettled} says the request finished;
-     * {@code completed} says <em>how</em> — which of the five ways a court-register run ends well.
-     * Four of them send nothing, and a single undifferentiated success is the legacy defect C33.
+     * <p>Two recordings, answering two questions. {@code requestSettled} says the request finished
+     * and how long it took - one call, because the terminal state is one fact and a count without
+     * its duration is a pair that has drifted; {@code completed} says <em>how</em> it finished -
+     * which of the five ways a court-register run ends well. Four of them send nothing, and a
+     * single undifferentiated success is the legacy defect C33.
      */
-    private GuardDecision completed(final RunClaim claim, final CompletionReason reason) {
-        return settled(guard.recordCompletion(claim, reason), claim, reason);
+    private GuardDecision completed(final RunClaim claim, final CompletionReason reason,
+            final ProcessingMetrics.Timing timing) {
+        return settled(guard.recordCompletion(claim, reason), claim, reason, timing);
     }
 
     /**
@@ -910,21 +924,27 @@ public class DistributionPipeline {
      * <p>Split from {@link #completed} because one completion in this pipeline is not written here:
      * a recording and its command's completion are one transaction, so the store writes both and
      * this is handed the answer. What follows the answer is the same either way - the line support
-     * reads the run's ending from, and the two instruments the ending is counted on - and a
+     * reads the run's ending from, and the three instruments the ending is counted on - and a
      * completion the guard did not admit is counted as nothing, because nothing was recorded.
+     *
+     * <p>The third of those is the duration, which is why the token is carried this far down rather
+     * than stopped where the run returns: this method and {@link #parked} are the two places that
+     * already know the guard <em>accepted</em> the write, and a sample taken anywhere else would
+     * time a superseded runner's work as if it were this delivery's.
      *
      * @param outcome what the guard made of the completion
      * @param claim   the claim the run was made under
      * @param reason  the reason the completion was written under
+     * @param timing  how long this run has been going
      * @return the settlement the delivery is handed
      */
     private GuardDecision settled(final GuardDecision outcome, final RunClaim claim,
-            final CompletionReason reason) {
+            final CompletionReason reason, final ProcessingMetrics.Timing timing) {
         if (outcome instanceof GuardDecision.Complete) {
             LOG.info("Run finished. source={} requestId={} reason={}",
                     claim.source(), claim.requestId(), reason.value());
-            metrics.requestSettled(RequestOutcome.COMPLETED);
             metrics.completed(reason);
+            metrics.requestSettled(timing, RequestStatus.COMPLETED);
         }
         return outcome;
     }
@@ -956,24 +976,32 @@ public class DistributionPipeline {
             final RunClaim claim,
             final FailureClassification classification,
             final ReasonCode reason,
-            final boolean lastChance) {
+            final boolean lastChance,
+            final ProcessingMetrics.Timing timing) {
         LOG.error("Pipeline run failed. source={} requestId={} classification={} reason={} "
                         + "finalPermittedDelivery={}",
                 claim.source(), claim.requestId(), classification.label(), reason.code(), lastChance);
         metrics.pipelineFailed(classification);
 
         return switch (classification) {
-            case NON_TRANSIENT -> parked(guard.recordNonTransientFailure(claim, reason));
+            case NON_TRANSIENT -> parked(guard.recordNonTransientFailure(claim, reason), timing);
             case TRANSIENT -> lastChance
-                    ? parked(guard.recordExhaustion(claim, reason))
+                    ? parked(guard.recordExhaustion(claim, reason), timing)
                     : guard.recordTransientFailure(claim, reason);
         };
     }
 
-    /** Counts a parking the guard accepted, and only one it accepted. */
-    private GuardDecision parked(final GuardDecision outcome) {
+    /**
+     * Counts a parking the guard accepted, and only one it accepted.
+     *
+     * @param outcome what the guard made of the parking
+     * @param timing  how long this run has been going
+     * @return the settlement the delivery is handed
+     */
+    private GuardDecision parked(final GuardDecision outcome,
+            final ProcessingMetrics.Timing timing) {
         if (outcome instanceof GuardDecision.DeadLetter) {
-            metrics.requestSettled(RequestOutcome.FAILED);
+            metrics.requestSettled(timing, RequestStatus.FAILED);
         }
         return outcome;
     }

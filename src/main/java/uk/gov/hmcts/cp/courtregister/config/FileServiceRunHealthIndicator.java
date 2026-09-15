@@ -38,8 +38,9 @@ import org.springframework.boot.health.contributor.Status;
  * <p>It is annotated with nothing and is registered by {@link GenerationHealth}, which contributes it
  * whether or not generation is enabled: Spring validates health-group membership at startup, so a
  * readiness group naming a contributor a property had removed would fail the context with a message
- * about health groups rather than about the setting somebody changed. On an intake-only pod no run
- * ever starts, so it answers idle for ever and asks nothing of a datasource that does not exist.
+ * about health groups rather than about the setting somebody changed. On a pod that starts no
+ * generation run it answers idle for ever - asking nothing of a datasource that does not exist on an
+ * intake-only pod, and nothing of the one a report pod's e-mail output brought with it either.
  */
 public class FileServiceRunHealthIndicator implements HealthIndicator, RunProgress {
 

@@ -242,7 +242,7 @@ class CliDispatchIT {
      * writes to stdout is what a runbook step greps.
      */
     @Test
-    @DisplayName("a mistyped command name is answered with the five names and exits 2")
+    @DisplayName("a mistyped command name is answered with the six names and exits 2")
     void a_name_the_script_does_not_know_should_be_refused_rather_than_start_a_second_application()
             throws Exception {
         final Container.ExecResult mistyped = APP.execInContainer("./startup.sh", "check-flags");
@@ -251,18 +251,54 @@ class CliDispatchIT {
         // refusal a runbook step must never retry as though it were one.
         assertThat(mistyped.getExitCode()).isEqualTo(2);
         assertThat(mistyped.getStderr())
-                .as("the list an operator who mistyped a runbook step needs, and nothing about "
-                        + "what they typed: it is a string from outside this service and their "
-                        + "terminal is pasted into tickets")
+                .as("the list an operator who mistyped a runbook step needs - all six of it, "
+                        + "because CLI_COMMANDS and the case pattern are two halves of one list "
+                        + "and a change that edits one and forgets the other looks exactly like a "
+                        + "change that edited both - and nothing about what they typed")
                 .contains("usage: startup.sh <command> [arguments]")
                 .contains("generate-register", "notify-register", "list-batches",
-                        "supersede-before", "check-flag")
+                        "supersede-before", "check-flag", "report-exceptions")
                 .doesNotContain("check-flags");
         assertThat(mistyped.getStdout())
                 .as("and no second application was started: the fall-through is for a container "
                         + "with no arguments, which is every deployed pod")
                 .doesNotContain("Running docker java jarfile")
                 .doesNotContain("Started Application");
+    }
+
+    /**
+     * The sixth command, asked of the built image for what it takes.
+     *
+     * <p><strong>Red, not a characterisation.</strong> This case runs before
+     * {@code docker/startup.sh} is changed, precisely because the script's {@code case} pattern and
+     * its {@code CLI_COMMANDS} string are two halves of one list: a task that edits one and forgets
+     * the other looks exactly like a task that edited both, right up until an operator types the
+     * name at 02:00 and the pod starts a second whole application instead of answering.
+     *
+     * <p>{@code --help} rather than a window, for the reason {@code generate-register --help} is
+     * asked that way above: {@code CliMain.wired} answers what a command takes before it resolves a
+     * bean, so the case is about the dispatch and about nothing this container's own store or
+     * schedule would have to answer.
+     *
+     * @throws Exception where the exec cannot be made at all
+     */
+    @Test
+    @DisplayName("report-exceptions --help prints what the sixth command takes and exits 0")
+    void report_exceptions_should_dispatch_out_of_the_image() throws Exception {
+        final Container.ExecResult asked =
+                APP.execInContainer("./startup.sh", "report-exceptions", "--help");
+
+        // 0 and not 2: a name the script does not recognise is answered by its own usage arm on
+        // the failure code, which is exactly what this case is red on before startup.sh is changed.
+        assertThat(asked.getExitCode()).isZero();
+        assertThat(asked.getStdout().lines()).contains(
+                "usage: report-exceptions [--since S] [--email] (lists what has gone wrong since S,"
+                        + " or since the previous scheduled report)");
+        assertThat(asked.getStderr())
+                .as("and it was reached by dispatch out of the fat jar rather than by a second "
+                        + "application starting, which is what the script's own arm does with a "
+                        + "name it does not know")
+                .contains("Running the report-exceptions command from /app/");
     }
 
     /**
@@ -402,6 +438,11 @@ class CliDispatchIT {
                 // Hosts only: each client appends its own contract path.
                 Map.entry("SYSTEMDOCGENERATOR_BASE_URL", WIREMOCK_URL),
                 Map.entry("NOTIFICATIONNOTIFY_BASE_URL", WIREMOCK_URL),
+                // The CJSCPPUID both of those calls are made under. Required to be set wherever
+                // either outward half sends, never connected to here: a local-only dummy, and a
+                // UUID because that is the shape an identity takes.
+                Map.entry("COURT_REGISTER_SYSTEM_USER_ID",
+                        "00000000-0000-0000-0000-000000000000"),
                 // Local-only dummy, and a UUID because startup checks the shape (fix P9). Never a
                 // real template id.
                 Map.entry("CR_EMAIL_TEMPLATE_ID", "11111111-1111-1111-1111-111111111111"),

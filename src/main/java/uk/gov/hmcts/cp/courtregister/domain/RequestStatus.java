@@ -22,5 +22,22 @@ public enum RequestStatus {
     COMPLETED,
 
     /** The permitted deliveries were exhausted; parked, and replayable under a fresh identity. */
-    FAILED
+    FAILED;
+
+    /**
+     * Whether this state is one a run stops in.
+     *
+     * <p>Asked by the request-duration timer, which may only take a sample from a run that has
+     * finished. The answer lives on the enumeration rather than at the instrument because it is a
+     * property of the state and not of the measurement: a fifth constant added later has to decide
+     * which side of this line it falls on, and deciding it here is deciding it once.
+     *
+     * <p>Terminal is not the same as final. A {@code FAILED} record is replayable under a fresh
+     * message identity, and the run that reached it still finished.
+     *
+     * @return whether a run in this state has finished
+     */
+    public boolean isTerminal() {
+        return this == COMPLETED || this == FAILED;
+    }
 }

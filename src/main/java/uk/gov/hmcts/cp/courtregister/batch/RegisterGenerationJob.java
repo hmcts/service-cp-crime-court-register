@@ -23,6 +23,7 @@ import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.RunProgress;
+import uk.gov.hmcts.cp.courtregister.config.SchedulingConfig;
 import uk.gov.hmcts.cp.courtregister.domain.AssembledBatch;
 import uk.gov.hmcts.cp.courtregister.domain.BatchAssembly;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
@@ -230,7 +231,9 @@ public class RegisterGenerationJob {
     // PMD.OnlyOneReturn: the two exits are the two nights - one the flag stopped and one it allowed
     // - and each reports where it ends; funnelling them through one would put the report after a
     // branch that has to be able to say which of the two it is describing.
-    @Scheduled(cron = "${courtregister.generation.cron}", zone = "${courtregister.generation.zone}")
+    @Scheduled(cron = "${courtregister.generation.cron}",
+            zone = "${courtregister.generation.zone}",
+            scheduler = SchedulingConfig.GENERATION_SCHEDULER)
     @SchedulerLock(name = LOCK_NAME, lockAtMostFor = LOCK_AT_MOST_FOR)
     public RunReport run() {
         return RunCorrelation.under(this::correlatedRun);

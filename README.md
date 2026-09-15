@@ -75,6 +75,26 @@ This repository carries no design narrative of its own. What it does carry:
   to the defect-fix register. The consolidation audit reproduces the recorded progression corpus by
   manifest digest on every build, with one attributed deviation (P10). Task-level detail is the
   checkbox state in `specs/002-consolidate-progression-leg/tasks.md`.
+- **Increment 003 — exception-report: complete.** Nothing silently wrong any more: a 07:00
+  Europe/London weekday run, on a scheduler of its own and under its own lock, reports every FAILED
+  request, every request still in flight past its threshold, every batch late at one of its three
+  stages, every failed batch and every refused notification over the window that opens at the
+  previous scheduled run. It reads the store and nothing else, is gated by the cutover flag nowhere,
+  and runs whatever `courtregister.generation.enabled` says. Two sinks: the Log Analytics one, which
+  writes one `courtregister_exception` event per exception and one ten-field
+  `courtregister_exception_report` summary per run, and the e-mail one, which renders the list as a
+  CSV into the framework file service and asks notificationnotify to attach it — one send per
+  support address. `IntakeAgeSweep` refreshes the two intake gauges on its own fixed delay in every
+  non-command JVM and under no lock, which with the request-duration timer and the report's own
+  counters completes the four instruments of design section 11. `report-exceptions` is the sixth
+  operations command, producing the same report on demand for a window given as an instant or a
+  duration. Task-level detail is the checkbox state in `specs/003-exception-report/tasks.md`.
+  **The e-mail output ships switched off in every environment**, and is gated on the
+  notificationnotify team providing the template it is sent under: user stories 1, 2, 3 and 5 are
+  complete without it, `--email` is refused with a bounded reason rather than silently doing
+  nothing, and startup refuses the switch with no template, no recipients, no file-service URL or
+  no notificationnotify endpoint. No `doc/DEFECT-FIXES.md` row is added or amended — a new
+  capability is not a deviation from a legacy oracle.
 - **Cutover** is a separate step now that both increments are signed off: the producer's queue
   publisher and the legacy kill-switch already exist as patterns; the flag is the only lever. Two
   register rows are tracked to conclusion first — P6 and P7 depend on progression's retirement PR
@@ -83,7 +103,8 @@ This repository carries no design narrative of its own. What it does carry:
 
 This service exposes **no REST API**. The only HTTP surface is Spring Boot Actuator. Operational
 actions (regenerate a date, resend a batch's failed notifications, list batches, review rows recorded
-while the flag was off) are a CLI baked into the image and run with `kubectl exec`.
+while the flag was off, pull the exception report for a window) are a CLI baked into the image and
+run with `kubectl exec`.
 
 ## Prerequisites
 
@@ -97,14 +118,24 @@ while the flag was off) are a CLI baked into the image and run with `kubectl exe
 ```bash
 ./gradlew build                 # compile + tests + PMD + Checkstyle (0 warnings) + JaCoCo gate
 ./gradlew test                  # test suite only; the *IT suites in it need Docker
+./gradlew test -PexcludeTags=timing  # the same, without the two wall-clock cases (see below)
 ./gradlew checkstyleMain        # style gate on main sources
 ./gradlew pmdMain               # PMD on main sources; `check` runs pmdMain and pmdTest as well
 ./gradlew jacocoTestReport      # coverage report → build/reports/jacoco
 ./gradlew bootRun               # local run against docker-compose dependencies (see below)
 ./scripts/container-smoke.sh    # packaged-artefact smoke: compose up, readiness gate, then
-                                # `startup.sh check-flag` through the entrypoint that dispatches
-                                # the operations commands
+                                # `startup.sh check-flag` and `startup.sh report-exceptions
+                                # --since 1h` through the entrypoint that dispatches the
+                                # operations commands; neither of them writes anything
 ```
+
+Two cases in `ExceptionReportEndToEndIT` carry `@Tag("timing")`: SC-006's "ten thousand rows
+reported on inside ten seconds" and SC-008's "both schedules fired". They are real acceptance
+criteria and they stay in the default selection, but their answer depends on how busy the host is -
+so a developer building something else on the same machine can leave them out by name rather than by
+disabling the suite. **`-PexcludeTags` is a local hatch only: CI runs every tag** - the one workflow
+that tests, `ci-build-publish.yml`, runs `./gradlew jacocoTestReport check` and passes no
+`excludeTags`, so nothing an acceptance criterion pins can be skipped on the way to a merge.
 
 Local dependencies:
 

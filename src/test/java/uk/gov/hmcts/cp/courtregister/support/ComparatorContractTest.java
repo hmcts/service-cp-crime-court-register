@@ -31,8 +31,8 @@ import tools.jackson.databind.ObjectMapper;
  * golden file while the ported pipeline reorders defendants, and the entire suite silently stops
  * being evidence of anything. This class is the test that the tests are real.
  *
- * <p>The contract being pinned, from {@code .claude/rules/technical-rules.md} ("Testing
- * Conventions") and the constitution's Principle I:
+ * <p>The contract being pinned, from the service's technical rules on testing conventions and the
+ * constitution's Principle I:
  *
  * <ul>
  *   <li>field-order-<strong>in</strong>sensitive</li>

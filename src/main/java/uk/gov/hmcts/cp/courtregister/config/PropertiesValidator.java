@@ -10,6 +10,7 @@ import java.util.regex.Pattern;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.env.Environment;
+import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Component;
 
 /**
@@ -42,7 +43,7 @@ import org.springframework.stereotype.Component;
 // the packaged application starts no context at all ("No qualifying bean of type
 // CourtRegisterProperties"), which the container smoke finds and no JUnit suite does.
 @EnableConfigurationProperties({CourtRegisterProperties.class, GenerationProperties.class,
-    FeatureFlagProperties.class})
+    FeatureFlagProperties.class, ReportProperties.class})
 public class PropertiesValidator implements InitializingBean {
 
     /**
@@ -70,6 +71,20 @@ public class PropertiesValidator implements InitializingBean {
      * {@code lock-at-most-for} is longer than the shipped {@code run-deadline} by.
      */
     public static final Duration SCHEDULER_LOCK_MARGIN = Duration.ofMinutes(10);
+
+    /**
+     * The fixed bound on how long one exception-report run may take.
+     *
+     * <p>Fixed rather than configured, for the reason {@link #SCHEDULER_LOCK_MARGIN} is: it is not an
+     * environment's choice how long reading five bounded lists and handing them to two sinks may
+     * take, and the only thing an operator can do with a number like this is make it large enough to
+     * hide the run that has stopped answering.
+     *
+     * <p>The shipped fifteen-minute lock is exactly this plus {@link #SCHEDULER_LOCK_MARGIN}, which
+     * is the same margin generation's 60m + 10m = 70m already uses. A second constant of the same
+     * value under a second name is a margin that can drift from itself.
+     */
+    public static final Duration REPORT_RUN_BUDGET = Duration.ofMinutes(5);
 
     /**
      * The factor the notification claim's lease has to exceed one recipient's POST cycle by.
@@ -129,6 +144,7 @@ public class PropertiesValidator implements InitializingBean {
     private static final String RUN_DEADLINE = GENERATION + ".run-deadline";
     private static final String LOCK_AT_MOST_FOR = GENERATION + ".lock-at-most-for";
     private static final String GENERATION_COMPLETION = GENERATION + ".completion";
+    private static final String GENERATION_GRACE_PERIOD = GENERATION + ".grace-period";
     private static final String NN_MODE = GENERATION + ".nn-mode";
     private static final String FILESERVICE_URL = "courtregister.fileservice.url";
     private static final String FEATURE_ENDPOINT = "courtregister.feature.endpoint";
@@ -142,7 +158,37 @@ public class PropertiesValidator implements InitializingBean {
             "courtregister.notification.claim-lease";
     private static final String SDG_ENDPOINT = "courtregister.endpoints.systemdocgenerator";
     private static final String NN_ENDPOINT = "courtregister.endpoints.notificationnotify";
+    private static final String ENDPOINTS_SYSTEM_USER_ID = ENDPOINTS + ".system-user-id";
     private static final String EMAIL_TEMPLATE = "courtregister.email.templates.cr_standard";
+
+    /**
+     * The sweep's own interval, on the intake half rather than under {@code courtregister.report}.
+     *
+     * <p>The sweep that reads it runs in every service JVM, including one with the report and the
+     * generation half both switched off - which binds neither of their records, and could not read
+     * a key that lived on one of them.
+     */
+    private static final String INTAKE_GAUGE_REFRESH = "courtregister.intake.gauge-refresh";
+
+    private static final String REPORT = "courtregister.report";
+    private static final String REPORT_CRON = REPORT + ".cron";
+    private static final String REPORT_ZONE = REPORT + ".zone";
+    private static final String REPORT_ZONE_OVERRIDE_ACKNOWLEDGED =
+            REPORT + ".zone-override-acknowledged";
+    private static final String REPORT_LOCK_AT_MOST_FOR = REPORT + ".lock-at-most-for";
+    private static final String REPORT_REQUEST_TERMINAL_WITHIN = REPORT + ".request-terminal-within";
+    private static final String REPORT_BATCH_GENERATED_WITHIN = REPORT + ".batch-generated-within";
+    private static final String REPORT_NOTIFIED_WITHIN = REPORT + ".notified-within";
+    private static final String REPORT_MAX_ENTRIES = REPORT + ".max-entries";
+    private static final String REPORT_EMAIL_ENABLED = REPORT + ".email.enabled";
+    private static final String REPORT_EMAIL_TEMPLATE = REPORT + ".email.template-id";
+    private static final String REPORT_EMAIL_RECIPIENTS = REPORT + ".email.recipients";
+
+    /** The least a report may carry and still be a report rather than a quiet morning. */
+    private static final int ONE_EXCEPTION = 1;
+
+    /** The hour the report's schedule is a wall-clock requirement in, for the zone refusal. */
+    private static final String REPORT_HOUR = "07:00";
 
     /** Spring's own key, not this service's: the broker the completion events arrive on. */
     private static final String BROKER_URL = "spring.artemis.broker-url";
@@ -202,6 +248,18 @@ public class PropertiesValidator implements InitializingBean {
     private static final Pattern UUID_SHAPE = Pattern.compile(
             "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
 
+    /**
+     * The shape a report recipient has to be in, checked at startup rather than at 07:00.
+     *
+     * <p>Deliberately coarse - one local part, one at-sign, a dotted domain. Its job is to catch the
+     * value that was never an address at all (a name, a Helm placeholder, a list pasted with a
+     * stray separator), which is the failure notificationnotify refuses every recipient of every
+     * morning on. Nothing here decides whether a well-formed address is a real mailbox, and nothing
+     * can.
+     */
+    private static final Pattern ADDRESS_SHAPE =
+            Pattern.compile("[^\\s@,;]+@[^\\s@,;]+\\.[^\\s@,;]+");
+
     /** The four downstream modes, by the setting each one is spelled with in a refusal. */
     private static final String SDG_MODE = GENERATION + ".sdg-mode";
     private static final String FILESERVICE_MODE = GENERATION + ".fileservice-mode";
@@ -220,6 +278,8 @@ public class PropertiesValidator implements InitializingBean {
 
     private final FeatureFlagProperties feature;
 
+    private final ReportProperties report;
+
     /**
      * The broker the completion events arrive on, read from the environment rather than bound.
      *
@@ -236,21 +296,24 @@ public class PropertiesValidator implements InitializingBean {
      * @param properties  the bound settings
      * @param generation  the downstream half's settings
      * @param feature     where the one lever is read from
+     * @param report      the morning exception report's settings
      * @param environment the resolved environment, for Spring's own broker key
      */
     public PropertiesValidator(final CourtRegisterProperties properties,
                                final GenerationProperties generation,
                                final FeatureFlagProperties feature,
+                               final ReportProperties report,
                                final Environment environment) {
         this.properties = properties;
         this.generation = generation;
         this.feature = feature;
+        this.report = report;
         this.brokerUrl = environment.getProperty(BROKER_URL);
     }
 
     @Override
     public void afterPropertiesSet() {
-        validate(properties, generation, feature, brokerUrl);
+        validate(properties, generation, feature, report, brokerUrl);
     }
 
     /**
@@ -259,14 +322,17 @@ public class PropertiesValidator implements InitializingBean {
      * @param properties the bound settings
      * @param generation the downstream half's settings
      * @param feature    where the one lever is read from
+     * @param report     the morning exception report's settings
      * @param brokerUrl  {@code spring.artemis.broker-url}, empty or null where none is configured
      * @throws IllegalStateException if any rule is broken
      */
     public static void validate(final CourtRegisterProperties properties,
                                 final GenerationProperties generation,
                                 final FeatureFlagProperties feature,
+                                final ReportProperties report,
                                 final String brokerUrl) {
         validate(properties);
+        validateReport(report, generation);
         generation.validate();
         validateTheSchedulerLockOutlivesTheRun(generation);
         validateTheNotificationClaimOutlastsOnePostCycle(properties);
@@ -274,6 +340,9 @@ public class PropertiesValidator implements InitializingBean {
         validateTheStubsAreNotWhereRegistersAreProduced(properties, generation);
         validateTheLocalCredentialIsNowhereARealFlagIsRead(properties, feature);
         validateGenerationHasTheDownstreamsItNeeds(properties, generation, feature);
+        validateWhicheverHalfWritesAFileCanReachTheFileService(properties, generation, report);
+        validateWhicheverHalfSendsCanReachNotificationnotify(properties, generation, report);
+        validateWhicheverHalfSendsHasAnIdentityToSendUnder(properties, generation, report);
         validateTheCompletionMechanismCanHearAnOutcome(generation, brokerUrl);
     }
 
@@ -292,6 +361,23 @@ public class PropertiesValidator implements InitializingBean {
         validateTheSubmissionCanPost(properties);
         validateEveryStepTogetherFinishesInsideTheRun(properties);
         validateTheOutboundValidatorIsOnWhereItIsDeployed(properties);
+        validateTheIntakeGaugesCanBeRefreshed(properties);
+    }
+
+    /**
+     * The intake gauges have to be refreshed by something, and a fixed delay of zero refreshes
+     * nothing.
+     *
+     * <p>On the intake half's own list rather than the report's, because that is where the setting
+     * is and where the sweep is: it publishes the age of the oldest unfinished request and the count
+     * of unfinished requests over the threshold in every JVM that is not a command, whichever of the
+     * other two halves this deployment switched on. A refresh a pod cannot schedule is a pod whose
+     * gauges read whatever they were born with for the life of it, and an alert on a gauge that
+     * never moves is an alert that never fires.
+     */
+    private static void validateTheIntakeGaugesCanBeRefreshed(
+            final CourtRegisterProperties properties) {
+        requirePositive(properties.intake().gaugeRefresh(), INTAKE_GAUGE_REFRESH);
     }
 
     private static void validateRunFinishesBeforeTheClaimExpires(
@@ -1074,8 +1160,10 @@ public class PropertiesValidator implements InitializingBean {
      * Enabling the downstream half is enabling everything it depends on.
      *
      * <p>Each of these is the same failure wearing a different name: the pod starts, reports itself
-     * healthy, waits until 18:00 and then cannot store the payload, cannot read the flag, cannot ask
-     * for a render or cannot send an e-mail. The registers are not late, they are never produced,
+     * healthy, waits until 18:00 and then cannot read the flag or cannot ask for a render. The
+     * endpoint it sends through is required here no longer, because it is required of whichever
+     * half sends; the rest are this half's alone. The registers are not late, they are never
+     * produced,
      * and the first anybody hears of it is a Youth Offending Team asking where the register is.
      * Every one of these settings arrives from the deployment, so every one of them is a deploy that
      * should have failed.
@@ -1089,9 +1177,6 @@ public class PropertiesValidator implements InitializingBean {
             final CourtRegisterProperties properties, final GenerationProperties generation,
             final FeatureFlagProperties feature) {
         if (generation.enabled()) {
-            requireForGeneration(properties.fileservice().url(), FILESERVICE_URL,
-                    "systemdocgenerator renders only a payload that is already in the file service,"
-                            + " and there is nowhere to put one");
             requireForGeneration(feature.endpoint(), FEATURE_ENDPOINT,
                     "the run reads the cutover flag before it does anything else, and an unreadable"
                             + " flag is a run skipped every night");
@@ -1101,8 +1186,6 @@ public class PropertiesValidator implements InitializingBean {
                             + " of somebody else's flag or of none");
             requireForGeneration(properties.endpoints().systemdocgenerator(), SDG_ENDPOINT,
                     "the generate-document command has nowhere to go without it");
-            requireForGeneration(properties.endpoints().notificationnotify(), NN_ENDPOINT,
-                    "the send-email-notification command has nowhere to go without it");
             validateTheEmailTemplateIsOneNotificationnotifyWillAccept(properties, generation);
         }
     }
@@ -1165,6 +1248,117 @@ public class PropertiesValidator implements InitializingBean {
     }
 
     /**
+     * Whichever half writes a file has to have a file service to write it into.
+     *
+     * <p>The file service is the one downstream the two outward legs share: the nightly run stores a
+     * render payload and hands systemdocgenerator its id, and the morning report stores the
+     * exception list as a CSV and hands notificationnotify its id. The URL was required of the
+     * generation half alone, which made a pod in FR-004's shape with the e-mail output on a pod that
+     * starts clean, reports itself healthy, and fails at 07:00 with nothing to attach - the exact
+     * shape of failure this validator exists to turn into a refused deploy.
+     *
+     * <p>The refusal names <strong>which half asked</strong>, because the value to set is the same
+     * either way and the thing an operator has to know is why a pod that renders nothing wants a
+     * file service at all.
+     *
+     * <p>Only the URL. The credentials stay optional for the reason
+     * {@link FileServiceDataSourceConfig} gives - a stack that authenticates the pod itself supplies
+     * neither - and the URL is the one of the three that has no other way of arriving.
+     */
+    private static void validateWhicheverHalfWritesAFileCanReachTheFileService(
+            final CourtRegisterProperties properties, final GenerationProperties generation,
+            final ReportProperties report) {
+
+        if (hasText(properties.fileservice().url())) {
+            return;
+        }
+        if (generation.enabled()) {
+            throw new IllegalStateException(FILESERVICE_URL + MUST_BE_SET_WHEN + GENERATION_ENABLED
+                    + " is true - systemdocgenerator renders only a payload that is already in the"
+                    + " file service, and there is nowhere to put one");
+        }
+        if (report.email().enabled()) {
+            throw new IllegalStateException(FILESERVICE_URL + MUST_BE_SET_WHEN
+                    + REPORT_EMAIL_ENABLED + " is true - the report's exception list is attached by"
+                    + " file-service id, so a morning with nowhere to write the CSV is a morning"
+                    + " support is told nothing about, on a pod that renders no document at all");
+        }
+    }
+
+    /**
+     * Whichever half sends has to have a notificationnotify to send through.
+     *
+     * <p>The second downstream the two outward legs share, and the second rule of this shape: the
+     * nightly run posts one send-email-notification per Youth Offending Team, and the morning report
+     * posts one per support address with the exception CSV attached by id. The endpoint was required
+     * of the generation half alone, which made a pod in FR-004's shape with the e-mail output on a
+     * pod that starts clean, reports itself healthy, and fails every send at 07:00 against a client
+     * with no base URL - the shape review gate 7 had just moved the file-service URL out of, one
+     * setting along.
+     *
+     * <p>The refusal names <strong>which half asked</strong>, for the reason the file service's
+     * does: the value to set is the same either way, and what an operator has to know is why a pod
+     * that renders nothing wants a notificationnotify endpoint at all.
+     */
+    private static void validateWhicheverHalfSendsCanReachNotificationnotify(
+            final CourtRegisterProperties properties, final GenerationProperties generation,
+            final ReportProperties report) {
+
+        if (hasText(properties.endpoints().notificationnotify())) {
+            return;
+        }
+        if (generation.enabled()) {
+            throw new IllegalStateException(NN_ENDPOINT + MUST_BE_SET_WHEN + GENERATION_ENABLED
+                    + " is true - the send-email-notification command has nowhere to go without it,"
+                    + " and every Youth Offending Team on every batch goes untold");
+        }
+        if (report.email().enabled()) {
+            throw new IllegalStateException(NN_ENDPOINT + MUST_BE_SET_WHEN + REPORT_EMAIL_ENABLED
+                    + " is true - the report's own client is built over it, so a morning with"
+                    + " nowhere to post is support told nothing, on a pod that renders no document"
+                    + " at all");
+        }
+    }
+
+    /**
+     * Whichever half sends has to have an identity to send under.
+     *
+     * <p>The gap review gate 7 named and deliberately left: it fixed the endpoint and recorded that
+     * {@code courtregister.endpoints.system-user-id} was asked of neither half, because giving it a
+     * rule inside a remediation commit would have been a new refusal wearing a bug fix's clothes.
+     * This is the gate that catalogues it.
+     *
+     * <p>Both outward legs put the value in the {@code CJSCPPUID} header of every
+     * {@code send-email-notification} they make, and the framework refuses a command without one.
+     * So a deployment that sets the endpoint and forgets the identity is a pod that starts clean,
+     * reports itself healthy, and has every send refused - the Youth Offending Teams at 18:00, or
+     * support at 07:00. It is the same shape as the endpoint rule beside it, one setting along.
+     *
+     * <p>The value is <strong>never quoted back</strong>: it is a secret, and a startup failure is a
+     * log line in the same index as every other (constitution Principle VII).
+     */
+    private static void validateWhicheverHalfSendsHasAnIdentityToSendUnder(
+            final CourtRegisterProperties properties, final GenerationProperties generation,
+            final ReportProperties report) {
+
+        if (hasText(properties.endpoints().systemUserId())) {
+            return;
+        }
+        if (generation.enabled()) {
+            throw new IllegalStateException(ENDPOINTS_SYSTEM_USER_ID + MUST_BE_SET_WHEN
+                    + GENERATION_ENABLED + " is true - every send-email-notification is made under"
+                    + " it, and a command with no CJSCPPUID is refused: every Youth Offending Team"
+                    + " on every batch goes untold");
+        }
+        if (report.email().enabled()) {
+            throw new IllegalStateException(ENDPOINTS_SYSTEM_USER_ID + MUST_BE_SET_WHEN
+                    + REPORT_EMAIL_ENABLED + " is true - the report's own send is made under it, so"
+                    + " a morning with no identity to post under is support told nothing, on a pod"
+                    + " that renders no document at all");
+        }
+    }
+
+    /**
      * A setting the downstream half cannot run without, and the consequence of its absence.
      *
      * @param value       what the deployment supplied
@@ -1222,6 +1416,208 @@ public class PropertiesValidator implements InitializingBean {
                             + " starts or a client that cannot reach anything, read as an"
                             + " unreadable flag every night");
         }
+    }
+
+    /**
+     * The morning report's own refusals - a schedule nothing can read, a threshold that reports
+     * everything as late, a schedule read in the wrong zone, a rendering limit of zero whichever of
+     * its two sources it came from, a lock that cannot cover the run it locks, and an e-mail output
+     * enabled with nobody to send to or no template to send under.
+     *
+     * <p>Unconditional on {@link ReportProperties#enabled()}, for the reason the generation half's
+     * zone and lock rules are unconditional on its own switch: a report that happens to be disabled
+     * in this deployment is not a reason to accept a setting that would be wrong in the next one.
+     * The two e-mail rules are the exception, because neither of their settings is required until
+     * something sends.
+     *
+     * <p>No refusal here quotes an address or a template id back. A startup failure is a log line in
+     * the same index as every other, recipients are people's addresses, and naming the setting is
+     * what an operator needs in order to fix it.
+     *
+     * @param report     the report's settings
+     * @param generation the downstream half's settings, which the rendering limit borrows from
+     * @throws IllegalStateException if any of the report's rules is broken
+     */
+    /* default */ static void validateReport(final ReportProperties report,
+            final GenerationProperties generation) {
+        validateTheScheduleCanBeRead(report);
+        GenerationProperties.requireTheCourtsZone(report.zone(), report.zoneOverrideAcknowledged(),
+                REPORT_ZONE, REPORT_ZONE_OVERRIDE_ACKNOWLEDGED, REPORT_HOUR);
+        requirePositive(report.requestTerminalWithin(), REPORT_REQUEST_TERMINAL_WITHIN);
+        requirePositive(report.notifiedWithin(), REPORT_NOTIFIED_WITHIN);
+        validateTheRenderingLimitIsUsableWhereverItCameFrom(report, generation);
+        validateTheReportCanCarryAtLeastOneException(report);
+        validateTheReportLockOutlivesItsRun(report);
+        validateTheReportCanReachSomebody(report);
+    }
+
+    /**
+     * A report capped at nothing is a morning that reads exactly like a quiet one.
+     *
+     * <p>The cap exists so that one very bad night cannot become a line-per-exception write that
+     * outlives its own lock, and it bounds the two late kinds alone - the failure kinds are carried
+     * whole, because a failure one window dropped is a failure no window would report again. At
+     * zero it keeps no late entry at all: the summary's five counts would still be true and every
+     * late event would be missing, which is the same silence the whole feature exists to end - and
+     * it would be discovered at 07:00 on the morning it mattered rather than at startup.
+     */
+    private static void validateTheReportCanCarryAtLeastOneException(final ReportProperties report) {
+        if (report.maxEntries() < ONE_EXCEPTION) {
+            throw new IllegalStateException(REPORT_MAX_ENTRIES + " (" + report.maxEntries()
+                    + ") must be at least " + ONE_EXCEPTION + " - a report that carries no"
+                    + " late exception at all is indistinguishable from a morning with nothing"
+                    + " wrong on it");
+        }
+    }
+
+    /**
+     * A schedule nothing can read is two failures at once, and neither is discovered before 07:00.
+     *
+     * <p>The cron is the run's trigger <em>and</em> the window it reads back over
+     * ({@code ReportWindow.forScheduledRun} for the job, {@code sinceLastScheduledRun} for the
+     * command), so an unparseable one is a job
+     * {@code @Scheduled} refuses at refresh and a window neither the run nor the command can open.
+     * Unconditional on {@link ReportProperties#enabled()}, like the zone rule beside it: a schedule
+     * that would be wrong in the next deployment is not made right by this one having the report
+     * switched off.
+     *
+     * <p>The value is not quoted back. It is an operator's own text and this refusal is a log line;
+     * naming the setting is what is needed in order to fix it.
+     */
+    private static void validateTheScheduleCanBeRead(final ReportProperties report) {
+        if (!CronExpression.isValidExpression(report.cron())) {
+            throw new IllegalStateException(
+                    REPORT_CRON + " must be a schedule Spring's six-field dialect can read - it is"
+                            + " both the run's trigger and the window the run reads back over, so"
+                            + " an unreadable one is a job that never fires and a window nothing"
+                            + " can open");
+        }
+    }
+
+    /**
+     * The rendering limit has to be usable whichever of its two sources it came from.
+     *
+     * <p>An explicitly set value is the deployment's own and is held to being usable under its own
+     * key. Only an <strong>unset</strong> one resolves: "unset" and "zero" are different things an
+     * operator can mean, and a zero quietly read as the grace period is a rendering limit nobody
+     * chose. A zero that arrives <em>through</em> the resolution is refused too, and under
+     * {@link #GENERATION_GRACE_PERIOD} rather than under the report's own key - because that is the
+     * key an operator has to edit, and a refusal naming a key nobody set is a refusal nobody can
+     * act on. Left unchecked it is a limit of zero seconds, under which every batch in the estate
+     * is late on its first morning and the report says nothing useful ever again.
+     */
+    private static void validateTheRenderingLimitIsUsableWhereverItCameFrom(
+            final ReportProperties report, final GenerationProperties generation) {
+        requirePositive(resolvedBatchGeneratedWithin(report, generation),
+                report.batchGeneratedWithin() == null
+                        ? GENERATION_GRACE_PERIOD
+                        : REPORT_BATCH_GENERATED_WITHIN);
+    }
+
+    /**
+     * The lock over the morning run has to outlast the run it locks.
+     *
+     * <p>The same arrangement the nightly run's lock is in, and refused the same way. The run budget
+     * is fixed rather than configured, so there is only one number an operator can get wrong here -
+     * and a lock that expires under a run still reading is a lock the next replica takes, after
+     * which support is sent the same morning twice by two pods that each believe they are the only
+     * one.
+     */
+    private static void validateTheReportLockOutlivesItsRun(final ReportProperties report) {
+        final Duration required = REPORT_RUN_BUDGET.plus(SCHEDULER_LOCK_MARGIN);
+        if (report.lockAtMostFor().compareTo(required) < 0) {
+            throw new IllegalStateException(
+                    REPORT_LOCK_AT_MOST_FOR + " (" + report.lockAtMostFor() + MUST_BE_AT_LEAST
+                            + "the fixed " + REPORT_RUN_BUDGET + " run budget plus the "
+                            + SCHEDULER_LOCK_MARGIN + " margin (" + required + "), so a run still"
+                            + " reading cannot be joined by the replica that took the lock it had"
+                            + " already lost");
+        }
+    }
+
+    /**
+     * An e-mail output that is switched on must have somewhere to send and something to send under.
+     *
+     * <p>The same argument as fix P9 makes for the register's own template, one morning earlier: a
+     * deployment that sends nothing every morning and says so only in a log line is the silence this
+     * service exists to end, whereas a deployment that cannot start is a deployment that gets fixed.
+     * The Log Analytics output is unaffected either way, which is why the e-mail switch is its own.
+     */
+    private static void validateTheReportCanReachSomebody(final ReportProperties report) {
+        if (!report.email().enabled()) {
+            return;
+        }
+        final String template = report.email().templateId();
+        requireForReport(template, REPORT_EMAIL_TEMPLATE,
+                "notificationnotify refuses the command on a blank id, every recipient of every"
+                        + " morning");
+        if (!UUID_SHAPE.matcher(template).matches()) {
+            throw new IllegalStateException(
+                    REPORT_EMAIL_TEMPLATE + " must be a UUID when " + REPORT_EMAIL_ENABLED
+                            + " is true - notificationnotify refuses the command on anything else,"
+                            + " and the id is not quoted back here because a refusal is a log line");
+        }
+        if (report.email().recipients().isEmpty()) {
+            throw new IllegalStateException(
+                    REPORT_EMAIL_RECIPIENTS + MUST_BE_SET_WHEN + REPORT_EMAIL_ENABLED
+                            + " is true - an e-mail output with nobody to send to is a morning"
+                            + " report nobody receives, and nothing says so");
+        }
+        // No null check on the entry: ReportProperties.Email freezes the list with List.copyOf,
+        // which refuses a null element before the validator ever sees it. An empty entry is not a
+        // null one and is refused here, by the address rule, which is where the stray separator
+        // that produces it belongs.
+        for (final String recipient : report.email().recipients()) {
+            if (!ADDRESS_SHAPE.matcher(recipient.trim()).matches()) {
+                throw new IllegalStateException(
+                        REPORT_EMAIL_RECIPIENTS + " must be a comma-separated list of addresses"
+                                + " when " + REPORT_EMAIL_ENABLED + " is true - one entry is not"
+                                + " one, and it is deliberately not quoted back: it is somebody's"
+                                + " address and this refusal is a log line");
+            }
+        }
+    }
+
+    /**
+     * A setting the morning report's e-mail output cannot send without, and the consequence of its
+     * absence.
+     *
+     * @param value       what the deployment supplied
+     * @param setting     the key, so the message names the setting to set
+     * @param consequence what happens at 07:00 without it, so the message says why it matters
+     */
+    private static void requireForReport(final String value, final String setting,
+            final String consequence) {
+        if (!hasText(value)) {
+            throw new IllegalStateException(
+                    setting + MUST_BE_SET_WHEN + REPORT_EMAIL_ENABLED + " is true - " + consequence);
+        }
+    }
+
+    /**
+     * The rendering limit the report reads, resolved once.
+     *
+     * <p>{@code batch-generated-within} is the one duration this increment leaves undefaulted, and
+     * it resolves to the generation half's grace period: that is already the interval after which
+     * the reconciler decides a render has not happened, and two different answers to "how long is
+     * too long for a render" is the shape that makes an alert argue with a batch state. An
+     * explicitly set value is the deployment's own and is used as it stands - a set zero is refused
+     * rather than resolved, because "unset" and "zero" are different things an operator can mean.
+     *
+     * <p>One mechanism, not two: there is no {@code application.yaml} placeholder for this key,
+     * because nothing reads it through the placeholder resolver. A value written in both places is a
+     * value whose two copies can disagree, and the morning they do is the morning an alert argues
+     * with a batch state.
+     *
+     * @param report     the report's settings
+     * @param generation the downstream half's settings
+     * @return how long a batch may stay PENDING or GENERATING before the report calls it late
+     */
+    public static Duration resolvedBatchGeneratedWithin(final ReportProperties report,
+            final GenerationProperties generation) {
+        return report.batchGeneratedWithin() == null
+                ? generation.gracePeriod()
+                : report.batchGeneratedWithin();
     }
 
     private static void requirePositive(final Duration value, final String setting) {

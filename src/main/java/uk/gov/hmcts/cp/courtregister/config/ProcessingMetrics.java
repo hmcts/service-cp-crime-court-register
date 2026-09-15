@@ -3,15 +3,25 @@ package uk.gov.hmcts.cp.courtregister.config;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import java.time.Duration;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import org.springframework.stereotype.Component;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
+import uk.gov.hmcts.cp.courtregister.domain.DeliveryStatus;
+import uk.gov.hmcts.cp.courtregister.domain.ExceptionKind;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.ReportRunOutcome;
+import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
 import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
+import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
+import uk.gov.hmcts.cp.courtregister.domain.SweepFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 
 /**
@@ -30,6 +40,16 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
  * anomaly counter records a register that was produced with a part skipped (fixes C19, C20 and C27),
  * which is deliberately not a failure: {@code TRANSFORMATION_FAILED} is reserved for a
  * transformation that cannot produce a document at all.
+ *
+ * <p>Increment 003 adds the four instruments the design promised and 001 never built. Two are
+ * gauges about work that has not finished - the age of the oldest unfinished request, and how many
+ * of them are over the intake threshold - refreshed on their own fixed delay by
+ * {@code batch.IntakeAgeSweep} in every JVM and under no lock, so a pod publishes its own reading
+ * and an alert aggregates across pods with {@code max()}. The third is the request-duration timer,
+ * tagged by the terminal outcome and by nothing else. The fourth is the report's own three
+ * counters, beside which sits {@code courtregister_intake_sweep_failures_total}: the sweep's read
+ * failure is the one refusal this service absorbs, and this counter is what makes the absorption
+ * visible.
  *
  * <p>Dead-letter <em>depth</em> is deliberately absent: it is read from Azure Monitor's native queue
  * metric. This service counts the dead-letters it performs, which is a different question.
@@ -52,11 +72,24 @@ public class ProcessingMetrics {
             "courtregister_stale_runner_rejections_total";
     public static final String INTAKE_SUSPENDED = "courtregister_intake_suspended";
     public static final String SERVICEBUS_UP = "courtregister_servicebus_up";
+    public static final String OLDEST_NON_TERMINAL_REQUEST_AGE =
+            "courtregister_oldest_non_terminal_request_age";
+    public static final String NON_TERMINAL_REQUESTS_OVER_THRESHOLD =
+            "courtregister_non_terminal_requests_over_threshold";
+    public static final String REQUEST_DURATION = "courtregister_request_duration";
+    public static final String EXCEPTION_REPORT_RUNS = "courtregister_exception_report_runs_total";
+    public static final String EXCEPTION_REPORT_DELIVERIES =
+            "courtregister_exception_report_deliveries_total";
+    public static final String EXCEPTIONS_REPORTED = "courtregister_exceptions_reported_total";
+    public static final String INTAKE_SWEEP_FAILURES =
+            "courtregister_intake_sweep_failures_total";
 
     public static final String OUTCOME_TAG = "outcome";
     public static final String CLASSIFICATION_TAG = "classification";
     public static final String REASON_TAG = "reason";
     public static final String OPERATION_TAG = "operation";
+    public static final String SINK_TAG = "sink";
+    public static final String KIND_TAG = "kind";
 
     private static final int UP = 1;
     private static final int DOWN = 0;
@@ -69,6 +102,15 @@ public class ProcessingMetrics {
      * message, and a gauge that only appears after the first incident is not an alerting surface.
      */
     private final AtomicInteger intakeSuspendedState = new AtomicInteger(DOWN);
+
+    /**
+     * The two readings the intake sweep publishes, held for the same reason and refreshed on their
+     * own fixed delay in every JVM. Nothing locks the sweep, so each pod's pair describes the pod
+     * that published it and an alert aggregates them across pods with {@code max()} - the oldest
+     * unfinished request is the oldest any pod can see.
+     */
+    private final AtomicLong oldestNonTerminalSeconds = new AtomicLong();
+    private final AtomicInteger nonTerminalOverThreshold = new AtomicInteger();
 
     /**
      * How the Service Bus gauge answers, at the moment it is asked.
@@ -98,15 +140,58 @@ public class ProcessingMetrics {
                         state -> state.get().getAsBoolean() ? UP : DOWN)
                 .description("1 while the Service Bus health component is up, 0 while it is down")
                 .register(registry);
+        Gauge.builder(OLDEST_NON_TERMINAL_REQUEST_AGE, oldestNonTerminalSeconds,
+                        AtomicLong::doubleValue)
+                .description("Age in seconds of the oldest request that has not finished")
+                .register(registry);
+        Gauge.builder(NON_TERMINAL_REQUESTS_OVER_THRESHOLD, nonTerminalOverThreshold,
+                        AtomicInteger::doubleValue)
+                .description("Requests unfinished for longer than the intake threshold")
+                .register(registry);
     }
 
     /**
-     * A request reached a terminal outcome.
+     * A request reached a terminal state: counts it and records how long it took to get there.
      *
-     * @param outcome how the request finished
+     * <p><strong>One settlement is one recording.</strong> The count and the duration were two
+     * calls, made side by side at every settlement in {@code DistributionPipeline}, and a pair like
+     * that can drift: a path that remembered one and forgot the other publishes a count with no
+     * duration, or a duration with no count, and the two series an operator reads together stop
+     * agreeing about how many requests finished. The terminal state is the same fact both of them
+     * are about, so it is taken once and answers both - {@code RequestOutcome.reached} is where the two
+     * vocabularies meet, and it is written once.
+     *
+     * <p>Refuses a state that is not terminal. A sample taken from {@code RECEIVED} or
+     * {@code RETRYING} would time an attempt rather than a run - the broker is going to deliver the
+     * message again - and would publish it under an {@code outcome} value nothing documents and no
+     * alert reads. A timer records in silence, so the caller that did it would never find out;
+     * refusing here is the only place that can tell them. The refusal comes before either
+     * instrument moves, so a refused call leaves no half-recorded settlement behind.
+     *
+     * @param timing  the token {@link #startRequestTiming()} answered
+     * @param outcome the terminal state the run reached
+     * @throws IllegalArgumentException where the run has not reached a terminal state
      */
-    public void requestSettled(final RequestOutcome outcome) {
-        counter(PROCESSED, OUTCOME_TAG, outcome.label()).increment();
+    public void requestSettled(final Timing timing, final RequestStatus outcome) {
+        if (!outcome.isTerminal()) {
+            throw new IllegalArgumentException(outcome
+                    + " is not a terminal state, so a duration sample taken here would time an "
+                    + "attempt rather than a run");
+        }
+        counter(PROCESSED, OUTCOME_TAG, RequestOutcome.reached(outcome).label()).increment();
+        timing.sample.stop(Timer.builder(REQUEST_DURATION)
+                .description("Time from the guard admitting a run to the terminal state it reached")
+                .tag(OUTCOME_TAG, code(outcome))
+                .register(registry));
+    }
+
+    /**
+     * Starts timing one admitted run.
+     *
+     * @return the token to hand back when the run reaches a terminal state
+     */
+    public Timing startRequestTiming() {
+        return new Timing(Timer.start(registry));
     }
 
     /**
@@ -225,6 +310,107 @@ public class ProcessingMetrics {
      */
     public void bindServiceBusUp(final BooleanSupplier liveState) {
         serviceBusState.set(liveState);
+    }
+
+    /**
+     * Reports how old the oldest request that has not reached a terminal state is.
+     *
+     * @param age the age of the oldest RECEIVED or RETRYING request, or {@link Duration#ZERO}
+     *            where nothing is unfinished
+     */
+    public void oldestNonTerminalRequestAge(final Duration age) {
+        oldestNonTerminalSeconds.set(age.toSeconds());
+    }
+
+    /**
+     * Reports how many requests have been unfinished for longer than the intake threshold.
+     *
+     * @param count how many requests are over it, or zero where none is
+     */
+    public void nonTerminalRequestsOverThreshold(final int count) {
+        nonTerminalOverThreshold.set(count);
+    }
+
+    /**
+     * Counts one exception-report run under the bounded outcome its run line carries.
+     *
+     * <p>The parameter is an enumeration rather than the word itself, which is the whole of review
+     * gate 3's finding: a label a caller spells is a label a caller can mistype, and a mistyped
+     * label is not a wrong reading but a new series, on which the alert written against the right
+     * one is silent for ever. The three constants render to the three words the run line carries,
+     * through the same {@link #code(Enum)} every other bounded label here goes through.
+     *
+     * @param outcome how the run as a whole went
+     */
+    public void exceptionReportRun(final ReportRunOutcome outcome) {
+        counter(EXCEPTION_REPORT_RUNS, OUTCOME_TAG, code(outcome)).increment();
+    }
+
+    /**
+     * Counts one sink's delivery of one report.
+     *
+     * @param sink    which sink delivered it
+     * @param outcome how completely it was delivered
+     */
+    public void exceptionReportDelivery(final ReportSinkName sink, final DeliveryStatus outcome) {
+        Counter.builder(EXCEPTION_REPORT_DELIVERIES)
+                .tag(SINK_TAG, code(sink))
+                .tag(OUTCOME_TAG, code(outcome))
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * Counts the exceptions one report carried, by kind.
+     *
+     * @param kind  which of the five things was wrong
+     * @param count how many of them the report carried
+     */
+    public void exceptionsReported(final ExceptionKind kind, final int count) {
+        counter(EXCEPTIONS_REPORTED, KIND_TAG, code(kind)).increment(count);
+    }
+
+    /**
+     * Counts a gauge refresh the intake sweep could not take, under a bounded reason.
+     *
+     * <p>Enumerated for the reason {@link #exceptionReportRun(ReportRunOutcome)} is, and with more
+     * riding on it: this counter is the only evidence the service's one absorbed refusal leaves
+     * behind, and evidence published under a label nobody queries is no evidence at all. Two codes,
+     * because an outage of theirs and a bug of ours need telling apart - one series moves during
+     * somebody else's incident and stops when it ends, the other should be flat at zero for ever.
+     *
+     * @param reason what stopped it, never a message
+     */
+    public void intakeSweepFailure(final SweepFailureReason reason) {
+        counter(INTAKE_SWEEP_FAILURES, REASON_TAG, code(reason)).increment();
+    }
+
+    /**
+     * How long a run has been going, as the one thing the application layer is handed.
+     *
+     * <p>Opaque on purpose. The timing underneath is a Micrometer sample, and a sample handed to
+     * {@code DistributionPipeline} would put the metrics library in the application layer for the
+     * sake of two lines (constitution Principle V, the same containment that keeps
+     * {@code StructuredArguments} inside one adapter). So the pipeline holds a token it can do
+     * nothing with except give back, and this class does the arithmetic.
+     */
+    public static final class Timing {
+
+        private final Timer.Sample sample;
+
+        private Timing(final Timer.Sample sample) {
+            this.sample = sample;
+        }
+    }
+
+    /**
+     * The bounded label value an enumerated state is published under.
+     *
+     * @param state the enumerated state being labelled
+     * @return the label value for that state
+     */
+    private static String code(final Enum<?> state) {
+        return state.name().toLowerCase(Locale.ROOT).replace('_', '-');
     }
 
     private Counter counter(final String name) {

@@ -41,6 +41,7 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
 import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
+import uk.gov.hmcts.cp.courtregister.config.SchedulingConfig;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
@@ -851,6 +852,28 @@ class GenerationReconcilerTest {
                             + "sixty-minute run holds is a reconciliation that never happens")
                     .isNotBlank()
                     .isNotEqualTo(RegisterGenerationJob.LOCK_NAME);
+        }
+
+        /**
+         * And it names the scheduler it shares with the run, rather than relying on there being
+         * only one.
+         *
+         * <p>The reconciler has always run on the generation scheduler and goes on doing so; what
+         * changes is that the routing is stated. With three {@code TaskScheduler} beans on the
+         * context and no attribute, Spring resolves one of them for every {@code @Scheduled}
+         * method in the service - so the grace-period sweep could end up on the report's thread
+         * or the sweep's, and the separation SC-008 rests on would hold by accident.
+         */
+        @Test
+        void the_sweep_names_the_generation_scheduler() throws NoSuchMethodException {
+            final Scheduled schedule =
+                    GenerationReconciler.class.getDeclaredMethod("reconcileScheduled")
+                            .getAnnotation(Scheduled.class);
+
+            softly.assertThat(schedule == null ? null : schedule.scheduler())
+                    .as("the same bean the run names: the two generation surfaces share one "
+                            + "scheduler exactly as they do today, and no bean moves")
+                    .isEqualTo(SchedulingConfig.GENERATION_SCHEDULER);
         }
 
         /**

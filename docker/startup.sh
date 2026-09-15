@@ -9,22 +9,22 @@ export LOCALJARFILE=$(ls ./build/libs/*.jar 2>/dev/null | grep -v 'plain' | head
 export DOCKERJARFILE=$(ls /app/*.jar 2>/dev/null | grep -v 'plain' | head -n1)
 
 # The operations commands, run out of the same image rather than off an API this service does not
-# have. There is no REST surface to regenerate a date, resend a batch's failed recipients or read
-# the cutover flag through, deliberately (FR-016, constitution Principle III), so support reaches
+# have. There is no REST surface to regenerate a date, resend a batch's failed recipients, read the
+# cutover flag or pull the exception report through, deliberately (FR-016, constitution Principle III), so support reaches
 # those through `kubectl exec ... -- ./startup.sh <command>`, which runs with the pod's own identity
 # and network path and needs no data-plane credential of its own (research 13).
 #
-# The five names below are exactly `CliMain.COMMANDS`, and the two lists are one list: a name this
+# The six names below are exactly `CliMain.COMMANDS`, and the two lists are one list: a name this
 # script does not recognise is answered with the list and a refusal, exactly as CliMain answers one
 # it does not recognise. The fall-through to `exec java -jar` further down is for a container
 # started with NO arguments, which is every deployed pod - and only for that, because a mistyped
 # name reaching it would start a second whole application in the pod, drop the operator's arguments,
-# leave `courtregister.cli` false and end on 1 rather than print any of the five names.
+# leave `courtregister.cli` false and end on 1 rather than print any of the six names.
 CLI_MAIN=uk.gov.hmcts.cp.courtregister.batch.cli.CliMain
-# The same five names as the dispatch pattern below, for the refusal to print. `case` patterns are
+# The same six names as the dispatch pattern below, for the refusal to print. `case` patterns are
 # not expanded, so this is the one place they are written twice in this file; `CliDispatchIT` asks
-# the built image for both halves - two of the names dispatched, and all five listed by a refusal.
-CLI_COMMANDS="generate-register notify-register list-batches supersede-before check-flag"
+# the built image for both halves - three of the names dispatched, and all six listed by a refusal.
+CLI_COMMANDS="generate-register notify-register list-batches supersede-before check-flag report-exceptions"
 # A Boot 4 fat jar's manifest names JarLauncher, whose Start-Class is the application. Running a
 # second main class out of the same archive is what PropertiesLauncher and `loader.main` are for:
 # BOOT-INF/classes and BOOT-INF/lib are on the classpath it builds, so a command sees exactly the
@@ -34,7 +34,7 @@ CLI_COMMANDS="generate-register notify-register list-batches supersede-before ch
 BOOT_LAUNCHER=org.springframework.boot.loader.launch.PropertiesLauncher
 
 case "${1:-}" in
-    generate-register|notify-register|list-batches|supersede-before|check-flag)
+    generate-register|notify-register|list-batches|supersede-before|check-flag|report-exceptions)
         if [ -f "$DOCKERJARFILE" ]; then
             CLIJARFILE=$DOCKERJARFILE
         elif [ -f "$LOCALJARFILE" ]; then
@@ -60,7 +60,7 @@ case "${1:-}" in
         # No arguments at all: the deployed pod, which falls through to the application below.
         ;;
     *)
-        # A first argument that is none of the five. Answered here rather than dropped into the
+        # A first argument that is none of the six. Answered here rather than dropped into the
         # application, and answered the way CliMain answers an unknown name: the list of what this
         # image offers, and nothing about what was typed - it is a string from outside this service
         # and an operator's terminal is pasted into tickets.

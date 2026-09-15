@@ -48,6 +48,7 @@ import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
     "courtregister.feature.label=ste86",
     "courtregister.endpoints.systemdocgenerator=http://systemdocgenerator.internal:8080",
     "courtregister.endpoints.notificationnotify=http://notificationnotify.internal:8080",
+    "courtregister.endpoints.system-user-id=00000000-0000-4000-8000-000000000000",
     "courtregister.email.templates.cr_standard=5c9a0e21-3d47-4f18-9b62-0a71c4e8d530",
     "spring.artemis.broker-url=tcp://artemis.internal:61616"})
 @ActiveProfiles("test") // context-load only: no broker, no database, no Docker

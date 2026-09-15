@@ -37,6 +37,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import javax.xml.parsers.DocumentBuilderFactory;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -51,10 +52,15 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.w3c.dom.Document;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.adapter.fileservice.FileServicePayloadStore;
 import uk.gov.hmcts.cp.courtregister.application.DistributionPipeline;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.HearingPayloadSource;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
@@ -73,6 +79,7 @@ import uk.gov.hmcts.cp.courtregister.batch.cli.CliMain;
 import uk.gov.hmcts.cp.courtregister.batch.cli.GenerateRegisterCli;
 import uk.gov.hmcts.cp.courtregister.batch.cli.ListBatchesCli;
 import uk.gov.hmcts.cp.courtregister.batch.cli.NotifyRegisterCli;
+import uk.gov.hmcts.cp.courtregister.batch.cli.ReportExceptionsCli;
 import uk.gov.hmcts.cp.courtregister.batch.cli.SupersedeBeforeCli;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
@@ -87,7 +94,9 @@ import uk.gov.hmcts.cp.courtregister.domain.GateDecision;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
+import uk.gov.hmcts.cp.courtregister.domain.ReportDeliveryReason;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
+import uk.gov.hmcts.cp.courtregister.domain.SweepFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.inbound.CourtRegisterMessageListener;
 import uk.gov.hmcts.cp.courtregister.inbound.DistributionCommandParser;
@@ -208,6 +217,9 @@ class TelemetryPrivacyTest {
     private static final int MAX_STATUS = 599;
 
     private static final int MAX_DELIVERY_COUNT = 5;
+
+    /** The shipped entry cap, stated rather than defaulted: no case here is about truncation. */
+    private static final int MAX_ENTRIES = 5000;
     private static final Duration RUN_DEADLINE = Duration.ofMinutes(4);
 
     /** Reads a {@code reason=} or {@code detail=} token out of a formatted line. */
@@ -227,6 +239,15 @@ class TelemetryPrivacyTest {
                     // RegisterGenerationJobTest.BOUNDED_FIELDS_ONLY; this set is only about which
                     // words may sit in a reason slot.
                     Arrays.stream(GateDecision.Reason.values()).map(GateDecision.Reason::code),
+                    // The report's own delivery vocabulary, for the same reason the batch's is
+                    // here by name: the e-mail sink writes the constant into a reason slot, and a
+                    // delivery that could not be made is exactly the line somebody alerts on.
+                    Arrays.stream(ReportDeliveryReason.values()).map(Enum::name),
+                    // The sweep's two, by name for the same reason. This is the service's one
+                    // absorbed refusal, so the reason beside it is the only evidence it leaves -
+                    // and an outage of theirs and a bug of ours have to stay tellable apart, which
+                    // is why there are two of them and why both belong in the vocabulary.
+                    Arrays.stream(SweepFailureReason.values()).map(Enum::name),
                     Stream.of("flag-on"))
             .flatMap(codes -> codes)
             .collect(Collectors.toUnmodifiableSet());
@@ -588,7 +609,7 @@ class TelemetryPrivacyTest {
      * contact detail typed where a court house belongs, or a credential pasted over
      * {@code --batch}, is one refusal away from being published.
      *
-     * <p>The sweep is over all five commands and both halves of every refusal - the grammar
+     * <p>The sweep is over all six commands and both halves of every refusal - the grammar
      * underneath them and each value a command interprets - because the rule is not one command's:
      * it is what this image's whole operations surface may say about text it did not write. What a
      * diagnosis needs instead is on the line and asserted by {@code batch/cli/CliMainTest}: which
@@ -609,6 +630,8 @@ class TelemetryPrivacyTest {
         private final RegisterNotificationRepository notifications =
                 mock(RegisterNotificationRepository.class);
         private final FeatureFlagReader reader = mock(FeatureFlagReader.class);
+        private final ExceptionReportService reporting = mock(ExceptionReportService.class);
+        private final ExceptionReportSink logSink = mock(ExceptionReportSink.class);
 
         @ParameterizedTest(name = "{0}")
         @MethodSource("uk.gov.hmcts.cp.courtregister.config.TelemetryPrivacyTest"
@@ -639,7 +662,7 @@ class TelemetryPrivacyTest {
         }
 
         /**
-         * The five commands over doubled collaborators, by the names the registry knows them by.
+         * The six commands over doubled collaborators, by the names the registry knows them by.
          *
          * <p>Built the way {@code CliMain.registryOf} builds them, so a command added to the image
          * is one line from being inside this claim. None of the doubles is reached: every
@@ -647,7 +670,7 @@ class TelemetryPrivacyTest {
          * asked anything.
          *
          * @param output where the command's lines are written, one line per call
-         * @return the five commands, by name
+         * @return the six commands, by name
          */
         private Map<String, CliMain.Command> commands(final Consumer<String> output) {
             return Map.of(
@@ -657,7 +680,26 @@ class TelemetryPrivacyTest {
                     CliMain.LIST_BATCHES,
                             new ListBatchesCli(batches, notifications, store, output)::run,
                     CliMain.SUPERSEDE_BEFORE, new SupersedeBeforeCli(store, output)::run,
-                    CliMain.CHECK_FLAG, new CheckFlagCli(reader, output)::run);
+                    CliMain.CHECK_FLAG, new CheckFlagCli(reader, output)::run,
+                    CliMain.REPORT_EXCEPTIONS, new ReportExceptionsCli(reporting, List.of(logSink),
+                            reportSettings(), Clock.systemUTC(), output)::run);
+        }
+
+        /**
+         * The report's settings a deployed command works to, with the e-mail output off.
+         *
+         * <p>Off because every environment ships it off until the Notify template exists, and
+         * because the refusal being swept for here happens at the window rather than at the
+         * output: a window this command cannot read is refused before either sink is asked
+         * anything, which is what makes the doubles above unreachable.
+         *
+         * @return the report on, at seven in the court's zone, with no e-mail output
+         */
+        private static ReportProperties reportSettings() {
+            return new ReportProperties(true, "0 0 7 * * MON-FRI", GenerationProperties.COURTS_ZONE,
+                    false, Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(15),
+                    Duration.ofMinutes(30), MAX_ENTRIES,
+                    new ReportProperties.Email(false, null, List.of()));
         }
 
         /**
@@ -676,7 +718,7 @@ class TelemetryPrivacyTest {
     }
 
     /**
-     * The invocations an operator gets wrong, one for every value the five commands read and two
+     * The invocations an operator gets wrong, one for every value the six commands read and two
      * for the grammar underneath all of them.
      *
      * <p>Each puts {@link PersonalDataMarkers#OPERATOR_TOKEN} where the mistake goes: in a value a
@@ -702,6 +744,8 @@ class TelemetryPrivacyTest {
                         List.of("--" + Args.DATE, token)),
                 arguments("supersede-before's bound", CliMain.SUPERSEDE_BEFORE,
                         List.of("--" + Args.SHARED_BEFORE, token)),
+                arguments("report-exceptions' window", CliMain.REPORT_EXCEPTIONS,
+                        List.of("--" + Args.SINCE, token)),
                 arguments("a token where a name belongs", CliMain.CHECK_FLAG, List.of(token)),
                 arguments("a name nobody owns, given twice", CliMain.LIST_BATCHES,
                         List.of("--" + token, "--" + token)));
@@ -979,6 +1023,21 @@ class TelemetryPrivacyTest {
             assertThat(declared)
                     .as("a scan that found no statement would make the sweep above cover nothing")
                     .hasSizeGreaterThan(EVERY_LINE_THE_LEGS_WRITE);
+            assertThat(GenerationLegs.THE_REPORT)
+                    .as("the report's classes are inside the enumeration now, and a class that "
+                            + "declares no statement contributes nothing for the reach assertion "
+                            + "below to cover - it is widened past in silence, and the sweep says "
+                            + "it covered them while covering nothing of theirs")
+                    .isNotEmpty()
+                    .allSatisfy(reporting -> assertThat(declared.stream()
+                                    .filter(statement ->
+                                            reporting.getName().equals(statement.loggerName()))
+                                    .toList())
+                            .as("the statements %s declares; asked of each class rather than of "
+                                    + "the two together, because one of them writing two lines "
+                                    + "satisfies a claim about the pair while the other is "
+                                    + "covered by nothing", reporting.getSimpleName())
+                            .isNotEmpty());
             assertThat(LogStatement.keyCollisionsIn(declared))
                     .as("two statements one key cannot tell apart: the event from either satisfies "
                             + "both declarations, so the assertion below is met without the second "
@@ -1183,6 +1242,72 @@ class TelemetryPrivacyTest {
                             + "being true, whichever of the two a JVM starts under")
                     .doesNotContain("DEBUG")
                     .doesNotContain("TRACE");
+        }
+
+        /**
+         * The provider without which the report's events are a sentence again.
+         *
+         * <p>{@code LogEventReportSink} writes both of its events through
+         * {@code StructuredArguments.value(...)}, and an encoder with no {@code <arguments/>}
+         * provider renders those values into the message text and emits no fields at all - so
+         * every saved query would need {@code parse()}, which is precisely what SC-003 forbids. It
+         * is asserted over <strong>both</strong> files for the same reason the MDC claim above is:
+         * a command's lines reach the same index as a pod's, and {@code report-exceptions} writes
+         * the same two events the 07:00 run does.
+         *
+         * <p><strong>Read as XML, not as characters.</strong> A search for the text
+         * {@code <arguments/>} is satisfied by the tag inside an XML comment, which is the one
+         * shape a well-meant edit actually takes - somebody commenting a provider out to quieten a
+         * local run - and it is equally satisfied by the tag sitting anywhere else in the file,
+         * where logback would never read it as a provider at all. So the file is parsed and the
+         * question asked of the encoder's own provider list.
+         *
+         * @param configuration which of the two shipped files is being read
+         * @throws Exception where the file cannot be read or parsed at all
+         */
+        @ParameterizedTest
+        @ValueSource(strings = {"logback.xml", "logback-cli.xml"})
+        @DisplayName("emits the structured arguments, without which the report's fields are prose")
+        void both_logback_files_declare_the_arguments_provider(final String configuration)
+                throws Exception {
+            assertThat(encoderProvidersOf(configuration))
+                    .as("without the arguments provider every field of both report events is "
+                            + "rendered into the message and every query needs parse(); a "
+                            + "commented-out tag is not a provider, and neither is one outside "
+                            + "the encoder's list")
+                    .contains("arguments");
+        }
+
+        /**
+         * Every provider the shipped file declares, by element name, inside an encoder.
+         *
+         * @param configuration which of the two shipped files is being read
+         * @return the provider element names, in the order the encoder lists them
+         * @throws Exception where the file cannot be read or parsed
+         */
+        private List<String> encoderProvidersOf(final String configuration) throws Exception {
+            final DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setExpandEntityReferences(false);
+            final Document parsed = factory.newDocumentBuilder()
+                    .parse(Path.of("src", "main", "resources", configuration).toFile());
+
+            final List<String> providers = new ArrayList<>();
+            final NodeList lists = parsed.getElementsByTagName("providers");
+            for (int list = 0; list < lists.getLength(); list++) {
+                final Node declared = lists.item(list);
+                if (!"encoder".equals(declared.getParentNode().getNodeName())) {
+                    continue;
+                }
+                final NodeList children = declared.getChildNodes();
+                for (int child = 0; child < children.getLength(); child++) {
+                    final Node provider = children.item(child);
+                    if (provider.getNodeType() == Node.ELEMENT_NODE) {
+                        providers.add(provider.getNodeName());
+                    }
+                }
+            }
+            return providers;
         }
 
         @Test
@@ -1390,6 +1515,7 @@ class TelemetryPrivacyTest {
         return new CourtRegisterProperties(
                 OutputMode.RECORD,
                 new CourtRegisterProperties.Consumer(true),
+                new CourtRegisterProperties.Intake(Duration.ofMinutes(10)),
                 new CourtRegisterProperties.Servicebus(
                         connectionString, null, "courtregister.requests", 2, MAX_DELIVERY_COUNT,
                         Duration.ofMinutes(5), Duration.ofSeconds(60)),

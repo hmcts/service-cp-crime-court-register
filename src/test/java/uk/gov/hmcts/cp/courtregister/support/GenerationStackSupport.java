@@ -433,6 +433,24 @@ public final class GenerationStackSupport implements AutoCloseable {
                 .orElse("");
     }
 
+    /**
+     * The text stored under a file id, as the bytes the file service holds.
+     *
+     * <p>The morning report's attachment is a CSV rather than a render payload, and it is written
+     * through the same two inserts the nightly run's payload is - so what is read back here is the
+     * {@code content} row itself and not the string a sink happened to build.
+     *
+     * @param fileId the id the sink minted before it wrote
+     * @return the stored text, or empty where nothing was written under that id
+     */
+    public String textUnder(final UUID fileId) {
+        return fileService.sql("SELECT content FROM content WHERE file_id = :fileId")
+                .param("fileId", fileId)
+                .query((rs, rowNumber) -> new String(rs.getBytes("content"), StandardCharsets.UTF_8))
+                .optional()
+                .orElse("");
+    }
+
     private long rows(final String sql, final UUID fileId) {
         return fileService.sql(sql).param("fileId", fileId).query(Long.class).single();
     }

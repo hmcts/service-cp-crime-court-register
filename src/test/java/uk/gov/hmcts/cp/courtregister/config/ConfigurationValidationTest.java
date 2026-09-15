@@ -103,6 +103,10 @@ class ConfigurationValidationTest {
     private static final String NN_ENDPOINT_PROPERTY =
             "courtregister.endpoints.notificationnotify=http://notificationnotify.internal:8080";
 
+    /** The CJSCPPUID both outward legs post under; a secret, and never quoted back in a refusal. */
+    private static final String ENDPOINTS_IDENTITY_PROPERTY =
+            "courtregister.endpoints.system-user-id=6b1f0c94-2d75-4e38-a9c1-0f7b4e2d85a3";
+
     /** The notificationnotify template the register e-mail is sent with, and a UUID (P9). */
     private static final String TEMPLATE_ID = "5c9a0e21-3d47-4f18-9b62-0a71c4e8d530";
 
@@ -130,11 +134,11 @@ class ConfigurationValidationTest {
     private final ApplicationContextRunner generating = runner.withPropertyValues(
             CONNECTION_STRING_PROPERTY, GENERATION_ENABLED_PROPERTY, FILESERVICE_URL_PROPERTY,
             FLAG_ENDPOINT_PROPERTY, FLAG_LABEL_PROPERTY, SDG_ENDPOINT_PROPERTY, NN_ENDPOINT_PROPERTY,
-            TEMPLATE_PROPERTY, BROKER_URL_PROPERTY);
+            ENDPOINTS_IDENTITY_PROPERTY, TEMPLATE_PROPERTY, BROKER_URL_PROPERTY);
 
     @Configuration(proxyBeanMethods = false)
     @EnableConfigurationProperties({CourtRegisterProperties.class, GenerationProperties.class,
-        FeatureFlagProperties.class})
+        FeatureFlagProperties.class, ReportProperties.class})
     @Import(PropertiesValidator.class)
     static class PropertiesTestConfiguration {
     }
@@ -2183,6 +2187,420 @@ class ConfigurationValidationTest {
                                 + " point")
                         .isNullOrEmpty();
             });
+        }
+    }
+
+    /**
+     * The morning exception report's own refusals.
+     *
+     * <p>The same family as the generation half's, and the same argument carries them: a zero
+     * threshold reports every request as late, a schedule read in UTC fires at 08:00 through the
+     * summer, a lock shorter than the run it locks lets a second replica report the same morning
+     * twice, and an e-mail output enabled with no template or nobody to send to is a deployment that
+     * sends nothing every morning and says so only in a log line. Every one of them is discovered at
+     * 07:00 the next morning if it is not discovered at startup.
+     *
+     * <p>The duration, zone and lock rules are unconditional on {@code courtregister.report.enabled}
+     * for the reason the generation half's zone rule is unconditional on its own switch: a report
+     * that happens to be disabled in this deployment is not a reason to accept a setting that would
+     * be wrong in the next one. The two e-mail rules are conditional on the e-mail output, because
+     * neither setting is required until something sends.
+     *
+     * <p><strong>No refusal quotes an address or a template id back.</strong> Recipients are
+     * people's addresses, and a startup failure is a log line in the same index as everything else.
+     */
+    @Nested
+    @DisplayName("the morning report must be able to run and to reach somebody")
+    class ReportRefusals {
+
+        private static final String REPORT = "courtregister.report";
+
+        private static final String RECIPIENTS = REPORT + ".email.recipients";
+
+        private static final String TEMPLATE = REPORT + ".email.template-id";
+
+        private static final String EMAIL_ENABLED = REPORT + ".email.enabled=true";
+
+        /** A recipient that parses, for the cases whose subject is one of the other settings. */
+        private static final String A_RECIPIENT = RECIPIENTS + "=cr-support@justice.gov.uk";
+
+        private static final String A_TEMPLATE =
+                TEMPLATE + "=8f1d5c30-27b4-4f6a-9d18-0c3b7a2e5164";
+
+        /** The words only the JVM-unknown branch of the zone rule says. */
+        private static final String NOT_A_ZONE_THIS_JVM_KNOWS = "is not a zone this JVM knows";
+
+        /** The words only the unacknowledged branch says, so the two cannot be confused. */
+        private static final String MUST_BE_EUROPE_LONDON = "must be Europe/London";
+
+        /** The grace period the unset rendering limit resolves from, by its own key. */
+        private static final String GRACE_PERIOD = "courtregister.generation.grace-period";
+
+        @Test
+        void a_negative_request_threshold_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".request-terminal-within=-1m").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".request-terminal-within");
+                    });
+        }
+
+        /**
+         * An explicitly set zero is refused; only an <em>unset</em> value resolves. "Unset" and
+         * "zero" are different things an operator can mean, and a zero silently read as the grace
+         * period is a rendering limit nobody chose.
+         */
+        @Test
+        void a_zero_batch_generated_within_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".batch-generated-within=0s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".batch-generated-within");
+                    });
+        }
+
+        /**
+         * A cap of zero is a report that carries nothing, which is the one reading this feature
+         * exists to make impossible: every morning would look like a quiet one, and the counts
+         * beside the empty list would be the only thing saying otherwise. It is the same argument
+         * the zero durations are refused under, one setting along.
+         */
+        @Test
+        void a_zero_max_entries_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".max-entries=0").run(context -> {
+                        assertThat(context)
+                                .as("a report capped at nothing writes no exception event at all,"
+                                        + " which is indistinguishable from a morning with nothing"
+                                        + " wrong on it")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".max-entries");
+                    });
+        }
+
+        @Test
+        void a_zero_notified_within_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".notified-within=0s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".notified-within");
+                    });
+        }
+
+        /**
+         * The sweep's interval, and the one key in this family that is not under
+         * {@code courtregister.report}: a refresh of zero is a fixed delay Spring refuses to
+         * schedule, on a pod whose gauges are then dark for the life of it.
+         */
+        @Test
+        void a_zero_gauge_refresh_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.intake.gauge-refresh=0s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.intake.gauge-refresh");
+                    });
+        }
+
+        /**
+         * The shipped fifteen minutes is exactly the fixed run budget plus the <em>existing</em>
+         * scheduler margin, so a value below it is a lock that can expire under a run still going
+         * on - and the replica that takes it reports the same morning to the same people again.
+         */
+        @Test
+        void a_lock_below_budget_plus_margin_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".lock-at-most-for=14m").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".lock-at-most-for");
+                    });
+        }
+
+        @Test
+        void a_zone_other_than_europe_london_refuses_without_the_acknowledgement() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".zone=Europe/Paris").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".zone")
+                                .hasMessageContaining("Europe/London")
+                                .hasMessageContaining(REPORT + ".zone-override-acknowledged");
+                    });
+        }
+
+        /**
+         * Asserted on the wording that belongs to <em>this</em> rule and to no other. Naming the
+         * setting alone is not enough here: the unacknowledged refusal names the same setting, so a
+         * case that asked only for that would still pass if the acknowledgement stopped being read
+         * at all - which is precisely the regression that would leave {@code @Scheduled} to fail at
+         * refresh with nothing pointing at the setting that caused it.
+         */
+        @Test
+        void an_acknowledged_override_must_still_be_a_zone_the_jvm_knows() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".zone=Mars/Olympus",
+                    REPORT + ".zone-override-acknowledged=true").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".zone")
+                                .hasMessageContaining(NOT_A_ZONE_THIS_JVM_KNOWS)
+                                .as("the unacknowledged refusal names the same setting, so the"
+                                        + " distinguishing words are what pins this rule")
+                                .hasMessageNotContaining(MUST_BE_EUROPE_LONDON);
+                    });
+        }
+
+        @Test
+        void an_acknowledged_override_of_a_known_zone_should_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".zone=Europe/Paris",
+                    REPORT + ".zone-override-acknowledged=true")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        @Test
+        void email_enabled_with_no_template_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_RECIPIENT)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(TEMPLATE)
+                                .hasMessageContaining(REPORT + ".email.enabled");
+                    });
+        }
+
+        @Test
+        void email_enabled_with_no_recipient_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(RECIPIENTS)
+                                .hasMessageContaining(REPORT + ".email.enabled");
+                    });
+        }
+
+        /**
+         * The address is never quoted back. It is somebody's address, the refusal is a log line, and
+         * naming the setting is what an operator needs in order to fix it.
+         */
+        @Test
+        void an_unparseable_recipient_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
+                    RECIPIENTS + "=cr-support@justice.gov.uk,not-an-address").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(RECIPIENTS)
+                                .hasMessageNotContaining("not-an-address");
+                    });
+        }
+
+        /**
+         * Four settings and not two, after review gate 7 and the finding it left behind.
+         *
+         * <p>The e-mail output writes the exception list into the framework file service and
+         * attaches it by id, so {@code courtregister.fileservice.url} is required of it exactly as
+         * it is required of the nightly run - and was required of the run alone until the gate,
+         * which is what made a report pod with this output on a pod that could not start. The
+         * endpoint it then posts through is the same argument one setting along, and the case below
+         * is its refusal. What this one says is that the settings together are a deployment that
+         * starts.
+         */
+        @Test
+        void an_enabled_email_output_with_everything_it_needs_should_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
+                    A_RECIPIENT, FILESERVICE_URL_PROPERTY, NN_ENDPOINT_PROPERTY,
+                    ENDPOINTS_IDENTITY_PROPERTY)
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /**
+         * A blank id is an unset one. A deployed environment overrides the local binding with an
+         * empty value rather than deleting the key, which is the exact shape fix P9 was: the
+         * register's own template arrived blank, every send was refused, and the only thing that
+         * said so was a log line nobody read.
+         */
+        @Test
+        void a_blank_template_id_with_email_enabled_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_RECIPIENT,
+                    TEMPLATE + "=  ").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(TEMPLATE)
+                                .hasMessageContaining(REPORT + ".email.enabled");
+                    });
+        }
+
+        /**
+         * Non-blank is not the same as usable. notificationnotify refuses the command on anything
+         * that is not its own canonical UUID, so a template id of the wrong shape is a morning
+         * report nobody receives - refused here rather than at 07:00, and never quoted back,
+         * because a startup refusal is a log line in the same index as every other.
+         */
+        @Test
+        void a_malformed_template_id_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_RECIPIENT,
+                    TEMPLATE + "=not-a-uuid").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(TEMPLATE)
+                                .hasMessageContaining(REPORT + ".email.enabled")
+                                .hasMessageNotContaining("not-a-uuid");
+                    });
+        }
+
+        /**
+         * An empty entry in the list is the stray-separator failure the address rule exists to
+         * catch, and it is the one the list arrives from Key Vault carrying: a trailing comma and a
+         * list pasted with a separator too many look identical to a correct list in a chart diff.
+         * notificationnotify refuses the command on it, every recipient of every morning.
+         *
+         * <p>Two spellings, because they reach the binder differently and must reach the same
+         * answer: a separator with nothing between two addresses, and a separator with nothing
+         * after the last one.
+         */
+        @Test
+        void a_recipient_list_with_an_empty_entry_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
+                    RECIPIENTS + "=cr-support@justice.gov.uk,,duty@justice.gov.uk")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(RECIPIENTS)
+                                .hasMessageNotContaining("cr-support@justice.gov.uk");
+                    });
+
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
+                    RECIPIENTS + "=cr-support@justice.gov.uk, ").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(RECIPIENTS)
+                                .hasMessageNotContaining("cr-support@justice.gov.uk");
+                    });
+        }
+
+        /**
+         * The schedule is also the window, so a cron nothing can read is two failures at once: a
+         * job Spring refuses to schedule at refresh, and a window neither the run nor the command
+         * can open. Both are discovered at 07:00 on a morning nobody is watching, which is why they
+         * are discovered at startup instead. The value is not quoted back.
+         */
+        @Test
+        void an_unparseable_cron_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".cron=every morning please").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".cron")
+                                .hasMessageNotContaining("every morning please");
+                    });
+        }
+
+        /**
+         * The endpoint the send is made to, required of whichever half sends.
+         *
+         * <p>{@code ReportEmailConfig} builds the report's own {@code RestClient} over
+         * {@code courtregister.endpoints.notificationnotify}, because the register leg's client is
+         * built only where the generation half is enabled and this output has to work where it is
+         * not - and the setting was required of that half alone. A pod in FR-004's shape with the
+         * e-mail output on therefore started clean, reported itself healthy, and failed every send
+         * at 07:00 against a client with no base URL: the same shape as the file-service URL the
+         * gate before this one moved, one setting along.
+         *
+         * <p>The refusal names the half that asked, for the reason that one does: the value to set
+         * is the same either way, and what an operator has to know is why a pod that renders
+         * nothing wants a notificationnotify endpoint at all.
+         */
+        @Test
+        void the_notificationnotify_endpoint_is_required_whenever_either_half_sends() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
+                    A_RECIPIENT, FILESERVICE_URL_PROPERTY, ENDPOINTS_IDENTITY_PROPERTY,
+                    "courtregister.endpoints.notificationnotify=  ").run(context -> {
+                        assertThat(context)
+                                .as("the e-mail output posts the report to notificationnotify, so"
+                                        + " a blank endpoint is a morning that fails every send on"
+                                        + " a pod that started clean")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.endpoints.notificationnotify")
+                                .hasMessageContaining(REPORT + ".email.enabled");
+                    });
+
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, A_TEMPLATE, A_RECIPIENT)
+                    .run(context -> assertThat(context)
+                            .as("and of neither half on a pod that sends nothing at all: a setting"
+                                    + " demanded of a deployment that cannot use it is a deploy"
+                                    + " that fails for no reason")
+                            .hasNotFailed());
+        }
+
+        /**
+         * The identity the send is made under, required of whichever half sends.
+         *
+         * <p>The finding review gate 7 named and left: it fixed the endpoint and said out loud that
+         * {@code courtregister.endpoints.system-user-id} was asked of neither half, because giving
+         * it a rule there would have been a new refusal inside a remediation commit. This is the
+         * gate that catalogues it. Both outward legs put the value in the {@code CJSCPPUID} header
+         * of every {@code send-email-notification} they make, and the framework refuses a command
+         * without one - so a deployment that sets the endpoint and forgets the identity is a pod
+         * that starts clean, reports itself healthy, and has every send refused: the Youth
+         * Offending Teams at 18:00, or support at 07:00.
+         *
+         * <p>The value is <strong>never quoted back</strong>. It is a secret, and a startup failure
+         * is a log line in the same index as every other.
+         */
+        @Test
+        void the_system_user_id_is_required_whenever_either_half_sends() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
+                    A_RECIPIENT, FILESERVICE_URL_PROPERTY, NN_ENDPOINT_PROPERTY,
+                    "courtregister.endpoints.system-user-id=  ").run(context -> {
+                        assertThat(context)
+                                .as("an endpoint with no identity to post under is every send"
+                                        + " refused, on a pod that started clean")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.endpoints.system-user-id")
+                                .hasMessageContaining(REPORT + ".email.enabled");
+                    });
+
+            generating.withPropertyValues("courtregister.endpoints.system-user-id=  ")
+                    .run(context -> {
+                        assertThat(context)
+                                .as("and the same of the half that tells the Youth Offending"
+                                        + " Teams, because it is the same header on the same"
+                                        + " command")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.endpoints.system-user-id")
+                                .hasMessageContaining("courtregister.generation.enabled");
+                    });
+
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, A_TEMPLATE, A_RECIPIENT)
+                    .run(context -> assertThat(context)
+                            .as("and of neither half on a pod that sends nothing at all")
+                            .hasNotFailed());
+        }
+
+        /**
+         * The rendering limit is the one duration with no default of its own: unset, it <em>is</em>
+         * the generation half's grace period. A zero there is therefore a zero here, and a
+         * rendering limit of zero reports every batch in the estate as late on its first morning -
+         * so the resolved value is held to being positive too, and the refusal names the key the
+         * value really came from rather than the key that was left unset.
+         */
+        @Test
+        void a_zero_grace_period_makes_the_unset_rendering_limit_refuse() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, REPORT + ".enabled=true",
+                    GRACE_PERIOD + "=0s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(GRACE_PERIOD);
+                    });
         }
     }
 }

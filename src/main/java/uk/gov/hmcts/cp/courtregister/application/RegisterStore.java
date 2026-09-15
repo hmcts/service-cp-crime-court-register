@@ -13,6 +13,7 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.DistributionCommand;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
+import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 
@@ -102,6 +103,25 @@ public interface RegisterStore {
      * @return every register eligible for automatic batching, oldest first
      */
     List<RegisterRecord> activeUnbatched();
+
+    /**
+     * The registers still recorded, active and unbatched that were recorded before a given moment.
+     *
+     * <p>The report's fourth BATCH_LATE source: a register the most recent scheduled generation run
+     * left where it was. Shares {@link #activeUnbatched()}'s predicate, written once, and adds the
+     * cut-off and an age computed in the same statement that selects the row - which is why it is a
+     * projection rather than a filter over the entity read, an age derived in the JVM from a stored
+     * timestamp being the cross-clock comparison V1 forbids.
+     *
+     * <p>A register recorded while the flag was not ON is absent here exactly as it is absent
+     * there, because the predicate is the same one: those rows are the existing
+     * {@code list-batches --recorded-while-off} command's concern and are not exceptions.
+     *
+     * @param recordedBefore the cut-off, which the caller chose - the previous occurrence of the
+     *                       generation schedule
+     * @return every register waiting since before it, oldest first
+     */
+    List<RecordedRegisterSummary> recordedUnbatchedBefore(Instant recordedBefore);
 
     /**
      * The registers one batch was assembled from, oldest first.
