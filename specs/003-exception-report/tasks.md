@@ -36,8 +36,8 @@ approval **before** the commit lands, in the shape 002's exception blocks use - 
 afterwards in a commit body.
 
 Two were found afterwards, by review gates 1 and 7, and neither was written here before its commit
-landed - which is the failure the paragraph above describes and not a licence. One is granted; one
-is proposed and not granted. Both are recorded here rather than argued for in a commit body:
+landed - which is the failure the paragraph above describes and not a licence. Both are now granted
+and dated, and both are recorded here rather than argued for in a commit body:
 
 - **`0e0e7b1`** "the `UUID_SHAPE` shape check on `courtregister.report.email.template-id`", landed
   inside T003's green commit. What landed without a red is one rule in `config/PropertiesValidator`:
@@ -53,23 +53,25 @@ is proposed and not granted. Both are recorded here rather than argued for in a 
   re-landing it as a pair would mean reverting a correct refusal in order to watch it fail.
   **Approved: design owner, 2026-09-15.**
 
-No other exception of this kind is pre-approved.
+- **`2a50b81`** "T068's `config/ReportEmailConfig`, landed with no test of its own." What landed
+  without a red is a whole configuration class - two beans, one condition and an HTTP client - under
+  a task whose named green was `T063`'s sink-selection cases, which are unit cases over the sink and
+  assert nothing about which beans a context holds. **No red run was recorded for it** because the
+  wiring was treated as the delivery of the sink the cases already covered rather than as a claim of
+  its own, and no exception was written in this block before that commit landed. It is held now by
+  `config/ReportEmailConfigTest`, which landed at `9aa0d47` with four red cases - the pod that holds
+  two sinks, the pod that holds one, the `PayloadFileStore` on a context with the generation half
+  off, and the startup refusal naming the half that asked - and by the defect fix those reds found,
+  at `bd56721`: a pod with the generation half off and the e-mail output on had no
+  `PayloadFileStore` and no file-service datasource, and would not have started. The grounds are
+  that the pair has been formed after the fact, in full, and that rewriting unpushed history to
+  interleave it was judged the higher risk - the same judgement 002's Phase 2 block records.
+  **Approved: design owner, 2026-09-15.**
+  The approval carries a condition: **a wiring task's test is its context case**, and a third
+  occurrence of a configuration class landing without one is reverted and re-landed as a pair, not
+  excused.
 
-- **`2a50b81`** "T068's `config/ReportEmailConfig`, landed with no test of its own."
-  **Proposed, awaiting design owner approval - NOT granted.** Review gate 7 found that T068 shipped
-  a new configuration class - two beans, one condition and an HTTP client - under a task whose named
-  green was `T063`'s sink-selection cases, which are unit cases over the sink and assert nothing
-  about which beans a context holds. No red run was recorded and no exception was written here
-  before the commit landed. T068's own narrative records two gaps rather than claiming one, and the
-  sharper of them was a real defect: a pod with the generation half off and the e-mail output on had
-  no `PayloadFileStore` and no file-service datasource, and would not have started. The cases that
-  should have preceded it landed at `9aa0d47` as `config/ReportEmailConfigTest`, four of them red,
-  and the defect was fixed at `bd56721`. **The proposal** is to record a one-off exception
-  covering the `ReportEmailConfig` wiring commit alone, on the grounds that the pair has now been
-  formed after the fact and that rewriting unpushed history to interleave it was judged the higher
-  risk - the same judgement 002's Phase 2 block records.
-  **Status: awaiting the design owner's approval.** Until that approval is given and dated in this
-  block, this is not an approved exception, and the gap stands recorded as a gap.
+No other exception of this kind is pre-approved.
 
 **No `doc/DEFECT-FIXES.md` row is added, amended or flipped anywhere in this increment.** There is
 no legacy oracle for an exception report: neither the function app nor progression's leg produced
@@ -2345,6 +2347,16 @@ seams.**
       It is the same class of defect as the one this gate fixed and it is **not** on this gate's
       brief, which enumerated the file-service settings; fixing it here would be an uncatalogued
       change made inside a remediation commit. It is raised for **review gate 8** at T077.
+      **Closed before Phase 8 began**, as a red/green pair of its own: `5be9abb`
+      `ConfigurationValidationTest.ReportRefusals
+      .the_notificationnotify_endpoint_is_required_whenever_either_half_sends` - the report on, the
+      e-mail output on, generation off, the endpoint blank - red on *"to have failed but context
+      started successfully"*; `7892e5d`
+      `PropertiesValidator.validateWhicheverHalfSendsCanReachNotificationnotify`, mirroring the
+      file-service rule this gate landed and naming the half that asked. The endpoint and not the
+      identity: `courtregister.endpoints.system-user-id` is asked of neither half today, so a rule
+      for it would be a new refusal rather than this defect's fix, and it is left named in the new
+      method's javadoc for whichever gate catalogues it.
       Nothing in this gate changed an outbound contract, a bounded reason an operator's tooling
       already greps, a status code, or readiness on any deployment. The register leg's body, its
       suite and its vendored-schema assertions are untouched.
@@ -2371,7 +2383,7 @@ inventing a `C` or `P` number for one would make the register say a defect exist
 catalogued. `RegisteredDefectFixes` and `DifferentialAuditTest` must be green at T077 without having
 been touched.
 
-- [ ] T070 [A] `e2e/ExceptionReportEndToEndIT` - full context with
+- [x] T070 [A] `e2e/ExceptionReportEndToEndIT` - full context with
       `courtregister.generation.enabled=false`, which is FR-004's deployment and the shape the
       relocated repository beans exist for; Testcontainers Postgres, WireMock standing in for
       notificationnotify. Four cases:
@@ -2394,7 +2406,32 @@ been touched.
       is the case that makes SC-008 a measurement rather than an inference from bean names; the
       `scheduler` attribute (T048) is what makes it pass.
       Record the first observed result of each.
-- [ ] T071 [A] `config/TelemetryPrivacyTest` and `config/TelemetryPrivacyIT` full run - `THE_LEGS`
+      **Done** (`2701798`). A database of this suite's own inside the shared container, migrated in
+      full: every case here is a claim about what the report does *not* hold as much as what it
+      does, and none of that is observable against the container the other e2e suites share.
+      `GenerationStackSupport` supplies WireMock and the file-service database and gains
+      `textUnder(fileId)`, so the CSV is read back out of the `content` row the sink wrote.
+      **(a)** five `courtregister_exception` events, one of each kind; one
+      `courtregister_exception_report` summary with exactly ten fields and the five counts at one
+      each; the run line *"event=exception_report_run ... entries=5 delivered_log=ok
+      delivered_email=ok outcome=delivered duration_ms=165"*; two sends, one per recipient, over one
+      attachment; a six-line CSV, header plus one row per exception, the kind first on each.
+      **(b)** 76 seeded records - 12 FAILED requests, 10 late RETRYING, 8 late GENERATING batches, 7
+      FAILED batches with 7 refused notifications, against 20 COMPLETED requests, 5 NOTIFIED batches
+      with 5 ACCEPTED sends and 3 registers recorded while the flag was off. `entries=44`, the
+      twelve parked requests reported once each, no identifier duplicated, and no healthy row named.
+      **(c)** 10,000 processed-request rows, 50 of them parked inside the window, a `--since 24h`
+      window built and delivered in **PT0.184980042S** against the ten-second criterion.
+      **(d)** generation on (the one case that needs it), both crons at `*/2 * * * * *` so the two
+      runs are asked for on the same tick, in a second context of its own: the report's line written
+      from `exception-report-1` and the night's from `register-generation-1`, the generation line at
+      `duration_ms=247` against a stated five-second bound. The e-mail output is off in that context
+      - which thread a run happens on is the whole subject, and a send would only add a POST a tick.
+      Three arrangements the schema and the code corrected on the way in: a FAILED row carries the
+      identity of the delivery that exhausted it; the batch shape check pairs `completed_by` with
+      the two reasons an outcome taught this service; and the run line's per-sink word is `ok`, not
+      `delivered` - `DeliveryWord`'s, which is the point of it being one class.
+- [x] T071 [A] `config/TelemetryPrivacyTest` and `config/TelemetryPrivacyIT` full run - `THE_LEGS`
       now covers all **seven** new classes (`ExceptionReportJob`, `IntakeAgeSweep`,
       `ExceptionReportService`, `LogEventReportSink`, `EmailReportSink`,
       `NotificationNotifyReportMailer`, `ReportExceptionsCli`) and `driveEverything()` reaches
@@ -2404,15 +2441,40 @@ been touched.
       `<arguments/>` in both logback files. `support/LogStatementSweepTest` stays green unchanged: no
       throwable this service did not write is attached anywhere in the seven new classes. Covers
       SC-007. Record the result.
-- [ ] T072 [A] `scripts/container-smoke.sh` extended to run `report-exceptions --since 1h` through
+      **Done** - and it needed no change of any kind, which is the result. `THE_LEGS` already
+      carried all seven classes and `driveEverything()` already reached every LOG statement in them,
+      both landed with the phases that wrote them. `./gradlew test --tests '*TelemetryPrivacyTest*'
+      --tests '*TelemetryPrivacyIT*' --tests '*LogStatementSweepTest*'` BUILD SUCCESSFUL, exit 0,
+      **57 tests, 0 failures, 0 errors** - the two privacy suites and the log-statement sweep,
+      unchanged. No commit of its own: a verification task that finds nothing to change has nothing
+      to commit, and its evidence is this line.
+- [x] T072 [A] `scripts/container-smoke.sh` extended to run `report-exceptions --since 1h` through
       the entrypoint beside the existing `check-flag` step, asserting exit 0 and both a counts line
       and the run's last line, and to report it as its own PASS/FAIL line. Like `check-flag` it reads
       and changes nothing, so a smoke run cannot leave a batch or a send behind. Record the run's
       output.
-- [ ] T073 [P] `README.md` Status - a 003 entry naming what landed: the exception report and its two
+      **Done** (`30587ea`). Exit 0, with its own line beside `check-flag`'s:
+      *"[container-smoke] PASS: startup.sh report-exceptions --since 1h printed its counts and its
+      run line, and exited 0"*, after *"PASS: readiness reported UP within the 60s budget"* and
+      *"PASS: startup.sh check-flag printed flag=ON and exited 0"*. The command's own lines, read
+      off the same stack: `exceptions=none`; `counts request_failed=0 request_late=0 batch_late=0
+      batch_failed=0 notification_failed=0 window_from=... window_to=...`; and
+      `event=exception_report_run ... entries=0 delivered_log=ok delivered_email=skipped
+      outcome=delivered duration_ms=47` - `skipped` because `--email` is deliberately not given,
+      which is what keeps the step read-only on a stack whose e-mail output is switched on. The run
+      line is matched anywhere on the stream rather than at the end of it: the command writes to the
+      operator's stream and the JVM logs to the same one, so the last thing on it is whatever the
+      context said on the way down. The host it ran on already had 5433 bound by an unrelated
+      container, so the file service's published port was overridden for the run through
+      `COMPOSE_FILE` alone; nothing in the repository changed for it.
+- [x] T073 [P] `README.md` Status - a 003 entry naming what landed: the exception report and its two
       sinks, the four instruments of design section 11, the sixth operations command, and the e-mail
       output's deployment gate on the notificationnotify template. Docs-only, exempt from the loop.
-- [ ] T074 [P] `.claude/rules/design_rules.md` - the package map gains `adapter/report/`,
+      **Done** (`b5c9927`). The Status entry also records what this increment did not touch - no
+      defect-fix row - and two lines beside it follow the same change: the Quickstart's description
+      of `container-smoke.sh` names both commands it now runs, and the no-REST paragraph's list of
+      operational actions gains the one `report-exceptions` adds.
+- [x] T074 [P] `.claude/rules/design_rules.md` - the package map gains `adapter/report/`,
       `batch/ExceptionReportJob` and `batch/IntakeAgeSweep`, and the ports list becomes
       **fourteen** (`ExceptionReportSink` and `ReportMailer` join the twelve); the two-legs diagram
       gains the 07:00 report leg beside the 18:00 generation leg, showing `ExceptionReportJob` over
@@ -2440,16 +2502,41 @@ been touched.
       PROVENANCE.md` does too. **Approved by the design owner, 2026-09-15.** Deferred here from
       review gates 5 and 6, which both recorded it as belonging with this sync. Docs-only, exempt
       from the loop.
-- [ ] T075 [P] `.specify/memory/constitution.md` - `### Increments` gains **003
+      **Done** (`4fd46c7`). The diagram gains the 07:00 leg and the sweep, the ports become
+      fourteen, the package map gains `adapter/report/` and the two `batch/` classes, the commands
+      become six, the Persistence bullet names `ExceptionReportService` and `IntakeAgeSweep` as
+      readers that write no row, a bullet beside it states the report is on no cutover circuit, and
+      the file-service row keeps the Q20 ruling verbatim and adds the second caller. The sweep found
+      **ten** citations rather than the nine the task enumerated: the seven `design_rules.md` ones,
+      the two `technical-rules.md` ones, and `PROVENANCE.md`'s. Each now names the rule
+      ("the service's design rules on absorbed refusals"), and the shipped-source grep for the rules
+      directory is **empty**. `./gradlew checkstyleMain checkstyleTest pmdMain pmdTest test --tests
+      '*LogStatementSweepTest*' --tests '*TelemetryPrivacyTest*'` BUILD SUCCESSFUL, exit 0 - docs
+      and comments only, no behaviour, no assertion and no log statement changed.
+- [x] T075 [P] `.specify/memory/constitution.md` - `### Increments` gains **003
       "exception-report"**, 002 moves from "current" to "complete", and the Sync Impact Report header
       is updated for a **MINOR** amendment, **3.1.0 → 3.2.0**, with the bump rationale (a new
       obligation: the report's structured events and the `runId` on the sweep's lines), the modified
       sections, and the templates reviewed. Principles I to VIII are unchanged in wording. Docs-only,
       exempt from the loop.
-- [ ] T076 [P] `CLAUDE.md` - the Key Documentation table's Specifications row gains
+      **Done** (`a7eff60`). 3.1.0 → 3.2.0, MINOR: the report's output is structured events under
+      Principle VII's bounded-code rule, and the `runId` that principle names for a scheduled run
+      now has a third caller and a fourth kind of line under it. The previous amendment's report
+      moves down a level rather than being replaced, as the one before it did, and the footer reads
+      **Version: 3.2.0 | Last Amended: 2026-09-15**.
+- [x] T076 [P] `CLAUDE.md` - the Key Documentation table's Specifications row gains
       `specs/003-exception-report/` (complete), and the Setup section's "current plan" pointer moves
       to `specs/003-exception-report/plan.md`. Nothing else in the file changes. Docs-only, exempt
       from the loop.
+      **Done** (`1cdee61`). The Setup pointer already named the 003 plan and was verified rather
+      than edited. Two agent definitions carried the same staleness and are corrected with it, since
+      a brief naming the wrong increment sends the next review gate to the wrong tasks file:
+      `.claude/agents/software-engineer.md`'s "Current story scope" now names all three increments
+      complete and describes the report in two sentences, and
+      `.claude/agents/spec-validator.md`'s Scope Gate names 003 and the one thing a validator would
+      otherwise raise against it - that no DEFECT-FIXES row was added, because there is no legacy
+      oracle for a capability that was never built. `.claude/agents/qa.md` needed nothing: it lists
+      neither the ports nor the commands.
 - [ ] T077 [A] Final `./gradlew clean jacocoTestReport build` green on the branch (PMD over main and
       test, Checkstyle at `maxWarnings = 0`, the JaCoCo gate at its existing floors and not
       loosened); **review gate 8** over the whole increment against the seven gates of
@@ -2457,6 +2544,14 @@ been touched.
       `src/main/java`, no `System.out` / `System.err` / `printStackTrace()`, no wildcard import, no
       empty catch, no PII at INFO or above, and `doc/DEFECT-FIXES.md` byte-identical to its state at
       `720d659`. Report the test totals and the coverage figures.
+      **Build half done; the review gate is not.** `./gradlew clean jacocoTestReport build
+      -Dtest.noFailFast=true` **BUILD SUCCESSFUL, exit 0**, 10m 45s, 24 tasks executed - the whole
+      suite with PMD over main and test, Checkstyle at `maxWarnings = 0` and the JaCoCo gate at its
+      existing floors, none of them loosened. **3589 tests, 0 failures, 0 errors, 0 skipped.**
+      Coverage, read off `build/reports/jacoco/test/jacocoTestReport.xml`: **LINE 6482/6690 =
+      96.89%** against the 0.88 floor and **BRANCH 1966/2189 = 89.81%** against the 0.85 floor
+      (instruction 96.68%, method 98.31%, class 100%). **Review gate 8 remains open** and is the
+      other half of this task.
 
 ---
 
