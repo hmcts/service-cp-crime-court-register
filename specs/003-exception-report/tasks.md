@@ -1245,7 +1245,7 @@ start it with both flags false and confirm the sweep still runs; start it with
 
 ### Tests first ⚠️
 
-- [ ] T038 [P] [US1] `config/ReportSchedulingConfigTest` - **every infrastructure-presence case lives
+- [x] T038 [P] [US1] `config/ReportSchedulingConfigTest` - **every infrastructure-presence case lives
       in this one class**, so there is one place to read what a given pod wires and one place to
       change it: `the_scheduling_infrastructure_is_present_whatever_the_two_flags_say` (parameterised
       over the four combinations of `courtregister.report.enabled` and
@@ -1272,7 +1272,26 @@ start it with both flags false and confirm the sweep still runs; start it with
       Seams: `config/SchedulingInfrastructureConfig`, `config/ReportSchedulingConfig` and
       `config/IntakeSweepConfig` as empty `@Configuration` classes, each declaring its scheduler-name
       constant. Red: no `LockProvider` is present when only the report is enabled.
-- [ ] T039 [US1] `config/ReportSchedulingConfigTest` (extend, same file as T038 so it follows it
+      (red at `77564fb`: `./gradlew test --tests '*ReportSchedulingConfigTest*'
+      -Dtest.noFailFast=true`, 15 tests, 12 failures, 0 errors, every one an assertion. The task's
+      own red is among them - `there_is_exactly_one_lock_provider` on "[two providers over one
+      shedlock table is a race dressed as configuration, and none at all is a report pod whose
+      07:00 run is unlocked] Expecting actual: [] to have size 1" - because `@EnableSchedulerLock`
+      and the provider sit inside a configuration conditional on the generation half. So does
+      `the_scheduling_infrastructure_is_present_whatever_the_two_flags_say`, which fails on both
+      pods that generate nothing, and `the_sweep_is_declared_whatever_the_two_flags_say`, which
+      fails on all four. `the_generation_beans_are_unchanged` is green on introduction, which is
+      the point of it.
+      Two things about the commit rather than the task. `batch/ExceptionReportJob` lands here as a
+      `void run()` over a body that throws, because
+      `the_report_job_is_declared_only_when_the_report_is_enabled` asserts on the type and T041's
+      suite would otherwise not compile; T041 pins what it must do. And the contexts are built with
+      an `ApplicationContextRunner` over the six configurations under assertion plus one test
+      configuration of doubles, rather than with `@SpringBootTest`: the parameterisation over four
+      flag combinations needs a context per case, and what is under assertion is which beans a set
+      of conditions contributes - a suite about wiring that needed a database would be a suite that
+      stopped being run.)
+- [x] T039 [US1] `config/ReportSchedulingConfigTest` (extend, same file as T038 so it follows it
       rather than running beside it) - `the_report_wires_with_generation_disabled`: an
       `ApplicationContextRunner` with `courtregister.report.enabled=true` **and**
       `courtregister.generation.enabled=false` starts, and holds `ExceptionReportService`,
@@ -1282,7 +1301,15 @@ start it with both flags false and confirm the sweep still runs; start it with
       `courtregister.generation.enabled`, while the report reads both - `BATCH_LATE` and
       `BATCH_FAILED` from one, `NOTIFICATION_FAILED` from the other. Red: the context fails to start
       with a `NoSuchBeanDefinitionException` naming `RegisterBatchRepository`.
-- [ ] T040 [P] [US1] `config/CliModeConfigTest` (extend) -
+      (red at `d200f25`: `./gradlew test --tests '*ReportSchedulingConfigTest*'
+      -Dtest.noFailFast=true`, 16 tests, 13 failures, 0 errors, every one an assertion. The new
+      case fails on the first bean it asks for - "Expecting actual not to be empty", there being no
+      `ExceptionReportService` on any context yet. **The predicted red did not happen and could
+      not**: nothing on the context asks for `RegisterBatchRepository` until T045 contributes the
+      job, so today the context starts and simply holds none of the four. The prediction is what
+      T045 would have produced had T044 not moved the repositories first - which is why this case
+      goes green at `1958a33` rather than at `87b092a`.)
+- [x] T040 [P] [US1] `config/CliModeConfigTest` (extend) -
       `a_cli_context_contributes_no_scheduling_infrastructure`,
       `a_cli_context_contributes_no_report_scheduling` and
       `a_cli_context_contributes_no_intake_sweep`, so `@EnableScheduling` is absent and
@@ -1292,7 +1319,12 @@ start it with both flags false and confirm the sweep still runs; start it with
       `TheShippedDefault`'s three condition cases are untouched and **must keep passing**: a CLI JVM
       runs no scheduled task of any half. Red: the report configuration is contributed with
       `courtregister.cli=true`.
-- [ ] T041 [P] [US1] `batch/ExceptionReportJobTest` -
+      (red at `5499096`: `./gradlew test --tests '*CliModeConfigTest*' -Dtest.noFailFast=true`,
+      14 tests, 3 failures, 0 errors, every one an assertion and every one the task's own red -
+      "Expecting actual: [\"schedulingInfrastructureConfig\"] to be empty", and the same for the
+      report's and the sweep's, the seams carrying `@Profile("!test")` and nothing else. The eleven
+      existing cases, the ordinary pod's included, are untouched and all pass.)
+- [x] T041 [P] [US1] `batch/ExceptionReportJobTest` -
       `the_report_is_scheduled_in_europe_london` (the reflection case, written as
       `GenerationReconcilerTest.ItsOwnSchedule` writes its own:
       `ExceptionReportJob.class.getDeclaredMethod("run")` is `void`, `@Scheduled.cron` is
@@ -1328,7 +1360,18 @@ start it with both flags false and confirm the sweep still runs; start it with
       it is not on the lever's circuit and adds no second reader.
       Seam: `batch/ExceptionReportJob` with a `void run()` and a body method throwing. Red: the
       reflection assertion fails because the method carries no `@SchedulerLock`.
-- [ ] T042 [P] [US1] The **scheduler-attribute** reflection cases, one in each suite that owns a
+      (red at `670ca5b`: `./gradlew test --tests '*ExceptionReportJobTest*'
+      -Dtest.noFailFast=true`, 12 tests, 11 failures, 0 errors. The task's own red is
+      `the_report_is_scheduled_in_europe_london` - "[a report nothing fires is a morning support
+      hears nothing] Expecting actual not to be null" - the method carrying neither `@Scheduled`
+      nor `@SchedulerLock`. Nine more fail out of the seam's body, which throws, and
+      `a_read_failure_counts_the_run_failed_and_rethrows` fails as an assertion on the wrong
+      throwable. `the_cutover_flag_is_never_read` is green on introduction and stays so: the job
+      holds no field whose type names a flag.
+      The seam itself landed one commit earlier, with T038, which asserts on the type.
+      `the_report_names_the_report_scheduler` is in this file but belongs to T042 and landed with
+      the other three.)
+- [x] T042 [P] [US1] The **scheduler-attribute** reflection cases, one in each suite that owns a
       scheduled method, because three `TaskScheduler` beans on one context route nothing by
       themselves: Spring resolves a single scheduler for `@Scheduled` processing unless the method
       names one, so without this attribute SC-008's separation is a comment rather than a behaviour.
@@ -1351,10 +1394,18 @@ start it with both flags false and confirm the sweep still runs; start it with
       is added, renamed or moved - beside `ReportSchedulingConfig.REPORT_SCHEDULER` and
       `IntakeSweepConfig.INTAKE_SWEEP_SCHEDULER` from T038. Red: `scheduler()` is `""` on all four
       methods, so every case fails on the empty string.
+      (red at `8e7cf24`: `./gradlew test` over the four suites, 134 tests, 15 failures, 0 errors.
+      Four of them are these, each failing on the empty string exactly as predicted - `expected:
+      "registerGenerationScheduler" but was: ""`, and the same for `exceptionReportScheduler` and
+      `intakeSweepScheduler`. The other eleven are T041's. The attribute was checked rather than
+      assumed before the cases were written: `javap -p` over
+      `org/springframework/scheduling/annotation/Scheduled.class` in the resolved
+      `spring-context-7.0.9.jar` lists `public abstract java.lang.String scheduler();` beside
+      `cron`, `zone` and `fixedDelayString`, so no `SchedulingConfigurer` fallback was needed.)
 
 ### Implementation
 
-- [ ] T043 [US1] `config/SchedulingInfrastructureConfig` (new) - `@EnableScheduling`,
+- [x] T043 [US1] `config/SchedulingInfrastructureConfig` (new) - `@EnableScheduling`,
       `@EnableSchedulerLock` and the `LockProvider` bean moved out of `config/SchedulingConfig`,
       conditional on **nothing but not being a command JVM**
       (`@Conditional(CliModeConfig.NotCliMode.class)` plus the `@Profile("!test")` every
@@ -1370,7 +1421,16 @@ start it with both flags false and confirm the sweep still runs; start it with
       conditions; `config/CliModeConfig`'s javadoc updated to say the conditional now goes on **all
       three** new configurations, because the annotation moved and two of the three have no other
       condition. Green: T038, T040.
-- [ ] T044 [US1] `config/ProcessedLogConfig` and `config/GenerationConfig` - move the
+      (green at `d6d0f47`: `./gradlew test --tests '*ReportSchedulingConfigTest*' --tests
+      '*CliModeConfigTest*' -Dtest.noFailFast=true`, 30 tests, 11 failures, 0 errors. T038's four
+      infrastructure parameterisations, `there_is_exactly_one_lock_provider`,
+      `the_scheduler_lock_default_is_unchanged` and T040's
+      `a_cli_context_contributes_no_scheduling_infrastructure` are green, as are the eleven existing
+      CLI cases; the eleven failures are T044 to T047's.
+      `@EnableSchedulerLock(defaultLockAtMostFor = RegisterGenerationJob.LOCK_AT_MOST_FOR)` moved
+      character for character. `checkstyleMain` exits 0; `pmdMain` reports six `UnusedPrivateField`
+      violations, all of them T041's seam, which T047 fills in.)
+- [x] T044 [US1] `config/ProcessedLogConfig` and `config/GenerationConfig` - move the
       `registerBatchRepository` and `registerNotificationRepository` `@Bean` methods out of
       `GenerationConfig` (conditional on `courtregister.generation.enabled`) into the
       generation-neutral `ProcessedLogConfig`, verbatim, javadoc included: it is `@Profile("!test")`
@@ -1380,13 +1440,39 @@ start it with both flags false and confirm the sweep still runs; start it with
       is already there and does not move. Nothing about either repository class changes - only where
       its bean is declared - and `GenerationConfig` keeps everything else it owns.
       Green: T039.
-- [ ] T045 [US1] `config/ReportSchedulingConfig` (new) - conditional on
+      (green at `87b092a`: `./gradlew test --tests '*ReportSchedulingConfigTest*'
+      -Dtest.noFailFast=true`, 16 tests, 9 failures, 0 errors. `the_generation_beans_are_unchanged`
+      stays green over both pods and the two report-pod contexts still start. T039 itself cannot go
+      green here and does not: it asks for `ExceptionReportService` first, and nothing declares one
+      until T045 - which is also the commit that would have raised the
+      `NoSuchBeanDefinitionException` this task prevents. Both `@Bean` methods moved character for
+      character, javadoc included, and `GenerationConfig` lost only the two now-unused imports.
+      `checkstyleMain` exits 0.)
+- [x] T045 [US1] `config/ReportSchedulingConfig` (new) - conditional on
       `courtregister.report.enabled` and not CLI; its own single-thread `TaskScheduler` with thread
       prefix `exception-report-`, the public `REPORT_SCHEDULER` constant naming that bean, and the
       `ExceptionReportJob` bean. The sweep is **not** here: it is not the report's, and a pod with
       the report switched off still needs its gauges.
       Green: the report scheduler and job cases of T038.
-- [ ] T046 [US1] `config/IntakeSweepConfig` (new) - conditional on
+      (green at `1958a33`: `./gradlew test --tests '*ReportSchedulingConfigTest*'
+      -Dtest.noFailFast=true`, 16 tests, 6 failures, 0 errors. The report scheduler and job cases
+      are green and so is T039's `the_report_wires_with_generation_disabled`; the six failures are
+      all T046's sweep cases. `checkstyleMain` and `checkstyleTest` exit 0.
+      **One decision this task did not name, taken here and worth reading.**
+      `ExceptionReportService` and the `LogEventReportSink` bean are declared in
+      `config/ProcessedLogConfig`, not in `ReportSchedulingConfig`. The report is asked for by two
+      callers that never share a context - this job, which exists only where the schedule is on, and
+      T057's command, which runs on a JVM that contributes no scheduling configuration at all - so a
+      report declared beside the schedule would be a report the command could not ask for, and a
+      bean that moved twice is a bean two phases change. `ProcessedLogConfig` already declares every
+      other reader of the same database over the same client and clock, and `IdempotencyGuard` is
+      the standing precedent for an application class living there.
+      **One mechanical fix to T038's own suite**, in this commit rather than left to look like an
+      assertion that changed: the two single-thread claims asked
+      `ThreadPoolTaskScheduler.getPoolSize()`, which answers how many threads the executor has
+      *started* - none, on a scheduler never handed a task. They ask the configured core size now;
+      the claim is unchanged.)
+- [x] T046 [US1] `config/IntakeSweepConfig` (new) - conditional on
       `@Conditional(CliModeConfig.NotCliMode.class)` and `@Profile("!test")` and **nothing else**;
       its own single-thread `TaskScheduler` with thread prefix `intake-sweep-`, the public
       `INTAKE_SWEEP_SCHEDULER` constant naming that bean, and the `IntakeAgeSweep` bean built in
@@ -1394,7 +1480,14 @@ start it with both flags false and confirm the sweep still runs; start it with
       which is every service JVM - and the sweep's own scheduler keeps it off the thread the 07:00
       report, the 18:00 run and the reconciler use (SC-008).
       Green: the sweep cases of T038.
-- [ ] T047 [US1] `batch/ExceptionReportJob` - `@Scheduled(cron = "${courtregister.report.cron}",
+      (green at `9bfaa6f`: `./gradlew test --tests '*ReportSchedulingConfigTest*' --tests
+      '*CliModeConfigTest*' -Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 30 tests, 0 failures,
+      0 errors. Both wiring suites are wholly green: every pod shape this increment serves, and the
+      command JVM that must serve none of them. The sweep's threshold is
+      `ReportProperties.requestTerminalWithin`, which is the only thing it shares with the report
+      and shares deliberately - the gauge and the morning report must agree about which requests are
+      late. `checkstyleMain` exits 0.)
+- [x] T047 [US1] `batch/ExceptionReportJob` - `@Scheduled(cron = "${courtregister.report.cron}",
       zone = "${courtregister.report.zone}")` and `@SchedulerLock(name = "exception-report",
       lockAtMostFor = "${courtregister.report.lock-at-most-for}")` on a **`void`** `run()` that opens
       `RunCorrelation.under(...)` and delegates to a body returning the `ExceptionReport` - the body
@@ -1408,7 +1501,23 @@ start it with both flags false and confirm the sweep still runs; start it with
       collaborators and no driver, broker or HTTP client. Add `ExceptionReportJob` and
       `IntakeAgeSweep` to `support/GenerationLegs.THE_LEGS` and drive both in the same commit.
       Green: T041.
-- [ ] T048 [US1] The `scheduler` attribute on all four scheduled methods, and the one new constant
+      (green at `5f94606`: `./gradlew test --tests '*ExceptionReportJobTest*' --tests
+      '*TelemetryPrivacyTest*' --tests '*IntakeAgeSweepTest*' -Dtest.noFailFast=true`, 58 tests,
+      2 failures, 0 errors - both of them T048's scheduler-attribute cases. All eleven of T041's
+      other cases are green and the privacy sweep passes over the two widened legs: `THE_LEGS` gains
+      `ExceptionReportJob` and `IntakeAgeSweep`, with an arrangement each for every line they can
+      write - the morning that delivered, the morning whose store would not answer, and the gauge
+      refresh that could not be taken. Their instruments go on a registry of their own, so the
+      downstream half's two meter cases keep describing the downstream half.
+      Two details decided here rather than in the task. Whether there is an e-mail sink at all is
+      read **in the constructor**, while the sinks are whole, for the reason `askedOf` reads a
+      sink's name before asking it to deliver: the sink that has just broken is the one that may no
+      longer be able to say who it is. And a sink that only **partially** delivered is `failed` on
+      this line rather than `ok` - some recipients were told and the rest are a resend, which is a
+      thing to act on; the run's own `outcome=partial` is where that nuance is expressed.
+      `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` exit 0, the catch carrying the
+      `PMD.AvoidCatchingGenericException` suppression with the comment the convention asks for.)
+- [x] T048 [US1] The `scheduler` attribute on all four scheduled methods, and the one new constant
       behind it: `SchedulingConfig.GENERATION_SCHEDULER` (`"registerGenerationScheduler"`, the
       existing bean; **no bean is added, renamed or moved**) named by
       `batch/RegisterGenerationJob.run()` and `batch/GenerationReconciler.reconcileScheduled()`;
@@ -1417,7 +1526,12 @@ start it with both flags false and confirm the sweep still runs; start it with
       Nothing else about the four methods changes - not the cron, not the zone, not the fixed delay,
       not a lock name. This is the task that turns three `TaskScheduler` beans into three schedulers
       that are actually used, which is what SC-008's claim rests on. Green: T042.
-- [ ] T049 [P] [US1] `docker-compose.yml` - `COURTREGISTER_REPORT_ENABLED: "true"` and
+      (green at `750c3fc`: `./gradlew test` over the six suites the split touches, 164 tests,
+      0 failures, 0 errors. All four reflection cases pass, and so do the two wiring suites and the
+      two generation suites whose schedules moved from implicit routing to stated. Nothing else
+      about the four methods changed - not a cron, not a zone, not a fixed delay, not a lock name -
+      and no bean was added, renamed or moved. `checkstyleMain` and `pmdMain` exit 0.)
+- [x] T049 [P] [US1] `docker-compose.yml` - `COURTREGISTER_REPORT_ENABLED: "true"` and
       `COURTREGISTER_INTAKE_GAUGE_REFRESH: 10m` on the `app` service, in the block 002 wrote, with
       the comments quickstart.md gives: the report is a read of this service's own store and must
       keep running on a pod that generates nothing, which is what makes an intake-only deployment
@@ -1427,6 +1541,25 @@ start it with both flags false and confirm the sweep still runs; start it with
       The three e-mail variables land at T068.
       Infrastructure: the commit records `docker compose up -d app`, the 07:00 schedule registered in
       the startup log, and the two gauges present on `/actuator/prometheus`.
+      (done at `6e27131`. `docker compose up -d --build app` against the 002 dependency set; the app
+      answered `/actuator/health` in about five seconds. **All four schedules registered**, read off
+      `/actuator/scheduledtasks`: `RegisterGenerationJob.run` at `0 0 18 * * MON-FRI`,
+      **`ExceptionReportJob.run` at `0 0 7 * * MON-FRI`** with next execution
+      `2026-09-16T05:59:59.999Z` - 07:00 Europe/London in BST, so the zone is applied and not the
+      container's UTC - and `GenerationReconciler.reconcileScheduled` and
+      `IntakeAgeSweep.sweepScheduled` on fixed delays of 600000ms, the sweep having already run once
+      with status SUCCESS. **Both gauges present** on `/actuator/prometheus`:
+      `courtregister_non_terminal_requests_over_threshold 0.0` and
+      `courtregister_oldest_non_terminal_request_age 0.0`, each with its HELP and TYPE, published
+      from a real sweep against a real empty store rather than declared and never moved.
+      `docker compose down` afterwards; no container of this project left running.
+      Two things about the run rather than the change. The schedule is **not** in the startup log -
+      nothing prints it at INFO - so the evidence is `/actuator/scheduledtasks`, which this service
+      does not expose and which was exposed for the duration of the check through a compose override
+      file outside the repository; nothing in `docker-compose.yml` changed about the endpoint list.
+      And `fileservice-postgres`'s host mapping of 5433 was already taken on this machine by an
+      unrelated container, so that service ran on another host port through the same override - the
+      app reaches it over the compose network on 5432 either way.)
 - [ ] T050 Phase close: `./gradlew build` green; **review gate 5** (the scheduling split against
       `CliModeConfigTest`, one `LockProvider`, the unchanged `@EnableSchedulerLock` default, SC-008's
       three separate schedulers **named on all four scheduled methods**, FR-004's independence from
