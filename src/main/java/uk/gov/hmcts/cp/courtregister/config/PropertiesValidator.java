@@ -336,6 +336,7 @@ public class PropertiesValidator implements InitializingBean {
         validateTheLocalCredentialIsNowhereARealFlagIsRead(properties, feature);
         validateGenerationHasTheDownstreamsItNeeds(properties, generation, feature);
         validateWhicheverHalfWritesAFileCanReachTheFileService(properties, generation, report);
+        validateWhicheverHalfSendsCanReachNotificationnotify(properties, generation, report);
         validateTheCompletionMechanismCanHearAnOutcome(generation, brokerUrl);
     }
 
@@ -1153,8 +1154,10 @@ public class PropertiesValidator implements InitializingBean {
      * Enabling the downstream half is enabling everything it depends on.
      *
      * <p>Each of these is the same failure wearing a different name: the pod starts, reports itself
-     * healthy, waits until 18:00 and then cannot store the payload, cannot read the flag, cannot ask
-     * for a render or cannot send an e-mail. The registers are not late, they are never produced,
+     * healthy, waits until 18:00 and then cannot read the flag or cannot ask for a render. The
+     * endpoint it sends through is required here no longer, because it is required of whichever
+     * half sends; the rest are this half's alone. The registers are not late, they are never
+     * produced,
      * and the first anybody hears of it is a Youth Offending Team asking where the register is.
      * Every one of these settings arrives from the deployment, so every one of them is a deploy that
      * should have failed.
@@ -1177,8 +1180,6 @@ public class PropertiesValidator implements InitializingBean {
                             + " of somebody else's flag or of none");
             requireForGeneration(properties.endpoints().systemdocgenerator(), SDG_ENDPOINT,
                     "the generate-document command has nowhere to go without it");
-            requireForGeneration(properties.endpoints().notificationnotify(), NN_ENDPOINT,
-                    "the send-email-notification command has nowhere to go without it");
             validateTheEmailTemplateIsOneNotificationnotifyWillAccept(properties, generation);
         }
     }
@@ -1275,6 +1276,46 @@ public class PropertiesValidator implements InitializingBean {
                     + REPORT_EMAIL_ENABLED + " is true - the report's exception list is attached by"
                     + " file-service id, so a morning with nowhere to write the CSV is a morning"
                     + " support is told nothing about, on a pod that renders no document at all");
+        }
+    }
+
+    /**
+     * Whichever half sends has to have a notificationnotify to send through.
+     *
+     * <p>The second downstream the two outward legs share, and the second rule of this shape: the
+     * nightly run posts one send-email-notification per Youth Offending Team, and the morning report
+     * posts one per support address with the exception CSV attached by id. The endpoint was required
+     * of the generation half alone, which made a pod in FR-004's shape with the e-mail output on a
+     * pod that starts clean, reports itself healthy, and fails every send at 07:00 against a client
+     * with no base URL - the shape review gate 7 had just moved the file-service URL out of, one
+     * setting along.
+     *
+     * <p>It is the endpoint and not the identity, because the identity is asked of neither half
+     * today: {@code courtregister.endpoints.system-user-id} has no rule here at all, and giving it
+     * one under this heading would be a new refusal wearing a bug fix's clothes. That gap belongs to
+     * whichever gate catalogues it.
+     *
+     * <p>The refusal names <strong>which half asked</strong>, for the reason the file service's
+     * does: the value to set is the same either way, and what an operator has to know is why a pod
+     * that renders nothing wants a notificationnotify endpoint at all.
+     */
+    private static void validateWhicheverHalfSendsCanReachNotificationnotify(
+            final CourtRegisterProperties properties, final GenerationProperties generation,
+            final ReportProperties report) {
+
+        if (hasText(properties.endpoints().notificationnotify())) {
+            return;
+        }
+        if (generation.enabled()) {
+            throw new IllegalStateException(NN_ENDPOINT + MUST_BE_SET_WHEN + GENERATION_ENABLED
+                    + " is true - the send-email-notification command has nowhere to go without it,"
+                    + " and every Youth Offending Team on every batch goes untold");
+        }
+        if (report.email().enabled()) {
+            throw new IllegalStateException(NN_ENDPOINT + MUST_BE_SET_WHEN + REPORT_EMAIL_ENABLED
+                    + " is true - the report's own client is built over it, so a morning with"
+                    + " nowhere to post is support told nothing, on a pod that renders no document"
+                    + " at all");
         }
     }
 

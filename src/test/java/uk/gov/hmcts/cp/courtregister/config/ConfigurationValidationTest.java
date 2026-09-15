@@ -2377,19 +2377,20 @@ class ConfigurationValidationTest {
         }
 
         /**
-         * Three settings and not two, since review gate 7.
+         * Four settings and not two, after review gate 7 and the finding it left behind.
          *
          * <p>The e-mail output writes the exception list into the framework file service and
          * attaches it by id, so {@code courtregister.fileservice.url} is required of it exactly as
          * it is required of the nightly run - and was required of the run alone until the gate,
-         * which is what made a report pod with this output on a pod that could not start.
-         * {@code ReportEmailConfigTest} owns the refusal; what this case says is that the settings
-         * together are a deployment that starts.
+         * which is what made a report pod with this output on a pod that could not start. The
+         * endpoint it then posts through is the same argument one setting along, and the case below
+         * is its refusal. What this one says is that the settings together are a deployment that
+         * starts.
          */
         @Test
         void an_enabled_email_output_with_everything_it_needs_should_start() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
-                    A_RECIPIENT, FILESERVICE_URL_PROPERTY)
+                    A_RECIPIENT, FILESERVICE_URL_PROPERTY, NN_ENDPOINT_PROPERTY)
                     .run(context -> assertThat(context).hasNotFailed());
         }
 
@@ -2476,13 +2477,6 @@ class ConfigurationValidationTest {
         }
 
         /**
-         * The rendering limit is the one duration with no default of its own: unset, it <em>is</em>
-         * the generation half's grace period. A zero there is therefore a zero here, and a
-         * rendering limit of zero reports every batch in the estate as late on its first morning -
-         * so the resolved value is held to being positive too, and the refusal names the key the
-         * value really came from rather than the key that was left unset.
-         */
-        /**
          * The endpoint the send is made to, required of whichever half sends.
          *
          * <p>{@code ReportEmailConfig} builds the report's own {@code RestClient} over
@@ -2520,6 +2514,13 @@ class ConfigurationValidationTest {
                             .hasNotFailed());
         }
 
+        /**
+         * The rendering limit is the one duration with no default of its own: unset, it <em>is</em>
+         * the generation half's grace period. A zero there is therefore a zero here, and a
+         * rendering limit of zero reports every batch in the estate as late on its first morning -
+         * so the resolved value is held to being positive too, and the refusal names the key the
+         * value really came from rather than the key that was left unset.
+         */
         @Test
         void a_zero_grace_period_makes_the_unset_rendering_limit_refuse() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY, REPORT + ".enabled=true",
