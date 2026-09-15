@@ -224,35 +224,60 @@ class CliMainTest {
     }
 
     /**
-     * The five names it dispatches by, which are also the five the image's script recognises.
+     * The six names it dispatches by, which are also the six the image's script recognises.
      */
     @Nested
-    @DisplayName("the five names, stated once")
+    @DisplayName("the six names, stated once")
     class Names {
 
         @Test
-        void the_registry_should_carry_exactly_the_five_names_operations_has() {
+        void the_registry_should_carry_exactly_the_six_names_operations_has() {
             softly.assertThat(CliMain.COMMANDS)
                     .as("the names are a published interface: they are typed into runbook steps "
                             + "and matched by the image's own script, so one being renamed or "
                             + "dropped is a change to what support can do at 18:30")
                     .containsExactly("generate-register", "notify-register", "list-batches",
-                            "supersede-before", "check-flag");
+                            "supersede-before", "check-flag", "report-exceptions");
             softly.assertThat(CliMain.COMMANDS)
                     .as("and each is reachable as the constant the commands report themselves by")
                     .containsExactly(CliMain.GENERATE_REGISTER, CliMain.NOTIFY_REGISTER,
-                            CliMain.LIST_BATCHES, CliMain.SUPERSEDE_BEFORE, CliMain.CHECK_FLAG);
+                            CliMain.LIST_BATCHES, CliMain.SUPERSEDE_BEFORE, CliMain.CHECK_FLAG,
+                            CliMain.REPORT_EXCEPTIONS);
         }
 
         @Test
-        void the_script_that_dispatches_should_recognise_the_same_five_and_no_others()
+        void report_exceptions_should_be_in_commands() {
+            softly.assertThat(CliMain.COMMANDS)
+                    .as("the sixth command is dispatched by name against this list, so a name "
+                            + "missing from it is a command an operator cannot reach at all - and "
+                            + "the one they reach for is the one they reach for during an incident")
+                    .contains(CliMain.REPORT_EXCEPTIONS);
+        }
+
+        @Test
+        void report_exceptions_should_be_in_the_registry() {
+            final GenericApplicationContext anyContext = new GenericApplicationContext();
+            anyContext.refresh();
+            try {
+                softly.assertThat(CliMain.registryOf(anyContext, output))
+                        .as("a name in COMMANDS with no entry in the registry is answered with the "
+                                + "usage and a refusal, which reads exactly like a mistyped name: "
+                                + "the two lists are one list")
+                        .containsKey(CliMain.REPORT_EXCEPTIONS);
+            } finally {
+                anyContext.close();
+            }
+        }
+
+        @Test
+        void the_script_that_dispatches_should_recognise_the_same_six_and_no_others()
                 throws IOException {
 
             softly.assertThat(namesTheScriptDispatchesOn())
                     .as("one list rather than two: a name the script does not recognise starts the "
                             + "application instead of running a command, and a name this class "
-                            + "does not know is answered with a refusal - so a sixth command "
-                            + "missing from either side is a command that silently does nothing")
+                            + "does not know is answered with a refusal - so a name missing from "
+                            + "either side is a command that silently does nothing")
                     .containsExactlyInAnyOrderElementsOf(CliMain.COMMANDS);
         }
 
@@ -275,7 +300,7 @@ class CliMainTest {
     class UnknownName {
 
         @Test
-        void a_name_this_image_does_not_carry_should_be_refused_with_the_five_names() {
+        void a_name_this_image_does_not_carry_should_be_refused_with_the_six_names() {
             final int code = cli.run(new String[] {MISTYPED}, registryAnswering(CliMain.SUCCESS),
                     output);
 
@@ -293,7 +318,25 @@ class CliMainTest {
         }
 
         @Test
-        void no_command_name_at_all_should_be_refused_with_the_five_names() {
+        void the_usage_line_should_list_six_names() {
+            cli.run(new String[] {MISTYPED}, registryAnswering(CliMain.SUCCESS), output);
+
+            softly.assertThat(printed)
+                    .as("stated as the six literals rather than derived from COMMANDS, because a "
+                            + "list compared against itself agrees with itself however many names "
+                            + "it holds: this is what an operator who mistyped a runbook step is "
+                            + "actually shown")
+                    .containsExactly(USAGE,
+                            "  generate-register",
+                            "  notify-register",
+                            "  list-batches",
+                            "  supersede-before",
+                            "  check-flag",
+                            "  report-exceptions");
+        }
+
+        @Test
+        void no_command_name_at_all_should_be_refused_with_the_six_names() {
             final int code = cli.run(new String[0], registryAnswering(CliMain.SUCCESS), output);
 
             softly.assertThat(code)
@@ -302,7 +345,7 @@ class CliMainTest {
                             + "meant")
                     .isEqualTo(CliMain.REFUSED);
             softly.assertThat(printed)
-                    .as("the same five names, said the same way")
+                    .as("the same six names, said the same way")
                     .containsExactlyElementsOf(usageLines());
         }
 
