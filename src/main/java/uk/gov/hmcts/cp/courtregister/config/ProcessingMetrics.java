@@ -3,13 +3,17 @@ package uk.gov.hmcts.cp.courtregister.config;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import org.springframework.stereotype.Component;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
+import uk.gov.hmcts.cp.courtregister.domain.DeliveryStatus;
+import uk.gov.hmcts.cp.courtregister.domain.ExceptionKind;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
 import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
@@ -50,6 +54,10 @@ public class ProcessingMetrics {
     public static final String LOCK_LOSS = "courtregister_lock_loss_total";
     public static final String STALE_RUNNER_REJECTIONS =
             "courtregister_stale_runner_rejections_total";
+    public static final String EXCEPTION_REPORT_RUNS = "courtregister_exception_report_runs_total";
+    public static final String EXCEPTION_REPORT_DELIVERIES =
+            "courtregister_exception_report_deliveries_total";
+    public static final String EXCEPTIONS_REPORTED = "courtregister_exceptions_reported_total";
     public static final String INTAKE_SUSPENDED = "courtregister_intake_suspended";
     public static final String SERVICEBUS_UP = "courtregister_servicebus_up";
 
@@ -225,6 +233,47 @@ public class ProcessingMetrics {
      */
     public void bindServiceBusUp(final BooleanSupplier liveState) {
         serviceBusState.set(liveState);
+    }
+
+    /**
+     * One run of the exception report ended, delivered, partially delivered or not at all.
+     *
+     * @param outcome how the run as a whole went, as a bounded code
+     */
+    public void exceptionReportRun(final String outcome) {
+        counter(EXCEPTION_REPORT_RUNS, OUTCOME_TAG, outcome).increment();
+    }
+
+    /**
+     * One sink was handed one report, and said how it went.
+     *
+     * @param sink    which sink was asked
+     * @param outcome how completely it delivered
+     */
+    public void exceptionReportDelivery(final ReportSinkName sink, final DeliveryStatus outcome) {
+        Counter.builder(EXCEPTION_REPORT_DELIVERIES)
+                .tag("sink", label(sink))
+                .tag(OUTCOME_TAG, label(outcome))
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * How many exceptions of one kind a run found, counted whether or not there were any.
+     *
+     * <p>A kind with none still moves its series by nought, so all five exist from the first run
+     * and an empty morning is a zero rather than an absence.
+     *
+     * @param kind  which of the five
+     * @param count how many were found
+     */
+    public void exceptionsReported(final ExceptionKind kind, final int count) {
+        counter(EXCEPTIONS_REPORTED, "kind", label(kind)).increment(count);
+    }
+
+    /** The bounded label one enumerated value is counted under. */
+    private static String label(final Enum<?> value) {
+        return value.name().toLowerCase(Locale.ROOT).replace('_', '-');
     }
 
     private Counter counter(final String name) {
