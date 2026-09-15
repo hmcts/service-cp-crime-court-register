@@ -306,22 +306,19 @@ class ReportSchedulingConfigTest {
         });
     }
 
-    @Test
+    @ParameterizedTest(name = "report={0} generation={1}")
+    @CsvSource({"true,true", "true,false", "false,true", "false,false"})
     @DisplayName("there is exactly one lock provider over the one shedlock table")
-    void there_is_exactly_one_lock_provider() {
-        podWith(true, false).run(context -> {
+    void there_is_exactly_one_lock_provider(final boolean report, final boolean generation) {
+        podWith(report, generation).run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context.getBeanNamesForType(LockProvider.class))
                     .as("two providers over one shedlock table is a race dressed as configuration, "
-                            + "and none at all is a report pod whose 07:00 run is unlocked")
+                            + "and none at all is a report pod whose 07:00 run is unlocked - and "
+                            + "the provider is unconditional, so the claim is about all four "
+                            + "deployments and not about the two this case used to try")
                     .hasSize(1);
         });
-
-        podWith(false, false).run(context -> assertThat(
-                context.getBeanNamesForType(LockProvider.class))
-                .as("the pod that schedules only the sweep still holds the provider, because the "
-                        + "annotation that needs one is unconditional")
-                .hasSize(1));
     }
 
     @Test

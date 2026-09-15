@@ -80,6 +80,15 @@ class ExceptionReportJobTest {
     /** The one event name the run's line is indexed under. */
     private static final String RUN_EVENT = "exception_report_run";
 
+    /**
+     * A correlation somebody else opened, which is the only kind the body is ever given.
+     *
+     * <p>Deliberately not a UUID this class mints and then looks for: a caller's id is whatever the
+     * caller had, and a value that is plainly not one this job could have produced is the one an
+     * assertion about "the argument, not the MDC" is worth making over.
+     */
+    private static final String A_CALLERS_RUN_ID = "a-run-the-caller-already-opened";
+
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final ProcessingMetrics metrics = new ProcessingMetrics(registry);
     private final ExceptionReportService reporting = mock(ExceptionReportService.class);
@@ -177,6 +186,33 @@ class ExceptionReportJobTest {
                 .as("the scheduler's threads are pooled: an id left behind is inherited by "
                         + "whatever runs next on that thread, which reads as a true correlation")
                 .isNull();
+    }
+
+    @Test
+    void the_body_takes_its_run_id_from_the_caller_and_never_reads_the_mdc() {
+        try (CapturedLog log = CapturedLog.capturing(ExceptionReportJob.class)) {
+            final ArgumentCaptor<String> given = ArgumentCaptor.forClass(String.class);
+            when(reporting.build(any(), given.capture()))
+                    .thenAnswer(call -> emptyReport(call.getArgument(1)));
+            delivered(DeliveryStatus.DELIVERED, ReportSinkName.LOG);
+
+            jobOver(List.of(logSink)).report(A_CALLERS_RUN_ID);
+
+            assertThat(given.getValue())
+                    .as("the body is documented as directly callable, and a body that reads the "
+                            + "MDC is one only its own wrapper can call correctly: called by "
+                            + "anything else it reports a run under no correlation at all")
+                    .isEqualTo(A_CALLERS_RUN_ID);
+            assertThat(theRunLine(log))
+                    .as("and the line names the caller's run rather than whatever the calling "
+                            + "thread happened to be carrying")
+                    .contains("run_id=" + A_CALLERS_RUN_ID);
+            assertThat(RunCorrelation.current())
+                    .as("the body opens no correlation of its own: minting and removing one is "
+                            + "the wrapper's job, and a body that did both would do it twice on "
+                            + "the scheduled path")
+                    .isNull();
+        }
     }
 
     @Test
@@ -280,6 +316,25 @@ class ExceptionReportJobTest {
     }
 
     @Test
+    void a_run_asked_of_one_sink_that_failed_is_outcome_failed() {
+        try (CapturedLog log = CapturedLog.capturing(ExceptionReportJob.class)) {
+            aQuietMorning();
+            delivered(DeliveryStatus.NOT_DELIVERED, ReportSinkName.LOG);
+
+            jobOver(List.of(logSink)).run();
+
+            assertThat(theRunLine(log))
+                    .as("the MVP's own deployment holds one sink, so a morning it refused is a "
+                            + "morning nobody was told about - and a fold that only counted "
+                            + "refusals against a second sink would call that one delivered")
+                    .contains("delivered_log=failed")
+                    .contains("delivered_email=disabled")
+                    .contains("outcome=failed");
+            assertThat(runs(ReportRunOutcome.FAILED)).isEqualTo(1);
+        }
+    }
+
+    @Test
     void every_outcome_is_counted_on_the_runs_counter_so_a_quiet_morning_and_a_missing_run_are_different_observations() {
         aQuietMorning();
         delivered(DeliveryStatus.DELIVERED, ReportSinkName.LOG);
@@ -313,6 +368,28 @@ class ExceptionReportJobTest {
                             + "says so rather than saying nothing at all")
                     .contains("outcome=failed")
                     .contains("delivered_log=failed");
+        }
+    }
+
+    @Test
+    void the_failure_paths_run_line_carries_every_field() {
+        try (CapturedLog log = CapturedLog.capturing(ExceptionReportJob.class)) {
+            when(reporting.build(any(), any())).thenThrow(new StoreUnavailableException(
+                    "the store could not be reached to read what went wrong overnight",
+                    new IllegalStateException("the connection pool is empty")));
+
+            assertThatThrownBy(jobOver(List.of(logSink, emailSink))::run)
+                    .isInstanceOf(StoreUnavailableException.class);
+
+            assertThat(theRunLine(log))
+                    .as("the morning that produced nothing is the morning whose line is read "
+                            + "hardest, so it is the same line with the same fields and not a "
+                            + "shorter one a saved query would have to allow for separately")
+                    .contains("window_from=")
+                    .contains("window_to=")
+                    .contains("entries=0")
+                    .contains("delivered_email=failed")
+                    .contains("duration_ms=");
         }
     }
 

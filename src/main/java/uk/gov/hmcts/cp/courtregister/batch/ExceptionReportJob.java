@@ -160,7 +160,9 @@ public class ExceptionReportJob {
             scheduler = ReportSchedulingConfig.REPORT_SCHEDULER)
     @SchedulerLock(name = LOCK_NAME, lockAtMostFor = LOCK_AT_MOST_FOR)
     public void run() {
-        RunCorrelation.under(this::report);
+        RunCorrelation.under(() -> {
+            report(RunCorrelation.current());
+        });
     }
 
     /**
@@ -170,6 +172,11 @@ public class ExceptionReportJob {
      * whoever opened the run knows it, so the application layer never touches an MDC and the
      * command's path in Phase 6 works exactly the same way.
      *
+     * <p><strong>The parameter is a seam and is not read yet.</strong> The body still takes the
+     * correlation off the MDC, which is why a caller that hands one in gets a run reported under
+     * none.
+     *
+     * @param runId the correlation whoever opened the run already has
      * @return the report this morning's run built
      */
     // PMD.AvoidCatchingGenericException: what has to be reported is a morning that produced no
@@ -178,7 +185,7 @@ public class ExceptionReportJob {
     // would leave the classes it does not name as the mornings that say nothing at all. Nothing is
     // swallowed: the same throwable leaves the method.
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
-    public ExceptionReport report() {
+    public ExceptionReport report(final String runId) {
         final Instant startedAt = clock.instant();
         final ReportWindow window = ReportWindow.forScheduledRun(cron, zone, startedAt);
         try {
