@@ -22,6 +22,7 @@ import uk.gov.hmcts.cp.courtregister.batch.RunCorrelation;
 import uk.gov.hmcts.cp.courtregister.config.ReportProperties;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryStatus;
+import uk.gov.hmcts.cp.courtregister.domain.DeliveryWord;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionEntry;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionKind;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionReport;
@@ -84,17 +85,6 @@ public class ReportExceptionsCli {
     /** The one event name this command's last line is indexed under, as the job's run line is. */
     private static final String RUN_EVENT = "exception_report_run";
 
-    /** What the last line calls a sink that took the report, and one that did not. */
-    private static final String OK = "ok";
-
-    private static final String NOT_OK = "failed";
-
-    /** Nobody asked: the output exists on this deployment and this invocation did not want it. */
-    private static final String SKIPPED = "skipped";
-
-    /** And nobody could: there is no e-mail output here at all, which is a different fact. */
-    private static final String DISABLED = "disabled";
-
     /**
      * Roughly how long the counts line comes out, so the builder is sized once rather than grown.
      *
@@ -113,8 +103,19 @@ public class ReportExceptionsCli {
     /** The bounded reason {@code --email} is declined under where the output is switched off. */
     private static final String EMAIL_OUTPUT_DISABLED = "email-output-disabled";
 
-    /** And where the output is on but this build has no sink behind it yet (Phase 7). */
+    /** And where the output is on and no sink was contributed behind it. */
     private static final String EMAIL_OUTPUT_NOT_WIRED = "email-output-not-wired";
+
+    /**
+     * What the second decline names instead of a setting, because the setting is not the problem.
+     *
+     * <p>{@code ReportEmailConfig} declares the sink on exactly the condition this command reads,
+     * so on a deployed context the branch below cannot be reached. It is kept because nothing in
+     * this class's own type says so - the sinks are handed in - and because the alternative to
+     * declining is running log-only while an operator believes support was e-mailed. Naming the
+     * setting here would send them to the one place there is nothing to change.
+     */
+    private static final String SINK_EMAIL = "sink=email";
 
     /** What this command could not finish, as the bounded reason its failure line carries. */
     private static final String NOT_REPORTED = "report-not-built";
@@ -214,32 +215,46 @@ public class ReportExceptionsCli {
         }
         final boolean emailAsked = parsed.flags().contains(Args.EMAIL);
         if (emailAsked && !settings.email().enabled()) {
-            return declineEmail(EMAIL_OUTPUT_DISABLED);
+            return declineEmail(EMAIL_OUTPUT_DISABLED + " setting=" + EMAIL_SETTING);
         }
-        final Instant now = clock.instant();
+        final Instant startedAt = clock.instant();
+        final String typed = parsed.options().get(Args.SINCE);
         final ReportWindow window;
-        try {
-            window = windowFrom(parsed.options().get(Args.SINCE), now);
-        } catch (RuntimeException notAWindow) {
-            // Every reader a window goes through refuses in its own type - DateTimeParseException
-            // from the two parsers, IllegalArgumentException from the rules below them and from
-            // ReportWindow itself, DateTimeException from arithmetic on an absurd count - and all
-            // of them mean the one thing an operator can act on: this is not a window. Nothing is
-            // swallowed; unreadable names the argument and the class that refused it, and refuses
-            // to write down either the message or the token (constitution Principle VII).
-            return CliMain.unreadable(CliMain.REPORT_EXCEPTIONS, USAGE, Args.SINCE, notAWindow,
-                    output);
+        if (typed == null) {
+            try {
+                window = sinceTheLastRun(startedAt);
+            } catch (RuntimeException notAWindow) {
+                // A window nobody typed. Whatever refused it - a schedule that cannot be read, a
+                // zone that is not one - this is the command failing to produce a report, not an
+                // operator having got an argument wrong, and telling them their --since was
+                // unreadable would send them looking for an argument they never gave.
+                return couldNotBuild(notAWindow);
+            }
+        } else {
+            try {
+                window = sinceTyped(typed, startedAt);
+            } catch (RuntimeException notAWindow) {
+                // Every reader a window goes through refuses in its own type -
+                // DateTimeParseException from the two parsers, IllegalArgumentException from the
+                // rules below them and from ReportWindow itself, DateTimeException from arithmetic
+                // on an absurd count - and all of them mean the one thing an operator can act on:
+                // this is not a window. Nothing is swallowed; unreadable names the argument and the
+                // class that refused it, and refuses to write down either the message or the token
+                // (constitution Principle VII).
+                return CliMain.unreadable(CliMain.REPORT_EXCEPTIONS, USAGE, Args.SINCE, notAWindow,
+                        output);
+            }
         }
         final Optional<ExceptionReportSink> email = sinkNamed(ReportSinkName.EMAIL);
         if (emailAsked && email.isEmpty()) {
-            return declineEmail(EMAIL_OUTPUT_NOT_WIRED);
+            return declineEmail(EMAIL_OUTPUT_NOT_WIRED + " " + SINK_EMAIL);
         }
         final List<ExceptionReportSink> asked = new ArrayList<>();
         sinkNamed(ReportSinkName.LOG).ifPresent(asked::add);
         if (emailAsked) {
             email.ifPresent(asked::add);
         }
-        return reported(window, asked, emailAsked);
+        return reported(window, asked, emailAsked, startedAt);
     }
 
     /**
@@ -253,6 +268,7 @@ public class ReportExceptionsCli {
      * @param window     the window that was asked for
      * @param asked      the sinks this invocation delivers to, in the order they are asked
      * @param emailAsked whether {@code --email} was given and accepted
+     * @param startedAt  this invocation's own reading of now, taken once when it opened
      * @return {@link CliMain#SUCCESS} where every sink asked took it, else {@link CliMain#FAILED}
      * @throws ReportNotWritten where the destination refused a line, which is not this command's
      *                          answer to give
@@ -265,9 +281,8 @@ public class ReportExceptionsCli {
     // swallowed: the line below says it happened and the exit code is FAILED.
     @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
     private int reported(final ReportWindow window, final List<ExceptionReportSink> asked,
-            final boolean emailAsked) {
+            final boolean emailAsked, final Instant startedAt) {
 
-        final long startedAt = System.nanoTime();
         try {
             final ExceptionReport report = reporting.build(window, RunCorrelation.current());
             final List<DeliveryOutcome> delivered = reporting.deliver(report, asked);
@@ -280,39 +295,60 @@ public class ReportExceptionsCli {
             // without a terminal.
             throw notWritten;
         } catch (RuntimeException notBuilt) {
-            LOG.error("The exception report an operator asked for could not be produced, so "
-                    + "nothing was written to their terminal about what is wrong. cause={}",
-                    notBuilt.getClass().getName());
-            return CliMain.failure(CliMain.REPORT_EXCEPTIONS, "", NOT_REPORTED, output);
+            return couldNotBuild(notBuilt);
         }
     }
 
     /**
-     * The window's start, from what was typed, in the order data-model.md states.
+     * What this command says when it could not produce a report at all.
+     *
+     * <p>Two things reach it - a window nobody typed that cannot be computed, and a read that would
+     * not answer - and they are the same fact to whoever is reading the terminal: there is no
+     * report. {@link CliMain#FAILED} rather than {@link CliMain#REFUSED}, because this is the one a
+     * runbook may retry, and the cause is named by class because its message belongs to whatever
+     * raised it (constitution Principle VII).
+     *
+     * @param notBuilt what stopped it, read for its class and for nothing else
+     * @return {@link CliMain#FAILED}
+     */
+    private int couldNotBuild(final RuntimeException notBuilt) {
+        LOG.error("The exception report an operator asked for could not be produced, so "
+                + "nothing was written to their terminal about what is wrong. cause={}",
+                notBuilt.getClass().getName());
+        return CliMain.failure(CliMain.REPORT_EXCEPTIONS, "", NOT_REPORTED, output);
+    }
+
+    /**
+     * The window a bare invocation covers: the same one the morning run would have answered.
+     *
+     * <p>No fallback and no setting. A duration beside the schedule would be one fact written
+     * twice, and the morning the two disagreed is the morning something fell into the gap between
+     * two windows.
+     *
+     * @param now the window's end, which is always this pod's reading of now
+     * @return the window from the last scheduled run to now
+     */
+    private ReportWindow sinceTheLastRun(final Instant now) {
+        return ReportWindow.sinceLastScheduledRun(settings.cron(), settings.zone(), now);
+    }
+
+    /**
+     * The window an operator named, read in the order data-model.md states.
      *
      * <p>The first form that parses wins and nothing falls through to a default once a value was
      * given. A zero or negative duration, a shorthand with no digits and an instant that has not
-     * happened yet are each refused: a window of no width reports nothing and looks exactly like a
-     * quiet night, which is the one reading an operator must never be given by accident.
+     * happened yet are each refused - the last of them by {@link ReportWindow} itself, which is
+     * where a window of no width is refused for every caller: one that reports nothing looks
+     * exactly like a quiet night, which is the one reading an operator must never be given by
+     * accident.
      *
-     * @param typed what followed {@code --since}, or {@code null} where it was not given
+     * @param typed what followed {@code --since}
      * @param now   the window's end, which is always this pod's reading of now
      * @return the window
      * @throws IllegalArgumentException where the value is not a window this command can use
      */
-    private ReportWindow windowFrom(final String typed, final Instant now) {
-        final Instant from;
-        if (typed == null) {
-            from = ReportWindow.sinceLastScheduledRun(settings.cron(), settings.zone(), now)
-                    .from();
-        } else {
-            from = readBack(typed, now);
-        }
-        if (!from.isBefore(now)) {
-            throw new IllegalArgumentException(
-                    "a window has to open before it closes, and this one does not");
-        }
-        return new ReportWindow(from, now);
+    private static ReportWindow sinceTyped(final String typed, final Instant now) {
+        return new ReportWindow(readBack(typed, now), now);
     }
 
     /**
@@ -370,14 +406,18 @@ public class ReportExceptionsCli {
     }
 
     /**
-     * Declines {@code --email}, naming the setting, having read and written nothing.
+     * Declines {@code --email}, having read and written nothing.
      *
-     * @param reason the bounded reason it was declined under
+     * <p>The two declines name two different things, because they have two different answers: an
+     * output that is switched off is a deployment change, and an output that is on with no sink
+     * behind it is a context to fix. A reason that named the setting in both cases would send half
+     * the people who saw it to a setting that is already right.
+     *
+     * @param reason the bounded reason it was declined under, and what that reason names
      * @return {@link CliMain#REFUSED}
      */
     private int declineEmail(final String reason) {
-        return CliMain.declined(CliMain.REPORT_EXCEPTIONS, USAGE,
-                reason + " setting=" + EMAIL_SETTING, output);
+        return CliMain.declined(CliMain.REPORT_EXCEPTIONS, USAGE, reason, output);
     }
 
     /**
@@ -458,8 +498,14 @@ public class ReportExceptionsCli {
      * The run's own last line, written after every sink has returned.
      *
      * <p>The equivalent of {@code ExceptionReportJob}'s {@code exception_report_run}, on the
-     * operator's stream rather than in the log, so an on-demand report says the same four things
-     * about its delivery that the 07:00 run does.
+     * operator's stream rather than in the log, so an on-demand report says the same things about
+     * its delivery that the 07:00 run does - in the same words, which are
+     * {@link DeliveryWord}'s and {@link ReportRunOutcome}'s rather than a second copy of each.
+     *
+     * <p>{@code duration_ms} is measured on the injected clock, between this invocation opening
+     * its correlation and this line, exactly as the run measures its own. A reading taken off a
+     * second, un-injected clock is a field no case can state a value for, and a field no case
+     * states a value for is a field that can quietly stop being a duration at all.
      *
      * @param window     the window that was read
      * @param entries    how many exceptions the report held, across all five kinds
@@ -468,82 +514,39 @@ public class ReportExceptionsCli {
      * @param startedAt  when the invocation opened its correlation
      */
     private void runLine(final ReportWindow window, final int entries,
-            final List<DeliveryOutcome> delivered, final boolean emailAsked, final long startedAt) {
+            final List<DeliveryOutcome> delivered, final boolean emailAsked,
+            final Instant startedAt) {
 
         output.accept("event=" + RUN_EVENT
                 + " run_id=" + RunCorrelation.current()
                 + " window_from=" + window.from()
                 + " window_to=" + window.to()
                 + " entries=" + entries
-                + " delivered_log=" + tookIt(ReportSinkName.LOG, delivered)
-                + " delivered_email=" + emailTookIt(delivered, emailAsked)
-                + " outcome=" + outcomeOf(delivered).name().toLowerCase(Locale.ROOT)
-                + " duration_ms=" + Duration.ofNanos(System.nanoTime() - startedAt).toMillis());
+                + " delivered_log=" + said(ReportSinkName.LOG, delivered, true)
+                + " delivered_email=" + said(ReportSinkName.EMAIL, delivered, emailAsked)
+                + " outcome=" + ReportRunOutcome.of(delivered).name().toLowerCase(Locale.ROOT)
+                + " duration_ms=" + Duration.between(startedAt, clock.instant()).toMillis());
     }
 
     /**
-     * Whether one named sink took the report.
+     * What the line says about one sink, in the words the 07:00 run uses for the same facts.
+     *
+     * <p>Whether the sink is here at all is read from the sinks this context contributed, and not
+     * from the settings: the job reads it that way, and the two read it the same way or they can
+     * call the same context two different things. {@code skipped} is this command's alone - an
+     * output that exists and an invocation that did not want it - and it is the word that has to
+     * stay distinguishable from {@code disabled}, which says nobody could.
      *
      * @param sink      which sink the field is about
      * @param delivered one outcome per sink asked
-     * @return {@code ok} or {@code failed}
+     * @param asked     whether this invocation asked it
+     * @return the bounded word
      */
-    private static String tookIt(final ReportSinkName sink,
-            final List<DeliveryOutcome> delivered) {
+    private String said(final ReportSinkName sink, final List<DeliveryOutcome> delivered,
+            final boolean asked) {
 
-        return delivered.stream()
-                .filter(outcome -> outcome.sink() == sink)
-                .anyMatch(outcome -> outcome.status() == DeliveryStatus.DELIVERED)
-                ? OK : NOT_OK;
-    }
-
-    /**
-     * The e-mail field, which has two answers the log field does not.
-     *
-     * <p>{@code skipped} is nobody asked and {@code disabled} is nobody could, and they are
-     * different operational facts: the first is this invocation's choice, the second is the
-     * deployment's.
-     *
-     * @param delivered  one outcome per sink asked
-     * @param emailAsked whether {@code --email} was given and accepted
-     * @return {@code ok}, {@code failed}, {@code skipped} or {@code disabled}
-     */
-    private String emailTookIt(final List<DeliveryOutcome> delivered, final boolean emailAsked) {
-        final String said;
-        if (emailAsked) {
-            said = tookIt(ReportSinkName.EMAIL, delivered);
-        } else if (settings.email().enabled()) {
-            said = SKIPPED;
-        } else {
-            said = DISABLED;
-        }
-        return said;
-    }
-
-    /**
-     * How the invocation as a whole went, from what each sink asked answered.
-     *
-     * <p>The same three states {@code ExceptionReportJob} reports, computed here rather than shared
-     * with it: the job's fold is private to a class that also counts the outcome on its own meter
-     * and writes it to the log, and a command's JVM has neither a registry to increment nor that
-     * line to write.
-     *
-     * @param delivered one outcome per sink asked
-     * @return the bounded outcome
-     */
-    private static ReportRunOutcome outcomeOf(final List<DeliveryOutcome> delivered) {
-        final long accepted = delivered.stream()
-                .filter(outcome -> outcome.status() == DeliveryStatus.DELIVERED)
-                .count();
-        final ReportRunOutcome ended;
-        if (accepted == 0) {
-            ended = ReportRunOutcome.FAILED;
-        } else if (accepted == delivered.size()) {
-            ended = ReportRunOutcome.DELIVERED;
-        } else {
-            ended = ReportRunOutcome.PARTIAL;
-        }
-        return ended;
+        final boolean here = sinkNamed(sink).isPresent();
+        return DeliveryWord.of(sink, delivered, here, here && asked).said();
     }
 
     /**

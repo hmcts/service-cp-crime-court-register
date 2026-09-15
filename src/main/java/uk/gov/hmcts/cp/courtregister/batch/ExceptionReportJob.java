@@ -5,6 +5,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.stream.Collectors;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,7 +16,7 @@ import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.config.ReportSchedulingConfig;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryOutcome;
-import uk.gov.hmcts.cp.courtregister.domain.DeliveryStatus;
+import uk.gov.hmcts.cp.courtregister.domain.DeliveryWord;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionReport;
 import uk.gov.hmcts.cp.courtregister.domain.ReportRunOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
@@ -77,20 +79,6 @@ public class ExceptionReportJob {
     /** The one event name the run's line is indexed under. */
     private static final String RUN_EVENT = "exception_report_run";
 
-    /** What the line calls a sink that took the report, and one that did not. */
-    private static final String OK = "ok";
-
-    private static final String NOT_OK = "failed";
-
-    /**
-     * And what it calls an output this deployment does not have.
-     *
-     * <p>Not {@code skipped}: that is the command's word for a sink it chose not to ask, and this
-     * job asks every sink there is. A run that said {@code skipped} would be describing a decision
-     * nobody made.
-     */
-    private static final String DISABLED = "disabled";
-
     /** What a run that could not build a report has to report about, which is nothing. */
     private static final int NOTHING_BUILT = 0;
 
@@ -99,7 +87,7 @@ public class ExceptionReportJob {
     private final List<ExceptionReportSink> sinks;
 
     /**
-     * Whether this deployment has an e-mail sink at all, asked once while the sinks are whole.
+     * Which sinks this deployment has at all, asked once while the sinks are whole.
      *
      * <p>A sink names itself off the thing it delivers through, so the sink that has just broken is
      * exactly the one that may no longer be able to say who it is - which is why the service reads
@@ -107,7 +95,7 @@ public class ExceptionReportJob {
      * moment the line is written. By then a sink may be in no state to answer, and the one question
      * that would leave this method is the one about a run that has already happened.
      */
-    private final boolean emailSinkOnThisContext;
+    private final Set<ReportSinkName> onThisContext;
 
     private final String cron;
 
@@ -133,8 +121,9 @@ public class ExceptionReportJob {
             final ProcessingMetrics metrics, final Clock clock) {
         this.reporting = reporting;
         this.sinks = List.copyOf(sinks);
-        this.emailSinkOnThisContext = this.sinks.stream()
-                .anyMatch(sink -> sink.name() == ReportSinkName.EMAIL);
+        this.onThisContext = this.sinks.stream()
+                .map(ExceptionReportSink::name)
+                .collect(Collectors.toUnmodifiableSet());
         this.cron = cron;
         this.zone = zone;
         this.metrics = metrics;
@@ -235,67 +224,31 @@ public class ExceptionReportJob {
     private void recorded(final String runId, final ReportWindow window, final int entries,
             final List<DeliveryOutcome> delivered, final Instant startedAt) {
 
-        final ReportRunOutcome outcome = outcomeOf(delivered);
+        final ReportRunOutcome outcome = ReportRunOutcome.of(delivered);
         metrics.exceptionReportRun(outcome);
         LOG.info("event={} run_id={} window_from={} window_to={} entries={} delivered_log={} "
                         + "delivered_email={} outcome={} duration_ms={}",
                 RUN_EVENT, runId, window.from(), window.to(), entries,
-                tookIt(ReportSinkName.LOG, delivered), emailTookIt(delivered),
+                said(ReportSinkName.LOG, delivered), said(ReportSinkName.EMAIL, delivered),
                 outcome.name().toLowerCase(Locale.ROOT),
                 Duration.between(startedAt, clock.instant()).toMillis());
     }
 
     /**
-     * How the run as a whole went, from what each sink answered.
+     * What the line says about one sink, in the words the command uses for the same facts.
      *
-     * <p>Three states rather than two, because a report that reached one of its two audiences is
-     * neither a success nor a silence: it is a resend (FR-007). A run that asked nobody - which is
-     * a run that could not build a report at all - is {@code failed}, because nothing was told.
-     *
-     * @param delivered one outcome per sink asked
-     * @return the bounded outcome
-     */
-    private static ReportRunOutcome outcomeOf(final List<DeliveryOutcome> delivered) {
-        final long accepted = delivered.stream()
-                .filter(outcome -> outcome.status() == DeliveryStatus.DELIVERED)
-                .count();
-        final ReportRunOutcome ended;
-        if (accepted == 0) {
-            ended = ReportRunOutcome.FAILED;
-        } else if (accepted == delivered.size()) {
-            ended = ReportRunOutcome.DELIVERED;
-        } else {
-            ended = ReportRunOutcome.PARTIAL;
-        }
-        return ended;
-    }
-
-    /**
-     * Whether one named sink took the report.
-     *
-     * <p>A sink that partially delivered has not taken it: some recipients were told and the rest
-     * are a resend, which is a thing to act on rather than a delivery to tick off. The run's own
-     * outcome is where that nuance is expressed, as {@code partial}.
+     * <p>Asked and present are the same question here, because this run asks every sink there is:
+     * a sink on the context is a sink that was asked, and one that is not there is
+     * {@code disabled} - never {@code skipped}, which would describe a decision nobody made. The
+     * word itself is {@link DeliveryWord}'s, so this and {@code ReportExceptionsCli} cannot come
+     * to call the same shape two different things (review gate 6).
      *
      * @param sink      which sink the field is about
      * @param delivered one outcome per sink asked
-     * @return {@code ok} or {@code failed}
+     * @return the bounded word
      */
-    private static String tookIt(final ReportSinkName sink,
-            final List<DeliveryOutcome> delivered) {
-        return delivered.stream()
-                .filter(outcome -> outcome.sink() == sink)
-                .anyMatch(outcome -> outcome.status() == DeliveryStatus.DELIVERED)
-                ? OK : NOT_OK;
-    }
-
-    /**
-     * The e-mail field, which has a third answer the log field does not.
-     *
-     * @param delivered one outcome per sink asked
-     * @return {@code disabled} where this deployment has no e-mail sink, else how it went
-     */
-    private String emailTookIt(final List<DeliveryOutcome> delivered) {
-        return emailSinkOnThisContext ? tookIt(ReportSinkName.EMAIL, delivered) : DISABLED;
+    private String said(final ReportSinkName sink, final List<DeliveryOutcome> delivered) {
+        final boolean here = onThisContext.contains(sink);
+        return DeliveryWord.of(sink, delivered, here, here).said();
     }
 }

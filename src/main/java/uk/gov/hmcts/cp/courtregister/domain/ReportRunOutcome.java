@@ -42,7 +42,17 @@ public enum ReportRunOutcome {
      * @return the bounded outcome
      */
     public static ReportRunOutcome of(final List<DeliveryOutcome> delivered) {
-        throw new UnsupportedOperationException(
-                "the run's own three-state fold lands next; this is its red run");
+        final long accepted = delivered.stream()
+                .filter(outcome -> outcome.status() == DeliveryStatus.DELIVERED)
+                .count();
+        final ReportRunOutcome ended;
+        if (accepted == 0) {
+            ended = FAILED;
+        } else if (accepted == delivered.size()) {
+            ended = DELIVERED;
+        } else {
+            ended = PARTIAL;
+        }
+        return ended;
     }
 }

@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * What a run line says about one sink, as the bounded {@code delivered_log} /
@@ -45,8 +46,18 @@ public enum DeliveryWord {
     public static DeliveryWord of(final ReportSinkName sink, final List<DeliveryOutcome> delivered,
             final boolean onThisContext, final boolean asked) {
 
-        throw new UnsupportedOperationException(
-                "the run line's one word for a sink lands next; this is its red run");
+        final DeliveryWord said;
+        if (!onThisContext) {
+            said = DISABLED;
+        } else if (!asked) {
+            said = SKIPPED;
+        } else {
+            said = delivered.stream()
+                    .filter(outcome -> outcome.sink() == sink)
+                    .anyMatch(outcome -> outcome.status() == DeliveryStatus.DELIVERED)
+                    ? OK : FAILED;
+        }
+        return said;
     }
 
     /**
@@ -55,7 +66,6 @@ public enum DeliveryWord {
      * @return the lower-case word
      */
     public String said() {
-        throw new UnsupportedOperationException(
-                "the run line's one word for a sink lands next; this is its red run");
+        return name().toLowerCase(Locale.ROOT);
     }
 }
