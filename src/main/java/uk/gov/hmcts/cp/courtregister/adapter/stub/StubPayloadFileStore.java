@@ -44,18 +44,15 @@ public class StubPayloadFileStore implements PayloadFileStore {
     }
 
     /**
-     * A seam, and deliberately not yet a no-op like {@link #store} beside it.
+     * The same no-op {@link #store} is, for the exception report's CSV.
      *
-     * <p>The port method exists so the e-mail sink can be built against it; the write itself lands
-     * with that sink. Until then this refuses rather than pretends, because a stub that accepted a
-     * CSV and wrote nothing would mint a file id that notificationnotify would later find no file
-     * under - an e-mail with a missing attachment rather than an e-mail that was never sent, which
-     * is the harder of the two to notice.
+     * <p>It says the same thing in the same shape: nothing was written, and under which id. A
+     * context on the stub profile can therefore compose a report e-mail end to end without a
+     * refusal from a store nobody asked to be real - and what it sends carries a file id the file
+     * service has nothing under, which is exactly what the line says out loud.
      *
-     * <p><strong>When the e-mail sink lands, this must become a logging no-op</strong> in the shape
-     * {@code store} is written in - one line, saying plainly that nothing was written and under
-     * which id - so that a context on the stub profile can compose a report e-mail end to end
-     * without a refusal from a store nobody asked to be real.
+     * <p>The CSV itself is never logged. It is a list of identifiers about a register whose every
+     * defendant is a child, and its size says as much about a run as its contents would.
      *
      * @param fileId   the id the caller minted and wrote down before asking
      * @param text     the CSV
@@ -63,6 +60,9 @@ public class StubPayloadFileStore implements PayloadFileStore {
      */
     @Override
     public void storeText(final UUID fileId, final String text, final PayloadMetadata metadata) {
-        throw new UnsupportedOperationException("the stubbed text write is not written yet");
+        LOG.info("STUB payload file store invoked for text: nothing is written to the file "
+                        + "service, and the id is minted against no row. fileId={} template={} "
+                        + "format={} fileSize={}",
+                fileId, metadata.templateName(), metadata.conversionFormat(), metadata.fileSize());
     }
 }

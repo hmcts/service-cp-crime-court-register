@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.adapter.fileservice;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.IntSupplier;
@@ -112,7 +113,38 @@ public class FileServicePayloadStore implements PayloadFileStore {
     @Override
     public void store(final UUID fileId, final JsonNode payload, final PayloadMetadata metadata)
             throws PayloadStoreUnavailableException {
-        final byte[] content = serialised(payload);
+        write(fileId, serialised(payload), metadata);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The same two inserts in the same order as {@link #store}, over the same client and with
+     * the same licence: this is a second caller of somebody else's database and not a second use of
+     * it. The CSV becomes bytes here, in UTF-8, because {@code content} is a {@code bytea} column
+     * and the encoding of what support opens is not something to leave to whatever the platform
+     * default happens to be.
+     */
+    @Override
+    public void storeText(final UUID fileId, final String text, final PayloadMetadata metadata)
+            throws PayloadStoreUnavailableException {
+        write(fileId, text.getBytes(StandardCharsets.UTF_8), metadata);
+    }
+
+    /**
+     * The two inserts both callers make, written once.
+     *
+     * <p><strong>Content first.</strong> {@code metadata.file_id} is a foreign key onto
+     * {@code content.file_id}, so the order is the schema's requirement and not a preference - and
+     * it is one order rather than two because a second copy of it is a second thing to get wrong
+     * about a table this service does not own.
+     *
+     * @param fileId   the file-service id, minted and persisted before this call
+     * @param content  the bytes, as the caller measured them for the metadata beside them
+     * @param metadata the metadata row that goes beside them
+     * @throws PayloadStoreUnavailableException if either row is not durably written, for any reason
+     */
+    private void write(final UUID fileId, final byte[] content, final PayloadMetadata metadata) {
         settle(CONTENT_WRITE, () -> jdbcClient.sql(CONTENT_INSERT)
                 .param(fileId)
                 .param(content)
@@ -122,20 +154,6 @@ public class FileServicePayloadStore implements PayloadFileStore {
                 .param(metadataJson)
                 .param(fileId)
                 .update());
-    }
-
-    /**
-     * {@inheritDoc}
-     *
-     * <p>The real write lands with the e-mail sink that needs it. Until then this refuses rather
-     * than pretending: a store that accepted a CSV and wrote nothing would mint an id for a file
-     * notificationnotify would later find nothing under, and the Youth Offending Team's report
-     * would arrive with an empty attachment.
-     */
-    @Override
-    public void storeText(final UUID fileId, final String text, final PayloadMetadata metadata)
-            throws PayloadStoreUnavailableException {
-        throw new UnsupportedOperationException("the file service's text write is not written yet");
     }
 
     /**
