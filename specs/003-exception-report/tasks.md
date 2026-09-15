@@ -1884,7 +1884,7 @@ seams.**
 
 ### Tests first ⚠️
 
-- [ ] T061 [P] [US4] `adapter/fileservice/FileServicePayloadStoreIT` (extend) -
+- [x] T061 [P] [US4] `adapter/fileservice/FileServicePayloadStoreIT` (extend) -
       `store_text_issues_exactly_two_statements_content_before_metadata` (and no third; the order is
       forced, because `metadata.file_id` is a foreign key onto `content.file_id`),
       `store_text_writes_the_utf_8_bytes_of_the_string_into_the_bytea_column`, and
@@ -1894,7 +1894,22 @@ seams.**
       like is T062's, so neither suite asserts the other's claim. Red:
       `UnsupportedOperationException` from T020's seam, replaced by a failing assertion on the
       statement count.
-- [ ] T062 [P] [US4] `adapter/report/EmailReportSinkStoreIT` - the sink's own composition against the
+      (red at `b0d7853`: `./gradlew test --tests '*FileServicePayloadStoreIT*'
+      -Dtest.noFailFast=true`, 10 tests, 4 failed, 0 errors. Three fail through the suite's own
+      `storeCsv` helper, which says "the write is expected to happen" as an assertion rather than
+      letting the seam's refusal out as an error - *"Expecting code not to raise a throwable but
+      caught java.lang.UnsupportedOperationException: the file service's text write is not written
+      yet"* - and the fourth on the type of what an unreachable store threw. The six payload cases
+      are untouched and green.
+      **A fourth case beyond the task's three**, and worth saying why: the unreachable-store case.
+      `storeText` promises the same `PayloadStoreUnavailableException` `store` does, the sink's
+      whole ATTACHMENT_STORE_UNAVAILABLE branch is built on it, and nothing else asserted that the
+      new method translates rather than letting the driver's own type out.
+      The fixture carries a comma inside a quoted field and a multi-byte character, so the byte
+      round trip says something about encoding rather than only about length. Checkstyle's
+      `AvoidEscapedUnicodeCharacters` wants the escape on the line its tail comment is on, which is
+      why the literal is split where it is.)
+- [x] T062 [P] [US4] `adapter/report/EmailReportSinkStoreIT` - the sink's own composition against the
       file-service Testcontainers fixture seeded from
       `specs/002-consolidate-progression-leg/contracts/fileservice/`:
       `the_csv_has_one_header_row_and_one_row_per_entry_in_the_entries_own_order`,
@@ -1909,7 +1924,20 @@ seams.**
       `the_csv_carries_no_address_no_defendant_data_and_no_generator_text`.
       **This suite owns the CSV's composition; the two-statement pin over `storeText` belongs to
       T061.** Red: the stored content is empty.
-- [ ] T063 [P] [US4] `adapter/report/EmailReportSinkTest` - a **unit** suite, because the sink holds
+      (red at `51d699b`: `./gradlew test --tests '*EmailReportSinkStoreIT*' -Dtest.noFailFast=true`,
+      6 tests, 6 failed, 0 errors, every one the same assertion through the suite's `deliver`
+      helper - *"Expecting code not to raise a throwable but caught
+      java.lang.UnsupportedOperationException: the report's e-mail is not written yet"*.
+      **The task's predicted red is not reachable**: an empty stored CSV needs a seam that already
+      does the storing, which is the body this task is written before. The seam is the class, its
+      two ports, its two settings and a `deliver` that throws.
+      Two decisions this task did not name. The file id is read **off the mail** rather than
+      guessed, so the case that reads a row back is also the case that says the id on the mail is
+      the id that was stored. And the snapshot is half past midnight in London, half past eleven
+      the evening before in UTC, so a file name taken off the wrong clock fails rather than passes
+      for five months of the year.
+      It carries a PMD suppression for the seam's unread fields, closed at T067.)
+- [x] T063 [P] [US4] `adapter/report/EmailReportSinkTest` - a **unit** suite, because the sink holds
       the `ReportMailer` port and no HTTP type:
       `the_csv_is_stored_before_any_send_and_its_file_id_is_the_one_on_every_mail` (ids before calls:
       the `fileId` is minted and written into the run's log line **before** the file-service write,
@@ -1926,7 +1954,17 @@ seams.**
       `every_address_is_masked_in_every_line_the_sink_writes`.
       Seam: `adapter/report/EmailReportSink` implementing `ExceptionReportSink` with `deliver`
       throwing. Red: nothing reaches the `ReportMailer` mock.
-- [ ] T064 [P] [US4] `adapter/notificationnotify/NotificationNotifyReportMailerTest` (WireMock,
+      (red at `4f3a73a`: `./gradlew test --tests '*EmailReportSinkTest*' -Dtest.noFailFast=true`,
+      9 tests, 9 failed, 0 errors. Nothing reaches the mailer mock, exactly as predicted, and every
+      case says so as an assertion about the port's own contract rather than as an error: *"a sink
+      answers how it went rather than throwing ... Expecting code not to raise a throwable but
+      caught java.lang.UnsupportedOperationException"*.
+      The seam landed one commit early, with T062, which needs the class to compile - the same
+      shape T041's seam took with T038.
+      The ids-before-calls case reads the log **at the moment the store is called**, through an
+      answer on the mock, because "before" is an ordering claim and a capture read afterwards
+      cannot make it.)
+- [x] T064 [P] [US4] `adapter/notificationnotify/NotificationNotifyReportMailerTest` (WireMock,
       `dynamicPort()`) - the report's own send, against the **002-vendored** schema:
       `the_report_body_validates_against_the_vendored_schema`, validated against
       `specs/002-consolidate-progression-leg/contracts/notificationnotify/notificationnotify.email.json`
@@ -1947,15 +1985,42 @@ seams.**
       Nothing is re-vendored: the 002 copy is the single copy, as `contracts/README.md` states.
       Seam: `adapter/notificationnotify/NotificationNotifyReportMailer` implementing `ReportMailer`
       with `send` throwing. Red: no request reaches WireMock.
+      (red at `473fc09`: `./gradlew test --tests '*NotificationNotifyReportMailerTest*'
+      -Dtest.noFailFast=true`, 17 tests, 15 failed, 0 errors. No request reaches WireMock, as
+      predicted, and each failure is an assertion about the port's contract - *"the port answers
+      how the send went rather than throwing ... Expecting code not to raise a throwable but caught
+      java.lang.UnsupportedOperationException"*.
+      **Two are green on introduction and say so here.**
+      `arbitrary_personalisation_keys_are_contract_legal` reads the vendored file itself and finds
+      what research §4 said it would: `personalisation` is `"type": "object"` with an empty
+      `properties` block and `"additionalProperties": true`, inside a body that is
+      `"additionalProperties": false`. **Verified, not assumed** - it is the whole reason the counts
+      may travel in a body at all. And `the_register_paths_body_is_unchanged` passes before the
+      shared builder exists, which is the point of writing it here: it is the before of a
+      before-and-after over a refactor of somebody else's path.
+      The vendored-schema fixture is a second copy of `NotificationNotifyClientTest`'s on purpose.
+      That suite is the one T066 must leave untouched, and reaching into it to share a helper is
+      exactly the edit that would stop its green run meaning anything.)
 
 ### Implementation
 
-- [ ] T065 [US4] `adapter/fileservice/FileServicePayloadStore.storeText` - the same two inserts as
+- [x] T065 [US4] `adapter/fileservice/FileServicePayloadStore.storeText` - the same two inserts as
       `store`, character for character, in the same order: content first, then metadata; the CSV's
       UTF-8 bytes into the `bytea` column; the five metadata keys. The write-only, changeset-pinned
       framework contract is used exactly as 002 uses it and is not migrated or read through.
       Green: T061.
-- [ ] T066 [US4] `adapter/notificationnotify/NotificationNotifyReportMailer` and the shared request
+      (green at `f81802a`: `./gradlew test --tests '*FileServicePayloadStoreIT*'
+      -Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 10 tests, 0 failures, 0 errors - T061's
+      four and the six payload cases, which are untouched. `checkstyleMain` and `pmdMain` exit 0.
+      Both callers now issue the two inserts through one private `write`, because a second copy of
+      that order is a second thing to get wrong about a table this service does not own.
+      **`StubPayloadFileStore.storeText` becomes the logging no-op its own javadoc said it must
+      become when the sink landed**, in this commit rather than a later one: the sink exists now, a
+      context on the stub profile has to be able to compose a report e-mail end to end, and a stub
+      that refused would make the one path such a run could exercise the path where it does
+      nothing. The line says plainly that nothing was written and under which id, in the shape
+      `store`'s line is written in, and the CSV itself is never logged.)
+- [x] T066 [US4] `adapter/notificationnotify/NotificationNotifyReportMailer` and the shared request
       builder - a **package-private** builder in `adapter/notificationnotify/` that composes the URI
       (`COMMAND_PATH` with the notification id as the path parameter), the
       `application/vnd.notificationnotify.email+json` media type, the `CJSCPPUID` identity header,
@@ -1967,7 +2032,27 @@ seams.**
       untouched**, and `NotificationNotifyClientTest` stays green unchanged. Add
       `NotificationNotifyReportMailer` to `support/GenerationLegs.THE_LEGS` and drive it in the same
       commit - it is the one class besides the sink that holds an address. Green: T064.
-- [ ] T067 [US4] `adapter/report/EmailReportSink` - render the CSV from the report's entries, mint
+      (green at `0f19400`: `./gradlew test --tests '*NotificationNotifyReportMailerTest*' --tests
+      '*NotificationNotifyClientTest*' --tests '*TelemetryPrivacyTest*' -Dtest.noFailFast=true`
+      BUILD SUCCESSFUL, exit 0, 95 tests, 0 failures, 0 errors. `checkstyleMain`, `checkstyleTest`,
+      `pmdMain` and `pmdTest` exit 0.
+      The builder is `NotificationNotifyCommand`: the path, the media type, the identity header and
+      a three-word taxonomy - taken, refused, retryable - over the shared `RetryPolicy`. It
+      composes the request and **hands the response back unread**, because the two callers settle
+      differently: one throws a classified failure at a run holding a retry budget, the other
+      answers an outcome to a sink that carries on to the next recipient. A helper that decided for
+      them would have to know which of the two it was serving.
+      `NotificationNotifyClient`'s four public constants now name the builder's rather than
+      spelling them again; its body, its three lines and its two exceptions are untouched, and
+      `NotificationNotifyClientTest` is **not edited** and stays green - which is what makes
+      `the_register_paths_body_is_unchanged`, green before the refactor, worth having.
+      One analysis finding closed in the same commit: `OnlyOneReturn` over the mailer's `send`,
+      which now assigns one non-final local, because "answers rather than throws" is what that
+      costs on this path.
+      `THE_LEGS` gains the mailer with three arrangements - a refusal, a retryable answer and an
+      answer that never came - over a **marked** address, so the sweep's claim covers the second
+      class in this increment that holds one.)
+- [x] T067 [US4] `adapter/report/EmailReportSink` - render the CSV from the report's entries, mint
       the `fileId` and write it into the run's line, store the text through `PayloadFileStore`, then
       one `ReportMailer.send` per configured recipient, folding the per-recipient `MailOutcome`s into
       one `DeliveryOutcome` with its accepted and refused counts and a bounded
@@ -1975,7 +2060,31 @@ seams.**
       strings and nothing else. Every line masks its addresses; no address reaches an event, a label
       or the CSV. Add `EmailReportSink` to `support/GenerationLegs.THE_LEGS` and drive it in the same
       commit. Green: T062, T063.
-- [ ] T068 [US4] Wiring in `config/` - the `EmailReportSink` and `NotificationNotifyReportMailer`
+      (green at `49c9cbe`: `./gradlew test --tests '*EmailReportSink*' --tests
+      '*TelemetryPrivacyTest*' -Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 52 tests, 0
+      failures, 0 errors - T063's nine, T062's six and the privacy sweep's thirty-seven over the
+      widened leg. `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` exit 0.
+      Three decisions this task did not name.
+      **RFC 4180 quoting is applied to every field** rather than to the one that can need it. Only
+      the producing context's name is text another system chose, and a rule applied to whichever
+      field looked dangerous today is a rule the next column added is outside of.
+      **An empty recipient list is answered before anything outside the class is touched** - no id
+      minted, no CSV rendered, no write - because NO_RECIPIENTS is a configuration emptied under a
+      running pod, and storing a file nobody will be told about would leave a row in somebody
+      else's database for nothing.
+      **The delivery's reason is the first refusal's**, and a later refusal of another kind is
+      counted and named on its own line: one reason on one outcome cannot describe three different
+      answers, and the one that came first is the one to act on.
+      Two analysis findings closed here: `OnlyOneReturn` over the store-and-render step,
+      restructured to one exit, and `AvoidInstantiatingObjectsInLoops` over the per-recipient
+      `ReportMail`, suppressed with its reason - one mail per recipient is the contract, and one
+      object reused would be one e-mail addressed to everybody.
+      `GenerationLegs.THE_REPORT` becomes **four** classes and drives all five of the sink's lines.
+      `TelemetryPrivacyTest`'s bounded-reason vocabulary gains `ReportDeliveryReason`, for the
+      reason `BatchFailureReason` is already in it: the sink writes the constant into a `reason=`
+      slot an alert keys on, and the sweep refused it as free text until the vocabulary said
+      otherwise.)
+- [x] T068 [US4] Wiring in `config/` - the `EmailReportSink` and `NotificationNotifyReportMailer`
       beans contributed only when `courtregister.report.email.enabled` is true, so a context with the
       output off holds one sink and the job's run line reads `delivered_email=disabled`; plus the
       three e-mail variables on the `app` service in `docker-compose.yml`
@@ -1984,10 +2093,44 @@ seams.**
       local-only dummies, never a real template id and never a real address, because in a deployed
       environment both arrive from Key Vault through the CSI driver and neither is ever a chart
       value. Green: the sink-selection cases of T063.
+      (done at `2a50b81`: `./gradlew test --tests '*CliModeConfigTest*' --tests
+      '*ReportSchedulingConfigTest*' --tests '*PropertiesValidator*' --tests '*ContextLoad*'
+      -Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 33 tests, 0 failures, 0 errors.
+      `checkstyleMain` and `pmdMain` exit 0.
+      **A new configuration class, `config/ReportEmailConfig`**, which the plan's Project Structure
+      did not name. Its beans cannot go on `LiveNotificationConfig`, which is conditional on
+      `courtregister.generation.enabled`, because this output has to work on the pod FR-004
+      describes; and an HTTP client does not belong in `ProcessedLogConfig`, which is about this
+      service's own database. So the mailer builds its own `RestClient` over the same endpoint,
+      identity and timeouts.
+      **The condition is the enabled flag and nothing else**, as this task's own wording asks and
+      for the reason it gives: `report-exceptions --email` is the on-demand half of this output, so
+      a `NotCliMode` condition would make a command decline a flag the deployment says is on. It is
+      not conditional on `courtregister.report.enabled` either - the schedule and the command are
+      two callers of one report, and the sink belongs to neither.
+      **One gap, recorded rather than papered over.** There is no context case asserting "two sinks
+      with the output on, one with it off": `ReportEmailConfig` needs `CourtRegisterProperties` and
+      the shared mapper, which the wiring suite's runner does not carry, and standing them up there
+      would be a second copy of an application context inside a suite whose subject is which beans
+      a condition contributes. T070's end-to-end run boots the real context **with the e-mail
+      output on** and reads the sends back, which is where this becomes a behaviour rather than a
+      bean count. Review gate 7 should decide whether that is enough.
+      **A second gap of the same kind**, and the sharper one: with `generation.enabled=false` and
+      `fileservice-mode` at its LIVE default there is no `PayloadFileStore` bean and no
+      file-service datasource - both are behind the generation switch - so a pod in FR-004's shape
+      with the e-mail output **on** would fail to start. No deployed environment can reach that
+      combination while the deployment gate holds the flag false, and the local stack runs the
+      generation half, but it is the same relocation the repository beans needed at T044 and it is
+      not done. Raised here for review gate 7 rather than fixed inside an implementation task.)
 - [ ] T069 Phase close: `./gradlew build` green; **review gate 7** (the two consumed contracts used
       and not redefined, the shared request builder leaving the register path byte-identical, ids
       before calls, 202 and nothing else, no address anywhere, the deployment gate above restated in
       the PR narrative); findings land as red/green pairs.
+      (build half done with this phase's tick: `./gradlew build -Dtest.noFailFast=true` BUILD
+      SUCCESSFUL, exit 0, **3552 tests over 572 suites, 0 failures, 0 errors, 0 skipped**, with
+      `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and the JaCoCo gate at LINE 0.88 /
+      BRANCH 0.85 all green, none of them loosened. **Review gate 7 is not done**: it runs in a new
+      session, and the two gaps recorded under T068 are the first things to put in front of it.)
 
 **Checkpoint**: US4 is implemented and proven under test. It stays switched off in every deployed
 environment until the notificationnotify team provides the template.
