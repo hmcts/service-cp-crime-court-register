@@ -1589,12 +1589,22 @@ second read path.
 
 ### Tests first ⚠️
 
-- [ ] T051 [P] [US3] `batch/cli/ArgsTest` (extend) - `since_is_an_option_and_email_is_a_flag`,
+- [x] T051 [P] [US3] `batch/cli/ArgsTest` (extend) - `since_is_an_option_and_email_is_a_flag`,
       `both_are_in_names`, and `permits_rejects_since_and_email_on_the_other_five_commands`
       (generate-register, notify-register, list-batches, supersede-before, check-flag). Seams:
       `Args.SINCE` and `Args.EMAIL` constants declared and added to `NAMES`. Red: `permits` accepts
       `--since` on `check-flag`.
-- [ ] T052 [P] [US3] `batch/cli/ReportExceptionsCliTest` - the `--since` parse table of
+      (done at `ceff426`. The seam is the two constants alone - `NAMES` still held eight - and the
+      recorded red is `both_should_be_in_names`: *"Expecting SetN: [... eight names] to contain:
+      ["since", "email"] but could not find the following element(s): ["since", "email"]"* and
+      *"Expected size: 10 but was: 8"*. **The task's stated red is not reachable and was not
+      recorded**: `permits` consults only the two sets a command declares and has never consulted
+      `NAMES`, so it rejected both names before either constant existed. That case
+      (`permits_should_reject_since_and_email_on_the_other_five_commands`, parameterised over the
+      five commands' own declared sets) and `since_should_be_an_option_and_email_should_be_a_flag`
+      are therefore characterisations, and `both_should_be_in_names` is the assertion T056 turned
+      green. Names carry `should`, as this repository's method convention has them.)
+- [x] T052 [P] [US3] `batch/cli/ReportExceptionsCliTest` - the `--since` parse table of
       data-model.md, one case per row:
       `an_iso_instant_is_the_windows_from`, `an_iso_duration_is_subtracted_from_now`,
       `the_day_hour_minute_and_second_shorthands_are_subtracted_from_now` (parameterised over `2d`,
@@ -1643,27 +1653,66 @@ second read path.
       `RegisterGenerationJobTest` MDC case (`the_run_id_should_not_outlive_the_run`) still pins the
       clear-on-exit contract and must stay green.
       Red: `--since 2h` is not parsed and the window is the since-the-previous-run one.
-- [ ] T053 [P] [US3] `batch/cli/CliMainTest` (extend) - `report_exceptions_is_in_commands`,
+      (done at `0c324b4`. 36 cases in three groups - the window, the refusals, the table - and the
+      red is all 36: *"java.lang.UnsupportedOperationException: the sixth command is not implemented
+      yet at ReportExceptionsCli.run(ReportExceptionsCli.java:63)"*, so `--since 2h` is not parsed,
+      the window is nobody's and nothing is delivered. Seams in this commit: `ReportExceptionsCli`
+      with a `run` that throws, **`CliMain.REPORT_EXCEPTIONS`** - `USAGE` is written from it, so it
+      has to exist for the suite to compile, and T053 asserts what is done with it - and
+      `batch/RunCorrelation` promoted to `public` for the class, `under(...)` and `current()` only.
+      **It was package-private before this commit**, contrary to the note that it might already be
+      public. `RegisterGenerationJobTest.the_run_id_should_not_outlive_the_run` is untouched and
+      green. One case beyond the task's list: `a_report_that_could_not_be_built_should_be_reported_as_a_failure`,
+      because every other command catches a collaborator's refusal and reports it on exit 2, and a
+      throw out of this one would have left the JVM on its own 1 - the code a runbook reads as
+      "declined".)
+- [x] T053 [P] [US3] `batch/cli/CliMainTest` (extend) - `report_exceptions_is_in_commands`,
       `report_exceptions_is_in_the_registry`, and `the_usage_line_lists_six_names`. Red: `COMMANDS`
       holds five.
-- [ ] T054 [P] [US3] `config/TelemetryPrivacyTest` (extend) - the operator-token group gains
+      (done at `69bdeb4`. Red: 38 cases, 4 failed -
+      `report_exceptions_should_be_in_commands` *"Expecting ListN: ["generate-register",
+      "notify-register", "list-batches", "supersede-before", "check-flag"] to contain:
+      ["report-exceptions"]"*, plus `report_exceptions_should_be_in_the_registry`,
+      `the_usage_line_should_list_six_names` and the renamed
+      `the_registry_should_carry_exactly_the_six_names_operations_has`. The usage case states the
+      six literals rather than deriving them from `COMMANDS`, because a list compared against itself
+      agrees with itself however many names it holds. The two existing five-name cases are renamed
+      rather than left saying five while asserting six.)
+- [x] T054 [P] [US3] `config/TelemetryPrivacyTest` (extend) - the operator-token group gains
       `report-exceptions`: every value the command reads, got wrong, is asserted never to reach a
       line, a label or an exception message. Red: the group has no case for the sixth command's
       `--since`.
-- [ ] T055 [P] [US3] `e2e/CliDispatchIT` (extend) - `report_exceptions_dispatches_out_of_the_image`
+      (done at `af453a5`. The group's doubled registry gains the sixth command and
+      `invocationsAnOperatorGetsWrong` gains `report-exceptions' window` -
+      `--since <OPERATOR_TOKEN>`. Red: 37 cases, 1 failed, *"java.lang.UnsupportedOperationException:
+      the sixth command is not implemented yet"*. The doubles behind the command are unreachable by
+      construction, which T057 then had to make true: the sink lookup was moved below the window so
+      that a refusal really does touch nothing - see its note.)
+- [x] T055 [P] [US3] `e2e/CliDispatchIT` (extend) - `report_exceptions_dispatches_out_of_the_image`
       (`startup.sh report-exceptions --help` exits 0 inside the built image) and
       `a_mistyped_command_name_lists_six`. This is a **red** test, not a characterisation: it runs
       before `docker/startup.sh` is changed, precisely because the `case` pattern and the
       `CLI_COMMANDS` string are two halves of one list and a task that edits one and forgets the
       other looks exactly like a task that edited both. Red: the built image exits non-zero on an
       unknown command name.
+      (done at `1fe4ff8`. Run against the image built from the repo's own Dockerfile over the
+      packaged jar, Docker present. Red: 6 cases, 2 failed - `report-exceptions --help` *"expected: 0
+      but was: 2"*, the script having no arm for the name, and the mistyped-name case *"Expecting
+      actual: "usage: startup.sh <command> [arguments]\n  generate-register\n  notify-register\n
+      list-batches\n  supersede-before\n  check-flag\n" to contain: [... "report-exceptions"]"*.
+      `a_mistyped_command_name_lists_six` landed as the sixth name on the existing mistyped-name
+      case rather than as a second case: it is the same exec against the same container, and
+      asserting one list twice is the duplication that case's own reason warns about.)
 
 ### Implementation
 
-- [ ] T056 [US3] `batch/cli/Args` - the `SINCE` option and the `EMAIL` flag, added to `NAMES`, with
+- [x] T056 [US3] `batch/cli/Args` - the `SINCE` option and the `EMAIL` flag, added to `NAMES`, with
       `permits` keeping both off the other five commands. A message repeats a name only where `NAMES`
       owns it. Green: T051.
-- [ ] T057 [US3] `batch/cli/ReportExceptionsCli` - the sixth command: open `RunCorrelation.under(...)`
+      (done at `2197858`. `./gradlew test --tests '...batch.cli.ArgsTest'` BUILD SUCCESSFUL, 36
+      tests, 0 failed. `permits` is unchanged, which is why the task's stated red was never
+      reachable - see T051.)
+- [x] T057 [US3] `batch/cli/ReportExceptionsCli` - the sixth command: open `RunCorrelation.under(...)`
       for the invocation, resolve the window from `--since` per data-model.md's table (`to` is always
       now, read from the injected `Clock`; absent, the previous scheduled run), call
       `ExceptionReportService.build(window, RunCorrelation.current())` and then
@@ -1679,15 +1728,52 @@ second read path.
       In the same commit, `batch/RunCorrelation` becomes `public` for the class and for
       `under(...)` / `current()`, and `ReportExceptionsCli` is added to
       `support/GenerationLegs.THE_LEGS` and driven. Green: T052, T054.
-- [ ] T058 [US3] `batch/cli/CliMain` - `REPORT_EXCEPTIONS` added to `COMMANDS` and to `registryOf`.
+      (done at `d8911d5`, with its analysis findings closed at `bee1ad1`.
+      `./gradlew test --tests '...ReportExceptionsCliTest' --tests '...TelemetryPrivacyTest'` BUILD
+      SUCCESSFUL, 73 tests, 0 failed. `RunCorrelation`'s widening landed with T052's seam, where the
+      task listed it; nothing else about that class changed. `ReportExceptionsCli` joins
+      `THE_REPORT`, so the per-class reach assertion covers it, and it is driven straight after
+      `theMorningRun()` leaves the request log refusing - the class declares exactly one statement,
+      the ERROR about a report an operator could not be given, which is what that arrangement
+      reaches. Three decisions worth naming:
+      **(1) `--email` before Phase 7's sink exists.** With the output enabled and no `EMAIL` sink on
+      the context the flag is declined (exit 1) under `email-output-not-wired`, beside
+      `email-output-disabled` for the output being off; both name
+      `courtregister.report.email.enabled`. T065 makes the second branch unreachable on any
+      deployment that enables the output.
+      **(2) Nothing outside the class is touched until every argument has been read** - not even a
+      sink's own name. The first shape put the sink lookup above the window, and T054's
+      `verifyNoInteractions` caught it: a refusal that had spoken to a collaborator is a refusal that
+      changed something.
+      **(3) The three-state outcome fold is written here as well as in `ExceptionReportJob`.** The
+      job's is private to a class that also counts the outcome on a meter and writes it to the log,
+      and a command's JVM has neither a registry to increment nor that line to write.
+      `duration_ms` is on the last line, as quickstart.md's own sample of this command's output has
+      it, so the line is the job's equivalent rather than a subset of it.)
+- [x] T058 [US3] `batch/cli/CliMain` - `REPORT_EXCEPTIONS` added to `COMMANDS` and to `registryOf`.
       Green: T053.
-- [ ] T059 [US3] `docker/startup.sh` - `report-exceptions` added in **both** places: the `case`
+      (done at `854a2f2`. The command asks for its sinks through a bean provider rather than by
+      type, because two of them ship and `getBean` over an interface with two implementations
+      refuses rather than choosing; which of the two it delivers to is the command's decision and
+      not the registry's. The help group's own doubled registry grows with the list in the same
+      commit, which is what its first assertion exists to force. 221 tests over `batch.cli.*`, 1
+      failed, and that one is `the_script_that_dispatches_should_recognise_the_same_six_and_no_others` -
+      the half of the list T059 closes, and the reason T055 was written red before it.)
+- [x] T059 [US3] `docker/startup.sh` - `report-exceptions` added in **both** places: the `case`
       pattern at line 36 and the `CLI_COMMANDS` string at line 27. The two lists are one list, and
       `CliDispatchIT` asks the built image for both halves. Green: T055.
+      (done at `36868f1`. `./gradlew test --tests '...CliMainTest' --tests '...CliDispatchIT'` BUILD
+      SUCCESSFUL, 44 tests, 0 failed: the built image exits 0 on `startup.sh report-exceptions
+      --help`, lists all six under a mistyped name, and the script-list case that went red at T058 is
+      green.)
 - [ ] T060 Phase close: `./gradlew build` green; **review gate 6** (the refusal codes and exit codes
       against the five existing commands, the operator-token rule, no token ever quoted back, and
       that `RunCorrelation`'s widened visibility changed nothing else about it); findings land as
       red/green pairs.
+      (build half done at `bee1ad1`: `./gradlew build` BUILD SUCCESSFUL, 3510 tests, 0 failed,
+      0 skipped, with `pmdMain`, `pmdTest`, `checkstyleMain`, `checkstyleTest` and the JaCoCo gate
+      all green - the four analysis findings the phase brought were closed at that commit. **Review
+      gate 6 is not done**: it runs in a new session and its findings land as red/green pairs.)
 
 **Checkpoint**: US3 is independently demonstrable through quickstart.md's `docker compose exec app
 /startup.sh report-exceptions --since 2h`.
