@@ -46,8 +46,10 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
+import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
+import uk.gov.hmcts.cp.courtregister.batch.IntakeAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
@@ -158,6 +160,8 @@ public final class GenerationLegs implements AutoCloseable {
     public static final List<Class<?>> THE_LEGS = Stream.concat(
             Stream.of(
                     RegisterGenerationJob.class,
+                    ExceptionReportJob.class,
+                    IntakeAgeSweep.class,
                     RegisterGenerationService.class,
                     SystemDocGeneratorClient.class,
                     GenerationReconciler.class,
@@ -199,6 +203,9 @@ public final class GenerationLegs implements AutoCloseable {
 
     /** The schedule that decides what "the last run left this behind" means. */
     private static final String GENERATION_CRON = "0 0 18 * * MON-FRI";
+
+    /** And the report's own, which is what its window is measured back through. */
+    private static final String REPORT_CRON = "0 0 7 * * MON-FRI";
 
     /**
      * The one limit the three report thresholds are all given.
@@ -311,6 +318,19 @@ public final class GenerationLegs implements AutoCloseable {
 
     private final LogEventReportSink logSink = new LogEventReportSink();
 
+    /**
+     * The intake half's instruments, on a registry of their own.
+     *
+     * <p>Separate from the one handed in, which the two meter cases above read back: those are
+     * about what the downstream half publishes, and the report's and the sweep's counters are not
+     * that. What this fixture wants from them is the lines the classes holding them write.
+     */
+    private final ProcessingMetrics intakeMetrics = new ProcessingMetrics(new SimpleMeterRegistry());
+
+    private final ExceptionReportJob reportJob;
+
+    private final IntakeAgeSweep sweep;
+
     private GenerationLegs(final WireMockServer wireMock, final MeterRegistry registry) {
         this.contexts = wireMock;
         this.metrics = new GenerationMetrics(registry);
@@ -331,8 +351,10 @@ public final class GenerationLegs implements AutoCloseable {
                 metrics, settings(), clock);
         this.reporting = new ExceptionReportService(requestLog, batches, notifications, store,
                 REPORT_LIMIT, REPORT_LIMIT, REPORT_LIMIT, GENERATION_CRON,
-                GenerationProperties.COURTS_ZONE, new ProcessingMetrics(new SimpleMeterRegistry()),
-                clock);
+                GenerationProperties.COURTS_ZONE, intakeMetrics, clock);
+        this.reportJob = new ExceptionReportJob(reporting, List.of(logSink), REPORT_CRON,
+                GenerationProperties.COURTS_ZONE, intakeMetrics, clock);
+        this.sweep = new IntakeAgeSweep(requestLog, intakeMetrics, REPORT_LIMIT, clock);
     }
 
     /**
@@ -369,6 +391,8 @@ public final class GenerationLegs implements AutoCloseable {
         theNotifyingLeg();
         theNotifiersClient();
         theExceptionReport();
+        theMorningRun();
+        theIntakeGaugeRefresh();
     }
 
     // --- the nightly run -------------------------------------------------------------------------
@@ -1059,6 +1083,40 @@ public final class GenerationLegs implements AutoCloseable {
     private static FailedNotification aRefusedNotification() {
         return new FailedNotification(NOTIFICATION_ID, BATCH_ID, COURT_CENTRE, REGISTER_DATE,
                 NotificationStatus.FAILED, REFUSED_STATUS, MAX_ATTEMPTS, AT, A_BATCHS_AGE);
+    }
+
+    /**
+     * The 07:00 run's two lines: the one every morning leaves, and the one a morning that could
+     * not read its own store leaves instead.
+     *
+     * <p>The first is written over the arrangement {@link #theExceptionReport()} has just made, so
+     * it describes a real report delivered to a real sink rather than an empty one - the counts and
+     * the window on it are the ones the eight reads produced. The second is the branch that makes
+     * this job the opposite of the sweep below: the read is the report, so its refusal leaves, and
+     * what the run says on the way out has to name the cause by class and repeat none of its words.
+     */
+    private void theMorningRun() {
+        whateverItAnswers(reportJob::run);
+
+        when(requestLog.failedSince(any())).thenThrow(new StoreUnavailableException(
+                "the store could not be reached to read what went wrong overnight",
+                new IllegalStateException("the connection pool is empty")));
+        whateverItAnswers(reportJob::run);
+    }
+
+    /**
+     * The one refusal this service absorbs, and the one WARN line that makes it visible.
+     *
+     * <p>Driven last because it leaves the request log refusing, and because it is the only line
+     * the sweep can write: everything else it does is two gauges moving, which no capture sees. The
+     * refusal carries the store's own words and a cause of its own, both of which the sweep must
+     * keep out of the log - a caught exception's message belongs to whatever raised it.
+     */
+    private void theIntakeGaugeRefresh() {
+        when(requestLog.oldestNonTerminal()).thenThrow(new StoreUnavailableException(
+                "the store could not be reached to read the oldest unfinished request",
+                new IllegalStateException("the connection pool is empty")));
+        whateverItAnswers(sweep::sweepScheduled);
     }
 
     /**
