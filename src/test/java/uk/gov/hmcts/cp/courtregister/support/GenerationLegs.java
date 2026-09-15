@@ -1061,14 +1061,14 @@ public final class GenerationLegs implements AutoCloseable {
      * above already hold, answering one row apiece.
      */
     private void theExceptionReport() {
-        when(requestLog.failedSince(any())).thenReturn(List.of(aParkedRequest()));
+        when(requestLog.failedBetween(any(), any())).thenReturn(List.of(aParkedRequest()));
         when(requestLog.nonTerminalOlderThan(any())).thenReturn(List.of(anUnfinishedRequest()));
         when(batches.latePending(any())).thenReturn(List.of(aLateBatch(BatchStatus.PENDING)));
         when(batches.lateGenerating(any())).thenReturn(List.of(aLateBatch(BatchStatus.GENERATING)));
         when(batches.lateGenerated(any())).thenReturn(List.of(aLateBatch(BatchStatus.GENERATED)));
-        when(batches.failedSince(any())).thenReturn(List.of(aDeadBatch()));
+        when(batches.failedBetween(any(), any())).thenReturn(List.of(aDeadBatch()));
         when(store.recordedUnbatchedBefore(any())).thenReturn(List.of(aStrandedRegister()));
-        when(notifications.failedSince(any())).thenReturn(List.of(aRefusedNotification()));
+        when(notifications.failedBetween(any(), any())).thenReturn(List.of(aRefusedNotification()));
 
         final ExceptionReport report =
                 reporting.build(new ReportWindow(AT.minus(Duration.ofDays(1)), AT), RUN_ID);
@@ -1125,7 +1125,7 @@ public final class GenerationLegs implements AutoCloseable {
     private void theMorningRun() {
         whateverItAnswers(reportJob::run);
 
-        when(requestLog.failedSince(any())).thenThrow(new StoreUnavailableException(
+        when(requestLog.failedBetween(any(), any())).thenThrow(new StoreUnavailableException(
                 "the store could not be reached to read what went wrong overnight",
                 new IllegalStateException("the connection pool is empty")));
         whateverItAnswers(reportJob::run);

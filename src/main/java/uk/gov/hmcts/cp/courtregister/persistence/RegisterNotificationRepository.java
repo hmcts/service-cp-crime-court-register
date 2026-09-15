@@ -200,14 +200,15 @@ public class RegisterNotificationRepository {
      * <p>Ordered oldest first, because the team that has been waiting longest is the one a
      * morning's resend starts with.
      */
-    private static final String FAILED_SINCE = """
+    private static final String FAILED_BETWEEN = """
             SELECT n.notification_id, n.batch_id, n.status, n.response_code, n.attempts, n.sent_at,
                    b.court_centre_id, b.register_date,
                    extract(epoch from (now() - n.sent_at))::bigint AS age_seconds
               FROM register_notification n
               JOIN register_batch b ON b.batch_id = n.batch_id
              WHERE n.status = 'FAILED'
-               AND n.sent_at >= :since
+               AND n.sent_at >= :from
+               AND n.sent_at < :to
              ORDER BY n.sent_at
             """;
 
@@ -358,29 +359,20 @@ public class RegisterNotificationRepository {
      * the entry names, and ordered oldest first. {@code email_address} is deliberately not among
      * the columns it selects.
      *
-     * @param since the window's start
-     * @return every refused or unanswered send settled at or after it, oldest first
-     */
-    public List<FailedNotification> failedSince(final Instant since) {
-        return StoreOutage.translating("read the sends refused inside a window",
-                () -> jdbcClient.sql(FAILED_SINCE)
-                        .param("since", offsetOf(since))
-                        .query((rs, rowNumber) -> failed(rs))
-                        .list());
-    }
-
-    /**
-     * The report's NOTIFICATION_FAILED read over a half-open window.
-     *
-     * <p><strong>Seam.</strong> The statement behind it still binds the window's start alone; the
-     * exclusive end lands with the half-open window itself.
+     * <p>Both ends, and the end exclusive: a Youth Offending Team that has been chased once has
+     * been chased, and a send on the boundary of two windows would otherwise be named by both.
      *
      * @param from the window's start, inclusive
      * @param to   the window's end, exclusive
      * @return every refused or unanswered send settled inside it, oldest first
      */
     public List<FailedNotification> failedBetween(final Instant from, final Instant to) {
-        return failedSince(from);
+        return StoreOutage.translating("read the sends refused inside a window",
+                () -> jdbcClient.sql(FAILED_BETWEEN)
+                        .param("from", offsetOf(from))
+                        .param("to", offsetOf(to))
+                        .query((rs, rowNumber) -> failed(rs))
+                        .list());
     }
 
     /**

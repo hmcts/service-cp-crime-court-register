@@ -214,7 +214,7 @@ class ExceptionReportServiceTest {
 
         @Test
         void a_failed_request_inside_the_window_is_one_request_failed_entry() {
-            when(requests.failedSince(WINDOW_FROM)).thenReturn(List.of(parked()));
+            when(requests.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(parked()));
 
             final ExceptionReport report = service.build(WINDOW, RUN_ID);
 
@@ -267,7 +267,7 @@ class ExceptionReportServiceTest {
 
         @Test
         void a_request_is_reported_under_at_most_one_kind_per_run() {
-            when(requests.failedSince(WINDOW_FROM)).thenReturn(List.of(parked()));
+            when(requests.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(parked()));
             when(requests.nonTerminalOlderThan(any()))
                     .thenReturn(List.of(theSameRequestStillOpen()));
 
@@ -297,7 +297,7 @@ class ExceptionReportServiceTest {
             final StoreUnavailableException outage = new StoreUnavailableException(
                     "the processed log could not be read for the report",
                     new IllegalStateException("the connection pool is empty"));
-            when(requests.failedSince(WINDOW_FROM)).thenThrow(outage);
+            when(requests.failedBetween(WINDOW_FROM, NOW)).thenThrow(outage);
 
             assertThatThrownBy(() -> service.build(WINDOW, RUN_ID))
                     .as("a read that could not be taken has no answer to fold, and a report built "
@@ -390,7 +390,7 @@ class ExceptionReportServiceTest {
 
         @Test
         void a_batch_failed_inside_the_window_is_one_batch_failed_entry_carrying_its_bounded_reason() {
-            when(batches.failedSince(WINDOW_FROM)).thenReturn(List.of(dead()));
+            when(batches.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(dead()));
 
             final ExceptionReport report = service.build(WINDOW, RUN_ID);
 
@@ -420,7 +420,7 @@ class ExceptionReportServiceTest {
 
         @Test
         void a_batch_failed_entry_never_carries_the_generators_own_words() {
-            when(batches.failedSince(WINDOW_FROM)).thenReturn(List.of(dead()));
+            when(batches.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(dead()));
 
             final ExceptionReport report = service.build(WINDOW, RUN_ID);
 
@@ -482,7 +482,7 @@ class ExceptionReportServiceTest {
 
         @Test
         void a_failed_notification_inside_the_window_names_its_batch_and_its_notification_and_no_address() {
-            when(notifications.failedSince(WINDOW_FROM)).thenReturn(List.of(refused()));
+            when(notifications.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(refused()));
 
             final ExceptionReport report = service.build(WINDOW, RUN_ID);
 
@@ -546,7 +546,7 @@ class ExceptionReportServiceTest {
 
         @Test
         void entries_at_the_same_age_are_ordered_by_kind_then_identifier() {
-            when(batches.failedSince(WINDOW_FROM))
+            when(batches.failedBetween(WINDOW_FROM, NOW))
                     .thenReturn(List.of(deadAt(LATER_BATCH_ID), deadAt(BATCH_ID)));
             when(registers.recordedUnbatchedBefore(any())).thenReturn(List.of(leftBehindAt()));
 
@@ -674,20 +674,20 @@ class ExceptionReportServiceTest {
 
             service.build(WINDOW, RUN_ID);
 
-            verify(requests).failedSince(WINDOW_FROM);
+            verify(requests).failedBetween(WINDOW_FROM, NOW);
             verify(requests).nonTerminalOlderThan(any());
             verify(batches).latePending(any());
             verify(batches).lateGenerating(any());
             verify(batches).lateGenerated(any());
-            verify(batches).failedSince(WINDOW_FROM);
-            verify(notifications).failedSince(WINDOW_FROM);
+            verify(batches).failedBetween(WINDOW_FROM, NOW);
+            verify(notifications).failedBetween(WINDOW_FROM, NOW);
             verify(registers).recordedUnbatchedBefore(any());
             verifyNoMoreInteractions(requests, batches, notifications, registers);
         }
     }
 
     private void seedOneOfEveryKind() {
-        when(requests.failedSince(WINDOW_FROM)).thenReturn(List.of(parked()));
+        when(requests.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(parked()));
         when(requests.nonTerminalOlderThan(any())).thenReturn(List.of(stuckSinceFriday()));
         when(batches.latePending(any()))
                 .thenReturn(List.of(late(BatchStatus.PENDING, PENDING_AGE)));
@@ -695,8 +695,8 @@ class ExceptionReportServiceTest {
                 .thenReturn(List.of(late(BatchStatus.GENERATING, GENERATING_AGE)));
         when(batches.lateGenerated(any()))
                 .thenReturn(List.of(late(BatchStatus.GENERATED, GENERATED_AGE)));
-        when(batches.failedSince(WINDOW_FROM)).thenReturn(List.of(dead()));
-        when(notifications.failedSince(WINDOW_FROM)).thenReturn(List.of(refused()));
+        when(batches.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(dead()));
+        when(notifications.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(refused()));
         when(registers.recordedUnbatchedBefore(any())).thenReturn(List.of(leftBehind()));
     }
 

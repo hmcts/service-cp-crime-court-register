@@ -34,8 +34,10 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 /**
  * What went wrong, asked of the store and answered as one report.
  *
- * <p>Eight reads and no writes (FR-014). Three of them are bounded by the window, so a report is a
- * statement about a period rather than a growing ledger; the two late kinds deliberately are not,
+ * <p>Eight reads and no writes (FR-014). Three of them are bounded by the window - at
+ * <strong>both</strong> ends, the start inclusive and the end exclusive - so a report is a statement
+ * about a closed period rather than a growing ledger and consecutive reports cannot both name the
+ * same row; the two late kinds deliberately are not bounded by it,
  * because a request stuck since Friday is late on Monday morning whether or not it arrived over the
  * weekend, and a window filter would make the longest-running problem the first one to disappear.
  *
@@ -207,7 +209,8 @@ public class ExceptionReportService {
         final List<ExceptionEntry> entries = new ArrayList<>();
 
         final Set<String> reported = new HashSet<>();
-        for (final ProcessedRequestSummary failed : requests.failedSince(window.from())) {
+        for (final ProcessedRequestSummary failed
+                : requests.failedBetween(window.from(), window.to())) {
             reported.add(identityOf(failed));
             entries.add(intake(ExceptionKind.REQUEST_FAILED, failed, failed.failureReason()));
         }
@@ -227,14 +230,16 @@ public class ExceptionReportService {
         for (final BatchException late : batches.lateGenerated(snapshotAt.minus(notifiedWithin))) {
             entries.add(batch(ExceptionKind.BATCH_LATE, late, AWAITING_NOTIFICATION));
         }
-        for (final BatchException dead : batches.failedSince(window.from())) {
+        for (final BatchException dead
+                : batches.failedBetween(window.from(), window.to())) {
             entries.add(batch(ExceptionKind.BATCH_FAILED, dead, nameOf(dead)));
         }
         for (final RecordedRegisterSummary stranded : registers.recordedUnbatchedBefore(
                 LastScheduledRun.before(generationCron, generationZone, snapshotAt))) {
             entries.add(unbatched(stranded));
         }
-        for (final FailedNotification refused : notifications.failedSince(window.from())) {
+        for (final FailedNotification refused
+                : notifications.failedBetween(window.from(), window.to())) {
             entries.add(notification(refused));
         }
 

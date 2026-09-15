@@ -165,7 +165,7 @@ class RegisterBatchReportReadsIT {
             failed(TUESDAY, hoursAgo(9));
             generating(MONDAY, hoursAgo(9));
 
-            softly.assertThat(failedSince(hoursAgo(2)))
+            softly.assertThat(failedBetween(hoursAgo(2), soon()))
                     .as("a report is a statement about a period: a batch that ended before the "
                             + "window belongs to the report that already named it")
                     .extracting(BatchException::batchId)
@@ -218,7 +218,7 @@ class RegisterBatchReportReadsIT {
                             BatchException::status, BatchException::failureReason)
                     .containsExactly(tuple(rendered.courtCentreId(), MONDAY, BatchStatus.GENERATED,
                             null));
-            softly.assertThat(failedSince(hoursAgo(2)))
+            softly.assertThat(failedBetween(hoursAgo(2), soon()))
                     .as("the bounded reason, which is this service's own code with a fixed "
                             + "meaning and never the renderer's words about the document")
                     .extracting(BatchException::courtCentreId, BatchException::registerDate,
@@ -309,7 +309,8 @@ class RegisterBatchReportReadsIT {
                 softly.assertThatThrownBy(() -> repository.lateGenerated(minutesAgo(30)))
                         .as("and for the document nobody has been told about")
                         .isInstanceOf(StoreUnavailableException.class);
-                softly.assertThatThrownBy(() -> repository.failedSince(hoursAgo(2)))
+                softly.assertThatThrownBy(
+                        () -> repository.failedBetween(hoursAgo(2), soon()))
                         .as("and for the batches that ended, so a morning the database is away "
                                 + "is a run that failed for a reason with a name rather than a "
                                 + "driver exception nobody classified")
@@ -327,7 +328,7 @@ class RegisterBatchReportReadsIT {
             latePending(minutesAgo(10));
             lateGenerating(minutesAgo(10));
             lateGenerated(minutesAgo(10));
-            failedSince(hoursAgo(2));
+            failedBetween(hoursAgo(2), soon());
 
             softly.assertThat(database.statements())
                     .as("four reads, four statements")
@@ -376,10 +377,6 @@ class RegisterBatchReportReadsIT {
 
     private List<BatchException> lateGenerated(final Instant generatedBefore) {
         return answered(() -> repository.lateGenerated(generatedBefore));
-    }
-
-    private List<BatchException> failedSince(final Instant since) {
-        return answered(() -> repository.failedSince(since));
     }
 
     private List<BatchException> failedBetween(final Instant from, final Instant to) {
@@ -488,7 +485,7 @@ class RegisterBatchReportReadsIT {
         return List.of(firstAge(latePending(minutesAgo(10))),
                 firstAge(lateGenerating(minutesAgo(10))),
                 firstAge(lateGenerated(minutesAgo(10))),
-                firstAge(failedSince(hoursAgo(4))));
+                firstAge(failedBetween(hoursAgo(4), soon())));
     }
 
     /** The statement each of the four really prepared, in the same order. */
@@ -496,7 +493,7 @@ class RegisterBatchReportReadsIT {
         return List.of(statementOf(() -> latePending(minutesAgo(10))),
                 statementOf(() -> lateGenerating(minutesAgo(10))),
                 statementOf(() -> lateGenerated(minutesAgo(10))),
-                statementOf(() -> failedSince(hoursAgo(4))));
+                statementOf(() -> failedBetween(hoursAgo(4), soon())));
     }
 
     /**
@@ -587,6 +584,16 @@ class RegisterBatchReportReadsIT {
 
     private static Instant minutesAgo(final long minutes) {
         return stored(Instant.now().minus(Duration.ofMinutes(minutes)));
+    }
+
+    /**
+     * A window end far enough ahead that it excludes nothing this suite seeded.
+     *
+     * <p>Every case but the boundary one is about the start; an end is now required of the read,
+     * and one an hour out keeps those cases about the question they were written for.
+     */
+    private static Instant soon() {
+        return stored(Instant.now().plus(Duration.ofHours(1)));
     }
 
     private static Instant stored(final Instant moment) {

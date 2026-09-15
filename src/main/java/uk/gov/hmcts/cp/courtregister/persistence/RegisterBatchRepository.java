@@ -360,11 +360,12 @@ public class RegisterBatchRepository {
      * whole difference between a reason a support engineer can paste into a ticket and a sentence
      * another system wrote about somebody's document.
      */
-    private static final String FAILED_SINCE = EXCEPTION_COLUMNS + """
+    private static final String FAILED_BETWEEN = EXCEPTION_COLUMNS + """
                    extract(epoch from (now() - failed_at))::bigint AS age_seconds
               FROM register_batch
              WHERE status = 'FAILED'
-               AND failed_at >= :since
+               AND failed_at >= :from
+               AND failed_at < :to
              ORDER BY failed_at
             """;
 
@@ -530,25 +531,20 @@ public class RegisterBatchRepository {
      * {@link BatchFailureReason} and never {@code sdg_reason}, which is not among the columns the
      * statement selects at all.
      *
-     * @param since the window's start
-     * @return every batch failed at or after it, oldest first
-     */
-    public List<BatchException> failedSince(final Instant since) {
-        return exceptions(FAILED_SINCE, "since", since);
-    }
-
-    /**
-     * The report's BATCH_FAILED read over a half-open window.
-     *
-     * <p><strong>Seam.</strong> The statement behind it still binds the window's start alone; the
-     * exclusive end lands with the half-open window itself.
+     * <p>Both ends, and the end exclusive: a court centre's dead day belongs to one morning's
+     * report, and a batch on the boundary of two windows would otherwise be chased twice.
      *
      * @param from the window's start, inclusive
      * @param to   the window's end, exclusive
      * @return every batch failed inside it, oldest first
      */
     public List<BatchException> failedBetween(final Instant from, final Instant to) {
-        return failedSince(from);
+        return StoreOutage.translating("read the batches that ended inside a window",
+                () -> jdbcClient.sql(FAILED_BETWEEN)
+                        .param("from", offsetOf(from))
+                        .param("to", offsetOf(to))
+                        .query((rs, rowNumber) -> exception(rs))
+                        .list());
     }
 
     /**

@@ -305,11 +305,17 @@ ones would be reporting the symptom and hiding the outcome.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `from` | `Instant` | The window's start: the **previous scheduled report time** for a scheduled run, `--since` for a command |
-| `to` | `Instant` | The window's end, which is always the moment the run started |
+| `from` | `Instant` | The window's start, **inclusive**: the **previous scheduled report time** for a scheduled run, `--since` for a command |
+| `to` | `Instant` | The window's end, **exclusive**: the run's **own scheduled occurrence** for a scheduled run, `now` for a command |
 
 `from` must be **strictly** before `to`; the record refuses otherwise, a window of no width included,
 because either reports nothing and looks exactly like a quiet morning.
+
+The window is **half-open**, and the three window-bounded reads bind both ends
+(`>= :from AND < :to`). One run's window closes exactly where the next one opens, so a row that
+failed on that instant is named by the later run and by it alone - a closed window shares its
+boundary with its neighbour, which is a failure in two mornings' reports and a support engineer
+chasing it twice.
 
 ```java
 static ReportWindow forScheduledRun(String cron, String zone, Instant firedAt);
@@ -322,15 +328,23 @@ static ReportWindow sinceLastScheduledRun(String cron, String zone, Instant now)
 its own** - the schedule is what woke it - so the first step back through `LastScheduledRun` is
 `atOrBefore(cron, zone, firedAt)`, and the second is `before(...)` that occurrence. A strictly
 earlier first step would skip the run's own occurrence whenever it fired on the instant it was due,
-opening the window a whole period early and reporting the same failures twice. `to` is `firedAt` and
-not the occurrence, so a run held up covers its own period **and** the delay: the window widens and
-never shrinks, and nothing falls into a gap between two reports. There is deliberately **no
-tolerance** around the occurrence - "near enough to count as on it" is a second boundary to get
-wrong, and the at-or-before step answers the only case a tolerance was ever for.
+opening the window a whole period early and reporting the same failures twice. **`to` is that
+occurrence and not `firedAt`**, so both ends are the schedule's: consecutive windows abut exactly,
+and an end taken off the firing instant would move with how busy the pod was - a boundary that moves
+is a boundary the next run cannot open on, and the delay between the two is a slice every run reads
+twice. What that costs is stated rather than hidden: a row that fails *after* the occurrence waits
+for the next run, and **a skipped run loses its period** - the following run opens at its own
+previous occurrence, not at the last one that reported. The report is not the alerting surface for a
+report that did not run; `courtregister_exception_report_runs_total` is, and a missing series on it
+is what says so. There is deliberately **no tolerance** around the occurrence - "near enough to count
+as on it" is a second boundary to get wrong, and the at-or-before step answers the only case a
+tolerance was ever for.
 
 `sinceLastScheduledRun` is what a caller with **no occurrence of its own** asks, which is the bare
 `report-exceptions` command (FR-009). One step: nothing woke it on a schedule, so the most recent
-occurrence strictly before `now` is the run that last reported. An operator asking at 06:59 reads the
+occurrence strictly before `now` is the run that last reported. Its end is `now` rather than an
+occurrence - a command is a snapshot taken when somebody asked, and an exclusive end at this instant
+excludes nothing that has happened yet. An operator asking at 06:59 reads the
 window this morning's run is about to read; one asking at 09:00 reads what has gone wrong since that
 run reported rather than repeating it. A scheduled run must never use it - the moment it fires is its
 own occurrence or a hair past it, and one step from there is a window a few milliseconds wide and a
@@ -600,6 +614,7 @@ that must hold, and each is a named test:
 | Predicate | Holds because |
 |---|---|
 | Every `FAILED` request whose `updated_at` is inside the window appears exactly once | the read is a single statement over a primary-key-unique table; `SC-001` pins it over fifty mixed seeded rows |
+| No row is named by two consecutive reports | every window-bounded read binds both ends, `>= :from AND < :to`, and a scheduled window's ends are its schedule's two occurrences - so window N's end **is** window N+1's start and the boundary row belongs to the later |
 | No request appears under two kinds in one run | the two intake predicates partition on `status`, and `build` folds the two answers on `(source, request_id)` with the failure winning, because the statements are taken a moment apart (FR-013) |
 | Two exceptions of one age come back in the same order every run | the sort falls through to `kind` in enum order and then to the entry's most specific identifier |
 | A `BATCH_FAILED` entry always carries a bounded reason | `ExceptionEntry`'s compact constructor refuses one that does not |

@@ -125,7 +125,7 @@ class ProcessedRequestReportReadsIT {
             seed(RequestStatus.RETRYING, "store-unavailable", Duration.ofHours(4),
                     Duration.ofHours(1));
 
-            final List<ProcessedRequestSummary> failed = failedSince(hoursAgo(2));
+            final List<ProcessedRequestSummary> failed = failedBetween(hoursAgo(2), soon());
 
             softly.assertThat(failed)
                     .as("a report is a statement about a period: a request parked before the "
@@ -148,9 +148,9 @@ class ProcessedRequestReportReadsIT {
         void failed_since_includes_a_row_failed_exactly_at_the_window_start() {
             final UUID parked = seed(RequestStatus.FAILED, "store-unavailable",
                     Duration.ofHours(4), Duration.ofHours(1));
-            final Instant parkedAt = parkedAtOf(failedSince(hoursAgo(9)));
+            final Instant parkedAt = parkedAtOf(failedBetween(hoursAgo(9), soon()));
 
-            softly.assertThat(failedSince(parkedAt))
+            softly.assertThat(failedBetween(parkedAt, soon()))
                     .as("the window's start is inclusive, so a request parked on the very instant "
                             + "the previous run closed its window is named by this one rather "
                             + "than by neither: consecutive windows abut, and a failure on the "
@@ -303,7 +303,8 @@ class ProcessedRequestReportReadsIT {
         void every_read_goes_through_store_outage_translating() {
             PostgresTestSupport.refuseConnectionsTo(DATABASE);
             try {
-                softly.assertThatThrownBy(() -> repository.failedSince(hoursAgo(2)))
+                softly.assertThatThrownBy(
+                        () -> repository.failedBetween(hoursAgo(2), soon()))
                         .as("an unreachable store is the intake half's own signal, and a "
                                 + "org.springframework.dao type reaching the core is Principle V")
                         .isInstanceOf(StoreUnavailableException.class);
@@ -327,7 +328,8 @@ class ProcessedRequestReportReadsIT {
         void every_scheduled_read_is_served_by_a_v4_index() throws SQLException {
             seedManyRows();
 
-            softly.assertThat(planFor(hoursAgo(24), () -> repository.failedSince(hoursAgo(24))))
+            softly.assertThat(planFor(hoursAgo(24),
+                            () -> repository.failedBetween(hoursAgo(24), soon())))
                     .as("the window read is served by the total index on (status, updated_at), "
                             + "which is the whole reason V4 adds it")
                     .contains("idx_request_status_updated");
@@ -347,10 +349,6 @@ class ProcessedRequestReportReadsIT {
     }
 
     // --- the reads, made so that a seam's refusal is recorded rather than thrown ----------------
-
-    private List<ProcessedRequestSummary> failedSince(final Instant since) {
-        return answered(() -> repository.failedSince(since));
-    }
 
     private List<ProcessedRequestSummary> failedBetween(final Instant from, final Instant to) {
         return answered(() -> repository.failedBetween(from, to));
@@ -538,5 +536,15 @@ class ProcessedRequestReportReadsIT {
 
     private static Instant hoursAgo(final long hours) {
         return Instant.now().minus(Duration.ofHours(hours));
+    }
+
+    /**
+     * A window end far enough ahead that it excludes nothing this suite seeded.
+     *
+     * <p>Every case but the boundary one is about the start; an end is now required of every read,
+     * and one an hour out keeps those cases about the question they were written for.
+     */
+    private static Instant soon() {
+        return Instant.now().plus(Duration.ofHours(1));
     }
 }

@@ -179,13 +179,18 @@ public class ProcessedRequestRepository {
      * is measured from the same column, so what the report says is how long ago the request was
      * parked.
      *
+     * <p><strong>Half-open</strong>: the start is inclusive and the end exclusive, so one run's
+     * window closes exactly where the next one opens and a request parked on that instant is named
+     * by one report rather than by two.
+     *
      * <p>Served by {@code idx_request_status_updated}, which V4 adds for it.
      */
-    private static final String FAILED_SINCE = SUMMARY_COLUMNS + """
+    private static final String FAILED_BETWEEN = SUMMARY_COLUMNS + """
                    extract(epoch from (now() - updated_at))::bigint AS age_seconds
               FROM processed_request
              WHERE status = 'FAILED'
-               AND updated_at >= :since
+               AND updated_at >= :from
+               AND updated_at < :to
              ORDER BY updated_at
             """;
 
@@ -406,29 +411,20 @@ public class ProcessedRequestRepository {
      * yesterday failed", which is a different and less useful question on the morning after an
      * outage.
      *
-     * @param since the window's start
-     * @return every parked request settled at or after it, oldest first
-     */
-    public List<ProcessedRequestSummary> failedSince(final Instant since) {
-        return StoreOutage.translating("read the requests parked inside a window",
-                () -> jdbcClient.sql(FAILED_SINCE)
-                        .param("since", offsetOf(since))
-                        .query((rs, rowNumber) -> summary(rs))
-                        .list());
-    }
-
-    /**
-     * The report's REQUEST_FAILED read over a half-open window.
-     *
-     * <p><strong>Seam.</strong> The statement behind it still binds the window's start alone; the
-     * exclusive end lands with the half-open window itself.
+     * <p>Both ends, and the end exclusive: a report is a statement about a period, and a period
+     * with one end open is a statement two consecutive reports both make.
      *
      * @param from the window's start, inclusive
      * @param to   the window's end, exclusive
      * @return every parked request settled inside it, oldest first
      */
     public List<ProcessedRequestSummary> failedBetween(final Instant from, final Instant to) {
-        return failedSince(from);
+        return StoreOutage.translating("read the requests parked inside a window",
+                () -> jdbcClient.sql(FAILED_BETWEEN)
+                        .param("from", offsetOf(from))
+                        .param("to", offsetOf(to))
+                        .query((rs, rowNumber) -> summary(rs))
+                        .list());
     }
 
     /**

@@ -119,7 +119,7 @@ class RegisterNotificationReportReadsIT {
         settled(batch, "accepted@example.gov.uk", NotificationStatus.ACCEPTED, 202, minutesAgo(30));
         settled(batch, "stale@example.gov.uk", NotificationStatus.FAILED, 500, hoursAgo(9));
 
-        final List<FailedNotification> failed = failedSince(hoursAgo(2));
+        final List<FailedNotification> failed = failedBetween(hoursAgo(2), soon());
 
         softly.assertThat(failed)
                 .as("a report is a statement about a period, and a team that was told is not an "
@@ -146,7 +146,7 @@ class RegisterNotificationReportReadsIT {
         final UUID newest = settled(monday, "newest@example.gov.uk", NotificationStatus.FAILED,
                 null, minutesAgo(5));
 
-        softly.assertThat(failedSince(hoursAgo(4)))
+        softly.assertThat(failedBetween(hoursAgo(4), soon()))
                 .as("oldest first, because the team that has been waiting longest is the one a "
                         + "morning's resend starts with")
                 .extracting(FailedNotification::notificationId)
@@ -162,7 +162,7 @@ class RegisterNotificationReportReadsIT {
         settled(tuesday, "three@example.gov.uk", NotificationStatus.FAILED, 500, minutesAgo(10));
         database.forgetStatements();
 
-        final List<FailedNotification> failed = failedSince(hoursAgo(4));
+        final List<FailedNotification> failed = failedBetween(hoursAgo(4), soon());
 
         softly.assertThat(database.statements())
                 .as("N+1 reads land on precisely the morning the list is longest, which is the "
@@ -199,7 +199,7 @@ class RegisterNotificationReportReadsIT {
         final UUID refused =
                 settled(batch, "yot@example.gov.uk", NotificationStatus.FAILED, 500, settledAt);
 
-        softly.assertThat(failedSince(settledAt))
+        softly.assertThat(failedBetween(settledAt, soon()))
                 .as("the window's start is inclusive, so a send refused on the very instant the "
                         + "previous run closed its window is named by this one rather than by "
                         + "neither: consecutive windows abut, and a Youth Offending Team that "
@@ -214,7 +214,7 @@ class RegisterNotificationReportReadsIT {
         settled(batch, "yot@example.gov.uk", NotificationStatus.FAILED, 500, minutesAgo(10));
         database.forgetStatements();
 
-        final List<FailedNotification> failed = failedSince(hoursAgo(4));
+        final List<FailedNotification> failed = failedBetween(hoursAgo(4), soon());
 
         softly.assertThat(ageOf(failed))
                 .as("the real age, in seconds, measured from the moment the attempt was settled")
@@ -250,7 +250,7 @@ class RegisterNotificationReportReadsIT {
         settled(batch, "yot@example.gov.uk", NotificationStatus.FAILED, 500, minutesAgo(30));
         database.forgetStatements();
 
-        failedSince(hoursAgo(4));
+        failedBetween(hoursAgo(4), soon());
 
         softly.assertThat(database.statements())
                 .as("the read this case is about is the only statement it made")
@@ -262,14 +262,6 @@ class RegisterNotificationReportReadsIT {
     }
 
     // --- the read, made so that a seam's refusal is recorded rather than thrown -----------------
-
-    private List<FailedNotification> failedSince(final Instant since) {
-        final AtomicReference<List<FailedNotification>> answered = new AtomicReference<>(List.of());
-        softly.assertThatCode(() -> answered.set(repository.failedSince(since)))
-                .as(SEAM)
-                .doesNotThrowAnyException();
-        return answered.get();
-    }
 
     private List<FailedNotification> failedBetween(final Instant from, final Instant to) {
         final AtomicReference<List<FailedNotification>> answered = new AtomicReference<>(List.of());
@@ -407,6 +399,16 @@ class RegisterNotificationReportReadsIT {
 
     private static Instant minutesAgo(final long minutes) {
         return stored(Instant.now().minus(Duration.ofMinutes(minutes)));
+    }
+
+    /**
+     * A window end far enough ahead that it excludes nothing this suite seeded.
+     *
+     * <p>Every case but the boundary one is about the start; an end is now required of the read,
+     * and one an hour out keeps those cases about the question they were written for.
+     */
+    private static Instant soon() {
+        return stored(Instant.now().plus(Duration.ofHours(1)));
     }
 
     private static Instant stored(final Instant moment) {

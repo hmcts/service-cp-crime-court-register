@@ -246,9 +246,13 @@ the offending setting.
   written by another system is carried: a reason is a bounded code of this service's own.
 - **FR-003**: The scheduled run MUST execute on a configurable schedule, by default at 07:00
   Europe/London on Monday to Friday, exactly once per scheduled time across all running instances,
-  and MUST derive its window from that same schedule: from the previous scheduled time to now.
-  A Monday run therefore covers from Friday's run, and the window is not a separate setting that
-  could disagree with the schedule.
+  and MUST derive its window from that same schedule: **half-open, aligned to the schedule** - from
+  the previous scheduled time, inclusive, to its own scheduled time, exclusive. A Monday run
+  therefore covers from Friday's run, and the window is not a separate setting that could disagree
+  with the schedule. Both ends are the schedule's and neither is the scheduler's, so consecutive
+  windows abut exactly and no row is read by two runs; a row that fails after the occurrence waits
+  for the next run, and a run that never fires loses its period - which the run counter's missing
+  series says, and the report does not.
 - **FR-004**: The scheduled run MUST run whether or not the generation half is enabled, and the
   intake instruments MUST refresh whether or not either half is enabled. Neither MUST ever run on a
   JVM started for an operations command, and neither MUST ever delay or block the 18:00 generation
