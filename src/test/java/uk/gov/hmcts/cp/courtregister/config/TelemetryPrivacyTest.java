@@ -1185,6 +1185,34 @@ class TelemetryPrivacyTest {
                     .doesNotContain("TRACE");
         }
 
+        /**
+         * The provider without which the report's events are a sentence again.
+         *
+         * <p>{@code LogEventReportSink} writes both of its events through
+         * {@code StructuredArguments.kv(...)}, and an encoder with no {@code <arguments/>} provider
+         * renders those values into the message text and emits no fields at all - so every saved
+         * query would need {@code parse()}, which is precisely what SC-003 forbids. It is asserted
+         * over <strong>both</strong> files for the same reason the MDC claim above is: a command's
+         * lines reach the same index as a pod's, and {@code report-exceptions} writes the same two
+         * events the 07:00 run does.
+         *
+         * @param configuration which of the two shipped files is being read
+         * @throws Exception where the file cannot be read at all
+         */
+        @ParameterizedTest
+        @ValueSource(strings = {"logback.xml", "logback-cli.xml"})
+        @DisplayName("emits the structured arguments, without which the report's fields are prose")
+        void both_logback_files_declare_the_arguments_provider(final String configuration)
+                throws Exception {
+            final String logback = Files.readString(
+                    Path.of("src", "main", "resources", configuration));
+
+            assertThat(logback)
+                    .as("without the arguments provider every field of both report events is "
+                            + "rendered into the message and every query needs parse()")
+                    .contains("<arguments/>");
+        }
+
         @Test
         @DisplayName("turns no logger below INFO, so no deployed pod writes a payload dump")
         void should_ship_no_logger_below_info() throws Exception {
