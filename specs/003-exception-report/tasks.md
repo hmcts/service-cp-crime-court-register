@@ -2624,6 +2624,52 @@ been touched.
       `build/reports/jacoco/test/jacocoTestReport.xml`: **LINE 6543/6753 = 96.89%** against the 0.88
       floor and **BRANCH 1987/2212 = 89.83%** against the 0.85 floor (instruction 96.68%, method
       98.32%, class 100%). **Review gate 8 is closed.**
+      **Final re-check.** One independent pass over gate 8's own remediation, finding by finding.
+      | Finding | Verdict | What the re-check found |
+      |---|---|---|
+      | F1 - the scheduled window ended at the moment the scheduler fired | Resolved | `forScheduledRun` is `[before(occurrence), occurrence)`; two consecutive windows abut and cannot overlap, however busy the pod was |
+      | F2 - the three window-bounded reads bound the start alone | **Partial** | They are half-open at both ends now, so no row is read by two runs. The other side of that coin is not closed: a run that is a **whole period late** loses the missed period, because the window is aligned to the schedule rather than carried forward. It is **documented as kept behaviour** and **alerted on the runs counter** - a period nobody reported is a run that did not happen, and the counter is what says so. Closing it means persisting the last completed boundary and opening the window from there, which is a follow-up increment, not a remediation |
+      | F3 - a report had no ceiling | **Partial** | The **budget stays advisory**: what actually bounds a run is the lock and the counters, not a deadline the run enforces on itself. The **cap** now bounds the recurring kinds only - see the HIGH below |
+      | F4-F9 - the four mediums and the two lows | Resolved | `345138d`, `bc97032`, `b93632f`, `e1be504`, `d6b5432` and the tidy-ups above; nothing reopened, nothing regressed |
+      The pass also raised **one new HIGH and two LOWs**, landed here as red/green pairs:
+      * **The entry cap could permanently hide a failure** (HIGH). `courtregister.report.max-entries`
+        was applied in `ExceptionReportService.build` after ordering, across all five kinds. Since F1
+        and F2 made the three failure reads half-open and aligned to the schedule, every failed row
+        belongs to **exactly one** run's window - so a `REQUEST_FAILED`, `BATCH_FAILED` or
+        `NOTIFICATION_FAILED` entry the cap dropped sat in a window no later run re-reads and was
+        reported **nowhere**, on precisely the longest morning of the year. Fixed by design rather
+        than by raising the number: the cap bounds `REQUEST_LATE` and `BATCH_LATE` alone - they are
+        asked about a cut-off, so whatever one run leaves out the next reads again, older - and the
+        three failure kinds are carried whole whatever the count. `truncated` counts dropped **late**
+        entries only. Reds at `eb84f80`: *"Expecting actual: [(REQUEST_FAILED, 9000L),
+        (REQUEST_FAILED, 8000L)] to contain exactly (and in same order): [(REQUEST_FAILED, 9000L),
+        (REQUEST_FAILED, 8000L), (REQUEST_FAILED, 7000L), (REQUEST_LATE, 6000L), (REQUEST_LATE,
+        5000L)]"* and *"Expecting actual: [9000L, 8000L] to contain exactly (and in same order):
+        [9000L, 8000L, 7000L]"*; the third case,
+        `the_cap_keeps_the_oldest_late_entries_and_drops_the_newest`, is **green on introduction**
+        and pins the half that does not change. Closed at `c437293`:
+        `ExceptionKind.recursEveryRun()` as a switch expression, so a sixth kind cannot be added
+        without deciding which class it is in, and the setting's comment, `ReportProperties`,
+        `ExceptionReport`, `LogEventReportSink`, `PropertiesValidator`, data-model.md, plan.md and
+        quickstart.md's KQL comment all carry the narrowed `truncated` semantics.
+      * **`PropertiesValidator` named the wrong window factory** (LOW). Its schedule javadoc called
+        the scheduled run's window `ReportWindow.sinceLastScheduledRun`; the job uses
+        `forScheduledRun` and the **command** uses `sinceLastScheduledRun`. Corrected to name both,
+        in `c437293` beside the cap's own javadoc on the same file.
+      * **The `-PexcludeTags` hatch had nothing saying where it stops** (LOW). It is kept - a
+        developer on a loaded machine leaves the two wall-clock cases out **by name** rather than by
+        disabling the suite that holds them - and CI was **checked rather than assumed**: the one
+        workflow that tests, `ci-build-publish.yml`, runs `./gradlew jacocoTestReport check` and
+        passes no `excludeTags` (`ci-draft.yml` and `ci-released.yml` call it, `codeql.yml` runs
+        `-x test`, and `gradle.properties` sets nothing), so no acceptance criterion can be skipped
+        on the way to a merge. `4b4e4bb` says so in the README note beside the tag.
+      **Re-check build**: `./gradlew clean jacocoTestReport build -Dtest.noFailFast=true` **BUILD
+      SUCCESSFUL, exit 0**, 10m 28s, 24 tasks executed - the whole suite with PMD over main and
+      test, Checkstyle at `maxWarnings = 0` and the JaCoCo gate at its existing floors, none of them
+      loosened. **3616 tests over 576 suites, 0 failures, 0 errors, 0 skipped.** Coverage, read off
+      `build/reports/jacoco/test/jacocoTestReport.xml`: **LINE 6556/6766 = 96.90%** against the 0.88
+      floor and **BRANCH 1995/2220 = 89.86%** against the 0.85 floor (instruction 96.68%, method
+      98.33%, class 100%). **The final re-check is closed.**
 
 ---
 
