@@ -1,11 +1,15 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
+import java.time.Clock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import uk.gov.hmcts.cp.courtregister.adapter.report.LogEventReportSink;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.persistence.JdbcRegisterStore;
@@ -158,6 +162,63 @@ public class ProcessedLogConfig {
     public RegisterNotificationRepository registerNotificationRepository(
             final JdbcClient jdbcClient) {
         return new RegisterNotificationRepository(jdbcClient);
+    }
+
+    /**
+     * The morning exception report: eight reads over the tables declared above it, and no writes.
+     *
+     * <p>Here rather than in {@link ReportSchedulingConfig} on purpose. The report is asked for by
+     * two callers that never share a context - the 07:00 job, which only exists where the schedule
+     * is switched on, and the operations command, which runs on a JVM that contributes no
+     * scheduling configuration at all ({@link CliModeConfig}) - so a report declared beside the
+     * schedule would be a report the command could not ask for. It is a read of exactly the tables
+     * this configuration declares the readers for, so this is also where it reads from: the two
+     * halves of the processed log, the batches, the notifications and the register store, over one
+     * client and one clock.
+     *
+     * <p>The two thresholds it is given are the report's own settings; the third is resolved,
+     * because {@code batch-generated-within} is deliberately undefaulted and falls back to the
+     * generation half's grace period - one answer to "how long is too long for a render", not two
+     * that can disagree ({@link PropertiesValidator#resolvedBatchGeneratedWithin}). The generation
+     * schedule is handed in because it is what "the last scheduled run left this register behind"
+     * means, and the report has no business guessing it.
+     *
+     * @param requests      the request half of the processed log
+     * @param batches       the {@code register_batch} table
+     * @param notifications the {@code register_notification} table
+     * @param registers     the recorded registers, through the store's own port
+     * @param report        the report's own settings, for the three limits
+     * @param generation    the downstream half's settings, for the schedule and the fallback limit
+     * @param metrics       where the five kinds and each delivery are counted
+     * @param clock         the one clock the snapshot and the three cut-offs are taken from
+     * @return the report
+     */
+    @Bean
+    public ExceptionReportService exceptionReportService(
+            final ProcessedRequestRepository requests, final RegisterBatchRepository batches,
+            final RegisterNotificationRepository notifications, final RegisterStore registers,
+            final ReportProperties report, final GenerationProperties generation,
+            final ProcessingMetrics metrics, final Clock clock) {
+
+        return new ExceptionReportService(requests, batches, notifications, registers,
+                report.requestTerminalWithin(),
+                PropertiesValidator.resolvedBatchGeneratedWithin(report, generation),
+                report.notifiedWithin(), generation.cron(), generation.zone(), metrics, clock);
+    }
+
+    /**
+     * The structured events the platform's container-log collection carries into Log Analytics.
+     *
+     * <p>Unconditional, beside the report itself and for the same reason: it is the sink both
+     * callers always deliver to, and a context that could build a report but had nowhere to write
+     * it would be a morning nobody is told about. The e-mail sink is the one that is switched, and
+     * it is contributed elsewhere.
+     *
+     * @return the log sink
+     */
+    @Bean
+    public ExceptionReportSink logEventReportSink() {
+        return new LogEventReportSink();
     }
 
     /**

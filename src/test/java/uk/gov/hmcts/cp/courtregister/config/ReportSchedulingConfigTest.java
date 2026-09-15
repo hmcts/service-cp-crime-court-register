@@ -231,7 +231,7 @@ class ReportSchedulingConfigTest {
                     .isNotNull()
                     .satisfies(sweeps -> {
                         assertThat(sweeps.getThreadNamePrefix()).isEqualTo(SWEEP_THREAD_PREFIX);
-                        assertThat(sweeps.getPoolSize()).isEqualTo(ONE_THREAD);
+                        assertThat(configuredThreads(sweeps)).isEqualTo(ONE_THREAD);
                     });
         });
     }
@@ -263,7 +263,7 @@ class ReportSchedulingConfigTest {
                     .isNotNull()
                     .satisfies(reports -> {
                         assertThat(reports.getThreadNamePrefix()).isEqualTo(REPORT_THREAD_PREFIX);
-                        assertThat(reports.getPoolSize()).isEqualTo(ONE_THREAD);
+                        assertThat(configuredThreads(reports)).isEqualTo(ONE_THREAD);
                     });
         });
     }
@@ -402,6 +402,20 @@ class ReportSchedulingConfigTest {
      */
     private ApplicationContextRunner podWith(final boolean report, final boolean generation) {
         return runner.withPropertyValues(REPORT_ENABLED + report, GENERATION_ENABLED + generation);
+    }
+
+    /**
+     * How many threads a scheduler was configured with, rather than how many it has started.
+     *
+     * <p>{@code getPoolSize()} answers the executor's <em>current</em> size, and a scheduler that
+     * has never been handed a task has started no core thread yet - so it answers nought on a
+     * context built and closed without 07:00 ever arriving. The configured core size is the claim.
+     *
+     * @param scheduler the scheduler under assertion
+     * @return the core pool size it was built with
+     */
+    private static int configuredThreads(final ThreadPoolTaskScheduler scheduler) {
+        return scheduler.getScheduledThreadPoolExecutor().getCorePoolSize();
     }
 
     /**
