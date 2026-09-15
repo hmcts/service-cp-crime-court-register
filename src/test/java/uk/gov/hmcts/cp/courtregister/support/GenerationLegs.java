@@ -51,10 +51,12 @@ import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.IntakeAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
+import uk.gov.hmcts.cp.courtregister.batch.cli.ReportExceptionsCli;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
+import uk.gov.hmcts.cp.courtregister.config.ReportProperties;
 import uk.gov.hmcts.cp.courtregister.domain.AssembledBatch;
 import uk.gov.hmcts.cp.courtregister.domain.BatchAssembly;
 import uk.gov.hmcts.cp.courtregister.domain.BatchException;
@@ -138,7 +140,7 @@ public final class GenerationLegs implements AutoCloseable {
             UUID.fromString("66666666-7777-4888-8999-aaaaaaaaaaaa");
 
     /**
-     * The two classes the morning's exception report writes its own lines from.
+     * The three classes the exception report writes its own lines from.
      *
      * <p>Named on their own as well as inside {@link #THE_LEGS}, because a class that declares no
      * statement contributes nothing to a sweep over declarations and is passed over in silence. A
@@ -147,7 +149,8 @@ public final class GenerationLegs implements AutoCloseable {
      */
     public static final List<Class<?>> THE_REPORT = List.of(
             ExceptionReportService.class,
-            LogEventReportSink.class);
+            LogEventReportSink.class,
+            ReportExceptionsCli.class);
 
     /**
      * The classes that write a line about a register: the two legs, and the report over both.
@@ -392,6 +395,7 @@ public final class GenerationLegs implements AutoCloseable {
         theNotifiersClient();
         theExceptionReport();
         theMorningRun();
+        theOnDemandReport();
         theIntakeGaugeRefresh();
     }
 
@@ -1102,6 +1106,34 @@ public final class GenerationLegs implements AutoCloseable {
                 "the store could not be reached to read what went wrong overnight",
                 new IllegalStateException("the connection pool is empty")));
         whateverItAnswers(reportJob::run);
+    }
+
+    /**
+     * The one line the sixth operations command writes, which is about a report nobody got.
+     *
+     * <p>Driven immediately after {@link #theMorningRun()}, which leaves the request log refusing:
+     * a command whose read will not answer is the one thing it has to say out loud, because its
+     * report is an operator's terminal and there is nothing on it to read. The store's own words
+     * and the cause it carries are exactly what the sweep holds this line to a class name over.
+     *
+     * <p>The command's own table goes nowhere here. What it prints is asserted by
+     * {@code batch/cli/ReportExceptionsCliTest}, over a consumer it hands in; this fixture's
+     * subject is the log, which is a command's stderr and reaches the index the whole estate reads.
+     */
+    private void theOnDemandReport() {
+        whateverItAnswers(() -> new ReportExceptionsCli(reporting, List.of(logSink),
+                reportSettings(), clock, line -> { }).run(List.of("--since", "2h")));
+    }
+
+    /**
+     * The report's own settings, with the e-mail output off as every environment ships it.
+     *
+     * @return the report on, at seven in the court's zone, with no e-mail output
+     */
+    private static ReportProperties reportSettings() {
+        return new ReportProperties(true, REPORT_CRON, GenerationProperties.COURTS_ZONE, false,
+                Duration.ofMinutes(15), REPORT_LIMIT, REPORT_LIMIT, REPORT_LIMIT,
+                new ReportProperties.Email(false, null, List.of()));
     }
 
     /**
