@@ -50,8 +50,16 @@ class ExceptionReportModelTest {
 
     private static final String RUN_ID = "run-7f1c9204";
 
+    /**
+     * What every read here is made through, so a case reports the property it is about.
+     *
+     * <p>These are pure computations over a window, a count or a fold, and none of the cases below
+     * hands one an argument it refuses. Made through {@code assertThatCode}, a refusal is recorded
+     * as a failure of its own rather than stopping the case at the arrangement, which is what lets
+     * one run report every property rather than the first one that broke.
+     */
     private static final String SEAM =
-            "the model's own behaviour lands next; this is its red run";
+            "the model computes rather than refuses: this call answered";
 
     /** How long after its own occurrence a scheduled run really asks for its window. */
     private static final long FIRING_DELAY_MILLIS = 50;

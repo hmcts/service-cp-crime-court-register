@@ -370,20 +370,15 @@ public class ReportExceptionsCli {
      */
     // PMD.OnlyOneReturn: three forms tried in a stated order, each answered where it parses; one
     // exit would need a sentinel standing in for "not this form", which is the null this avoids.
-    // PMD.EmptyCatchBlock: a form that did not parse is the next form being tried, and saying so
-    // out loud would put a line on an operator's stderr for every window they typed correctly.
-    @SuppressWarnings({"PMD.OnlyOneReturn", "PMD.EmptyCatchBlock"})
+    @SuppressWarnings("PMD.OnlyOneReturn")
     private static Instant readBack(final String typed, final Instant now) {
-        try {
-            return Instant.parse(typed);
-        } catch (DateTimeParseException notAnInstant) {
-            // Not an instant, so the next form is tried. Deliberately unreported: which of the
-            // three forms was meant is not knowable here, and only the last failure is a refusal.
+        final Optional<Instant> instant = asInstant(typed);
+        if (instant.isPresent()) {
+            return instant.get();
         }
-        try {
-            return now.minus(positive(Duration.parse(typed)));
-        } catch (DateTimeParseException notADuration) {
-            // As above: the shorthand is the last form there is.
+        final Optional<Duration> duration = asDuration(typed);
+        if (duration.isPresent()) {
+            return now.minus(positive(duration.get()));
         }
         final Matcher shorthand = SHORTHAND.matcher(typed);
         if (!shorthand.matches()) {
@@ -392,6 +387,44 @@ public class ReportExceptionsCli {
         }
         return now.minus(positive(Duration.of(Long.parseLong(shorthand.group(1)),
                 UNITS.get(shorthand.group(2)))));
+    }
+
+    /**
+     * The value as an ISO-8601 instant, where it is one.
+     *
+     * <p>"Not this form" is answered rather than caught at the call site, which is the difference
+     * between a suppressed empty catch and a reader that says what it found. Only the last form
+     * tried is a refusal, so the two before it must be able to say "no" without raising anything:
+     * a line on an operator's stderr for every window they typed correctly is noise, and a
+     * suppressed catch is a place a real failure could later hide.
+     *
+     * @param typed what followed {@code --since}
+     * @return the instant, or empty where this is not one
+     */
+    private static Optional<Instant> asInstant(final String typed) {
+        try {
+            return Optional.of(Instant.parse(typed));
+        } catch (DateTimeParseException notAnInstant) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * The value as an ISO-8601 duration, where it is one.
+     *
+     * <p>Answered rather than thrown, for the reason {@link #asInstant} gives. Whether the duration
+     * is one a window can be measured back by is {@link #positive}'s question and not this one's:
+     * {@code PT0S} parses and is refused, and the two refusals are different sentences.
+     *
+     * @param typed what followed {@code --since}
+     * @return the duration, or empty where this is not one
+     */
+    private static Optional<Duration> asDuration(final String typed) {
+        try {
+            return Optional.of(Duration.parse(typed));
+        } catch (DateTimeParseException notADuration) {
+            return Optional.empty();
+        }
     }
 
     /**
@@ -551,7 +584,7 @@ public class ReportExceptionsCli {
             final boolean asked) {
 
         final boolean here = sinkNamed(sink).isPresent();
-        return DeliveryWord.forSink(sink, delivered, here, here && asked).said();
+        return DeliveryWord.said(sink, delivered, here, here && asked);
     }
 
     /**

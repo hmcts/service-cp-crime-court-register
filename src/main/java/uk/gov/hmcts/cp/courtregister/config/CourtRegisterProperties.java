@@ -335,9 +335,6 @@ public record CourtRegisterProperties(
      * - the URL and the credentials arrive from Key Vault through the CSI driver, and an empty
      * default is what lets startup refuse a deployment that enabled generation without them.
      *
-     * <p><strong>Seam.</strong> The refusals themselves are T016's, guarded by
-     * {@code ConfigurationValidationTest} (T009); nothing reads these values yet.
-     *
      * @param url      the JDBC URL of the stack's file-service database
      * @param username the write identity; a secret, never logged
      * @param password the write identity's password; a secret, never logged

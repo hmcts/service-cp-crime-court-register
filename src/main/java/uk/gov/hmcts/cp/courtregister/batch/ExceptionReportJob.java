@@ -254,6 +254,6 @@ public class ExceptionReportJob {
      */
     private String said(final ReportSinkName sink, final List<DeliveryOutcome> delivered) {
         final boolean here = onThisContext.contains(sink);
-        return DeliveryWord.forSink(sink, delivered, here, here).said();
+        return DeliveryWord.said(sink, delivered, here, here);
     }
 }

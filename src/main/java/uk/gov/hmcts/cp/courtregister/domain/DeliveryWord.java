@@ -62,6 +62,25 @@ public enum DeliveryWord {
     }
 
     /**
+     * The word one sink's field carries, written the way a run line writes it.
+     *
+     * <p>The two callers had {@code forSink(...).said()} each, which is the same two steps spelled
+     * twice: one line's worth of duplication, and the one line on which the job and the command
+     * could come to render the same fact differently. This is {@link #forSink} and {@link #said}
+     * in one call, so neither caller holds either half.
+     *
+     * @param sink          which sink the field is about
+     * @param delivered     one outcome per sink asked, in the order they were asked
+     * @param onThisContext whether a sink of that name exists on this context at all
+     * @param asked         whether this invocation asked it
+     * @return the one word the line carries, lower case
+     */
+    public static String said(final ReportSinkName sink, final List<DeliveryOutcome> delivered,
+            final boolean onThisContext, final boolean asked) {
+        return forSink(sink, delivered, onThisContext, asked).said();
+    }
+
+    /**
      * How the word is written, which is the rendering every bounded label here is published under.
      *
      * @return the lower-case word

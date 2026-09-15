@@ -66,11 +66,6 @@ import uk.gov.hmcts.cp.courtregister.pipeline.Dates;
  * setting. It is not a second cutover lever: the value is fixed for the life of a release, the one
  * lever is the App Configuration flag, and {@link OutputMode} says so at length.
  *
- * <p><strong>The transformation port is not implemented yet</strong>, and a pipeline constructed
- * without one — the walking skeleton the transport suites use — ends every run it admits as
- * {@code no-defendants}, which is the outcome a payload with no register in it earns anyway. The
- * chain behind that port arrives with the mapper phase; nothing above it changes when it does.
- *
  * <p><strong>The run bounds itself, across every stage.</strong> Before the ports are touched the
  * deadline is fixed at {@code courtregister.claim.processing-deadline} from now, and what is left of
  * it is read again before the transformation, before the send and before any outcome is written.

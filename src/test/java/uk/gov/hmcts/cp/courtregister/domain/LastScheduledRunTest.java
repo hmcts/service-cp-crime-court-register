@@ -41,8 +41,16 @@ class LastScheduledRunTest {
     /** The same hour every day of the week, which is what makes the weekend rule visible. */
     private static final String EVERY_MORNING_CRON = "0 0 7 * * *";
 
+    /**
+     * What every read here is made through, so a case reports the property it is about.
+     *
+     * <p>The computation is pure and throws only where a cron or a zone cannot be read, which no
+     * case below hands it. Made through {@code assertThatCode}, a refusal is recorded as a failure
+     * of its own rather than stopping the case at the arrangement - so a case still says which
+     * occurrence it expected, and a soft-assertion suite reports every property in one run.
+     */
     private static final String SEAM =
-            "the most-recent-occurrence computation lands next; this is its red run";
+            "these occurrences are computed, not caught: this read answered rather than refused";
 
     @InjectSoftAssertions
     private SoftAssertions softly;
