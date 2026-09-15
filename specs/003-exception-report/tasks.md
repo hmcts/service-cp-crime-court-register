@@ -785,7 +785,7 @@ on a pod with the report and the generation half both switched off - which is th
       throws, so a failure this method let out would take both readings off the air for the life of
       the pod. Its bean is Phase 5's `IntakeSweepConfig`, along with the `scheduler` attribute
       (T048); nothing schedules it yet.)
-- [ ] T028 Phase close: `./gradlew build` green; **review gate 3** (the instruments' bounded labels,
+- [x] T028 Phase close: `./gradlew build` green; **review gate 3** (the instruments' bounded labels,
       no PII, the Micrometer containment behind the `Timing` token, the sweep's
       absorbed-and-counted read failure as the one permitted absorbed refusal, quoted against
       `.claude/rules/design_rules.md`); findings land as red/green pairs.
@@ -793,8 +793,106 @@ on a pod with the report and the generation half both switched off - which is th
       551 suites, 0 failures, 0 errors. `checkstyleMain` and `checkstyleTest` at `maxWarnings = 0`,
       `pmdMain` and `pmdTest`, and `jacocoTestCoverageVerification` at LINE 0.88 / BRANCH 0.85 all
       ran in that one invocation and none of them was loosened: nothing under `gradle/`, `config/`,
-      `.github/` or `build.gradle` moved anywhere in Phase 3. **Review gate 3 has not run**, so
-      this task stays open until its findings have landed as red/green pairs.)
+      `.github/` or `build.gradle` moved anywhere in Phase 3.
+      **Review gate 3 ran against the committed Phase 3 content** with three read-only reviewers.
+      Verdicts: `code-reviewer` **PASS** (2 medium, 3 low), `spec-validator` **COMPLIANT** (2 low),
+      `qa` **FAIL** - narrow, and on the fixtures rather than on a failing suite, QA's own read of
+      the tree at `7bca310` being 3375 tests, 0 failures, 0 errors. The three things the gate was
+      called for were found clean: no PII on any label or at INFO, the Micrometer containment
+      behind the `Timing` token holds (no `io.micrometer` import or field in `application/`), and
+      the sweep's absorbed read failure is the only absorbed refusal in the increment - counted,
+      said once at WARN by class, and not cancelling the schedule.
+      Findings, and where each was closed:
+      * **the two newest labels were bounded by review rather than by the compiler.**
+        `exceptionReportRun(String)` and `intakeSweepFailure(String)` took the word itself, so the
+        only thing keeping `courtregister_exception_report_runs_total` to three series was that
+        three callers spelled three words correctly. A mistyped label is not a wrong reading - it
+        is a new series, on which the alert written against the right one is silent for ever.
+        `domain/ReportRunOutcome` (`DELIVERED`, `PARTIAL`, `FAILED`) and `domain/SweepFailureReason`
+        (`STORE_UNAVAILABLE`, `UNEXPECTED`) land as the seam and the String overloads are **removed**
+        rather than deprecated; both render through the existing `code(Enum)` helper, so the
+        published labels do not move. Red `the_run_outcome_label_is_one_of_three_bounded_words` and
+        `the_sweep_failure_reason_label_is_one_of_two_bounded_codes` at `8820b64`, green at
+        `37fe136`.
+      * **the request-duration timer recorded whatever status it was handed.**
+        `requestSettled(Timing, RequestStatus.RETRYING)` would publish a sample under a fifth
+        `outcome` value nothing documents and no alert reads, turning the timer into a histogram of
+        attempts - and a timer records in silence, so the caller would never find out.
+        `RequestStatus.isTerminal()` is what the refusal asks, pinned in `domain/RequestStatusTest`
+        so a fifth constant has to decide which side of the line it falls on. Red
+        `a_non_terminal_status_is_refused_by_the_timer` at `8820b64` ("Expecting code to raise a
+        throwable"), green at `37fe136`.
+      * **the over-threshold gauge sized a list to get one number.** The sweep called
+        `nonTerminalOlderThan(...)` and took `.size()`, so its cost grew with the backlog it was
+        reporting - slowest on the morning the reading matters most - and every unfinished
+        request's row was carried into the JVM to be counted and dropped, which on this register is
+        a youth's case. `countNonTerminalOlderThan(Instant)` answers the number, spelled with the
+        list read's predicate character for character so `idx_request_non_terminal_created` still
+        matches, and wrapped in `StoreOutage.translating` like every other statement in the class.
+        Red `ProcessedRequestReportReadsIT.count_non_terminal_older_than_answers_the_number_without_the_rows`
+        and `IntakeAgeSweepTest.the_over_threshold_gauge_is_set_from_the_count_read_not_from_a_materialised_list`
+        at `8820b64`, green at `37fe136`.
+      * **the sweep's fixture contradicted the store it was standing in for** (QA). It answered a
+        900-second row as the oldest while a 2400-second row sat in the same store, then counted
+        the 900-second one as over a 1800-second threshold - so it could have passed against a
+        sweep that had the two readings the wrong way round. Rewritten to **spec scenario 2.2 as
+        written**: one unfinished request forty minutes old, a thirty-minute threshold, the age
+        gauge at least 2400 and the count 1. `8820b64` / `37fe136`.
+      * **the threshold boundary had no case at either level** (QA). The predicate is
+        `created_at < :cutOff`, exclusive, so a request created exactly the threshold ago is not
+        over it. Pinned in the store by
+        `ProcessedRequestReportReadsIT.a_request_exactly_at_the_threshold_is_not_over_it`, asserted
+        against the row's **own stored instant read back** rather than one derived from this
+        suite's clock - a derived cut-off is near the boundary, and near is what the case exists to
+        rule out - and in the sweep by
+        `the_cut_off_is_the_threshold_ago_exactly_and_is_not_nudged_either_way`, which captures the
+        instant the sweep passes. The report's REQUEST_LATE read shares that boundary, so a
+        tolerance added to soften it would make the gauge and the morning report disagree about the
+        same request. `8820b64` / `37fe136`.
+      * **only the cause's text was asserted absent from the WARN line** (QA); the caught
+        exception's own message was not, and the wrapper's message is the one that names the
+        statement. Both absorbed-refusal cases now assert both, through a shared
+        `assertTheOneWarningNames(...)`. `8820b64`.
+      * `a_read_that_fails_for_any_other_reason_is_counted_unexpected` characterises the total
+        second catch: an outage of theirs and a bug of ours are counted apart, because one counter
+        for both would make the second invisible inside the first. **The branch was already there**
+        - the red run's own log shows `reason=unexpected type=java.lang.IllegalStateException`
+        written before any production change - so only the over-threshold assertion in that case
+        was red, and the commit body says so.
+      * `a_parked_run_that_was_not_dead_lettered_records_no_sample` (QA's sixth item, which asked
+        for it only if `parked(...)` is reachable with a non-DeadLetter outcome in a unit test: it
+        is, by stubbing `guard.recordExhaustion` to hand back an `Abandon`). The completion side of
+        the guard's refusal had a case and the parking side did not, although they are separate
+        `instanceof` branches and one could be widened without the other. **Green on introduction**,
+        at `8820b64`.
+      * LOW, folded into the green commit with no red of its own: the pipeline's import-list case
+        read `DistributionPipeline.java` through a bare relative path, so it asserted about
+        whatever file that resolved to. It resolves from `System.getProperty("user.dir")` now.
+        `37fe136`.
+      Record-keeping the Phase 3 tick got wrong, corrected here rather than by editing T022-T024:
+      * T023's tick folds `the_pipeline_holds_a_timing_token_and_imports_no_micrometer_type` into
+        "the three negative cases" without naming it. It is not a negative case - it characterises
+        the seam's own shape and was **green on introduction**, as
+        `the_timing_token_is_opaque_and_carries_no_micrometer_type_into_the_caller` is and says.
+      * T022's tick omits `the_exceptions_counter_moves_by_the_number_reported`, which landed with
+        the rest at `7a486fd`.
+      * T022's tick says four `Surface` cases were widened; **five** were - the Prometheus
+        gauge-scrape case `the_gauges_should_scrape_before_any_message_has_arrived` ("all four gauges scrape from a pod that has seen nothing") too.
+      Nothing in the gate asked for a `doc/DEFECT-FIXES.md` row and none was added: every finding
+      is about this increment's own instruments, not about a legacy behaviour.
+      **Cross-branch note.** `a00cdcf` on the Phase 4 branch stands in `exceptionReportRun(String)`
+      so the report's service can compile while Phase 3 is in flight, on the stated understanding
+      that "the two branches declare the same members with the same signatures, so the merge
+      resolves to Phase 3's version". That is now **false for one member**: this branch's signature
+      is `exceptionReportRun(ReportRunOutcome)`. The merge must take this branch's
+      `ProcessingMetrics` whole and move the report's call sites onto the enum - three words, the
+      same three - rather than resolving member by member.
+      Phase-close build **after** the findings landed, at `37fe136`: `./gradlew build` BUILD
+      SUCCESSFUL, exit 0, 3387 tests over 552 suites, 0 failures, 0 errors; `checkstyleMain` and
+      `checkstyleTest` at `maxWarnings = 0`, `pmdMain` and `pmdTest`, and
+      `jacocoTestCoverageVerification` at LINE 0.88 / BRANCH 0.85 all ran in that one invocation
+      and none of them was loosened - nothing under `gradle/`, `config/`, `.github/` or
+      `build.gradle` moved anywhere in Phase 3 or in this gate. Phase 4 may start.)
 
 **Checkpoint**: US2 is independently demonstrable through the actuator's Prometheus endpoint, on a
 pod with the report and the generation half both switched off, once Phase 5 declares the bean in

@@ -119,6 +119,7 @@ Notes that matter:
 ```java
 List<ProcessedRequestSummary> failedSince(Instant since);
 List<ProcessedRequestSummary> nonTerminalOlderThan(Instant createdBefore);
+long countNonTerminalOlderThan(Instant createdBefore);
 Optional<ProcessedRequestSummary> oldestNonTerminal();
 ```
 
@@ -141,6 +142,12 @@ SELECT source, request_id, hearing_id, hearing_day, status, attempts, failure_re
    AND created_at < :createdBefore
  ORDER BY created_at
 
+-- countNonTerminalOlderThan  (the sweep's second gauge; the SAME predicate, answered as a number)
+SELECT count(*)
+  FROM processed_request
+ WHERE status IN ('RECEIVED', 'RETRYING')
+   AND created_at < :createdBefore
+
 -- oldestNonTerminal      (the sweep's first gauge; LIMIT 1 over the same partial index)
 SELECT source, request_id, hearing_id, hearing_day, status, attempts, failure_reason,
        created_at, updated_at,
@@ -151,8 +158,20 @@ SELECT source, request_id, hearing_id, hearing_day, status, attempts, failure_re
  LIMIT 1
 ```
 
-All three go through `StoreOutage.translating(...)` like every other statement in the class, so an
+All four go through `StoreOutage.translating(...)` like every other statement in the class, so an
 unreachable store is the intake half's own signal rather than an untranslated driver failure.
+
+**`countNonTerminalOlderThan` is a count and not a `.size()`** (review gate 3). The sweep wants one
+number; sizing `nonTerminalOlderThan`'s list to get it is a read whose cost grows with the backlog
+it is reporting - slowest on the morning the reading matters most - and carries every unfinished
+request's row into the JVM to be counted and dropped, which on this register is a youth's case. Its
+predicate is `nonTerminalOlderThan`'s **character for character**, for the reason the migration
+gives: Postgres matches a partial index by proving the query's predicate implies the index's.
+
+**The cut-off is exclusive, and both callers share it.** `created_at < :cutOff` means a request
+created exactly the intake threshold ago is *not* over it. The gauge and the report's REQUEST_LATE
+list read the same boundary, so neither may nudge its own cut-off to soften it - two readings that
+disagree about the same request are two answers waiting to be compared.
 
 ### `RegisterNotificationRepository`
 
@@ -405,6 +424,27 @@ public enum DeliveryStatus { DELIVERED, PARTIALLY_DELIVERED, NOT_DELIVERED }
 
 Never a raw exception message, never a status line quoted back, never a fragment of a downstream's
 body (constitution Principle VII).
+
+### `ReportRunOutcome` and `SweepFailureReason` - the two labels review gate 3 made unspellable
+
+```java
+public enum ReportRunOutcome { DELIVERED, PARTIAL, FAILED }
+
+public enum SweepFailureReason { STORE_UNAVAILABLE, UNEXPECTED }
+```
+
+Both render through `ProcessingMetrics`'s `code(Enum)` helper - `delivered`/`partial`/`failed` and
+`store-unavailable`/`unexpected` - so the published labels are exactly the words they always were.
+What changed is who may say them: `ProcessingMetrics.exceptionReportRun` and `intakeSweepFailure`
+take these types and no longer take a `String`, because a label a caller spells is a label a caller
+can mistype, and a mistyped label is not a wrong reading but a new series on which the alert written
+against the right one is silent for ever.
+
+`ReportRunOutcome`'s three are the same three the run line carries: a dashboard filtered on the
+counter and a query over the run lines must partition a morning the same way. `SweepFailureReason`
+has two and must keep two - it is the only evidence the service's one absorbed refusal leaves, and
+an outage of theirs and a bug of ours need telling apart, because one counter for both would make
+the second invisible inside the first.
 
 ### How the two borrowed and defaulted durations resolve
 
