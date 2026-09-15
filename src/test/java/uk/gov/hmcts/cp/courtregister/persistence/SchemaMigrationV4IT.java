@@ -70,7 +70,10 @@ class SchemaMigrationV4IT {
         constraintsBefore = constraints();
         indexesBefore = indexes();
 
-        flyway().load().migrate();
+        // Targeted at V4 and not at the head. This suite's claim is what ONE migration did, and a
+        // migration that arrives after it would otherwise be counted as part of it - which is how
+        // "V4 added exactly two indexes" quietly becomes "the migrations after V3 added seven".
+        flyway().target("4").load().migrate();
         tablesAfter = tables();
         columnsAfter = columns();
         constraintsAfter = constraints();

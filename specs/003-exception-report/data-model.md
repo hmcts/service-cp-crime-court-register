@@ -34,7 +34,50 @@ CREATE INDEX idx_request_status_updated
 ```
 
 `SchemaMigrationV4IT` asserts both exist, that the partial one carries its predicate, and that every
-V1-V3 object is unchanged.
+V1-V3 object is unchanged. It is targeted at V4 rather than at the head, so what it measures stays
+one migration.
+
+## `V5__exception_report_batch_and_notification_indexes.sql`
+
+Additive and forward-only. Five indexes, no columns, no tables, no constraints. V4 indexed the two
+intake reads and left the five downstream ones scanning; all five run on a schedule, and the morning
+they are slowest is the morning a support engineer is waiting for the answer.
+
+```sql
+CREATE INDEX idx_batch_late_pending
+    ON register_batch (assembled_at)
+ WHERE status = 'PENDING';
+
+CREATE INDEX idx_batch_late_generating
+    ON register_batch (requested_at)
+ WHERE status = 'GENERATING';
+
+CREATE INDEX idx_batch_late_generated
+    ON register_batch (generated_at)
+ WHERE status = 'GENERATED';
+
+CREATE INDEX idx_batch_failed_at
+    ON register_batch (failed_at)
+ WHERE status = 'FAILED';
+
+CREATE INDEX idx_notification_failed_sent
+    ON register_notification (sent_at)
+ WHERE status = 'FAILED';
+```
+
+Every one of them is **partial**, and each predicate is spelled exactly as the statement that uses it
+spells its own `WHERE` clause - the V4 argument, unchanged: Postgres proves the implication
+syntactically, and a differently spelled equivalent is a planner coin toss. The indexed column is in
+each case the one its read orders by as well as filters on, so the sort comes off the index; that is
+why there are four batch indexes and not one, because "waiting" means a different moment in each of
+the four batch reads.
+
+`SchemaMigrationV5IT` asserts all five exist, that each is on its own stage column and partial on its
+own state, and that every V1-V4 object is unchanged. Whether the reads reach them is
+`RegisterBatchReportReadsIT.every_report_read_is_served_by_a_v5_index` and
+`RegisterNotificationReportReadsIT.the_report_read_is_served_by_a_v5_index`, over `EXPLAIN` with
+`enable_seqscan = off` after `ANALYZE` - "this query can use this index", rather than "today's row
+count made it cheapest".
 
 ## What the report reads, and from where
 
