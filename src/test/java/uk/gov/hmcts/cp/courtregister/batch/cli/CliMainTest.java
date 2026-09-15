@@ -35,6 +35,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.context.support.GenericApplicationContext;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
@@ -43,6 +45,7 @@ import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties.SourceMode;
+import uk.gov.hmcts.cp.courtregister.config.ReportProperties;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
@@ -689,7 +692,7 @@ class CliMainTest {
     }
 
     /**
-     * The one argument every command takes, asked of all five of them at once.
+     * The one argument every command takes, asked of all six of them at once.
      */
     @Nested
     @DisplayName("asking a command what it takes")
@@ -705,15 +708,17 @@ class CliMainTest {
         private final RegisterNotificationRepository notifications =
                 mock(RegisterNotificationRepository.class);
         private final FeatureFlagReader reader = mock(FeatureFlagReader.class);
+        private final ExceptionReportService reporting = mock(ExceptionReportService.class);
+        private final ExceptionReportSink logSink = mock(ExceptionReportSink.class);
 
         /**
-         * The five commands over doubled collaborators, by the names the registry knows them by.
+         * The six commands over doubled collaborators, by the names the registry knows them by.
          *
          * <p>Built the way {@code CliMain}'s own registry builds them - one command per name, over
          * whatever this context holds - so a name added to {@link CliMain#COMMANDS} without a
          * command behind it fails the first case below rather than being quietly untested.
          *
-         * @return the five commands, by name
+         * @return the six commands, by name
          */
         private Map<String, CliMain.Command> commands() {
             final Map<String, CliMain.Command> registry = new LinkedHashMap<>();
@@ -725,7 +730,22 @@ class CliMainTest {
                     new ListBatchesCli(batches, notifications, store, output)::run);
             registry.put(CliMain.SUPERSEDE_BEFORE, new SupersedeBeforeCli(store, output)::run);
             registry.put(CliMain.CHECK_FLAG, new CheckFlagCli(reader, output)::run);
+            registry.put(CliMain.REPORT_EXCEPTIONS, new ReportExceptionsCli(reporting,
+                    List.of(logSink), reportSettings(), Clock.fixed(
+                    Instant.parse("2026-08-21T07:00:00Z"), ZoneOffset.UTC), output)::run);
             return registry;
+        }
+
+        /**
+         * The report's settings a deployed command works to, with the e-mail output off as every
+         * environment ships it until the Notify template exists.
+         *
+         * @return the report on, at seven in the court's zone, with no e-mail output
+         */
+        private static ReportProperties reportSettings() {
+            return new ReportProperties(true, "0 0 7 * * MON-FRI", "Europe/London", false,
+                    Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(15),
+                    Duration.ofMinutes(30), new ReportProperties.Email(false, null, List.of()));
         }
 
         /**
@@ -746,7 +766,7 @@ class CliMainTest {
             final Map<String, CliMain.Command> registry = commands();
 
             softly.assertThat(registry.keySet())
-                    .as("all five, so the loop below is about the image's whole surface")
+                    .as("all six, so the loop below is about the image's whole surface")
                     .containsExactlyElementsOf(CliMain.COMMANDS);
             CliMain.COMMANDS.forEach(name -> {
                 printed.clear();
@@ -757,7 +777,7 @@ class CliMainTest {
                                 + "T067 exits 0 on generate-register --help inside the built image")
                         .isEqualTo(CliMain.SUCCESS);
                 softly.assertThat(printed)
-                        .as("usage says which command it is about, so an operator with five of "
+                        .as("usage says which command it is about, so an operator with six of "
                                 + "them in a runbook can tell the answers apart")
                         .anyMatch(line -> line.startsWith("usage: " + name));
             });
@@ -771,7 +791,7 @@ class CliMainTest {
                     output));
 
             verifyNoInteractions(gate, store, assembler, generation, notifier, batches,
-                    notifications, reader);
+                    notifications, reader, reporting, logSink);
         }
     }
 
