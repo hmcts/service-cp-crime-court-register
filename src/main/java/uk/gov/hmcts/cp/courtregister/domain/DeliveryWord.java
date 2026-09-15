@@ -43,19 +43,20 @@ public enum DeliveryWord {
      * @param asked         whether this invocation asked it
      * @return the one word the line carries
      */
-    public static DeliveryWord of(final ReportSinkName sink, final List<DeliveryOutcome> delivered,
-            final boolean onThisContext, final boolean asked) {
+    public static DeliveryWord forSink(final ReportSinkName sink,
+            final List<DeliveryOutcome> delivered, final boolean onThisContext,
+            final boolean asked) {
 
         final DeliveryWord said;
-        if (!onThisContext) {
-            said = DISABLED;
-        } else if (!asked) {
-            said = SKIPPED;
-        } else {
+        if (onThisContext && asked) {
             said = delivered.stream()
                     .filter(outcome -> outcome.sink() == sink)
                     .anyMatch(outcome -> outcome.status() == DeliveryStatus.DELIVERED)
                     ? OK : FAILED;
+        } else if (onThisContext) {
+            said = SKIPPED;
+        } else {
+            said = DISABLED;
         }
         return said;
     }

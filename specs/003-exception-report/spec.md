@@ -123,7 +123,8 @@ refusal that names the argument.
 **Acceptance Scenarios**:
 
 1. **Given** exceptions in the last two hours, **When** support runs the command with `--since 2h`,
-   **Then** the output lists each exception once, oldest first, and ends with the five counts.
+   **Then** the output lists each exception once, oldest first, and ends with the counts line and
+   the run's own line.
 2. **Given** the command is run with `--since` as an instant, **When** it runs, **Then** the window
    is from that instant to now.
 3. **Given** the command is run with `--email`, **When** the e-mail output is enabled and its

@@ -224,7 +224,7 @@ public class ExceptionReportJob {
     private void recorded(final String runId, final ReportWindow window, final int entries,
             final List<DeliveryOutcome> delivered, final Instant startedAt) {
 
-        final ReportRunOutcome outcome = ReportRunOutcome.of(delivered);
+        final ReportRunOutcome outcome = ReportRunOutcome.from(delivered);
         metrics.exceptionReportRun(outcome);
         LOG.info("event={} run_id={} window_from={} window_to={} entries={} delivered_log={} "
                         + "delivered_email={} outcome={} duration_ms={}",
@@ -249,6 +249,6 @@ public class ExceptionReportJob {
      */
     private String said(final ReportSinkName sink, final List<DeliveryOutcome> delivered) {
         final boolean here = onThisContext.contains(sink);
-        return DeliveryWord.of(sink, delivered, here, here).said();
+        return DeliveryWord.forSink(sink, delivered, here, here).said();
     }
 }

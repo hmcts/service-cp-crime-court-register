@@ -48,7 +48,9 @@ import uk.gov.hmcts.cp.courtregister.domain.ReportWindow;
  * opens at the most recent scheduled occurrence before now - the same
  * {@link ReportWindow#sinceLastScheduledRun} the schedule defines - so the bare command answers
  * what the morning run would have answered rather than a different question, and there is no window
- * setting to disagree with the schedule. Anything else is a refusal rather than a guess, and
+ * setting to disagree with the schedule. A default window that cannot be computed at all is this
+ * command failing to produce a report - {@link CliMain#FAILED}, not a refusal about an argument
+ * nobody gave. Anything else typed is a refusal rather than a guess, and
  * <strong>the token is never quoted back</strong>: a command is reached by {@code kubectl exec}, so
  * its arguments are an operator's own typing, and a terminal is pasted into tickets (constitution
  * Principle VII).
@@ -57,7 +59,9 @@ import uk.gov.hmcts.cp.courtregister.domain.ReportWindow;
  * {@code --email} was given and the e-mail output is on. A command that e-mailed support whenever
  * it was run would make an incident's third invocation an incident of its own. {@code --email}
  * against a deployment whose e-mail output is off is {@link CliMain#REFUSED} under a bounded reason
- * that names the setting, and nothing is read and nothing is written.
+ * that names the setting, and nothing is read and nothing is written; against an output that is on
+ * with no sink behind it, the same refusal names the sink instead, because the setting is not the
+ * thing to go and change.
  *
  * <p><strong>No flag, and no {@code --ignore-flag}.</strong> The report reads and writes nothing
  * the cutover decides, so the {@code CourtRegisterService} flag is not read here at all. That is
@@ -524,7 +528,7 @@ public class ReportExceptionsCli {
                 + " entries=" + entries
                 + " delivered_log=" + said(ReportSinkName.LOG, delivered, true)
                 + " delivered_email=" + said(ReportSinkName.EMAIL, delivered, emailAsked)
-                + " outcome=" + ReportRunOutcome.of(delivered).name().toLowerCase(Locale.ROOT)
+                + " outcome=" + ReportRunOutcome.from(delivered).name().toLowerCase(Locale.ROOT)
                 + " duration_ms=" + Duration.between(startedAt, clock.instant()).toMillis());
     }
 
@@ -546,7 +550,7 @@ public class ReportExceptionsCli {
             final boolean asked) {
 
         final boolean here = sinkNamed(sink).isPresent();
-        return DeliveryWord.of(sink, delivered, here, here && asked).said();
+        return DeliveryWord.forSink(sink, delivered, here, here && asked).said();
     }
 
     /**

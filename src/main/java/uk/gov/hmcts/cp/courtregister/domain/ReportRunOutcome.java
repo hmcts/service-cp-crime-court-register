@@ -41,7 +41,7 @@ public enum ReportRunOutcome {
      * @param delivered one outcome per sink asked, in the order they were asked
      * @return the bounded outcome
      */
-    public static ReportRunOutcome of(final List<DeliveryOutcome> delivered) {
+    public static ReportRunOutcome from(final List<DeliveryOutcome> delivered) {
         final long accepted = delivered.stream()
                 .filter(outcome -> outcome.status() == DeliveryStatus.DELIVERED)
                 .count();

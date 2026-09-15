@@ -382,12 +382,12 @@ class ExceptionReportModelTest {
         void the_word_for_a_sink_that_is_not_on_this_context_is_disabled_asked_or_not() {
             final List<DeliveryOutcome> onlyTheLog = List.of(took(ReportSinkName.LOG));
 
-            softly.assertThat(answered(() -> DeliveryWord.of(ReportSinkName.EMAIL, onlyTheLog,
+            softly.assertThat(answered(() -> DeliveryWord.forSink(ReportSinkName.EMAIL, onlyTheLog,
                             false, false), null))
                     .as("nobody could: there is no e-mail output here at all, which is a different "
                             + "fact from an invocation choosing not to use one")
                     .isEqualTo(DeliveryWord.DISABLED);
-            softly.assertThat(answered(() -> DeliveryWord.of(ReportSinkName.EMAIL, onlyTheLog,
+            softly.assertThat(answered(() -> DeliveryWord.forSink(ReportSinkName.EMAIL, onlyTheLog,
                             false, true), null))
                     .as("and a caller that asks every sink there is - which is what the 07:00 run "
                             + "does - says the same word about the sink that is not there")
@@ -398,31 +398,31 @@ class ExceptionReportModelTest {
         void the_job_and_the_command_say_the_same_word_about_the_same_context() {
             final List<DeliveryOutcome> onlyTheLog = List.of(took(ReportSinkName.LOG));
 
-            softly.assertThat(answered(() -> DeliveryWord.of(ReportSinkName.EMAIL, onlyTheLog,
+            softly.assertThat(answered(() -> DeliveryWord.forSink(ReportSinkName.EMAIL, onlyTheLog,
                             false, true), null))
                     .as("the divergence this type exists to end: one caller asks every sink and "
                             + "the other asks the ones it chose, and an e-mail sink that is not on "
                             + "the context is the same absence to both of them")
-                    .isEqualTo(answered(() -> DeliveryWord.of(ReportSinkName.EMAIL, onlyTheLog,
+                    .isEqualTo(answered(() -> DeliveryWord.forSink(ReportSinkName.EMAIL, onlyTheLog,
                             false, false), null));
         }
 
         @Test
         void the_word_is_written_the_way_every_bounded_label_here_is() {
-            softly.assertThat(answered(() -> DeliveryWord.DISABLED.said(), ""))
+            softly.assertThat(answered(DeliveryWord.DISABLED::said, ""))
                     .as("lower case, said once here rather than spelled by each caller: a label a "
                             + "caller renders is a label a caller can render differently")
                     .isEqualTo("disabled");
         }
 
         private ReportRunOutcome outcomeOf(final List<DeliveryOutcome> delivered) {
-            return answered(() -> ReportRunOutcome.of(delivered), null);
+            return answered(() -> ReportRunOutcome.from(delivered), null);
         }
 
         private DeliveryWord wordFor(final ReportSinkName sink,
                 final List<DeliveryOutcome> delivered, final boolean asked) {
 
-            return answered(() -> DeliveryWord.of(sink, delivered, true, asked), null);
+            return answered(() -> DeliveryWord.forSink(sink, delivered, true, asked), null);
         }
 
         private DeliveryOutcome took(final ReportSinkName sink) {

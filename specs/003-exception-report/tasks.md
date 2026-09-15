@@ -1743,10 +1743,13 @@ second read path.
       `batch/RunCorrelation` promoted to `public` for the class, `under(...)` and `current()` only.
       **It was package-private before this commit**, contrary to the note that it might already be
       public. `RegisterGenerationJobTest.the_run_id_should_not_outlive_the_run` is untouched and
-      green. One case beyond the task's list: `a_report_that_could_not_be_built_should_be_reported_as_a_failure`,
-      because every other command catches a collaborator's refusal and reports it on exit 2, and a
-      throw out of this one would have left the JVM on its own 1 - the code a runbook reads as
-      "declined".)
+      green. Two cases beyond the task's list:
+      `a_report_that_could_not_be_built_should_be_reported_as_a_failure`, because every other
+      command catches a collaborator's refusal and reports it on exit 2, and a throw out of this one
+      would have left the JVM on its own 1 - the code a runbook reads as "declined"; and
+      `asking_what_the_command_takes_should_print_the_usage_and_read_nothing`, because `--help` is
+      an argument every command takes and none declares, and a sixth command that answered it by
+      reading a store would be the one command an operator cannot ask what it takes.)
 - [x] T053 [P] [US3] `batch/cli/CliMainTest` (extend) - `report_exceptions_is_in_commands`,
       `report_exceptions_is_in_the_registry`, and `the_usage_line_lists_six_names`. Red: `COMMANDS`
       holds five.
@@ -1847,14 +1850,111 @@ second read path.
       SUCCESSFUL, 44 tests, 0 failed: the built image exits 0 on `startup.sh report-exceptions
       --help`, lists all six under a mistyped name, and the script-list case that went red at T058 is
       green.)
-- [ ] T060 Phase close: `./gradlew build` green; **review gate 6** (the refusal codes and exit codes
+- [x] T060 Phase close: `./gradlew build` green; **review gate 6** (the refusal codes and exit codes
       against the five existing commands, the operator-token rule, no token ever quoted back, and
       that `RunCorrelation`'s widened visibility changed nothing else about it); findings land as
       red/green pairs.
       (build half done at `bee1ad1`: `./gradlew build` BUILD SUCCESSFUL, 3510 tests, 0 failed,
       0 skipped, with `pmdMain`, `pmdTest`, `checkstyleMain`, `checkstyleTest` and the JaCoCo gate
-      all green - the four analysis findings the phase brought were closed at that commit. **Review
-      gate 6 is not done**: it runs in a new session and its findings land as red/green pairs.)
+      all green - the four analysis findings the phase brought were closed at that commit.
+      **Review gate 6 ran with three read-only reviewers**, on the committed tree and its test
+      results. Verdicts: `code-reviewer` **PASS** (0 high, 3 medium, 2 low), `spec-validator`
+      **COMPLIANT** (4 low), `qa` **PASS** with named gaps rather than a failing suite. The four
+      things the gate was called for were found clean: the sixth command's refusal codes and exit
+      codes are the five existing commands' - `REFUSED` for an argument it will not read and for a
+      declined `--email`, `FAILED` for a sink that refused - nothing an operator typed reaches a
+      line, a log message or a metric label, the bounded reasons are the same vocabulary, and
+      `RunCorrelation` gained visibility and nothing else: `under(...)` and `current()` are
+      unchanged and `RegisterGenerationJobTest.the_run_id_should_not_outlive_the_run` is untouched
+      and green.
+      Findings, and where each was closed. The reds are at `2505125` and the greens at `3f8d502`
+      unless another commit is named:
+      * **the default window was computed inside the `--since` guard** (MEDIUM). A window nobody
+        typed that could not be computed came back as exit 1 `unreadable-argument` with the usage
+        line under it, sending an operator to look for an argument they never gave. The two windows
+        are two branches with a catch each now, and a default that cannot be computed is exit 2
+        `report-not-built` - the same bounded reason a read that would not answer carries, because
+        to whoever is reading the terminal they are the same fact: there is no report. Red
+        `a_default_window_that_cannot_be_computed_is_the_reports_failure_not_the_operators`
+        (*expected: 2 but was: 1*, over a terminal reading `reason=unreadable-argument`).
+      * **the three-state fold and the `delivered_email` word were copied into both callers, and
+        the copies had already diverged** (MEDIUM, and QA named the same shape). The job called an
+        e-mail sink that is not on the context `disabled`; the command called the same absent sink
+        `skipped`, which is its word for an output that is here and an invocation that did not want
+        it. `ReportRunOutcome.from` and a new `domain/DeliveryWord` are the fold and the word, said
+        once and used by both, and both callers now read presence off the sinks the context
+        contributed rather than off the settings. Reds: the domain's own cases in
+        `ExceptionReportModelTest.TheRunsOwnWords`, recorded as the seams' refusal rather than
+        thrown (*"Expecting code not to raise a throwable but caught
+        java.lang.UnsupportedOperationException: the run's own three-state fold lands next"*) with
+        the answer each case is about behind it (*expected: PARTIAL but was: null*); and, over the
+        command, `an_email_sink_that_is_not_here_should_be_disabled_in_the_words_the_job_uses`
+        (*"...delivered_email=skipped ... to contain: delivered_email=disabled"*) and
+        `a_context_with_no_log_sink_should_exit_could_not`
+        (*"...delivered_log=failed ... to contain: delivered_log=disabled"*), which is the same
+        divergence about the other field.
+      * **`duration_ms` was read off `System.nanoTime()`** (MEDIUM). The command holds an injected
+        clock, the job measures its own run on one, and a field measured off a second, un-injected
+        clock is a field no case can state a value for - which is why the only assertion about it
+        was that the key was present. It is measured between the invocation opening its correlation
+        and the last line now, off the clock it was handed, and one reading of now serves the
+        window's end and the duration's start. Red
+        `the_last_line_should_carry_duration_ms_from_the_clock` (*"...outcome=delivered
+        duration_ms=0 to contain: duration_ms=250"*) under a clock the case advances inside
+        `deliver`.
+      * **the `email-output-not-wired` branch named a setting that is correct** (LOW), and its
+        constant still described itself as waiting for Phase 7 (spec-validator, LOW). Phase 7's
+        `ReportEmailConfig` declares the e-mail sink on exactly the condition this command reads, so
+        the branch is unreachable on a deployed context. **It is kept, deliberately**: nothing in
+        the command's own type says so - the sinks are handed in - and the alternative to declining
+        is running log-only while an operator believes support was e-mailed. What changed is the
+        line, which names `sink=email` rather than a setting that is on and right. Red
+        `email_asked_where_the_output_is_on_and_no_sink_is_wired_should_name_the_sink`
+        (*"...reason=email-output-not-wired setting=courtregister.report.email.enabled to contain:
+        sink=email"*).
+      * **`GenerationLegs` kept the length of every line the on-demand report wrote and read none
+        of them back** (LOW). A write-only field is a field a later reader has to work out the
+        purpose of before they can be sure deleting it is safe. The consumer refuses a null instead,
+        which is the one thing that fixture has an opinion on about those lines. Closed at
+        `b749460`.
+      * **the ordering claim was a comment, not an assertion** (QA). The command's case for "the
+        last line is written after every sink has returned" read the last line and nothing about
+        when it was written. The sink now reads the printed lines at the moment it is asked to
+        deliver, exactly as `ExceptionReportJobTest`'s equivalent reads the captured log, and the
+        run line is not among them. **Green on introduction**, and said so here rather than left to
+        look like a red: the ordering was already right. The job's own case was found equally
+        strong already and was not touched.
+      * **five refusals and one quiet window were asserted on one line of what they print** (QA).
+        The e-mail decline was asserted on `printed.getFirst()` and the empty window on one line of
+        three; both are asserted over every line they write now - the decline is the refusal and the
+        usage line and nothing else, and a quiet window is the saying-so line, the five zeroes with
+        their window, and the run's own line. The future instant joins
+        `the_refusal_should_name_since_and_never_quote_the_token`, the boundary an instant exactly
+        now falls on is pinned as the refusal the code makes it
+        (`an_instant_exactly_now_should_be_refused`), and `--since` and `--email` given twice are
+        pinned as refusals that name the argument in `ArgsTest`
+        (`since_and_email_given_twice_should_be_refused_by_name`). All **green on introduction**.
+      * **the documentation had drifted from the code in four places** (spec-validator, LOW).
+        spec.md's US3 scenario 1 said the output "ends with the five counts", which the counts line
+        is not - the run's own line is last, and that line is the one a runbook step reads;
+        data-model.md's paragraph about the command's last line did not say that `duration_ms` is
+        measured from the correlation being opened, nor that the fold and the word behind the other
+        fields are shared with the job; data-model.md and quickstart.md both glossed
+        `delivered_email=disabled` as the **setting** being false, which is its cause and not what
+        either caller reads - both read presence off the sinks the context contributed, and saying
+        otherwise is what let the two copies diverge in the first place; and T052's tick narrative
+        said one case landed beyond the task's list when two did - `--help` is the second. All four
+        corrected in this commit.
+      Nothing in this gate changed an outbound contract, a bounded reason an operator's tooling
+      already greps, or the five existing commands. `email-output-disabled` still names its setting,
+      the exit codes are unchanged, and `delivered_email=disabled` is the word both callers now use
+      for the context the MVP deploys.
+      Phase close, the second half: `./gradlew build -Dtest.noFailFast=true` BUILD SUCCESSFUL,
+      exit 0, TESTS_LINE; Checkstyle at `maxWarnings = 0` over main and test, PMD over both, and the
+      JaCoCo gate at LINE 0.88 / BRANCH 0.85, none of them loosened.
+      **The finding gate 5 deferred is still deferred**: several shipped javadoc comments cite
+      `.claude/rules/design_rules.md` by path, `ExceptionReportJob` among them, and the sweep that
+      respells them belongs with Phase 8's documentation sync. No code changed for it here.)
 
 **Checkpoint**: US3 is independently demonstrable through quickstart.md's `docker compose exec app
 /startup.sh report-exceptions --since 2h`.

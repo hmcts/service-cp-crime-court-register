@@ -99,9 +99,10 @@ field name that differs between the two is a field somebody greps for and does n
 
 The **last line is always written**, and it is the command's equivalent of the 07:00 job's
 `exception_report_run` line: the same `delivered_log`, `delivered_email` and `outcome` words, written
-after every sink has returned. `delivered_email` is `skipped` without `--email` and `disabled` where
-`courtregister.report.email.enabled` is false, because "nobody asked" and "nobody could" are
-different facts.
+after every sink has returned - the same `ReportRunOutcome.from` and the same `DeliveryWord`, not a
+copy of each. `delivered_email` is `skipped` without `--email` and `disabled` where there is no
+e-mail sink on the context at all, which is what `courtregister.report.email.enabled=false`
+produces, because "nobody asked" and "nobody could" are different facts.
 
 No line carries a recipient address, masked or otherwise: no read this feature makes selects one.
 A failed send is named by its notification id, its batch and its response code. Nor does a

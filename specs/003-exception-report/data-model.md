@@ -672,14 +672,18 @@ event=exception_report_run run_id=<id> window_from=<instant> window_to=<instant>
 | `window_from`, `window_to` | the window that was read |
 | `entries` | how many exceptions the report holds, across all five kinds |
 | `delivered_log` | `ok` or `failed` |
-| `delivered_email` | `ok`, `failed`, `skipped` (the command was run without `--email`) or `disabled` (`courtregister.report.email.enabled` is false, so there is no sink on the context) |
+| `delivered_email` | `ok`, `failed`, `skipped` (the command was run without `--email`) or `disabled` (there is no e-mail sink on the context, which is what `courtregister.report.email.enabled=false` produces). Both callers read presence off the sinks the context contributed, never off the setting |
 | `outcome` | `delivered` (every sink asked said ok), `partial` (at least one sink asked failed and at least one said ok), or `failed` (the run could not build the report, or no sink asked said ok) |
 | `duration_ms` | how long the run took, from opening the correlation to writing this line |
 
 It is a flat line rather than a structured event for the reason the run report already is one: it is
 one line per run, read by eye and by a single-field filter, not a row a saved query aggregates.
-`ReportExceptionsCli` prints the **equivalent** as its last line, so an on-demand run says the same
-four things about its own delivery that the 07:00 run does.
+`ReportExceptionsCli` prints the **equivalent** as its last line, with the same nine fields in the
+same order - `duration_ms` included, measured on the injected clock between the invocation opening
+its correlation and writing this line, exactly as the job measures its own - so an on-demand run
+says the same things about its own delivery that the 07:00 run does. The fold behind `outcome` and
+the word behind each `delivered_*` field are `ReportRunOutcome.from` and `DeliveryWord.forSink`, used by both
+callers: two copies are two ways for a dashboard and a terminal to partition the same morning.
 
 ### `courtregister_exception` - once per exception
 
