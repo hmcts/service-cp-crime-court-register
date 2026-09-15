@@ -32,6 +32,9 @@
                 <logLevel/>
                 <!-- MDC after the fixed columns so timestamp leads every line in a terminal -->
                 <mdc/>
+                <!-- The exception report's kv(...) arguments, as top-level fields: without this
+                     they are rendered into the message and every saved query needs parse() -->
+                <arguments/>
                 <pattern>
                     <pattern>{"exception": "%xException{full}"}</pattern>
                 </pattern>
