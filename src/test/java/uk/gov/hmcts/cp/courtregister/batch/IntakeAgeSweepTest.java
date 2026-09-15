@@ -27,6 +27,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.scheduling.annotation.Scheduled;
+import uk.gov.hmcts.cp.courtregister.config.IntakeSweepConfig;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.ProcessedRequestSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
@@ -275,6 +276,19 @@ class IntakeAgeSweepTest {
                 .as("no lock, on purpose: a gauge describes the JVM that publishes it, so a locked "
                         + "sweep would show one pod's view under every pod's labels")
                 .isNull();
+    }
+
+    @Test
+    void the_intake_sweep_names_its_own_scheduler() throws NoSuchMethodException {
+        final Scheduled schedule = IntakeAgeSweep.class.getDeclaredMethod("sweepScheduled")
+                .getAnnotation(Scheduled.class);
+
+        assertThat(schedule == null ? null : schedule.scheduler())
+                .as("its own thread and not the run's: a refresh queued behind an 18:00 run that "
+                        + "overran would leave both readings frozen for the hour they matter "
+                        + "most, and three TaskScheduler beans route nothing unless the method "
+                        + "names one (SC-008)")
+                .isEqualTo(IntakeSweepConfig.INTAKE_SWEEP_SCHEDULER);
     }
 
     /**

@@ -28,6 +28,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
 import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
+import uk.gov.hmcts.cp.courtregister.config.ReportSchedulingConfig;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryStatus;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionReport;
@@ -127,6 +128,19 @@ class ExceptionReportJobTest {
                 .isEqualTo("exception-report")
                 .isNotEqualTo(RegisterGenerationJob.LOCK_NAME)
                 .isNotEqualTo(GenerationReconciler.LOCK_NAME);
+    }
+
+    @Test
+    void the_report_names_the_report_scheduler() throws NoSuchMethodException {
+        final Scheduled schedule = ExceptionReportJob.class.getDeclaredMethod("run")
+                .getAnnotation(Scheduled.class);
+
+        assertThat(schedule == null ? null : schedule.scheduler())
+                .as("three TaskScheduler beans route nothing by themselves - Spring resolves one "
+                        + "scheduler for @Scheduled processing unless the method names one, so "
+                        + "without this attribute the 07:00 run could be queued behind an 18:00 "
+                        + "one and SC-008's separation would be a comment")
+                .isEqualTo(ReportSchedulingConfig.REPORT_SCHEDULER);
     }
 
     @Test

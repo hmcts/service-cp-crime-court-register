@@ -47,6 +47,7 @@ import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties.SourceMode;
+import uk.gov.hmcts.cp.courtregister.config.SchedulingConfig;
 import uk.gov.hmcts.cp.courtregister.domain.AssembledBatch;
 import uk.gov.hmcts.cp.courtregister.domain.BatchAssembly;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
@@ -2307,6 +2308,26 @@ class RegisterGenerationJobTest {
                             + "still inside its hour would be joined by the replica that took the "
                             + "lock it had already lost")
                     .isGreaterThan(RUN_DEADLINE);
+        }
+
+        /**
+         * And the scheduler the run goes on, named rather than left to Spring to resolve.
+         *
+         * <p>Three {@code TaskScheduler} beans route nothing by themselves: {@code @Scheduled}
+         * processing resolves a single scheduler for the context unless the method names one, so
+         * without this attribute the 07:00 report and the fixed-delay gauge refresh could land on
+         * the thread an 18:00 run is holding, and SC-008's separation would be a comment. The
+         * constant names the bean that already exists; no bean is added, renamed or moved.
+         */
+        @Test
+        void the_run_names_the_generation_scheduler() throws NoSuchMethodException {
+            final Scheduled schedule = RegisterGenerationJob.class.getDeclaredMethod("run")
+                    .getAnnotation(Scheduled.class);
+
+            softly.assertThat(schedule == null ? null : schedule.scheduler())
+                    .as("the run keeps the executor it has always had, and says so: an attribute "
+                            + "nobody asserts is an attribute a later edit removes")
+                    .isEqualTo(SchedulingConfig.GENERATION_SCHEDULER);
         }
 
         /**
