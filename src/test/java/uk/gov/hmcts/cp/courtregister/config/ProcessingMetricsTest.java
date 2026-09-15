@@ -6,9 +6,12 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.Tag;
+import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import java.lang.reflect.Method;
+import java.time.Duration;
 import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -16,8 +19,12 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
+import uk.gov.hmcts.cp.courtregister.domain.DeliveryStatus;
+import uk.gov.hmcts.cp.courtregister.domain.ExceptionKind;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
 import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
+import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 
@@ -61,6 +68,11 @@ class ProcessingMetricsTest {
     private double gauge(final String name) {
         final Gauge gauge = registry.find(name).gauge();
         return gauge == null ? ABSENT : gauge.value();
+    }
+
+    private double timer(final String name, final String tag, final String value) {
+        final Timer found = registry.find(name).tag(tag, value).timer();
+        return found == null ? ABSENT : found.count();
     }
 
     private List<String> tagKeysOf(final String name) {
@@ -462,18 +474,199 @@ class ProcessingMetricsTest {
         }
     }
 
+    /**
+     * The four instruments design section 11 promised and 001 never built, plus the counter that
+     * makes the sweep's one absorbed refusal visible.
+     *
+     * <p>Two gauges about the intake half, a timer over the run that produced them, and four
+     * counters about the morning report. They are asserted together because they share one rule:
+     * every label is drawn from a closed enumeration, and none of them is ever an identifier. On a
+     * register whose every defendant is a youth, a label that could name one is a privacy breach
+     * before it is a cardinality problem, and a metric label is a log line kept for a year.
+     */
+    @Nested
+    @DisplayName("the intake gauges, the duration timer and the four report counters")
+    class TheReportInstruments {
+
+        @Test
+        void the_two_intake_gauges_exist_from_construction_and_read_zero() {
+            // Registered in the constructor, not on first use: a gauge that only appears after the
+            // first incident is not an alerting surface, which is the argument this class already
+            // makes for `courtregister_intake_suspended`. A healthy pod that has swept once and
+            // found nothing reads zero, and zero is a reading rather than an absence.
+            assertThat(gauge(ProcessingMetrics.OLDEST_NON_TERMINAL_REQUEST_AGE))
+                    .as("the oldest unfinished request, in seconds, from a pod that has swept "
+                            + "nothing yet")
+                    .isZero();
+            assertThat(gauge(ProcessingMetrics.NON_TERMINAL_REQUESTS_OVER_THRESHOLD))
+                    .as("and how many of them are over the intake threshold")
+                    .isZero();
+        }
+
+        @Test
+        void the_request_duration_timer_is_tagged_only_by_its_terminal_outcome() {
+            metrics.requestSettled(metrics.startRequestTiming(), RequestStatus.COMPLETED);
+            metrics.requestSettled(metrics.startRequestTiming(), RequestStatus.FAILED);
+
+            assertThat(timer(ProcessingMetrics.REQUEST_DURATION, "outcome", "completed"))
+                    .as("one sample per terminal transition the guard accepted")
+                    .isEqualTo(1);
+            assertThat(timer(ProcessingMetrics.REQUEST_DURATION, "outcome", "failed"))
+                    .isEqualTo(1);
+            assertThat(tagKeysOf(ProcessingMetrics.REQUEST_DURATION))
+                    .as("the terminal outcome and nothing else — not the source, not the reason, "
+                            + "and never the request")
+                    .containsExactly("outcome");
+        }
+
+        @Test
+        void the_timing_token_is_opaque_and_carries_no_micrometer_type_into_the_caller()
+                throws NoSuchMethodException {
+            final Method start = ProcessingMetrics.class.getMethod("startRequestTiming");
+            final Method stop = ProcessingMetrics.class.getMethod(
+                    "requestSettled", ProcessingMetrics.Timing.class, RequestStatus.class);
+
+            assertThat(start.getReturnType())
+                    .as("the start method answers a token of this class's own, not a Timer.Sample: "
+                            + "a Micrometer type here would be a Micrometer type in application/ "
+                            + "(Principle V)")
+                    .isEqualTo(ProcessingMetrics.Timing.class);
+            assertThat(stop.getReturnType()).isEqualTo(void.class);
+            assertThat(ProcessingMetrics.Timing.class.getFields())
+                    .as("nothing on the token is reachable, so the caller can do nothing with it "
+                            + "but give it back")
+                    .isEmpty();
+            assertThat(Stream.of(ProcessingMetrics.Timing.class.getMethods())
+                    .filter(method -> method.getDeclaringClass()
+                            .equals(ProcessingMetrics.Timing.class))
+                    .toList())
+                    .isEmpty();
+            assertThat(Stream.of(ProcessingMetrics.Timing.class.getDeclaredConstructors())
+                    .map(constructor -> constructor.canAccess(null))
+                    .toList())
+                    .as("and nobody outside this class mints one")
+                    .containsOnly(false);
+        }
+
+        @Test
+        void the_four_counters_carry_only_bounded_labels() {
+            exerciseTheReportCounters();
+
+            assertThat(tagKeysOf(ProcessingMetrics.EXCEPTION_REPORT_RUNS))
+                    .containsExactly("outcome");
+            assertThat(tagKeysOf(ProcessingMetrics.EXCEPTION_REPORT_DELIVERIES))
+                    .containsExactlyInAnyOrder("sink", "outcome");
+            assertThat(tagKeysOf(ProcessingMetrics.EXCEPTIONS_REPORTED)).containsExactly("kind");
+            assertThat(tagKeysOf(ProcessingMetrics.INTAKE_SWEEP_FAILURES))
+                    .as("the sweep's absorbed read failure, counted under a bounded reason — a "
+                            + "path that drops something moves a counter")
+                    .containsExactly("reason");
+
+            assertThat(seriesOf(ProcessingMetrics.EXCEPTION_REPORT_RUNS))
+                    .as("the same three words the run line carries")
+                    .containsExactlyInAnyOrder("delivered", "partial", "failed");
+            assertThat(seriesOf(ProcessingMetrics.EXCEPTIONS_REPORTED))
+                    .as("all five kinds, because a sixth is a spec change rather than an addition")
+                    .containsExactlyInAnyOrder("request-failed", "request-late", "batch-late",
+                            "batch-failed", "notification-failed");
+            assertThat(seriesOf(ProcessingMetrics.EXCEPTION_REPORT_DELIVERIES))
+                    .containsExactlyInAnyOrder("log", "email", "delivered", "partially-delivered",
+                            "not-delivered");
+        }
+
+        @Test
+        void the_exceptions_counter_moves_by_the_number_reported() {
+            metrics.exceptionsReported(ExceptionKind.REQUEST_LATE, 3);
+            metrics.exceptionsReported(ExceptionKind.REQUEST_LATE, 2);
+
+            assertThat(counter(ProcessingMetrics.EXCEPTIONS_REPORTED, "kind", "request-late"))
+                    .as("a report carrying five late requests is five, not two reports")
+                    .isEqualTo(5);
+        }
+
+        @Test
+        void no_identifier_is_ever_a_label() {
+            metrics.oldestNonTerminalRequestAge(Duration.ofSeconds(90));
+            metrics.nonTerminalRequestsOverThreshold(2);
+            metrics.requestSettled(metrics.startRequestTiming(), RequestStatus.COMPLETED);
+            exerciseTheReportCounters();
+
+            assertThat(labelsOfTheNewInstruments())
+                    .as("no request id, hearing id, court centre id or address — the report is "
+                            + "about children, and a label outlives the incident it described")
+                    .containsExactlyInAnyOrder("outcome", "sink", "kind", "reason");
+            assertThat(valuesOfTheNewInstruments())
+                    .allSatisfy(value -> assertThat(value).matches("[a-z][a-z-]*"));
+        }
+
+        /** Every one of the four report counters, over every value its label can take. */
+        private void exerciseTheReportCounters() {
+            for (final String outcome : List.of("delivered", "partial", "failed")) {
+                metrics.exceptionReportRun(outcome);
+            }
+            for (final ReportSinkName sink : ReportSinkName.values()) {
+                for (final DeliveryStatus outcome : DeliveryStatus.values()) {
+                    metrics.exceptionReportDelivery(sink, outcome);
+                }
+            }
+            for (final ExceptionKind kind : ExceptionKind.values()) {
+                metrics.exceptionsReported(kind, 1);
+            }
+            metrics.intakeSweepFailure("store-unavailable");
+        }
+
+        /** Every distinct label value one instrument's series carry. */
+        private List<String> seriesOf(final String name) {
+            return registry.find(name).meters().stream()
+                    .flatMap(meter -> meter.getId().getTags().stream())
+                    .map(Tag::getValue)
+                    .distinct()
+                    .toList();
+        }
+
+        private List<String> labelsOfTheNewInstruments() {
+            return newInstruments().flatMap(meter -> meter.getId().getTags().stream())
+                    .map(Tag::getKey)
+                    .distinct()
+                    .toList();
+        }
+
+        private List<String> valuesOfTheNewInstruments() {
+            return newInstruments().flatMap(meter -> meter.getId().getTags().stream())
+                    .map(Tag::getValue)
+                    .distinct()
+                    .toList();
+        }
+
+        private Stream<Meter> newInstruments() {
+            final List<String> names = List.of(
+                    ProcessingMetrics.OLDEST_NON_TERMINAL_REQUEST_AGE,
+                    ProcessingMetrics.NON_TERMINAL_REQUESTS_OVER_THRESHOLD,
+                    ProcessingMetrics.REQUEST_DURATION,
+                    ProcessingMetrics.EXCEPTION_REPORT_RUNS,
+                    ProcessingMetrics.EXCEPTION_REPORT_DELIVERIES,
+                    ProcessingMetrics.EXCEPTIONS_REPORTED,
+                    ProcessingMetrics.INTAKE_SWEEP_FAILURES);
+            return registry.getMeters().stream()
+                    .filter(meter -> names.contains(meter.getId().getName()));
+        }
+    }
+
     @Nested
     @DisplayName("the surface as a whole")
     class Surface {
 
         @Test
-        void the_two_gauges_should_be_registered_before_anything_happens() {
+        void the_four_gauges_should_be_registered_before_anything_happens() {
             // Gauges are state, not events: a dashboard must be able to read them from a pod that
-            // has not yet seen a message.
+            // has not yet seen a message. The two intake ages join the two the intake half already
+            // published, under the same rule and for the same reason.
             assertThat(registry.getMeters().stream().map(meter -> meter.getId().getName()).toList())
                     .containsExactlyInAnyOrder(
                             ProcessingMetrics.INTAKE_SUSPENDED,
-                            ProcessingMetrics.SERVICEBUS_UP);
+                            ProcessingMetrics.SERVICEBUS_UP,
+                            ProcessingMetrics.OLDEST_NON_TERMINAL_REQUEST_AGE,
+                            ProcessingMetrics.NON_TERMINAL_REQUESTS_OVER_THRESHOLD);
         }
 
         @Test
@@ -488,6 +681,11 @@ class ProcessingMetricsTest {
             metrics.settlementFailed(SettlementOperation.ABANDON);
             metrics.lockLost();
             metrics.staleRunnerRejected();
+            metrics.requestSettled(metrics.startRequestTiming(), RequestStatus.COMPLETED);
+            metrics.exceptionReportRun("delivered");
+            metrics.exceptionReportDelivery(ReportSinkName.LOG, DeliveryStatus.DELIVERED);
+            metrics.exceptionsReported(ExceptionKind.REQUEST_LATE, 1);
+            metrics.intakeSweepFailure("store-unavailable");
 
             assertThat(registry.getMeters().stream()
                     .map(meter -> meter.getId().getName())
@@ -505,7 +703,14 @@ class ProcessingMetricsTest {
                             ProcessingMetrics.LOCK_LOSS,
                             ProcessingMetrics.STALE_RUNNER_REJECTIONS,
                             ProcessingMetrics.INTAKE_SUSPENDED,
-                            ProcessingMetrics.SERVICEBUS_UP);
+                            ProcessingMetrics.SERVICEBUS_UP,
+                            ProcessingMetrics.OLDEST_NON_TERMINAL_REQUEST_AGE,
+                            ProcessingMetrics.NON_TERMINAL_REQUESTS_OVER_THRESHOLD,
+                            ProcessingMetrics.REQUEST_DURATION,
+                            ProcessingMetrics.EXCEPTION_REPORT_RUNS,
+                            ProcessingMetrics.EXCEPTION_REPORT_DELIVERIES,
+                            ProcessingMetrics.EXCEPTIONS_REPORTED,
+                            ProcessingMetrics.INTAKE_SWEEP_FAILURES);
         }
 
         @Test
@@ -516,13 +721,16 @@ class ProcessingMetricsTest {
             metrics.transformationAnomaly(TransformationAnomaly.UNRESOLVABLE_YOUTH_DEFENDANT);
             metrics.deadLettered(DeadLetterReason.COLLISION);
             metrics.settlementFailed(SettlementOperation.COMPLETE);
+            metrics.exceptionReportDelivery(ReportSinkName.EMAIL, DeliveryStatus.NOT_DELIVERED);
+            metrics.exceptionsReported(ExceptionKind.BATCH_FAILED, 1);
 
             assertThat(registry.getMeters().stream()
                     .flatMap(meter -> meter.getId().getTags().stream())
                     .map(Tag::getKey)
                     .distinct()
                     .toList())
-                    .containsExactlyInAnyOrder("outcome", "classification", "reason", "operation");
+                    .containsExactlyInAnyOrder("outcome", "classification", "reason", "operation",
+                            "sink", "kind");
         }
 
         @Test
@@ -650,9 +858,16 @@ class ProcessingMetricsTest {
                 scraped.staleRunnerRejected();
                 scraped.intakeSuspended();
                 scraped.intakeSuspensionFailed();
+                scraped.requestSettled(scraped.startRequestTiming(), RequestStatus.FAILED);
+                scraped.exceptionReportRun("partial");
+                scraped.exceptionReportDelivery(ReportSinkName.EMAIL,
+                        DeliveryStatus.PARTIALLY_DELIVERED);
+                scraped.exceptionsReported(ExceptionKind.NOTIFICATION_FAILED, 1);
+                scraped.intakeSweepFailure("store-unavailable");
 
                 assertThat(scrapedLabelKeys())
-                        .containsExactly("classification", "operation", "outcome", "reason");
+                        .containsExactly("classification", "kind", "operation", "outcome", "reason",
+                                "sink");
             }
 
             @Test
@@ -674,12 +889,17 @@ class ProcessingMetricsTest {
             }
 
             @Test
-            @DisplayName("both gauges scrape from a pod that has seen nothing")
+            @DisplayName("all four gauges scrape from a pod that has seen nothing")
             void the_gauges_should_scrape_before_any_message_has_arrived() {
                 assertThat(samplesOf(ProcessingMetrics.INTAKE_SUSPENDED))
                         .containsExactly(ProcessingMetrics.INTAKE_SUSPENDED);
                 assertThat(samplesOf(ProcessingMetrics.SERVICEBUS_UP))
                         .containsExactly(ProcessingMetrics.SERVICEBUS_UP);
+                assertThat(samplesOf(ProcessingMetrics.OLDEST_NON_TERMINAL_REQUEST_AGE))
+                        .containsExactly(ProcessingMetrics.OLDEST_NON_TERMINAL_REQUEST_AGE);
+                assertThat(samplesOf(ProcessingMetrics.NON_TERMINAL_REQUESTS_OVER_THRESHOLD))
+                        .containsExactly(
+                                ProcessingMetrics.NON_TERMINAL_REQUESTS_OVER_THRESHOLD);
             }
         }
 

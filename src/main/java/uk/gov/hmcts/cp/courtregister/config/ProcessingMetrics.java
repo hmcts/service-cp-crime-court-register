@@ -3,14 +3,20 @@ package uk.gov.hmcts.cp.courtregister.config;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Duration;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import org.springframework.stereotype.Component;
 import uk.gov.hmcts.cp.courtregister.domain.CompletionReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
+import uk.gov.hmcts.cp.courtregister.domain.DeliveryStatus;
+import uk.gov.hmcts.cp.courtregister.domain.ExceptionKind;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
 import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
+import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
 import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 
@@ -52,11 +58,24 @@ public class ProcessingMetrics {
             "courtregister_stale_runner_rejections_total";
     public static final String INTAKE_SUSPENDED = "courtregister_intake_suspended";
     public static final String SERVICEBUS_UP = "courtregister_servicebus_up";
+    public static final String OLDEST_NON_TERMINAL_REQUEST_AGE =
+            "courtregister_oldest_non_terminal_request_age";
+    public static final String NON_TERMINAL_REQUESTS_OVER_THRESHOLD =
+            "courtregister_non_terminal_requests_over_threshold";
+    public static final String REQUEST_DURATION = "courtregister_request_duration";
+    public static final String EXCEPTION_REPORT_RUNS = "courtregister_exception_report_runs_total";
+    public static final String EXCEPTION_REPORT_DELIVERIES =
+            "courtregister_exception_report_deliveries_total";
+    public static final String EXCEPTIONS_REPORTED = "courtregister_exceptions_reported_total";
+    public static final String INTAKE_SWEEP_FAILURES =
+            "courtregister_intake_sweep_failures_total";
 
     public static final String OUTCOME_TAG = "outcome";
     public static final String CLASSIFICATION_TAG = "classification";
     public static final String REASON_TAG = "reason";
     public static final String OPERATION_TAG = "operation";
+    public static final String SINK_TAG = "sink";
+    public static final String KIND_TAG = "kind";
 
     private static final int UP = 1;
     private static final int DOWN = 0;
@@ -225,6 +244,108 @@ public class ProcessingMetrics {
      */
     public void bindServiceBusUp(final BooleanSupplier liveState) {
         serviceBusState.set(liveState);
+    }
+
+    /**
+     * Reports how old the oldest request that has not reached a terminal state is.
+     *
+     * @param age the age of the oldest RECEIVED or RETRYING request, or {@link Duration#ZERO}
+     *            where nothing is unfinished
+     */
+    public void oldestNonTerminalRequestAge(final Duration age) {
+        // T025 registers the gauge this sets.
+    }
+
+    /**
+     * Reports how many requests have been unfinished for longer than the intake threshold.
+     *
+     * @param count how many requests are over it, or zero where none is
+     */
+    public void nonTerminalRequestsOverThreshold(final int count) {
+        // T025 registers the gauge this sets.
+    }
+
+    /**
+     * Starts timing one admitted run.
+     *
+     * @return the token to hand back when the run reaches a terminal state
+     */
+    public Timing startRequestTiming() {
+        return new Timing();
+    }
+
+    /**
+     * Records how long an admitted run took to reach the terminal state the guard accepted.
+     *
+     * @param timing  the token {@link #startRequestTiming()} answered
+     * @param outcome the terminal state the run reached
+     */
+    public void requestSettled(final Timing timing, final RequestStatus outcome) {
+        // T025 records the sample this token holds.
+    }
+
+    /**
+     * Counts one exception-report run under the word its run line carries.
+     *
+     * @param outcome {@code delivered}, {@code partial} or {@code failed}
+     */
+    public void exceptionReportRun(final String outcome) {
+        // T025 registers the counter this moves.
+    }
+
+    /**
+     * Counts one sink's delivery of one report.
+     *
+     * @param sink    which sink delivered it
+     * @param outcome how completely it was delivered
+     */
+    public void exceptionReportDelivery(final ReportSinkName sink, final DeliveryStatus outcome) {
+        // T025 registers the counter this moves.
+    }
+
+    /**
+     * Counts the exceptions one report carried, by kind.
+     *
+     * @param kind  which of the five things was wrong
+     * @param count how many of them the report carried
+     */
+    public void exceptionsReported(final ExceptionKind kind, final int count) {
+        // T025 registers the counter this moves.
+    }
+
+    /**
+     * Counts a gauge refresh the intake sweep could not take.
+     *
+     * @param reason the bounded code for what stopped it, never a message
+     */
+    public void intakeSweepFailure(final String reason) {
+        // T025 registers the counter this moves.
+    }
+
+    /**
+     * How long a run has been going, as the one thing the application layer is handed.
+     *
+     * <p>Opaque on purpose. The timing underneath is a Micrometer sample, and a sample handed to
+     * {@code DistributionPipeline} would put the metrics library in the application layer for the
+     * sake of two lines (constitution Principle V, the same containment that keeps
+     * {@code StructuredArguments} inside one adapter). So the pipeline holds a token it can do
+     * nothing with except give back, and this class does the arithmetic.
+     */
+    public static final class Timing {
+
+        private Timing() {
+            // Minted by startRequestTiming and read by requestSettled; T025 gives it its sample.
+        }
+    }
+
+    /**
+     * The bounded label value an enumerated state is published under.
+     *
+     * @param state the enumerated state being labelled
+     * @return the label value for that state
+     */
+    private static String code(final Enum<?> state) {
+        return state.name().toLowerCase(Locale.ROOT).replace('_', '-');
     }
 
     private Counter counter(final String name) {
