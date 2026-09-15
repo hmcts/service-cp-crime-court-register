@@ -46,6 +46,22 @@ public final class LastScheduledRun {
     }
 
     /**
+     * The most recent occurrence of a cron, in a zone, at or before an instant.
+     *
+     * <p>The one a scheduled run asks: a run handed its trigger on the very instant it was due is
+     * asking about its own occurrence, and {@link #before(String, String, Instant)} would step a
+     * whole period back past it.
+     *
+     * @param cron    the schedule, in Spring's six-field dialect
+     * @param zone    the zone the schedule is read in
+     * @param instant the moment to look back from, which may itself be an occurrence
+     * @return the most recent occurrence at or before it
+     */
+    public static Instant atOrBefore(final String cron, final String zone, final Instant instant) {
+        throw new UnsupportedOperationException("the at-or-before occurrence is not computed yet");
+    }
+
+    /**
      * The most recent occurrence of a cron, in a zone, strictly before an instant.
      *
      * @param cron    the schedule, in Spring's six-field dialect

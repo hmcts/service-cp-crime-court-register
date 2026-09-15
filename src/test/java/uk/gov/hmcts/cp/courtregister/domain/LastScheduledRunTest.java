@@ -106,6 +106,25 @@ class LastScheduledRunTest {
     }
 
     @Test
+    void an_occurrence_at_the_instant_itself_is_answered_by_at_or_before_and_not_by_before() {
+        final Instant onTheHour = london(2026, 9, 15, 7, 0);
+
+        softly.assertThat(atOrBefore(REPORT_CRON, COURTS_ZONE, onTheHour))
+                .as("a run handed its trigger on the very instant it was due is asking about its "
+                        + "own occurrence, so at-or-before answers that instant rather than "
+                        + "stepping a whole period back and reporting a period twice")
+                .isEqualTo(onTheHour);
+        softly.assertThat(before(REPORT_CRON, COURTS_ZONE, onTheHour))
+                .as("and strictly-before still means strictly before, which is the question a "
+                        + "bare command asks at some moment between two runs")
+                .isEqualTo(london(2026, 9, 14, 7, 0));
+        softly.assertThat(atOrBefore(REPORT_CRON, COURTS_ZONE, london(2026, 9, 15, 9, 0)))
+                .as("away from an occurrence the two answer alike, which is what makes the "
+                        + "difference between them exactly the boundary and nothing else")
+                .isEqualTo(london(2026, 9, 15, 7, 0));
+    }
+
+    @Test
     void the_cron_and_the_zone_are_arguments_not_a_bound_setting() {
         final Instant wednesdayEvening = london(2026, 9, 16, 20, 0);
 
@@ -126,6 +145,10 @@ class LastScheduledRunTest {
 
     private Instant before(final String cron, final String zone, final Instant instant) {
         return answered(() -> LastScheduledRun.before(cron, zone, instant));
+    }
+
+    private Instant atOrBefore(final String cron, final String zone, final Instant instant) {
+        return answered(() -> LastScheduledRun.atOrBefore(cron, zone, instant));
     }
 
     private Instant answered(final Supplier<Instant> computation) {

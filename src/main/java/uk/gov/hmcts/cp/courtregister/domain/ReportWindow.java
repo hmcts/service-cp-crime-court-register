@@ -31,6 +31,19 @@ public record ReportWindow(Instant from, Instant to) {
     }
 
     /**
+     * The window a scheduled run covers: from the run before its own occurrence, to when it fired.
+     *
+     * @param cron    the report's schedule, in Spring's six-field dialect
+     * @param zone    the zone it is read in
+     * @param firedAt the moment the run was handed its trigger, which is the window's end
+     * @return the window from the previous run to the moment this one started
+     */
+    public static ReportWindow forScheduledRun(final String cron, final String zone,
+            final Instant firedAt) {
+        throw new UnsupportedOperationException("the scheduled run's window is not computed yet");
+    }
+
+    /**
      * The window a scheduled run covers: from the run before this one, to now.
      *
      * <p>Two steps back through {@link LastScheduledRun}, and the second step is the whole point.
