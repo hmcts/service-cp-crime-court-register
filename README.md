@@ -118,6 +118,7 @@ run with `kubectl exec`.
 ```bash
 ./gradlew build                 # compile + tests + PMD + Checkstyle (0 warnings) + JaCoCo gate
 ./gradlew test                  # test suite only; the *IT suites in it need Docker
+./gradlew test -PexcludeTags=timing  # the same, without the two wall-clock cases (see below)
 ./gradlew checkstyleMain        # style gate on main sources
 ./gradlew pmdMain               # PMD on main sources; `check` runs pmdMain and pmdTest as well
 ./gradlew jacocoTestReport      # coverage report → build/reports/jacoco
@@ -127,6 +128,12 @@ run with `kubectl exec`.
                                 # --since 1h` through the entrypoint that dispatches the
                                 # operations commands; neither of them writes anything
 ```
+
+Two cases in `ExceptionReportEndToEndIT` carry `@Tag("timing")`: SC-006's "ten thousand rows
+reported on inside ten seconds" and SC-008's "both schedules fired". They are real acceptance
+criteria and they stay in the default selection, but their answer depends on how busy the host is -
+so a developer building something else on the same machine can leave them out by name rather than by
+disabling the suite.
 
 Local dependencies:
 

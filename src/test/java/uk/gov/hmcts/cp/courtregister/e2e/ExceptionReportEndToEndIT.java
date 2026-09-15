@@ -109,14 +109,19 @@ class ExceptionReportEndToEndIT {
     /** How old the request still in flight is: past the shipped thirty-minute threshold. */
     private static final Duration FORTY_MINUTES = Duration.ofMinutes(40);
 
-    /** Recent enough to be inside any window either half of this suite opens. */
+    /** Recent enough to be inside the SC-006 command's own twenty-four-hour window. */
     private static final Duration A_FEW_MINUTES = Duration.ofMinutes(5);
+
+    /** The schedule the reporting pod runs on, which is also the window it reads. */
+    private static final String REPORT_CRON = "0 0 7 * * MON-FRI";
+
+    private static final String COURTS_ZONE = "Europe/London";
 
     /** The five kinds, one of each, which is what the first case seeds and asserts. */
     private static final int ONE_OF_EACH_KIND = 5;
 
     /** The number of fields data-model.md states the summary event carries. */
-    private static final int TEN_SUMMARY_FIELDS = 10;
+    private static final int ELEVEN_SUMMARY_FIELDS = 11;
 
     /** SC-006's window, in the shape {@code report-exceptions --since 24h} builds it. */
     private static final Duration SINCE_24H = Duration.ofHours(24);
@@ -191,11 +196,11 @@ class ExceptionReportEndToEndIT {
     @Test
     @DisplayName("one of each kind reaches the index, the attachment and every recipient")
     void a_morning_with_one_of_each_kind_should_be_reported_to_both_sinks() {
-        final UUID parked = seedRequest("FAILED", "store-unavailable", A_FEW_MINUTES);
+        final UUID parked = seedRequest("FAILED", "store-unavailable", insideTheWindow());
         final UUID inFlight = seedRequest("RETRYING", null, FORTY_MINUTES);
         final UUID stillRendering = seedGeneratingBatch(LONG_SINCE_REQUESTED);
-        final UUID deadBatch = seedFailedBatch(A_FEW_MINUTES);
-        final UUID refused = seedNotification(deadBatch, "FAILED", A_FEW_MINUTES);
+        final UUID deadBatch = seedFailedBatch(insideTheWindow());
+        final UUID refused = seedNotification(deadBatch, "FAILED", insideTheWindow());
 
         final List<ILoggingEvent> written = runTheMorningReport();
 
@@ -214,8 +219,8 @@ class ExceptionReportEndToEndIT {
 
         final Map<String, String> summary = fieldsOf(summaryEvent(written));
         assertThat(summary)
-                .as("ten fields, the five counts among them, present even where they are nought")
-                .hasSize(TEN_SUMMARY_FIELDS)
+                .as("eleven fields, the five counts among them, present even where they are nought")
+                .hasSize(ELEVEN_SUMMARY_FIELDS)
                 .containsEntry("event", SUMMARY_EVENT)
                 .containsEntry("request_failed", "1")
                 .containsEntry("request_late", "1")
@@ -263,7 +268,7 @@ class ExceptionReportEndToEndIT {
         final List<String> healthy = new ArrayList<>();
 
         for (int i = 0; i < 12; i++) {
-            failures.add(seedRequest("FAILED", "schema-violation", A_FEW_MINUTES).toString());
+            failures.add(seedRequest("FAILED", "schema-violation", insideTheWindow()).toString());
         }
         for (int i = 0; i < 10; i++) {
             failures.add(seedRequest("RETRYING", null, FORTY_MINUTES).toString());
@@ -272,9 +277,9 @@ class ExceptionReportEndToEndIT {
             failures.add(seedGeneratingBatch(LONG_SINCE_REQUESTED).toString());
         }
         for (int i = 0; i < 7; i++) {
-            final UUID dead = seedFailedBatch(A_FEW_MINUTES);
+            final UUID dead = seedFailedBatch(insideTheWindow());
             failures.add(dead.toString());
-            failures.add(seedNotification(dead, "FAILED", A_FEW_MINUTES).toString());
+            failures.add(seedNotification(dead, "FAILED", insideTheWindow()).toString());
         }
         for (int i = 0; i < 20; i++) {
             healthy.add(seedRequest("COMPLETED", null, A_FEW_MINUTES).toString());
@@ -428,6 +433,28 @@ class ExceptionReportEndToEndIT {
      *
      * @return the lines the run wrote, in the order it wrote them
      */
+    /**
+     * How long ago a row has to have failed to fall inside the window the 07:00 run will read.
+     *
+     * <p>The scheduled window is <strong>aligned to the schedule and half-open</strong>: it ends at
+     * the run's own occurrence, not at the moment the run fires. A row seeded "five minutes ago" is
+     * therefore after the end of the window on any morning this suite is run at a sensible hour,
+     * and the three window-bounded kinds would be missing from a report that is otherwise correct -
+     * which is a suite that fails at half past three and passes at five past seven.
+     *
+     * <p>So the age is computed from the window itself: five minutes before its end, which is
+     * inside it for any schedule whose period is longer than five minutes. The two late kinds are
+     * deliberately unbounded by the window and keep their own ages, because how long they have been
+     * wrong is the whole of what makes them late.
+     *
+     * @return the age to seed a window-bounded row at
+     */
+    private static Duration insideTheWindow() {
+        final Instant now = Instant.now();
+        final ReportWindow window = ReportWindow.forScheduledRun(REPORT_CRON, COURTS_ZONE, now);
+        return Duration.between(window.to().minus(A_FEW_MINUTES), now);
+    }
+
     private static List<ILoggingEvent> runTheMorningReport() {
         try (CapturedLog log = CapturedLog.capturing(SERVICE_LOGGERS)) {
             service.getBean(ExceptionReportJob.class).run();
