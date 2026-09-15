@@ -12,6 +12,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
 import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
+import uk.gov.hmcts.cp.courtregister.config.ReportSchedulingConfig;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryStatus;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionReport;
@@ -154,7 +155,9 @@ public class ExceptionReportJob {
      * inherited by whatever ran next on that thread. The work is handed in rather than the scope
      * handed out precisely so there is no way to call this and forget the removal.
      */
-    @Scheduled(cron = "${courtregister.report.cron}", zone = "${courtregister.report.zone}")
+    @Scheduled(cron = "${courtregister.report.cron}",
+            zone = "${courtregister.report.zone}",
+            scheduler = ReportSchedulingConfig.REPORT_SCHEDULER)
     @SchedulerLock(name = LOCK_NAME, lockAtMostFor = LOCK_AT_MOST_FOR)
     public void run() {
         RunCorrelation.under(this::report);

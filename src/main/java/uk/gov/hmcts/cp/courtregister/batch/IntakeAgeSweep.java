@@ -6,6 +6,7 @@ import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
+import uk.gov.hmcts.cp.courtregister.config.IntakeSweepConfig;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.ProcessedRequestSummary;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
@@ -84,7 +85,8 @@ public class IntakeAgeSweep {
      * or a future command - carries whatever correlation it opened for itself, which is the same
      * split {@code GenerationReconciler} makes between its scheduled pass and its counting one.
      */
-    @Scheduled(fixedDelayString = "${courtregister.intake.gauge-refresh}")
+    @Scheduled(fixedDelayString = "${courtregister.intake.gauge-refresh}",
+            scheduler = IntakeSweepConfig.INTAKE_SWEEP_SCHEDULER)
     public void sweepScheduled() {
         RunCorrelation.under(this::sweep);
     }
