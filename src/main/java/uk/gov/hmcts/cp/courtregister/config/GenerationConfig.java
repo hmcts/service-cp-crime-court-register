@@ -6,9 +6,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
-import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPause;
 import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
@@ -46,6 +43,14 @@ import uk.gov.hmcts.cp.courtregister.pipeline.PdfPayloadMapper;
  * profile.</strong> The whole of it is conditional on {@code courtregister.generation.enabled}, so
  * an intake-only pod builds none of it; and it needs the register store, which needs a
  * {@code DataSource}, which the {@code test} profile deliberately has none of.
+ *
+ * <p><strong>Which is why the two repositories are no longer here.</strong>
+ * {@code registerBatchRepository} and {@code registerNotificationRepository} were declared in this
+ * file, so "an intake-only pod builds none of it" took them with it - and the morning exception
+ * report reads both, on a pod that generates nothing. They are in {@link ProcessedLogConfig} now,
+ * beside the other readers of the same database and over the same client and transaction manager.
+ * Nothing about either class changed; only where its bean is declared. What is left here is what
+ * is generation-only, and every constructor below still takes them exactly as it did.
  */
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
@@ -54,55 +59,6 @@ public class GenerationConfig {
 
     /** The setting the register e-mail's template id arrives on, named by its own refusal. */
     private static final String EMAIL_TEMPLATE = "courtregister.email.templates.cr_standard";
-
-    /**
-     * The {@code register_batch} table.
-     *
-     * <p>Over the register store's own client, because a batch is the store's neighbour: the two
-     * write the same database and the reconciler reads this one while the store writes the other.
-     *
-     * <p>The transaction manager is the register store's own, so the two statements the
-     * notification claim is taken in - the advisory lock and the compare-and-set - run on the
-     * connection this client already joins. It is the only thing here that needs a transaction at
-     * all; every other statement is one statement.
-     *
-     * <p>The lease is {@code courtregister.notification.claim-lease} and not the reconciler's grace
-     * period. The two answer different questions: how long a batch may hold a document before the
-     * safety net looks is no bound at all on telling that batch's recipients, whose cost is the
-     * number of Youth Offending Teams it is addressed to times whatever notificationnotify makes of
-     * each of them. Startup refuses a lease that cannot cover one recipient's POST cycle twice over
-     * ({@link PropertiesValidator#NOTIFICATION_LEASE_MARGIN}).
-     *
-     * @param jdbcClient         the processed log's client, which is the register store's
-     * @param transactionManager the register store's transaction manager, for the claim's two
-     *                           statements
-     * @param properties         the bound settings, for the notification claim's lease
-     * @return the repository
-     */
-    @Bean
-    public RegisterBatchRepository registerBatchRepository(final JdbcClient jdbcClient,
-            final PlatformTransactionManager transactionManager,
-            final CourtRegisterProperties properties) {
-        return new RegisterBatchRepository(jdbcClient,
-                new TransactionTemplate(transactionManager),
-                properties.notification().claimLease());
-    }
-
-    /**
-     * The {@code register_notification} table.
-     *
-     * <p>Over the same client, and beside {@link #registerBatchRepository} rather than inside the
-     * store, for the reason that read is: one recipient's row is a single-table read and write that
-     * the register store has no business owning, and the notifier is the only thing that touches it.
-     *
-     * @param jdbcClient the processed log's client, which is the register store's
-     * @return the repository
-     */
-    @Bean
-    public RegisterNotificationRepository registerNotificationRepository(
-            final JdbcClient jdbcClient) {
-        return new RegisterNotificationRepository(jdbcClient);
-    }
 
     /**
      * The one lever's gate: the flag read, and what a run may do about the answer.
