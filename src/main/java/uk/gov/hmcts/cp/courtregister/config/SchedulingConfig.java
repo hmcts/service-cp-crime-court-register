@@ -68,6 +68,17 @@ import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 @EnableSchedulerLock(defaultLockAtMostFor = RegisterGenerationJob.LOCK_AT_MOST_FOR)
 public class SchedulingConfig {
 
+    /**
+     * The bean name of the scheduler the two generation surfaces run on.
+     *
+     * <p>The name of the bean {@link #registerGenerationScheduler()} already declares, published so
+     * that {@code @Scheduled(scheduler = ...)} on {@code RegisterGenerationJob.run} and
+     * {@code GenerationReconciler.reconcileScheduled} names a constant rather than a string spelled
+     * twice. No bean is added, renamed or moved by it: the two surfaces go on sharing one scheduler
+     * exactly as they do today, and only the routing stops being implicit.
+     */
+    public static final String GENERATION_SCHEDULER = "registerGenerationScheduler";
+
     /** The table V2 creates for the lock, named here because the provider will not guess it. */
     private static final String SHEDLOCK_TABLE = "shedlock";
 
