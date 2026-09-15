@@ -117,7 +117,15 @@ class ExceptionReportServiceTest {
     /** Ages seeded as the statements answered them, deliberately unrelated to the timestamps. */
     private static final long REQUEST_FAILED_AGE = 4_000L;
 
-    private static final long REQUEST_LATE_AGE = 9_000L;
+    /**
+     * Three days, which is the point of the case that reads it.
+     *
+     * <p>The late kinds are bounded by their threshold and not by the window, and the way that is
+     * asserted is that the seeded row is older than the window is wide - so a row a window-bounded
+     * read would have dropped is the one the report still carries. At 9 000 seconds it was inside
+     * a twenty-four hour window and the assertion could not hold whatever the service did.
+     */
+    private static final long REQUEST_LATE_AGE = 259_200L;
 
     private static final long PENDING_AGE = 2_000L;
 
