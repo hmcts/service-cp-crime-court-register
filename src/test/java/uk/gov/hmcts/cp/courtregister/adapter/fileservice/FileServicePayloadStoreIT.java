@@ -117,6 +117,31 @@ class FileServicePayloadStoreIT {
     private static final PayloadMetadata METADATA = new PayloadMetadata(
             FILE_NAME, CONVERSION_FORMAT, TEMPLATE_NAME, NUMBER_OF_PAGES, PAYLOAD_BYTES.length);
 
+    /**
+     * The exception report's CSV, with a quoted field and a multi-byte character in it.
+     *
+     * <p>What this file looks like is {@code EmailReportSinkStoreIT}'s claim and not this suite's -
+     * here it is a string with the two properties the write has to survive: bytes that are not
+     * ASCII, and a comma inside a quoted field, so a round trip that lost either says so.
+     */
+    private static final String CSV_TEXT =
+            "kind,court_centre,reason\nBATCH_FAILED,"
+                    + "\"Youth Court, M\u00f4n\",GENERATION_TIMED_OUT\n"; // o-circumflex
+
+    private static final byte[] CSV_BYTES = CSV_TEXT.getBytes(StandardCharsets.UTF_8);
+
+    /** The name the framework is told the CSV has, dated the run's own day in Europe/London. */
+    private static final String CSV_FILE_NAME = "court-register-exceptions_2026-09-15.csv";
+
+    /** The template name the exception report's attachment carries; not a rendering template. */
+    private static final String CSV_TEMPLATE_NAME = "courtregister-exception-report";
+
+    private static final String CSV_CONVERSION_FORMAT = "csv";
+
+    private static final PayloadMetadata CSV_METADATA = new PayloadMetadata(
+            CSV_FILE_NAME, CSV_CONVERSION_FORMAT, CSV_TEMPLATE_NAME, NUMBER_OF_PAGES,
+            CSV_BYTES.length);
+
     /** The framework's own content insert, character for character (data-model.md). */
     private static final String CONTENT_INSERT =
             "INSERT INTO content(file_id, content, deleted) VALUES (?, ?, false)";
@@ -241,6 +266,73 @@ class FileServicePayloadStoreIT {
     }
 
     @Nested
+    @DisplayName("the exception report's CSV, written as text")
+    class StoredText {
+
+        @Test
+        void store_text_issues_exactly_two_statements_content_before_metadata() {
+            storeCsv(fileId);
+
+            assertThat(issued())
+                    .as("the same licence and the same order as the payload write: INSERT and no "
+                            + "more, content before metadata because metadata.file_id is a foreign "
+                            + "key onto it, and no third statement - a second caller of somebody "
+                            + "else's database that wrote it differently would be a second "
+                            + "contract")
+                    .containsExactly(CONTENT_INSERT, METADATA_INSERT);
+        }
+
+        @Test
+        void store_text_writes_the_utf_8_bytes_of_the_string_into_the_bytea_column() {
+            storeCsv(fileId);
+
+            assertThat(contentOf(fileId).orElseThrow())
+                    .as("notificationnotify attaches whatever is under this id, so a lossy round "
+                            + "trip is an attachment support opens and cannot read - and the "
+                            + "fileSize beside it is the count of these bytes")
+                    .isEqualTo(CSV_BYTES);
+            assertThat(deletedOf(fileId))
+                    .as("a row that is deleted the moment it is written is an e-mail with nothing "
+                            + "attached")
+                    .contains(false);
+        }
+
+        @Test
+        void store_text_writes_the_five_metadata_keys() {
+            storeCsv(fileId);
+
+            final JsonNode metadata = MAPPER.readTree(metadataOf(fileId).orElseThrow());
+
+            assertThat(Set.copyOf(metadata.propertyNames()))
+                    .as("the five keys the framework spells, whatever the file is: a CSV is not a "
+                            + "reason to write a sixth key into somebody else's table")
+                    .containsExactlyInAnyOrder(
+                            "fileName", "conversionFormat", "templateName", "numberOfPages",
+                            "fileSize");
+            assertThat(metadata.get("fileName").stringValue()).isEqualTo(CSV_FILE_NAME);
+            assertThat(metadata.get("conversionFormat").stringValue())
+                    .isEqualTo(CSV_CONVERSION_FORMAT);
+            assertThat(metadata.get("templateName").stringValue()).isEqualTo(CSV_TEMPLATE_NAME);
+            assertThat(metadata.get("numberOfPages").intValue()).isEqualTo(NUMBER_OF_PAGES);
+            assertThat(metadata.get("fileSize").longValue())
+                    .as("the byte count and not the character count, which for this CSV are not "
+                            + "the same number")
+                    .isEqualTo(CSV_BYTES.length);
+        }
+
+        @Test
+        void a_csv_that_could_not_be_written_should_be_reported_as_the_store_being_unavailable() {
+            assertThatThrownBy(
+                    () -> storeWithNoFileService.storeText(fileId, CSV_TEXT, CSV_METADATA))
+                    .as("the sink reports ATTACHMENT_STORE_UNAVAILABLE and sends nothing on this, "
+                            + "which it can only decide if what it catches is this service's own "
+                            + "signal rather than the driver's")
+                    .isInstanceOf(PayloadStoreUnavailableException.class)
+                    .hasMessageNotContaining("localhost");
+        }
+    }
+
+    @Nested
     @DisplayName("a file service that cannot be reached")
     class Unavailable {
 
@@ -276,6 +368,16 @@ class FileServicePayloadStoreIT {
         assertThatCode(() -> store.store(id, PAYLOAD, METADATA))
                 .as("a healthy file service and a payload the mapper produced: the write is "
                         + "expected to happen, and everything else here reads back what it wrote")
+                .doesNotThrowAnyException();
+    }
+
+    /**
+     * Stores the fixture CSV, insisting the write happened, exactly as {@link #storePayload} does.
+     */
+    private static void storeCsv(final UUID id) {
+        assertThatCode(() -> store.storeText(id, CSV_TEXT, CSV_METADATA))
+                .as("a healthy file service and a CSV the sink rendered: the write is expected to "
+                        + "happen, and everything else here reads back what it wrote")
                 .doesNotThrowAnyException();
     }
 
