@@ -536,7 +536,7 @@ class ExceptionReportServiceTest {
         when(registers.recordedUnbatchedBefore(any())).thenReturn(List.of(leftBehind()));
     }
 
-    private static List<String> names(final Enum<?>[] values) {
+    private static List<String> names(final Enum<?>... values) {
         return Arrays.stream(values).map(Enum::name).toList();
     }
 

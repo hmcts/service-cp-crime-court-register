@@ -249,12 +249,12 @@ class ExceptionReportDeliveryTest {
     /** A sink that takes whatever it is given, and remembers what that was. */
     private static final class RecordingSink implements ExceptionReportSink {
 
-        private final ReportSinkName name;
+        private final ReportSinkName sinkName;
 
         private final List<ExceptionReport> delivered = new ArrayList<>();
 
-        private RecordingSink(final ReportSinkName name) {
-            this.name = name;
+        private RecordingSink(final ReportSinkName sinkName) {
+            this.sinkName = sinkName;
         }
 
         static RecordingSink taking(final ReportSinkName name) {
@@ -263,30 +263,30 @@ class ExceptionReportDeliveryTest {
 
         @Override
         public ReportSinkName name() {
-            return name;
+            return sinkName;
         }
 
         @Override
         public DeliveryOutcome deliver(final ExceptionReport report) {
             delivered.add(report);
-            return DeliveryOutcome.delivered(name);
+            return DeliveryOutcome.delivered(sinkName);
         }
     }
 
     /** A sink that refuses, and counts how many times it was asked to. */
     private static final class CountingSink implements ExceptionReportSink {
 
-        private final ReportSinkName name;
+        private final ReportSinkName sinkName;
 
         private int asked;
 
-        private CountingSink(final ReportSinkName name) {
-            this.name = name;
+        private CountingSink(final ReportSinkName sinkName) {
+            this.sinkName = sinkName;
         }
 
         @Override
         public ReportSinkName name() {
-            return name;
+            return sinkName;
         }
 
         @Override
