@@ -43,6 +43,24 @@ public class StubPayloadFileStore implements PayloadFileStore {
                 fileId, metadata.templateName(), metadata.conversionFormat(), metadata.fileSize());
     }
 
+    /**
+     * A seam, and deliberately not yet a no-op like {@link #store} beside it.
+     *
+     * <p>The port method exists so the e-mail sink can be built against it; the write itself lands
+     * with that sink. Until then this refuses rather than pretends, because a stub that accepted a
+     * CSV and wrote nothing would mint a file id that notificationnotify would later find no file
+     * under - an e-mail with a missing attachment rather than an e-mail that was never sent, which
+     * is the harder of the two to notice.
+     *
+     * <p><strong>When the e-mail sink lands, this must become a logging no-op</strong> in the shape
+     * {@code store} is written in - one line, saying plainly that nothing was written and under
+     * which id - so that a context on the stub profile can compose a report e-mail end to end
+     * without a refusal from a store nobody asked to be real.
+     *
+     * @param fileId   the id the caller minted and wrote down before asking
+     * @param text     the CSV
+     * @param metadata what the file service would have been told about it
+     */
     @Override
     public void storeText(final UUID fileId, final String text, final PayloadMetadata metadata) {
         throw new UnsupportedOperationException("the stubbed text write is not written yet");

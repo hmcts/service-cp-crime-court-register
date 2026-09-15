@@ -771,13 +771,19 @@ public class RegisterBatchRepository {
      * <p>Written once because they are one shape: the report is asking each of the four stages the
      * same question, and four copies of the binding would be four places for the projection to
      * drift apart.
+     *
+     * <p>Translated like every other statement in this class. A morning the database is away must
+     * reach the report as this service's own signal, under a bounded reason it can count the run
+     * failed by - not as a {@code org.springframework.dao} type the application layer never
+     * classified (Principle V).
      */
     private List<BatchException> exceptions(final String sql, final String parameter,
             final Instant cutoff) {
-        return jdbcClient.sql(sql)
-                .param(parameter, offsetOf(cutoff))
-                .query((rs, rowNumber) -> exception(rs))
-                .list();
+        return StoreOutage.translating("read the batches the report asks about",
+                () -> jdbcClient.sql(sql)
+                        .param(parameter, offsetOf(cutoff))
+                        .query((rs, rowNumber) -> exception(rs))
+                        .list());
     }
 
     /**

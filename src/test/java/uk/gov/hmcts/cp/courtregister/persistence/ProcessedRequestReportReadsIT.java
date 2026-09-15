@@ -22,6 +22,7 @@ import java.util.function.Supplier;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -90,6 +91,12 @@ class ProcessedRequestReportReadsIT {
     static void migrate() {
         database = ReportReadsDatabase.migrated(DATABASE);
         repository = new ProcessedRequestRepository(database.jdbcClient(), LEASE);
+    }
+
+    /** The database goes with the suite, so its name is free for a second load of this class. */
+    @AfterAll
+    static void dropTheDatabase() {
+        database.drop();
     }
 
     @BeforeEach

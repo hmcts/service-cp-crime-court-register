@@ -336,6 +336,12 @@ public class JdbcRegisterStore implements RegisterStore {
      * <p>The cut-off is the most recent scheduled generation run, which the caller computed and
      * passed in; a boundary a caller chose is a statement of what was asked for rather than a
      * comparison of two clocks.
+     *
+     * <p>Ordered on the same two columns {@code ACTIVE_UNBATCHED} orders on, and for the same
+     * reason: a court centre's registers are recorded inside one microsecond often enough that
+     * {@code register_time} alone is no order at all, so without the tie-break two runs of one
+     * report list the same morning two ways and this read stops agreeing with the one it shares a
+     * predicate with.
      */
     private static final String RECORDED_UNBATCHED_BEFORE = """
             SELECT output_id, hearing_id, court_centre_id, register_date, register_time,
@@ -343,7 +349,7 @@ public class JdbcRegisterStore implements RegisterStore {
               FROM processed_output
             """ + ACTIVE_UNBATCHED_PREDICATE + """
                AND register_time < :recordedBefore
-             ORDER BY register_time
+             ORDER BY register_time, output_id
             """;
 
     /**

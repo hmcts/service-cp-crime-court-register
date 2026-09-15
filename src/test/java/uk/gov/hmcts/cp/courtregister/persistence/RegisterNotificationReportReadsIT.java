@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -87,6 +88,12 @@ class RegisterNotificationReportReadsIT {
         batches = new RegisterBatchRepository(database.jdbcClient(), database.transactions(),
                 NOTIFIER_LEASE);
         repository = new RegisterNotificationRepository(database.jdbcClient());
+    }
+
+    /** The database goes with the suite, so its name is free for a second load of this class. */
+    @AfterAll
+    static void dropTheDatabase() {
+        database.drop();
     }
 
     @BeforeEach

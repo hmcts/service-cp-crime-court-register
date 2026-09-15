@@ -146,6 +146,31 @@ public final class PostgresTestSupport {
     }
 
     /**
+     * Removes one database from the shared container, severing whatever is still attached to it.
+     *
+     * <p>The counterpart of {@link #createEmptyDatabase(String)}, for the suites that take a
+     * database of their own. Without it the name survives its suite for the life of the JVM, and a
+     * second {@code CREATE DATABASE} under the same name - a suite loaded twice, a retried run -
+     * fails in a {@code @BeforeAll} rather than in a case, which is a fixture error where an
+     * assertion should be.
+     *
+     * <p>Idempotent, and it refuses connections first: {@code DROP DATABASE} is refused while
+     * anything is attached, and an {@code @AfterAll} that threw would replace whatever the suite
+     * really did with a teardown failure.
+     *
+     * @param name the database to remove
+     */
+    public static void dropDatabase(final String name) {
+        onTheServer(name,
+                "ALTER DATABASE " + name + " WITH ALLOW_CONNECTIONS false",
+                // The name is a validated plain identifier, so it cannot carry a quote and this
+                // literal cannot be anything but a database name.
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '"
+                        + name + '\'',
+                "DROP DATABASE IF EXISTS " + name);
+    }
+
+    /**
      * Lets connections back into a database, whether or not they were refused.
      *
      * <p>Idempotent deliberately, for the reason {@link #unpause()} is: the suites that stage this

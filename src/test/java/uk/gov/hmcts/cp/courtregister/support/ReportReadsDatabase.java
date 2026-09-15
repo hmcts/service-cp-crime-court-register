@@ -73,6 +73,17 @@ public final class ReportReadsDatabase {
     }
 
     /**
+     * Removes this database from the container, so the name is free again.
+     *
+     * <p>Called from each suite's {@code @AfterAll}. One JVM runs all four of these suites, and a
+     * database that outlived its suite would make a second {@code migrated(...)} under the same
+     * name - a class loaded twice, a retried run - fail where no case can report it.
+     */
+    public void drop() {
+        PostgresTestSupport.dropDatabase(databaseName);
+    }
+
+    /**
      * The database's name, for the outage a case stages against it.
      *
      * @return the database name
