@@ -7,6 +7,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -32,7 +34,6 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 import uk.gov.hmcts.cp.courtregister.domain.RequestFingerprint;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
-import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.ReportReadsDatabase;
 
 /**
@@ -82,9 +83,23 @@ class RegisterStoreReportReadsIT {
     private static final String SEAM =
             "the report's recorded-unbatched read implements this statement; this is its red run";
 
-    private static final Duration A_LONG_WAY = Duration.ofHours(1);
-
     private static final long SECONDS_OF_SLACK = 5;
+
+    /** Enough registers on one moment that an accidental agreement with insertion order is remote. */
+    private static final int TIED_REGISTERS = 6;
+
+    /**
+     * How Postgres orders a {@code uuid} column, which is <strong>not</strong> how
+     * {@link UUID#compareTo(UUID)} does.
+     *
+     * <p>Postgres compares the sixteen bytes unsigned, big-endian; Java compares the two halves as
+     * signed longs, so the two disagree about every pair whose leading bit differs. A case that
+     * asserted the database's order against Java's would pass or fail on which random identities it
+     * happened to mint, which is the flake this comparator exists to remove.
+     */
+    private static final Comparator<UUID> AS_POSTGRES_ORDERS_THEM =
+            Comparator.comparing(UUID::getMostSignificantBits, Long::compareUnsigned)
+                    .thenComparing(UUID::getLeastSignificantBits, Long::compareUnsigned);
 
     private static ReportReadsDatabase database;
     private static RegisterStore store;
@@ -155,25 +170,46 @@ class RegisterStoreReportReadsIT {
     }
 
     @Test
-    void age_seconds_is_computed_by_the_database_from_register_time() {
+    void registers_recorded_at_the_same_moment_are_answered_in_output_id_order() {
+        final Instant sameMoment = minutesAgo(90);
+        final List<UUID> recorded = new ArrayList<>();
+        for (int register = 0; register < TIED_REGISTERS; register++) {
+            recorded.add(record(UUID.randomUUID(), sameMoment, RecordedFlagState.ON));
+        }
+
+        softly.assertThat(recordedUnbatchedBefore(minutesAgo(30)))
+                .as("a court centre's registers are recorded inside the same microsecond often "
+                        + "enough that register_time alone is no order at all: without a "
+                        + "tie-break the rows arrive in whatever order the scan found them, so "
+                        + "two runs of one report list the same morning two ways and a support "
+                        + "engineer comparing them reads a change that never happened")
+                .extracting(RecordedRegisterSummary::outputId)
+                .containsExactlyElementsOf(
+                        recorded.stream().sorted(AS_POSTGRES_ORDERS_THEM).toList());
+        softly.assertThat(recordedUnbatchedBefore(minutesAgo(30)))
+                .as("and it is the order 002's read has always answered in, which is what keeps "
+                        + "the two readings of one predicate from disagreeing about a morning")
+                .extracting(RecordedRegisterSummary::outputId)
+                .containsExactlyElementsOf(
+                        store.activeUnbatched().stream().map(RegisterRecord::outputId).toList());
+    }
+
+    @Test
+    void age_seconds_is_answered_in_seconds_from_the_stage_timestamp() {
         record(HEARING_ONE, minutesAgo(90), RecordedFlagState.ON);
-        final AdjustableClock jvm = AdjustableClock.startingAt(Instant.now());
+        database.forgetStatements();
 
-        final List<RecordedRegisterSummary> before = recordedUnbatchedBefore(minutesAgo(30));
-        final long jvmBefore = jvmAge(before, jvm);
-        jvm.advance(A_LONG_WAY);
-        final List<RecordedRegisterSummary> after = recordedUnbatchedBefore(minutesAgo(30));
+        final List<RecordedRegisterSummary> answered = recordedUnbatchedBefore(minutesAgo(30));
 
-        softly.assertThat(jvmAge(after, jvm) - jvmBefore)
-                .as("the counterfactual: an age this JVM derived from register_time would have "
-                        + "moved by exactly as far as its clock was moved")
-                .isEqualTo(A_LONG_WAY.toSeconds());
-        softly.assertThat(ageOf(after))
-                .as("the database's own reading did not move")
-                .isCloseTo(ageOf(before), offset(SECONDS_OF_SLACK));
-        softly.assertThat(ageOf(before))
-                .as("and it is the real age, measured from the moment the register was recorded")
+        softly.assertThat(ageOf(answered))
+                .as("the real age, in seconds, measured from the moment the register was recorded")
                 .isCloseTo(Duration.ofMinutes(90).toSeconds(), offset(SECONDS_OF_SLACK));
+        softly.assertThat(String.join("\n", database.statements()))
+                .as("and taken in the database, in the same statement that selects the row: this "
+                        + "store holds no clock for a read, so there is no JVM reading here for "
+                        + "register_time to be subtracted from (V1's single time authority)")
+                .contains("now()")
+                .contains("extract(epoch");
     }
 
     @Test
@@ -251,12 +287,6 @@ class RegisterStoreReportReadsIT {
 
     private long ageOf(final List<RecordedRegisterSummary> answered) {
         return answered.isEmpty() ? -1 : answered.get(0).ageSeconds();
-    }
-
-    private long jvmAge(final List<RecordedRegisterSummary> answered, final AdjustableClock jvm) {
-        return answered.isEmpty()
-                ? 0
-                : Duration.between(answered.get(0).registerTime(), jvm.instant()).toSeconds();
     }
 
     private static Instant minutesAgo(final long minutes) {

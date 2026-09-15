@@ -929,6 +929,26 @@ class RegisterNotifierServiceTest {
         }
 
         @Test
+        void a_failed_notification_always_carries_its_sent_at() {
+            refuses(ADDRESS_A, REFUSED);
+            answersNothingFor(ADDRESS_B);
+
+            notifyBatch();
+
+            softly.assertThat(ledger.values())
+                    .as("sent_at is the settlement instant of every terminal attempt, a refusal "
+                            + "and an unanswered connection alike, and it is stamped by the same "
+                            + "code that writes the status - so a FAILED row with no sent_at is a "
+                            + "row this service has no way to produce. The exception report's "
+                            + "NOTIFICATION_FAILED read relies on exactly that: it bounds the row "
+                            + "by sent_at and measures its age from it, so a null there would be "
+                            + "a Youth Offending Team silently missing from the morning report")
+                    .filteredOn(row -> row.status() == NotificationStatus.FAILED)
+                    .hasSize(2)
+                    .allSatisfy(row -> softly.assertThat(row.sentAt()).isEqualTo(SETTLED_AT));
+        }
+
+        @Test
         void a_refusal_should_not_stop_the_teams_after_it_being_told() {
             refuses(ADDRESS_A, REFUSED);
 

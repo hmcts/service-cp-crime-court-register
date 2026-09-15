@@ -25,7 +25,8 @@ import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
-import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
+import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ReportReadsDatabase;
 
 /**
@@ -72,8 +73,6 @@ class RegisterBatchReportReadsIT {
 
     private static final String SEAM =
             "the report's four batch reads implement these statements; this is their red run";
-
-    private static final Duration A_LONG_WAY = Duration.ofHours(1);
 
     private static final long SECONDS_OF_SLACK = 5;
 
@@ -202,29 +201,55 @@ class RegisterBatchReportReadsIT {
     class AsStatements {
 
         @Test
-        void every_age_is_computed_by_the_database_from_its_own_stage_timestamp() {
+        void age_seconds_is_answered_in_seconds_from_the_stage_timestamp() {
             pending(MONDAY, minutesAgo(90));
             generating(MONDAY, minutesAgo(60));
             generated(MONDAY, minutesAgo(45));
             failed(TUESDAY, minutesAgo(30));
-            final AdjustableClock jvm = AdjustableClock.startingAt(Instant.now());
 
-            final List<Long> before = everyAge();
-            jvm.advance(A_LONG_WAY);
-            final List<Long> after = everyAge();
+            final List<Long> ages = everyAge();
+            final List<String> statements = everyStatement();
             final List<Long> stages = List.of(Duration.ofMinutes(90).toSeconds(),
                     Duration.ofMinutes(60).toSeconds(), Duration.ofMinutes(45).toSeconds(),
                     Duration.ofMinutes(30).toSeconds());
 
             for (int read = 0; read < stages.size(); read++) {
-                softly.assertThat(before.get(read))
+                softly.assertThat(ages.get(read))
                         .as("read %d measures from its own stage timestamp: assembly, the render "
                                 + "request, the document, the ending", read)
                         .isCloseTo(stages.get(read), offset(SECONDS_OF_SLACK));
-                softly.assertThat(after.get(read))
-                        .as("and read %d did not move when this JVM's clock was moved an hour, "
-                                + "which is the cross-clock comparison V1 forbids", read)
-                        .isCloseTo(before.get(read), offset(SECONDS_OF_SLACK));
+                softly.assertThat(statements.get(read))
+                        .as("and read %d takes that reading in the database, in the same "
+                                + "statement that selects the row - which is the only place it "
+                                + "can be taken, because this repository holds no clock to "
+                                + "compare a stored timestamp against (V1's single time "
+                                + "authority)", read)
+                        .contains("now()")
+                        .contains("extract(epoch");
+            }
+        }
+
+        @Test
+        void every_read_goes_through_store_outage_translating() {
+            PostgresTestSupport.refuseConnectionsTo(DATABASE);
+            try {
+                softly.assertThatThrownBy(() -> repository.latePending(minutesAgo(30)))
+                        .as("an unreachable store is the generation half's own signal, and a "
+                                + "org.springframework.dao type reaching the core is Principle V")
+                        .isInstanceOf(StoreUnavailableException.class);
+                softly.assertThatThrownBy(() -> repository.lateGenerating(minutesAgo(30)))
+                        .as("the same for the render nobody has answered for")
+                        .isInstanceOf(StoreUnavailableException.class);
+                softly.assertThatThrownBy(() -> repository.lateGenerated(minutesAgo(30)))
+                        .as("and for the document nobody has been told about")
+                        .isInstanceOf(StoreUnavailableException.class);
+                softly.assertThatThrownBy(() -> repository.failedSince(hoursAgo(2)))
+                        .as("and for the batches that ended, so a morning the database is away "
+                                + "is a run that failed for a reason with a name rather than a "
+                                + "driver exception nobody classified")
+                        .isInstanceOf(StoreUnavailableException.class);
+            } finally {
+                PostgresTestSupport.allowConnectionsTo(DATABASE);
             }
         }
 
@@ -303,6 +328,27 @@ class RegisterBatchReportReadsIT {
                 firstAge(lateGenerating(minutesAgo(10))),
                 firstAge(lateGenerated(minutesAgo(10))),
                 firstAge(failedSince(hoursAgo(4))));
+    }
+
+    /** The statement each of the four really prepared, in the same order. */
+    private List<String> everyStatement() {
+        return List.of(statementOf(() -> latePending(minutesAgo(10))),
+                statementOf(() -> lateGenerating(minutesAgo(10))),
+                statementOf(() -> lateGenerated(minutesAgo(10))),
+                statementOf(() -> failedSince(hoursAgo(4))));
+    }
+
+    /**
+     * The SQL one read was prepared with, taken off the driver rather than spelled again here.
+     *
+     * @param read the read to make
+     * @return its statement, or an empty string where the seam refused before preparing one
+     */
+    private String statementOf(final Runnable read) {
+        database.forgetStatements();
+        read.run();
+        final List<String> executed = database.statements();
+        return executed.isEmpty() ? "" : executed.get(0);
     }
 
     private static long firstAge(final List<BatchException> answered) {

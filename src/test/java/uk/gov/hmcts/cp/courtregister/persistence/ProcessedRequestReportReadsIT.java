@@ -31,7 +31,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import uk.gov.hmcts.cp.courtregister.domain.ProcessedRequestSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
-import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ReportReadsDatabase;
 
@@ -74,9 +73,6 @@ class ProcessedRequestReportReadsIT {
     /** The description every read made against an unwritten statement carries. */
     private static final String SEAM =
             "the report's own reads implement these statements; this is their red run";
-
-    /** How far the clock case moves the JVM on, which is far more than a run's real duration. */
-    private static final Duration A_LONG_WAY = Duration.ofHours(1);
 
     /** How much the two ages of one row may differ and still be the database's own reading. */
     private static final long SECONDS_OF_SLACK = 5;
@@ -138,6 +134,22 @@ class ProcessedRequestReportReadsIT {
         }
 
         @Test
+        void failed_since_includes_a_row_failed_exactly_at_the_window_start() {
+            final UUID parked = seed(RequestStatus.FAILED, "store-unavailable",
+                    Duration.ofHours(4), Duration.ofHours(1));
+            final Instant parkedAt = parkedAtOf(failedSince(hoursAgo(9)));
+
+            softly.assertThat(failedSince(parkedAt))
+                    .as("the window's start is inclusive, so a request parked on the very instant "
+                            + "the previous run closed its window is named by this one rather "
+                            + "than by neither: consecutive windows abut, and a failure on the "
+                            + "boundary is the one a run is likeliest to have been in the middle "
+                            + "of writing")
+                    .extracting(ProcessedRequestSummary::requestId)
+                    .containsExactly(parked);
+        }
+
+        @Test
         void non_terminal_older_than_returns_received_and_retrying_oldest_first() {
             final UUID oldest = seed(RequestStatus.RECEIVED, null, Duration.ofHours(4),
                     Duration.ofHours(4));
@@ -184,28 +196,23 @@ class ProcessedRequestReportReadsIT {
     class TheAge {
 
         @Test
-        void age_seconds_is_computed_by_the_database_not_the_jvm() {
+        void age_seconds_is_answered_in_seconds_from_the_stage_timestamp() {
             seed(RequestStatus.RECEIVED, null, Duration.ofMinutes(10), Duration.ofMinutes(10));
-            final AdjustableClock jvm = AdjustableClock.startingAt(Instant.now());
+            database.forgetStatements();
 
-            final List<ProcessedRequestSummary> before = nonTerminalOlderThan(hoursAgo(-1));
-            final long jvmBefore = jvmAge(before, jvm);
-            jvm.advance(A_LONG_WAY);
-            final List<ProcessedRequestSummary> after = nonTerminalOlderThan(hoursAgo(-1));
-            final long jvmAfter = jvmAge(after, jvm);
+            final List<ProcessedRequestSummary> answered = nonTerminalOlderThan(hoursAgo(-1));
 
-            softly.assertThat(jvmAfter - jvmBefore)
-                    .as("the counterfactual: an age derived in this JVM from the stored timestamp "
-                            + "moves by exactly as much as the JVM's clock was moved")
-                    .isEqualTo(A_LONG_WAY.toSeconds());
-            softly.assertThat(ageOf(after))
-                    .as("the database's own reading did not move, which is why two pods reading "
-                            + "one row agree about how old it is")
-                    .isCloseTo(ageOf(before), offset(SECONDS_OF_SLACK));
-            softly.assertThat(ageOf(before))
-                    .as("and it is the real age of the row, measured from when it arrived")
-                    .isCloseTo(Duration.ofMinutes(10).toSeconds(),
-                            offset(SECONDS_OF_SLACK));
+            softly.assertThat(ageOf(answered))
+                    .as("the real age of the row, in seconds, measured from the moment it arrived")
+                    .isCloseTo(Duration.ofMinutes(10).toSeconds(), offset(SECONDS_OF_SLACK));
+            softly.assertThat(String.join("\n", database.statements()))
+                    .as("and taken in the database, in the same statement that selects the row, "
+                            + "which is the only place it can be taken: this repository holds no "
+                            + "clock, so there is no JVM reading here to subtract a stored "
+                            + "timestamp from (V1's single time authority), and two pods reading "
+                            + "one row therefore agree about how old it is")
+                    .contains("now()")
+                    .contains("extract(epoch");
         }
     }
 
@@ -407,15 +414,17 @@ class ProcessedRequestReportReadsIT {
     }
 
     /**
-     * The age this JVM would compute for the same row, which is the comparison V1 forbids.
+     * The instant the database really parked the first row answered, to the precision it holds it.
      *
-     * <p>Present so the case can show the difference rather than assert an absence: the database's
-     * reading stays where it was while this one moves by exactly as far as the clock was moved.
+     * <p>Read back rather than computed here, because the boundary case is about the row's own
+     * stored value: a cut-off this suite derived from its own clock would be near the boundary
+     * rather than on it, and near is what the case exists to rule out.
+     *
+     * @param answered a read that found the row
+     * @return its {@code updated_at}, or the epoch where nothing was answered
      */
-    private long jvmAge(final List<ProcessedRequestSummary> answered, final AdjustableClock jvm) {
-        return answered.isEmpty()
-                ? 0
-                : Duration.between(answered.get(0).createdAt(), jvm.instant()).toSeconds();
+    private Instant parkedAtOf(final List<ProcessedRequestSummary> answered) {
+        return answered.isEmpty() ? Instant.EPOCH : answered.get(0).updatedAt();
     }
 
     private static Instant hoursAgo(final long hours) {

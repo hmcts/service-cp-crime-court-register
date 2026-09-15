@@ -6,6 +6,7 @@ import static org.assertj.core.data.Offset.offset;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -22,7 +23,6 @@ import uk.gov.hmcts.cp.courtregister.domain.FailedNotification;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
-import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.ReportReadsDatabase;
 
 /**
@@ -71,8 +71,6 @@ class RegisterNotificationReportReadsIT {
 
     private static final String SEAM =
             "the report's failed-notification read implements this statement; this is its red run";
-
-    private static final Duration A_LONG_WAY = Duration.ofHours(1);
 
     private static final long SECONDS_OF_SLACK = 5;
 
@@ -159,26 +157,38 @@ class RegisterNotificationReportReadsIT {
     }
 
     @Test
-    void age_seconds_is_computed_by_the_database_not_the_jvm() {
+    void failed_since_includes_a_row_failed_exactly_at_the_window_start() {
+        final RegisterBatch batch = batch(MONDAY);
+        final Instant settledAt = minutesAgo(30);
+        final UUID refused =
+                settled(batch, "yot@example.gov.uk", NotificationStatus.FAILED, 500, settledAt);
+
+        softly.assertThat(failedSince(settledAt))
+                .as("the window's start is inclusive, so a send refused on the very instant the "
+                        + "previous run closed its window is named by this one rather than by "
+                        + "neither: consecutive windows abut, and a Youth Offending Team that "
+                        + "fell between two of them is a team nobody is ever told about")
+                .extracting(FailedNotification::notificationId)
+                .containsExactly(refused);
+    }
+
+    @Test
+    void age_seconds_is_answered_in_seconds_from_the_stage_timestamp() {
         final RegisterBatch batch = batch(MONDAY);
         settled(batch, "yot@example.gov.uk", NotificationStatus.FAILED, 500, minutesAgo(10));
-        final AdjustableClock jvm = AdjustableClock.startingAt(Instant.now());
+        database.forgetStatements();
 
-        final List<FailedNotification> before = failedSince(hoursAgo(4));
-        final long jvmBefore = jvmAge(before, jvm);
-        jvm.advance(A_LONG_WAY);
-        final List<FailedNotification> after = failedSince(hoursAgo(4));
+        final List<FailedNotification> failed = failedSince(hoursAgo(4));
 
-        softly.assertThat(jvmAge(after, jvm) - jvmBefore)
-                .as("the counterfactual: an age this JVM derived would have moved by exactly as "
-                        + "far as its clock was moved")
-                .isEqualTo(A_LONG_WAY.toSeconds());
-        softly.assertThat(ageOf(after))
-                .as("the database's own reading did not move")
-                .isCloseTo(ageOf(before), offset(SECONDS_OF_SLACK));
-        softly.assertThat(ageOf(before))
-                .as("and it is the real age, measured from when the attempt was settled")
+        softly.assertThat(ageOf(failed))
+                .as("the real age, in seconds, measured from the moment the attempt was settled")
                 .isCloseTo(Duration.ofMinutes(10).toSeconds(), offset(SECONDS_OF_SLACK));
+        softly.assertThat(String.join("\n", database.statements()))
+                .as("and taken in the database, in the same statement that selects the row: this "
+                        + "repository holds no clock, so there is no JVM reading here for a "
+                        + "stored timestamp to be subtracted from (V1's single time authority)")
+                .contains("now()")
+                .contains("extract(epoch");
     }
 
     @Test
@@ -248,21 +258,26 @@ class RegisterNotificationReportReadsIT {
         return answered.isEmpty() ? -1 : answered.get(0).ageSeconds();
     }
 
-    private long jvmAge(final List<FailedNotification> answered, final AdjustableClock jvm) {
-        return answered.isEmpty()
-                ? 0
-                : Duration.between(answered.get(0).sentAt(), jvm.instant()).toSeconds();
-    }
-
     private static String fileName(final LocalDate registerDate) {
         return "court-register_" + registerDate + '_' + OU_CODE + ".pdf";
     }
 
+    /**
+     * A moment in the past, at the precision {@code timestamptz} holds.
+     *
+     * <p>Truncated to microseconds because the boundary case compares a cut-off against the very
+     * value it seeded: a nanosecond this JVM minted and the database rounded would make that case
+     * about rounding rather than about whether the predicate is inclusive.
+     */
     private static Instant hoursAgo(final long hours) {
-        return Instant.now().minus(Duration.ofHours(hours));
+        return stored(Instant.now().minus(Duration.ofHours(hours)));
     }
 
     private static Instant minutesAgo(final long minutes) {
-        return Instant.now().minus(Duration.ofMinutes(minutes));
+        return stored(Instant.now().minus(Duration.ofMinutes(minutes)));
+    }
+
+    private static Instant stored(final Instant moment) {
+        return moment.truncatedTo(ChronoUnit.MICROS);
     }
 }
