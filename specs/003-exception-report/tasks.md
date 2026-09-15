@@ -1364,7 +1364,10 @@ start it with both flags false and confirm the sweep still runs; start it with
       -Dtest.noFailFast=true`, 12 tests, 11 failures, 0 errors. The task's own red is
       `the_report_is_scheduled_in_europe_london` - "[a report nothing fires is a morning support
       hears nothing] Expecting actual not to be null" - the method carrying neither `@Scheduled`
-      nor `@SchedulerLock`. Nine more fail out of the seam's body, which throws, and
+      nor `@SchedulerLock`. `the_lock_name_is_neither_generations_nor_the_reconcilers` fails on that
+      same absent annotation rather than on a name - the case reads `@SchedulerLock` through a null
+      guard, so what it compares against `exception-report` is a null - and eight more fail out of
+      the seam's body, which throws, while
       `a_read_failure_counts_the_run_failed_and_rethrows` fails as an assertion on the wrong
       throwable. `the_cutover_flag_is_never_read` is green on introduction and stays so: the job
       holds no field whose type names a flag.
@@ -1395,9 +1398,12 @@ start it with both flags false and confirm the sweep still runs; start it with
       `IntakeSweepConfig.INTAKE_SWEEP_SCHEDULER` from T038. Red: `scheduler()` is `""` on all four
       methods, so every case fails on the empty string.
       (red at `8e7cf24`: `./gradlew test` over the four suites, 134 tests, 15 failures, 0 errors.
-      Four of them are these, each failing on the empty string exactly as predicted - `expected:
-      "registerGenerationScheduler" but was: ""`, and the same for `exceptionReportScheduler` and
-      `intakeSweepScheduler`. The other eleven are T041's. The attribute was checked rather than
+      Four of them are these. Three fail on the empty string exactly as predicted - `expected:
+      "registerGenerationScheduler" but was: ""`, and the same for `intakeSweepScheduler` on the
+      sweep - and the report's fails on **`null`** rather than on `""`, because
+      `ExceptionReportJob.run()` carried no `@Scheduled` at all until T047 and the case reads the
+      attribute through a null guard. The prediction held for the three methods that were already
+      scheduled; the fourth was a seam. The other eleven are T041's. The attribute was checked rather than
       assumed before the cases were written: `javap -p` over
       `org/springframework/scheduling/annotation/Scheduled.class` in the resolved
       `spring-context-7.0.9.jar` lists `public abstract java.lang.String scheduler();` beside
@@ -1560,12 +1566,87 @@ start it with both flags false and confirm the sweep still runs; start it with
       And `fileservice-postgres`'s host mapping of 5433 was already taken on this machine by an
       unrelated container, so that service ran on another host port through the same override - the
       app reaches it over the compose network on 5432 either way.)
-- [ ] T050 Phase close: `./gradlew build` green; **review gate 5** (the scheduling split against
+- [x] T050 Phase close: `./gradlew build` green; **review gate 5** (the scheduling split against
       `CliModeConfigTest`, one `LockProvider`, the unchanged `@EnableSchedulerLock` default, SC-008's
       three separate schedulers **named on all four scheduled methods**, FR-004's independence from
       the generation switch, and the relocated repository beans - that `GenerationConfig` still owns
       everything generation-only and that nothing else moved with them); findings land as red/green
       pairs.
+      (build half done with the Phase 5 tick at `24710ec`: `./gradlew build -Dtest.noFailFast=true`
+      BUILD SUCCESSFUL, exit 0, 3462 tests over 564 suites, 0 failures, 0 errors, with Checkstyle at
+      `maxWarnings = 0` over main and test, PMD over both and the JaCoCo gate at LINE 0.88 /
+      BRANCH 0.85, none of them loosened. The tree with this gate's fixes in it is built whole at
+      T069, the next phase close; what closed each finding here is named beside it.
+      **Review gate 5 ran with three read-only reviewers.** Verdicts: `code-reviewer` **PASS**
+      (0 high, 1 medium, 2 low), `spec-validator` **COMPLIANT** (3 low), `qa` **PASS** with named
+      gaps rather than a failing suite. The six things the gate was called for were found clean:
+      the scheduling split holds against `CliModeConfigTest` - a command JVM contributes none of the
+      three new configurations; there is exactly one `LockProvider`; `@EnableSchedulerLock`'s
+      default moved across verbatim and is inert because all three locked methods state their own;
+      all four scheduled methods name the scheduler their own configuration publishes, and there are
+      three `TaskScheduler` beans and never a fourth; the report wires with
+      `courtregister.generation.enabled=false`, which is FR-004's deployment; and the two relocated
+      repository beans left `GenerationConfig` owning everything generation-only, with nothing else
+      moved beside them.
+      Findings, and where each was closed:
+      * **the body only its own wrapper could call correctly.** `report()` is documented as
+        directly callable - that is why `run()` is `void` - but it read `RunCorrelation.current()`
+        for the service and for its own line, so a direct call reported a run under no correlation
+        at all, and T057's command path and this one were the same shape only by coincidence. It
+        takes the run id as an argument now and `run()` hands in the one it opened. Red
+        `the_body_takes_its_run_id_from_the_caller_and_never_reads_the_mdc` at `2a7e78e`
+        (*expected: "a-run-the-caller-already-opened" but was: null*), green at `96257bd`.
+      * **the rethrow was queued behind the run line** (MEDIUM). The failure path wrote the line
+        and counted the outcome *inside* the catch and threw afterwards, so a registry or an
+        appender that refused would have replaced the store outage with its own complaint - the one
+        throwable nobody can act on standing in for the one they can. The recording is one
+        statement in a `finally` now, so the failure is already in flight when the line is written
+        and the same call is no longer spelled on two paths. Green at `96257bd`, under the two
+        cases below.
+      * **a one-sink morning that refused was unpinned** (QA). `outcomeOf` folds three states over
+        however many sinks were asked, and every case about it held two; the MVP's own deployment
+        holds **one**, and a fold that only counted refusals against a second sink would have
+        called that morning delivered. `a_run_asked_of_one_sink_that_failed_is_outcome_failed` is
+        **green on introduction**, at `2a7e78e`.
+      * **the failure path's line was asserted on two of its nine fields** (QA). The morning that
+        produced nothing is the morning whose line is read hardest, and nothing said it carries the
+        window, `entries=0`, both delivery fields and the duration rather than a shorter line a
+        saved query would have to allow for separately. `the_failure_paths_run_line_carries_every_field`
+        is **green on introduction**, at `2a7e78e`.
+      * **the lock-provider claim was made about two deployments of four** (spec-validator, LOW).
+        The provider carries no flag condition, so the claim was always about all four; the case
+        tried `true,false` and `false,false` while the two cases beside it are already
+        four-combination parameterised ones. `there_is_exactly_one_lock_provider` is now one too,
+        and **green on introduction**, at `2a7e78e`.
+      * **the compose comment said EVERY service JVM** (LOW). `IntakeSweepConfig` is conditional on
+        `NotCliMode`, which `CliModeConfigTest` holds it to, so a command JVM refreshes no gauge -
+        deliberately, because a gauge published by a process that exits is a reading nothing
+        scrapes. The comment says "every service JVM that is not a command" now, in
+        `docker-compose.yml` and in the quickstart block it mirrors. Closed at `9b035d6`.
+      * **three documentation statements had drifted from the code** (spec-validator, LOW; QA).
+        plan.md's Project Structure did not record that `ExceptionReportService` and
+        `logEventReportSink` are declared in `ProcessedLogConfig`, which the Phase 5 tick records as
+        a decision and the structure did not carry; its test-matrix row for the job still said the
+        window comes from `ReportWindow.sinceLastScheduledRun`, which is the **command's** factory
+        (review gate 2 split the two, and the job uses `forScheduledRun`); and the same row, with
+        the Summary's own rendering of the line, listed `skipped` among the job's `delivered_email`
+        values, which is the one word that line cannot carry - the job asks every sink there is.
+        All three corrected in this commit, with the gate's three new cases added to the row.
+      * **two tick narratives described their red inaccurately.** T041's recorded red put nine
+        failures on the seam's body; `the_lock_name_is_neither_generations_nor_the_reconcilers` is
+        one of them and fails on the **absent annotation** read through a null guard, not on a
+        name, so it is eight. T042 predicted `""` on all four scheduler attributes and recorded
+        four; the report's fails on **`null`**, because `ExceptionReportJob.run()` carried no
+        `@Scheduled` at all until T047. Both corrected in this commit. A red recorded as something
+        it was not is the one part of this file a later reader has no way to check.
+      **One finding is recorded and deliberately not acted on** (code-reviewer, LOW). Several
+      shipped javadoc comments cite `.claude/rules/design_rules.md` **by path** -
+      `ExceptionReportJob` and `ExceptionReportJobTest` among them - and a repository path under
+      `.claude/` is a tooling fingerprint in a file that ships in the image. The rule it cites is a
+      real rule and citing it is right; what is in question is the spelling. The decision is the
+      design owner's and is pending, and the sweep - every occurrence, in one commit, citing "the
+      service's design rules" by name instead - is deferred to Phase 8, where the documentation sync
+      already lives. No code changed for it here.)
 
 **Checkpoint**: 🎯 **MVP complete.** Phases 1 to 5 are US1 + US2 + US5, deployable with
 `courtregister.report.enabled=true`, `courtregister.generation.enabled=false` and
