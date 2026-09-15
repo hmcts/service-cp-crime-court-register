@@ -21,8 +21,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
  * compares the instant that time really is, which is the only way a case about a schedule in a
  * zone that changes offset twice a year says anything.
  *
- * <p>Soft assertions, so the red run against the seam is a failing assertion about the instant
- * answered rather than a stack trace from the first line of the case.
+ * <p>Soft assertions, so a case reports every occurrence it asked about rather than stopping at
+ * the first one that disagreed - which is what makes a suite about a schedule readable when the
+ * schedule changes.
  */
 @ExtendWith(SoftAssertionsExtension.class)
 @DisplayName("the most recent occurrence of a schedule")
