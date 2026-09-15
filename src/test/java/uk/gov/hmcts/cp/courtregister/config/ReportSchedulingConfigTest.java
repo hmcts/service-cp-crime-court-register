@@ -27,6 +27,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.transaction.PlatformTransactionManager;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
@@ -38,6 +39,8 @@ import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.IntakeAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
+import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
+import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 
 /**
  * What a given pod wires, read in one place.
@@ -366,6 +369,27 @@ class ReportSchedulingConfigTest {
                     .as("and a report pod generates nothing, which is the whole of FR-004")
                     .isEmpty();
             assertThat(context.getBeanNamesForType(GenerationReconciler.class)).isEmpty();
+        });
+    }
+
+    @Test
+    @DisplayName("the report wires end to end on a pod with the generation half switched off")
+    void the_report_wires_with_generation_disabled() {
+        podWith(true, false).run(context -> {
+            assertThat(context)
+                    .as("FR-004's deployment and the MVP's own shape: the two repositories the "
+                            + "report reads are declared inside a configuration conditional on the "
+                            + "generation half, so this context cannot start until they move")
+                    .hasNotFailed();
+            assertThat(context.getBeanNamesForType(ExceptionReportService.class)).isNotEmpty();
+            assertThat(context.getBeanNamesForType(ExceptionReportJob.class)).isNotEmpty();
+            assertThat(context.getBeanNamesForType(RegisterBatchRepository.class))
+                    .as("BATCH_LATE and BATCH_FAILED are read through it, on a pod that assembles "
+                            + "no batch of its own")
+                    .isNotEmpty();
+            assertThat(context.getBeanNamesForType(RegisterNotificationRepository.class))
+                    .as("and NOTIFICATION_FAILED through this one, on a pod that sends no register")
+                    .isNotEmpty();
         });
     }
 
