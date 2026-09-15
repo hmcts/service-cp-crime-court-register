@@ -59,6 +59,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.adapter.fileservice.FileServicePayloadStore;
 import uk.gov.hmcts.cp.courtregister.application.DistributionPipeline;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.HearingPayloadSource;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
@@ -77,6 +79,7 @@ import uk.gov.hmcts.cp.courtregister.batch.cli.CliMain;
 import uk.gov.hmcts.cp.courtregister.batch.cli.GenerateRegisterCli;
 import uk.gov.hmcts.cp.courtregister.batch.cli.ListBatchesCli;
 import uk.gov.hmcts.cp.courtregister.batch.cli.NotifyRegisterCli;
+import uk.gov.hmcts.cp.courtregister.batch.cli.ReportExceptionsCli;
 import uk.gov.hmcts.cp.courtregister.batch.cli.SupersedeBeforeCli;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
@@ -592,7 +595,7 @@ class TelemetryPrivacyTest {
      * contact detail typed where a court house belongs, or a credential pasted over
      * {@code --batch}, is one refusal away from being published.
      *
-     * <p>The sweep is over all five commands and both halves of every refusal - the grammar
+     * <p>The sweep is over all six commands and both halves of every refusal - the grammar
      * underneath them and each value a command interprets - because the rule is not one command's:
      * it is what this image's whole operations surface may say about text it did not write. What a
      * diagnosis needs instead is on the line and asserted by {@code batch/cli/CliMainTest}: which
@@ -613,6 +616,8 @@ class TelemetryPrivacyTest {
         private final RegisterNotificationRepository notifications =
                 mock(RegisterNotificationRepository.class);
         private final FeatureFlagReader reader = mock(FeatureFlagReader.class);
+        private final ExceptionReportService reporting = mock(ExceptionReportService.class);
+        private final ExceptionReportSink logSink = mock(ExceptionReportSink.class);
 
         @ParameterizedTest(name = "{0}")
         @MethodSource("uk.gov.hmcts.cp.courtregister.config.TelemetryPrivacyTest"
@@ -643,7 +648,7 @@ class TelemetryPrivacyTest {
         }
 
         /**
-         * The five commands over doubled collaborators, by the names the registry knows them by.
+         * The six commands over doubled collaborators, by the names the registry knows them by.
          *
          * <p>Built the way {@code CliMain.registryOf} builds them, so a command added to the image
          * is one line from being inside this claim. None of the doubles is reached: every
@@ -651,7 +656,7 @@ class TelemetryPrivacyTest {
          * asked anything.
          *
          * @param output where the command's lines are written, one line per call
-         * @return the five commands, by name
+         * @return the six commands, by name
          */
         private Map<String, CliMain.Command> commands(final Consumer<String> output) {
             return Map.of(
@@ -661,7 +666,25 @@ class TelemetryPrivacyTest {
                     CliMain.LIST_BATCHES,
                             new ListBatchesCli(batches, notifications, store, output)::run,
                     CliMain.SUPERSEDE_BEFORE, new SupersedeBeforeCli(store, output)::run,
-                    CliMain.CHECK_FLAG, new CheckFlagCli(reader, output)::run);
+                    CliMain.CHECK_FLAG, new CheckFlagCli(reader, output)::run,
+                    CliMain.REPORT_EXCEPTIONS, new ReportExceptionsCli(reporting, List.of(logSink),
+                            reportSettings(), Clock.systemUTC(), output)::run);
+        }
+
+        /**
+         * The report's settings a deployed command works to, with the e-mail output off.
+         *
+         * <p>Off because every environment ships it off until the Notify template exists, and
+         * because the refusal being swept for here happens at the window rather than at the
+         * output: a window this command cannot read is refused before either sink is asked
+         * anything, which is what makes the doubles above unreachable.
+         *
+         * @return the report on, at seven in the court's zone, with no e-mail output
+         */
+        private static ReportProperties reportSettings() {
+            return new ReportProperties(true, "0 0 7 * * MON-FRI", GenerationProperties.COURTS_ZONE,
+                    false, Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(15),
+                    Duration.ofMinutes(30), new ReportProperties.Email(false, null, List.of()));
         }
 
         /**
@@ -680,7 +703,7 @@ class TelemetryPrivacyTest {
     }
 
     /**
-     * The invocations an operator gets wrong, one for every value the five commands read and two
+     * The invocations an operator gets wrong, one for every value the six commands read and two
      * for the grammar underneath all of them.
      *
      * <p>Each puts {@link PersonalDataMarkers#OPERATOR_TOKEN} where the mistake goes: in a value a
@@ -706,6 +729,8 @@ class TelemetryPrivacyTest {
                         List.of("--" + Args.DATE, token)),
                 arguments("supersede-before's bound", CliMain.SUPERSEDE_BEFORE,
                         List.of("--" + Args.SHARED_BEFORE, token)),
+                arguments("report-exceptions' window", CliMain.REPORT_EXCEPTIONS,
+                        List.of("--" + Args.SINCE, token)),
                 arguments("a token where a name belongs", CliMain.CHECK_FLAG, List.of(token)),
                 arguments("a name nobody owns, given twice", CliMain.LIST_BATCHES,
                         List.of("--" + token, "--" + token)));
