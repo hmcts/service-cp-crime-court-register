@@ -244,8 +244,8 @@ public class EmailReportSink implements ExceptionReportSink {
 
         for (final String recipient : recipients) {
             final UUID notificationId = UUID.randomUUID();
-            final MailOutcome outcome = mailer.send(new ReportMail(
-                    notificationId, templateId, recipient, fileId, personalisation));
+            final MailOutcome outcome = answered(notificationId, recipient, fileId,
+                    personalisation, report);
             if (outcome.status() == MailStatus.ACCEPTED) {
                 accepted++;
                 LOG.info("The morning report has been accepted for one recipient. run_id={} "
@@ -267,6 +267,47 @@ public class EmailReportSink implements ExceptionReportSink {
         }
         return new DeliveryOutcome(ReportSinkName.EMAIL, statusOf(accepted), reason, accepted,
                 refused);
+    }
+
+    /**
+     * One recipient's send, with a mailer that broke answered rather than let out.
+     *
+     * <p>The port's contract is that it answers, so a throw reaching here is a broken mailer rather
+     * than a refused send - and this is the one place that can still do the right thing with it,
+     * which is to count it against this recipient and ask the next address. Let out, it reaches the
+     * service's own catch, the whole delivery is classified as having failed, and the support
+     * inboxes after this one in the list are never asked at all.
+     *
+     * <p>Caught to classify and not to carry on regardless: the answer is an {@code UNANSWERED}
+     * outcome, which the fold below turns into a bounded reason and a refused count, and the line
+     * names the failure by class because its message belongs to whatever raised it.
+     *
+     * @param notificationId  this recipient's own id, minted before the call
+     * @param recipient       the address, masked wherever it is said
+     * @param fileId          the attachment's id
+     * @param personalisation the counts and the window
+     * @param report          the report being delivered, for the correlation on the line
+     * @return what that send answered, or an unanswered outcome where the mailer broke
+     */
+    // PMD.AvoidCatchingGenericException: a mailer that throws is a mailer that broke its contract,
+    // and a broken collaborator is not a family a narrower catch can name. Nothing is swallowed:
+    // the outcome is counted, the line says it happened, and the fold carries its bounded reason.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private MailOutcome answered(final UUID notificationId, final String recipient,
+            final UUID fileId, final Map<String, String> personalisation,
+            final ExceptionReport report) {
+
+        try {
+            return mailer.send(new ReportMail(
+                    notificationId, templateId, recipient, fileId, personalisation));
+        } catch (RuntimeException broken) {
+            LOG.warn("The report's mailer broke rather than answering for one recipient, so this "
+                            + "one is a resend and the rest are still being asked. run_id={} "
+                            + "notification_id={} recipient={} cause={}",
+                    report.runId(), notificationId, masked(recipient),
+                    broken.getClass().getName());
+            return new MailOutcome(MailStatus.UNANSWERED, null);
+        }
     }
 
     /**

@@ -33,10 +33,14 @@ import uk.gov.hmcts.cp.courtregister.domain.ReportMail;
  * {@code personalisation} object is {@code additionalProperties: true} inside a body that is
  * otherwise closed.
  *
- * <p><strong>It answers rather than throws.</strong> One recipient's refusal is a resend for that
- * recipient and not the end of the morning's report, so the sink reads the outcome, counts it and
- * carries on to the next address. That is the difference between this port and
- * {@code RegisterNotifier}, whose caller holds a retry budget and needs a classified failure.
+ * <p><strong>It answers rather than throws, about everything.</strong> One recipient's refusal is a
+ * resend for that recipient and not the end of the morning's report, so the sink reads the outcome,
+ * counts it and carries on to the next address. That is the difference between this port and
+ * {@code RegisterNotifier}, whose caller holds a retry budget and needs a classified failure - and
+ * it is total: the body is composed inside the same {@code try} as the call, and anything that
+ * refuses before a verdict exists is {@code UNANSWERED} rather than a throw. A throw here would
+ * reach the sink's own catch and become <em>every</em> recipient's failure, with the addresses
+ * after this one never asked at all.
  *
  * <p><strong>One attempt.</strong> There is no loop here and no wait: a 4xx is a refusal that
  * asking again cannot change, and a 408, a 429 or a server error is a resend the support engineer
@@ -74,31 +78,55 @@ public class NotificationNotifyReportMailer implements ReportMailer {
         this.objectMapper = objectMapper;
     }
 
+    // PMD.AvoidCatchingGenericException: the port's whole contract is that it answers, and the
+    // things that can stop one send are not a family a narrower catch can name - the body's
+    // serialisation, a client that will not build a request, a pool that has been shut down. Every
+    // one of them means the one thing the sink can act on: this recipient was not told. Nothing is
+    // swallowed - the outcome is returned, counted and said at WARN, and the run's line carries it.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     @Override
     public MailOutcome send(final ReportMail mail) {
-        final byte[] body = objectMapper.writeValueAsBytes(new SendReport(
-                mail.templateId(), mail.sendToAddress(), mail.fileId(), mail.personalisation()));
         // Not final: the catch below assigns it too, which is what "answers rather than throws"
         // costs on this path.
         MailOutcome outcome;
         try {
+            final byte[] body = objectMapper.writeValueAsBytes(new SendReport(
+                    mail.templateId(), mail.sendToAddress(), mail.fileId(),
+                    mail.personalisation()));
             outcome = NotificationNotifyCommand.post(restClient, mail.notificationId(),
                     systemUserId, body, (sent, answer) -> outcomeOf(answer.getStatusCode(), mail));
         } catch (ResourceAccessException unreachable) {
-            // Connect failure, read timeout, connection dropped: whether the e-mail was asked for
-            // is unknown, and an invented status would say an attempt was answered when nothing
-            // answered. Nothing is swallowed - the sink folds this into its own bounded reason and
-            // the run's line says the e-mail output did not take the report.
-            //
-            // Only the class of what was caught travels with the line: the message belongs to
-            // whatever raised it, and is exactly where a host or a connection string turns up
-            // (constitution Principle VII).
-            LOG.warn("The report's send-email-notification command reached no verdict, so whether "
-                    + "support was told is unknown. notificationId={} fileId={} cause={}",
-                    mail.notificationId(), mail.fileId(), unreachable.getClass().getName());
-            outcome = new MailOutcome(MailStatus.UNANSWERED, null);
+            outcome = unanswered(mail, unreachable);
+        } catch (RuntimeException refusedToAsk) {
+            // Everything else that can stop one send before a verdict exists: a body that could not
+            // be written, a client that would not build a request. The body is composed INSIDE the
+            // try for exactly this reason - composed outside it, a serialisation failure left this
+            // method as a throw, reached the sink's own catch, and became the whole delivery
+            // failing rather than one recipient's: the addresses after it in the list were never
+            // asked at all.
+            outcome = unanswered(mail, refusedToAsk);
         }
         return outcome;
+    }
+
+    /**
+     * Says that this recipient reached no verdict, and answers with one rather than throwing.
+     *
+     * <p>Only the <strong>class</strong> of what was caught travels with the line: the message
+     * belongs to whatever raised it, and is exactly where a host, a connection string or an address
+     * turns up (constitution Principle VII). Nothing is swallowed - the sink folds this into its own
+     * bounded reason, counts it and asks the next address, and the run's line says the e-mail output
+     * did not take the report.
+     *
+     * @param mail    the mail nobody answered about
+     * @param refusal what stopped it, read for its class and for nothing else
+     * @return the outcome: nothing was sent, and no status came back to name
+     */
+    private static MailOutcome unanswered(final ReportMail mail, final RuntimeException refusal) {
+        LOG.warn("The report's send-email-notification command reached no verdict, so whether "
+                + "support was told is unknown. notificationId={} fileId={} cause={}",
+                mail.notificationId(), mail.fileId(), refusal.getClass().getName());
+        return new MailOutcome(MailStatus.UNANSWERED, null);
     }
 
     /**
