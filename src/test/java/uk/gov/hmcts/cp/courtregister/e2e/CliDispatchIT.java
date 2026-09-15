@@ -438,6 +438,11 @@ class CliDispatchIT {
                 // Hosts only: each client appends its own contract path.
                 Map.entry("SYSTEMDOCGENERATOR_BASE_URL", WIREMOCK_URL),
                 Map.entry("NOTIFICATIONNOTIFY_BASE_URL", WIREMOCK_URL),
+                // The CJSCPPUID both of those calls are made under. Required to be set wherever
+                // either outward half sends, never connected to here: a local-only dummy, and a
+                // UUID because that is the shape an identity takes.
+                Map.entry("COURT_REGISTER_SYSTEM_USER_ID",
+                        "00000000-0000-0000-0000-000000000000"),
                 // Local-only dummy, and a UUID because startup checks the shape (fix P9). Never a
                 // real template id.
                 Map.entry("CR_EMAIL_TEMPLATE_ID", "11111111-1111-1111-1111-111111111111"),
