@@ -37,7 +37,8 @@ import uk.gov.hmcts.cp.courtregister.persistence.ProcessedRequestRepository;
  * none is stated.
  *
  * <p><strong>The read it cannot take is the one refusal this service absorbs</strong>, and it is
- * absorbed because {@code .claude/rules/design_rules.md} says so: <em>"The one absorbed refusal is
+ * absorbed because the service's design rules on absorbed refusals say so: <em>"The one absorbed
+ * refusal is
  * telemetry: a round-trip reading that cannot be taken may not cost a Youth Offending Team its
  * e-mail, so it stops where it happens, is counted, and is said at WARN. Every other refusal still
  * leaves."</em> Every other refusal in this service still leaves. This one stops here for two

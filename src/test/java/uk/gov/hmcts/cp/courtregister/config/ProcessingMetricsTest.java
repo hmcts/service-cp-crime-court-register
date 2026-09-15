@@ -589,8 +589,8 @@ class ProcessingMetricsTest {
 
         @Test
         void the_run_outcome_label_is_one_of_three_bounded_words() {
-            // Review gate 3. `.claude/rules/design_rules.md` requires every metric label to be a
-            // bounded code, and the only enforcement this counter had was that its three callers
+            // Review gate 3. The service's design rules on bounded reasons and labels require
+            // every metric label to be a bounded code, and the only enforcement this counter had was that its three callers
             // happened to spell the three words correctly. A mistyped label is not a wrong reading
             // - it is a brand new series, on which the alert written against the right one is
             // silent. Bounded by the compiler costs nothing and cannot be forgotten.

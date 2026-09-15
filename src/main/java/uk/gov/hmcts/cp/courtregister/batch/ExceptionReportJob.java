@@ -49,8 +49,8 @@ import uk.gov.hmcts.cp.courtregister.domain.ReportWindow;
  * {@link IntakeAgeSweep}'s, and the two are opposite deliberately. The sweep absorbs a failed read
  * because a gauge is telemetry <em>about</em> the service and because a fixed-delay schedule
  * cancels the task that throws; here the read <strong>is</strong> the report, there is a lock to
- * release, and {@code .claude/rules/design_rules.md} is explicit that every other refusal still
- * leaves. So the run counts itself failed, writes its line - a morning that produced no report has
+ * release, and the service's design rules on absorbed refusals are explicit that every other
+ * refusal still leaves. So the run counts itself failed, writes its line - a morning that produced no report has
  * to say so rather than say nothing - and rethrows.
  *
  * <p>It holds a clock, a lock, a report and the sinks, and no driver, broker or HTTP client. It

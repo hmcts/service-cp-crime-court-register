@@ -124,8 +124,8 @@ The 127-member batch is one payload assembled from many documents, whose header 
 
 - It called this "the P4 shape". It is not. P4 is *"only the first request's recipients are used"*,
   and P4 is **fixed** - the recipients are the de-duplicated union across the batch. The header is a
-  different first-element-wins behaviour and is **deliberately kept**, listed as such in
-  `.claude/rules/design_rules.md`. Calling them one shape invites the reading that the header was
+  different first-element-wins behaviour and is **deliberately kept**, listed as such in the
+  service's design rules on behaviours kept. Calling them one shape invites the reading that the header was
   fixed too.
 - It said "a batch whose first row differs from the rest is the thing that makes that line worth
   pinning". No such batch is recorded here. All six base fixtures behind these 127 members carry the

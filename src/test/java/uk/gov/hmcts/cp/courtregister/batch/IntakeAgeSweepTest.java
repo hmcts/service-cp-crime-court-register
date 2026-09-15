@@ -50,7 +50,8 @@ import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
  * the oldest any pod can see.
  *
  * <p>A read it cannot take is <strong>the one refusal this service absorbs</strong>, and it is
- * absorbed because {@code .claude/rules/design_rules.md} says so: <em>"The one absorbed refusal is
+ * absorbed because the service's design rules on absorbed refusals say so: <em>"The one absorbed
+ * refusal is
  * telemetry: a round-trip reading that cannot be taken may not cost a Youth Offending Team its
  * e-mail, so it stops where it happens, is counted, and is said at WARN."</em> All three halves are
  * asserted here, plus the fourth thing that makes it an absorption rather than a swallow: the
@@ -295,7 +296,7 @@ class IntakeAgeSweepTest {
      * One WARN line, naming the caught failure by class and repeating none of its words.
      *
      * <p>Shared by the two absorbed-refusal cases because the claim is identical for both and it
-     * is the claim `.claude/rules/design_rules.md` makes: <em>"Never attach a throwable this
+     * is the claim the service's design rules on logging make: <em>"Never attach a throwable this
      * service did not write. A caught exception is named by class; its message belongs to whatever
      * library raised it and is exactly where a connection string or a fragment of a statement turns
      * up."</em> Review gate 3's QA pass found the cause's text asserted absent and the caught

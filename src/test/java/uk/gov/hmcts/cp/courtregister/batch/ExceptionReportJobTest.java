@@ -55,7 +55,8 @@ import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
  * {@link IntakeAgeSweep}'s, and the two are deliberately opposite: the sweep absorbs a failed read
  * because a gauge is telemetry about the service, and a fixed-delay schedule cancels the task that
  * throws. Here the read <em>is</em> the report, there is a lock to release, and
- * {@code .claude/rules/design_rules.md} is explicit that every other refusal still leaves. So the
+ * the service's design rules on absorbed refusals are explicit that every other refusal still
+ * leaves. So the
  * run counts itself failed, writes its line, and rethrows.
  *
  * <p>The window arithmetic is asserted against {@link ReportWindow#forScheduledRun} rather than
