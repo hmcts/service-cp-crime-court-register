@@ -172,9 +172,13 @@ public class ExceptionReportJob {
      * whoever opened the run knows it, so the application layer never touches an MDC and the
      * command's path in Phase 6 works exactly the same way.
      *
-     * <p><strong>The parameter is a seam and is not read yet.</strong> The body still takes the
-     * correlation off the MDC, which is why a caller that hands one in gets a run reported under
-     * none.
+     * <p><strong>The line and the counter are written in a {@code finally}.</strong> A morning
+     * that produced no report has to say so, and saying so must not be something the failure has
+     * to wait behind: written from inside the catch, the rethrow is queued after the write, and a
+     * registry or an appender that refused would replace the store outage with its own complaint -
+     * the one throwable nobody could act on standing in for the one they could. Here the failure is
+     * already in flight when the line is written, and the recording is one statement in one place
+     * rather than the same call spelled on two paths.
      *
      * @param runId the correlation whoever opened the run already has
      * @return the report this morning's run built
@@ -188,21 +192,24 @@ public class ExceptionReportJob {
     public ExceptionReport report(final String runId) {
         final Instant startedAt = clock.instant();
         final ReportWindow window = ReportWindow.forScheduledRun(cron, zone, startedAt);
+        int entries = NOTHING_BUILT;
+        List<DeliveryOutcome> delivered = List.of();
         try {
-            final ExceptionReport report = reporting.build(window, RunCorrelation.current());
-            final List<DeliveryOutcome> delivered = reporting.deliver(report, sinks);
-            recorded(window, report.entries().size(), delivered, startedAt);
+            final ExceptionReport report = reporting.build(window, runId);
+            entries = report.entries().size();
+            delivered = reporting.deliver(report, sinks);
             return report;
         } catch (RuntimeException stopped) {
-            // Reported and rethrown, not absorbed: the line beside this one says the morning
+            // Reported and rethrown, not absorbed: the line the finally writes says the morning
             // produced nothing, and the throw is what releases the lock and makes the failure
             // visible to anything watching the schedule. The cause is named by class - its message
             // belongs to whatever raised it, and is exactly where a connection string turns up.
             LOG.error("The morning report could not be built, so the line beside this one "
                     + "describes a run that told nobody anything. cause={}",
                     stopped.getClass().getName());
-            recorded(window, NOTHING_BUILT, List.of(), startedAt);
             throw stopped;
+        } finally {
+            recorded(runId, window, entries, delivered, startedAt);
         }
     }
 
@@ -219,19 +226,20 @@ public class ExceptionReportJob {
      * found nothing: without that, a report that found nothing and a report that never fired are
      * the same absence of a series, and the second is the failure this feature exists to reveal.
      *
+     * @param runId     the correlation this run happened under, as the caller handed it in
      * @param window    the window that was read
      * @param entries   how many exceptions the report held, across all five kinds
      * @param delivered one outcome per sink asked, in the order they were asked
      * @param startedAt when the run opened its correlation
      */
-    private void recorded(final ReportWindow window, final int entries,
+    private void recorded(final String runId, final ReportWindow window, final int entries,
             final List<DeliveryOutcome> delivered, final Instant startedAt) {
 
         final ReportRunOutcome outcome = outcomeOf(delivered);
         metrics.exceptionReportRun(outcome);
         LOG.info("event={} run_id={} window_from={} window_to={} entries={} delivered_log={} "
                         + "delivered_email={} outcome={} duration_ms={}",
-                RUN_EVENT, RunCorrelation.current(), window.from(), window.to(), entries,
+                RUN_EVENT, runId, window.from(), window.to(), entries,
                 tookIt(ReportSinkName.LOG, delivered), emailTookIt(delivered),
                 outcome.name().toLowerCase(Locale.ROOT),
                 Duration.between(startedAt, clock.instant()).toMillis());
