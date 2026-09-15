@@ -14,20 +14,22 @@ import java.util.Objects;
  * rather than something this type reads for itself, which is what keeps the application layer free
  * of the MDC and makes the correlation true on the command path as well as on the scheduled one.
  *
- * <p><strong>The counts are stated and the entries are capped.</strong> One very bad night can
- * produce more exceptions than any output should write - the log sink writes an event each - so a
- * report carries at most {@code courtregister.report.max-entries} of them, oldest first, and says
- * how many it dropped. The counts are therefore <em>not</em> derived from {@code entries}: they are
- * what the reads found, whole, because a count that shrank with the cap would make the worst
- * morning of the year read as a quieter one.
+ * <p><strong>The counts are stated and the recurring kinds are capped.</strong> One very bad night
+ * can produce more exceptions than any output should write - the log sink writes an event each - so
+ * a report carries at most {@code courtregister.report.max-entries} of the two <em>late</em> kinds,
+ * oldest first, and says how many it dropped. The three failure kinds are carried whole whatever
+ * their count: they are read over a half-open window no later run reads again, so a failure the cap
+ * dropped would be a failure no report ever states. The counts are therefore <em>not</em> derived
+ * from {@code entries}: they are what the reads found, whole, because a count that shrank with the
+ * cap would make the worst morning of the year read as a quieter one.
  *
  * @param runId      the correlation the caller opened, the same value {@code RunCorrelation} put in
  *                   the MDC
  * @param window     what was asked for
  * @param snapshotAt when the reads were taken, which is not when the events were written
  * @param entries    the exceptions this report carries, oldest first, across all five kinds
- * @param truncated  how many more the reads found and the cap dropped; nought on every ordinary
- *                   morning
+ * @param truncated  how many <em>late</em> entries the reads found and the cap dropped - never a
+ *                   failure, which the cap cannot drop; nought on every ordinary morning
  * @param counts     how many of each kind the reads found, <strong>before</strong> the cap
  */
 public record ExceptionReport(

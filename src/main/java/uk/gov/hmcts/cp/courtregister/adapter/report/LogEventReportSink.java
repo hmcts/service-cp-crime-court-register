@@ -70,6 +70,12 @@ public class LogEventReportSink implements ExceptionReportSink {
     /**
      * Writes the summary and one event per exception, and says the log was told.
      *
+     * <p>{@code truncated} is a count of <strong>late</strong> entries the cap dropped and never of
+     * a failure: the failure kinds are read over a window no later run reads again, so they are
+     * carried whole however many there are. A reader who finds fewer {@code REQUEST_LATE} or
+     * {@code BATCH_LATE} events than the counts imply is reading a capped morning whose tail the
+     * next run will say again; a shortfall on the three failure kinds is a sink that broke.
+     *
      * @param report the report to write
      * @return delivered, with the one audience a log has
      */
@@ -77,7 +83,8 @@ public class LogEventReportSink implements ExceptionReportSink {
     public DeliveryOutcome deliver(final ExceptionReport report) {
         final Map<ExceptionKind, Integer> counts = report.counts();
         LOG.info("The exception report for this run has been built; its window, its five counts "
-                        + "and what the entry cap dropped are the fields of this line.",
+                        + "and how many late entries the entry cap dropped are the fields of this "
+                        + "line.",
                 value(EVENT, SUMMARY_EVENT),
                 value(RUN_ID, report.runId()),
                 value("window_from", report.window().from().toString()),

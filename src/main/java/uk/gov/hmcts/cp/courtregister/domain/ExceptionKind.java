@@ -26,5 +26,26 @@ public enum ExceptionKind {
     BATCH_FAILED,
 
     /** A recipient's e-mail that was refused or never answered, inside the window. */
-    NOTIFICATION_FAILED
+    NOTIFICATION_FAILED;
+
+    /**
+     * Whether a run that did not report this kind would be asked about it again.
+     *
+     * <p>The two late kinds are read against a cut-off rather than a window, so whatever is still
+     * late at the next run is read by it: an entry left out of one morning's report is in the next
+     * morning's, older. The three failure kinds are read over a half-open window aligned to the
+     * schedule, so each row falls in exactly one run's window and no run reads that window again -
+     * a failure one report leaves out is a failure no report ever states.
+     *
+     * <p>That difference is what the entry cap is allowed to bound, and it is a switch expression
+     * so that a sixth kind cannot be added without deciding which of the two it is.
+     *
+     * @return whether the next run would find it again
+     */
+    public boolean recursEveryRun() {
+        return switch (this) {
+            case REQUEST_LATE, BATCH_LATE -> true;
+            case REQUEST_FAILED, BATCH_FAILED, NOTIFICATION_FAILED -> false;
+        };
+    }
 }

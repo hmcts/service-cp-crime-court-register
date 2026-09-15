@@ -198,6 +198,8 @@ ContainerLogV2
           batchLate        = toint(LogMessage.batch_late),
           batchFailed      = toint(LogMessage.batch_failed),
           notificationFailed = toint(LogMessage.notification_failed),
+          // dropped LATE entries only - the cap never drops a failure, so a shortfall on
+          // request_failed, batch_failed or notification_failed is a sink that broke
           truncated          = toint(LogMessage.truncated)
 | order by TimeGenerated desc
 ```

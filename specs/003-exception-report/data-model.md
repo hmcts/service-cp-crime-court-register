@@ -452,8 +452,8 @@ is a projection that has drifted from its table.
 | `runId` | `String` | The correlation the caller opened and passed in, the same value `RunCorrelation` put in the MDC |
 | `window` | `ReportWindow` | What was asked for |
 | `snapshotAt` | `Instant` | When the reads were taken, which is not the same as when the events were written |
-| `entries` | `List<ExceptionEntry>` | Oldest first, across all five kinds; ties broken by `kind` in enum order and then by the most specific identifier the entry carries. **At most `courtregister.report.max-entries` of them** |
-| `truncated` | `int` | How many more the reads found and the cap dropped; nought on every ordinary morning |
+| `entries` | `List<ExceptionEntry>` | Oldest first, across all five kinds; ties broken by `kind` in enum order and then by the most specific identifier the entry carries. **At most `courtregister.report.max-entries` of the two late kinds**; every failure the reads found, whatever the count |
+| `truncated` | `int` | How many **late** entries the reads found and the cap dropped - never a failure; nought on every ordinary morning |
 | `counts` | `Map<ExceptionKind, Integer>` | How many of each kind the reads found, **before** the cap, zero-filled |
 
 The tiebreak is not decoration. Age settles almost every pair, but not two things that went wrong at
@@ -468,6 +468,17 @@ not run (FR-012, acceptance scenario 1.5). It is a **component rather than a der
 the whole of what the cap costs the model: a count taken from `entries` would shrink with them, and
 the worst morning of the year would read as a quieter one. `ExceptionReport.whole(...)` is the
 factory for a report the cap did not reach, whose counts are its own entries'.
+
+**The cap bounds `REQUEST_LATE` and `BATCH_LATE` and nothing else.** The two late kinds are read
+against a cut-off rather than a window, so an entry one run drops is read again by the next one,
+older - the cap costs it a morning's place in a list. The three failure kinds are read over a
+half-open window aligned to the schedule (`[before(occurrence), occurrence)`), so each row falls in
+exactly one run's window and **no later run reads that window again**: a failed request, dead batch
+or refused notification the cap dropped would be one no output ever states, dropped on precisely the
+longest morning of the year. That is the silent loss this feature exists to end, so the failure
+kinds are carried whole however many there are, and `truncated` counts dropped **late** entries
+alone. `ExceptionKind.recursEveryRun()` is where the two classes are told apart - a switch
+expression, so a sixth kind cannot be added without deciding which it is.
 
 **The cap keeps the oldest.** A morning can be arbitrarily bad and the log sink writes one event per
 entry, so without a ceiling one outage is a write that outlives the run's own lock. The oldest have
@@ -728,15 +739,16 @@ group already makes about the other five commands).
 | `run_id` | string | the run's correlation, the same value on every line of the run |
 | `window_from`, `window_to`, `snapshot_at` | ISO-8601 instants | |
 | `request_failed`, `request_late`, `batch_late`, `batch_failed`, `notification_failed` | integers | always present, zero included; **what the reads found**, never what the cap kept |
-| `truncated` | integer | how many the entry cap dropped; nought on every ordinary morning |
+| `truncated` | integer | how many **late** entries the entry cap dropped, never a failure; nought on every ordinary morning |
 
 **Eleven fields**: `event`, `run_id`, the three instants, the five counts and `truncated`. That
 number is stated once, here, and the log sink's test counts against it.
 
 The last of them is what makes the other five readable. The counts are of what the reads found and
 the exception events are of what the report carries, so a query over a capped morning finds fewer
-events than the counts imply; `truncated` says how many are missing, and a reader who is not told
-that is a reader deciding whether a sink broke.
+`request_late` and `batch_late` events than the counts imply; `truncated` says how many are missing,
+and a reader who is not told that is a reader deciding whether a sink broke. A shortfall on any of
+the **three failure kinds** is never the cap - it cannot drop one - so it is a sink that broke.
 
 **The summary event carries no delivery status, deliberately.** It is written *by* a sink, while the
 other sink may not have been asked yet and this one cannot know how it went itself - a sink that
@@ -761,7 +773,7 @@ event=exception_report_run run_id=<id> window_from=<instant> window_to=<instant>
 | `run_id` | the run's correlation |
 | `window_from`, `window_to` | the window that was read |
 | `entries` | how many exceptions the report holds, across all five kinds |
-| `truncated` | how many more the reads found and `courtregister.report.max-entries` dropped |
+| `truncated` | how many **late** entries the reads found and `courtregister.report.max-entries` dropped; never a failure |
 | `delivered_log` | `ok` or `failed` |
 | `delivered_email` | `ok`, `failed`, `skipped` (the command was run without `--email`) or `disabled` (there is no e-mail sink on the context, which is what `courtregister.report.email.enabled=false` produces). Both callers read presence off the sinks the context contributed, never off the setting |
 | `outcome` | `delivered` (every sink asked said ok), `partial` (at least one sink asked failed and at least one said ok), or `failed` (the run could not build the report, or no sink asked said ok) |

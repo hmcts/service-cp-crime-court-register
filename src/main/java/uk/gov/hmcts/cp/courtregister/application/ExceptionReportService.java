@@ -237,18 +237,28 @@ public class ExceptionReportService {
     }
 
     /**
-     * The report, with the oldest entries kept and the rest counted rather than written.
+     * The report, with the recurring kinds capped and every failure carried whatever the count.
      *
      * <p>A morning can be arbitrarily bad, and the log sink writes one event per entry: without a
      * ceiling a single outage is a write that outlives the run's own lock, and the events of the
      * morning anybody actually needed are behind the fifty thousand nobody read.
      *
+     * <p><strong>The ceiling bounds the two late kinds and nothing else.</strong> They are read
+     * against a cut-off rather than a window, so an entry this run leaves out is read again by the
+     * next one, older - dropping it costs a morning's place in a list and nothing more. The three
+     * failure kinds are read over a half-open window aligned to the schedule, so each row belongs
+     * to exactly one run's window and no run ever reads that window again: a failure dropped here
+     * would be a failure no output states anywhere, ever, and it would be dropped on the longest
+     * morning of the year, which is the morning it mattered. A cap that can do that is the silent
+     * loss this whole feature exists to end, so it is not allowed to do it -
+     * {@link ExceptionKind#recursEveryRun()} is where the two are told apart.
+     *
      * <p><strong>The counts are taken before the cap and never after it.</strong> A count that
      * shrank with the list would make the worst morning of the year read as a quieter one, which is
      * the exact reading this feature exists to make impossible. So the summary's five numbers are
-     * what the reads found and the {@code truncated} number says how many of them no output wrote:
-     * a reader who finds fewer events than the counts imply is told how many are missing rather
-     * than left to wonder whether a sink broke.
+     * what the reads found and the {@code truncated} number says how many <em>late</em> entries no
+     * output wrote: a reader who finds fewer events than the counts imply is told how many are
+     * missing rather than left to wonder whether a sink broke.
      *
      * <p>Oldest first is the half kept, because the oldest exception has been wrong longest and is
      * where a support engineer starts. The tail is not lost: it is the next run's, and it is
@@ -263,17 +273,33 @@ public class ExceptionReportService {
     private ExceptionReport capped(final String runId, final ReportWindow window,
             final Instant snapshotAt, final List<ExceptionEntry> entries) {
 
+        final List<ExceptionEntry> kept = new ArrayList<>(entries.size());
+        int recurring = 0;
+        int dropped = 0;
+        for (final ExceptionEntry entry : entries) {
+            if (entry.kind().recursEveryRun()) {
+                if (recurring < maxEntries) {
+                    recurring++;
+                    kept.add(entry);
+                } else {
+                    dropped++;
+                }
+            } else {
+                kept.add(entry);
+            }
+        }
+
         final ExceptionReport report;
-        if (entries.size() <= maxEntries) {
-            report = ExceptionReport.whole(runId, window, snapshotAt, entries);
+        if (dropped == 0) {
+            report = ExceptionReport.whole(runId, window, snapshotAt, kept);
         } else {
-            final int dropped = entries.size() - maxEntries;
-            LOG.warn("The morning report found more exceptions than one report carries, so the "
-                            + "oldest were kept and the rest are the next run's. run_id={} kept={} "
-                            + "dropped={}",
+            LOG.warn("The morning report found more of the recurring kinds than one report carries, "
+                            + "so the oldest were kept and the rest are the next run's. Every "
+                            + "failure is carried whatever the count. run_id={} late_kept={} "
+                            + "late_dropped={}",
                     runId, maxEntries, dropped);
-            report = new ExceptionReport(runId, window, snapshotAt, entries.subList(0, maxEntries),
-                    dropped, ExceptionReport.countsOf(entries));
+            report = new ExceptionReport(runId, window, snapshotAt, kept, dropped,
+                    ExceptionReport.countsOf(entries));
         }
         return report;
     }

@@ -1455,17 +1455,18 @@ public class PropertiesValidator implements InitializingBean {
      * A report capped at nothing is a morning that reads exactly like a quiet one.
      *
      * <p>The cap exists so that one very bad night cannot become a line-per-exception write that
-     * outlives its own lock, and it keeps the oldest entries and counts what it dropped. At zero it
-     * keeps none of them: the summary's five counts would still be true and every exception event
-     * would be missing, which is the same silence the whole feature exists to end - and it would be
-     * discovered at 07:00 on the morning it mattered rather than at startup.
+     * outlives its own lock, and it bounds the two late kinds alone - the failure kinds are carried
+     * whole, because a failure one window dropped is a failure no window would report again. At
+     * zero it keeps no late entry at all: the summary's five counts would still be true and every
+     * late event would be missing, which is the same silence the whole feature exists to end - and
+     * it would be discovered at 07:00 on the morning it mattered rather than at startup.
      */
     private static void validateTheReportCanCarryAtLeastOneException(final ReportProperties report) {
         if (report.maxEntries() < ONE_EXCEPTION) {
             throw new IllegalStateException(REPORT_MAX_ENTRIES + " (" + report.maxEntries()
                     + ") must be at least " + ONE_EXCEPTION + " - a report that carries no"
-                    + " exception at all is indistinguishable from a morning with nothing wrong"
-                    + " on it");
+                    + " late exception at all is indistinguishable from a morning with nothing"
+                    + " wrong on it");
         }
     }
 
@@ -1473,7 +1474,8 @@ public class PropertiesValidator implements InitializingBean {
      * A schedule nothing can read is two failures at once, and neither is discovered before 07:00.
      *
      * <p>The cron is the run's trigger <em>and</em> the window it reads back over
-     * ({@code ReportWindow.sinceLastScheduledRun}), so an unparseable one is a job
+     * ({@code ReportWindow.forScheduledRun} for the job, {@code sinceLastScheduledRun} for the
+     * command), so an unparseable one is a job
      * {@code @Scheduled} refuses at refresh and a window neither the run nor the command can open.
      * Unconditional on {@link ReportProperties#enabled()}, like the zone rule beside it: a schedule
      * that would be wrong in the next deployment is not made right by this one having the report
