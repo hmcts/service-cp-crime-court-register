@@ -28,28 +28,48 @@ required; the task records the initial observed result.
 
 ### Approved TDD exceptions
 
-**None.** This increment starts with no pre-approved exception of any kind, and none is granted in
-advance. Every task below is either a red/green pair, a Phase 1 infrastructure task recording
-evidence, an `[A]` characterisation, or a documentation task exempt from the loop. If a pair cannot
-be formed, the exception is written into this section with the design owner's dated approval
-**before** the commit lands, in the shape 002's exception blocks use - never argued for afterwards
-in a commit body.
+**None in advance.** This increment started with no pre-approved exception of any kind, and none is
+granted in advance. Every task below is either a red/green pair, a Phase 1 infrastructure task
+recording evidence, an `[A]` characterisation, or a documentation task exempt from the loop. If a
+pair cannot be formed, the exception is written into this section with the design owner's dated
+approval **before** the commit lands, in the shape 002's exception blocks use - never argued for
+afterwards in a commit body.
 
-**Proposed, awaiting design owner approval - NOT granted.** Review gate 1 found one rule in
-`config/PropertiesValidator` that landed at `0e0e7b1`, inside T003's green commit, with no test of
-its own: the `UUID_SHAPE` shape check on `courtregister.report.email.template-id`. The rule is
-correct and is fix P9's rule one morning earlier, but it was written without a red run, and no
-exception was recorded here before that commit landed - which is exactly what the paragraph above
-requires. The characterisation
-`ConfigurationValidationTest.ReportRefusals.a_malformed_template_id_refuses_to_start` landed at
-`de21621` and was **green on introduction**; its commit body records it as an `[A]` characterisation
-of an already-shipped rule and claims no exception for it. **The proposal** is to record a one-off
-TDD exception covering the `UUID_SHAPE` rule alone, dated to the design owner's approval, on the
-grounds that the rule is a verbatim reuse of one already pinned by
-`ConfigurationValidationTest.a_template_id_that_is_not_a_uuid_should_fail_startup` and that
-re-landing it as a pair would mean reverting a correct refusal in order to watch it fail.
-**Status: awaiting the design owner's approval.** Until that approval is given and dated in this
-block, this is not an approved exception, and the gap stands recorded as a gap.
+Two were found afterwards, by review gates 1 and 7, and neither was written here before its commit
+landed - which is the failure the paragraph above describes and not a licence. One is granted; one
+is proposed and not granted. Both are recorded here rather than argued for in a commit body:
+
+- **`0e0e7b1`** "the `UUID_SHAPE` shape check on `courtregister.report.email.template-id`", landed
+  inside T003's green commit. What landed without a red is one rule in `config/PropertiesValidator`:
+  a template id that is set but is not a UUID refuses startup. **No red run was recorded for it**
+  because it was written as part of the settings surface T003 shipped rather than as an answer to a
+  failing case, and no exception was recorded in this block before that commit landed - which is
+  exactly what the paragraph above requires. It is held now by
+  `ConfigurationValidationTest.ReportRefusals.a_malformed_template_id_refuses_to_start`, which
+  landed at `de21621` and was **green on introduction**; its commit body records it as an `[A]`
+  characterisation of an already-shipped rule and claims no exception for it. The grounds are that
+  the rule is fix P9's rule one morning earlier - a verbatim reuse of the one already pinned by
+  `ConfigurationValidationTest.a_template_id_that_is_not_a_uuid_should_fail_startup` - and that
+  re-landing it as a pair would mean reverting a correct refusal in order to watch it fail.
+  **Approved: design owner, 2026-09-15.**
+
+No other exception of this kind is pre-approved.
+
+- **`2a50b81`** "T068's `config/ReportEmailConfig`, landed with no test of its own."
+  **Proposed, awaiting design owner approval - NOT granted.** Review gate 7 found that T068 shipped
+  a new configuration class - two beans, one condition and an HTTP client - under a task whose named
+  green was `T063`'s sink-selection cases, which are unit cases over the sink and assert nothing
+  about which beans a context holds. No red run was recorded and no exception was written here
+  before the commit landed. T068's own narrative records two gaps rather than claiming one, and the
+  sharper of them was a real defect: a pod with the generation half off and the e-mail output on had
+  no `PayloadFileStore` and no file-service datasource, and would not have started. The cases that
+  should have preceded it landed at `9aa0d47` as `config/ReportEmailConfigTest`, four of them red,
+  and the defect was fixed at `bd56721`. **The proposal** is to record a one-off exception
+  covering the `ReportEmailConfig` wiring commit alone, on the grounds that the pair has now been
+  formed after the fact and that rewriting unpushed history to interleave it was judged the higher
+  risk - the same judgement 002's Phase 2 block records.
+  **Status: awaiting the design owner's approval.** Until that approval is given and dated in this
+  block, this is not an approved exception, and the gap stands recorded as a gap.
 
 **No `doc/DEFECT-FIXES.md` row is added, amended or flipped anywhere in this increment.** There is
 no legacy oracle for an exception report: neither the function app nor progression's leg produced
@@ -2228,15 +2248,115 @@ seams.**
       combination while the deployment gate holds the flag false, and the local stack runs the
       generation half, but it is the same relocation the repository beans needed at T044 and it is
       not done. Raised here for review gate 7 rather than fixed inside an implementation task.)
-- [ ] T069 Phase close: `./gradlew build` green; **review gate 7** (the two consumed contracts used
+- [x] T069 Phase close: `./gradlew build` green; **review gate 7** (the two consumed contracts used
       and not redefined, the shared request builder leaving the register path byte-identical, ids
       before calls, 202 and nothing else, no address anywhere, the deployment gate above restated in
       the PR narrative); findings land as red/green pairs.
       (build half done with this phase's tick: `./gradlew build -Dtest.noFailFast=true` BUILD
       SUCCESSFUL, exit 0, **3552 tests over 572 suites, 0 failures, 0 errors, 0 skipped**, with
       `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and the JaCoCo gate at LINE 0.88 /
-      BRANCH 0.85 all green, none of them loosened. **Review gate 7 is not done**: it runs in a new
-      session, and the two gaps recorded under T068 are the first things to put in front of it.)
+      BRANCH 0.85 all green, none of them loosened.
+      **Review gate 7 ran with three read-only reviewers**, on the committed tree and its test
+      results, with the two gaps T068 recorded put in front of it first. Verdicts: `code-reviewer`
+      **NEEDS CHANGES** (1 high, 1 low), `spec-validator` **DRIFT DETECTED** (1 medium, 1 low),
+      `qa` **FAIL**. What the gate was called for was found clean: the two consumed contracts are
+      used and not redefined - the body notificationnotify is sent is the four fields its own
+      vendored schema declares and the file-service write is the same two inserts in the same order
+      through the pinned changesets - the file id is minted and written into the run's line before
+      the write that uses it, 202 and nothing else is an acceptance on both adapters, and no
+      address reaches a line, a label or the CSV. The deployment gate is unchanged: the output ships
+      switched off until notificationnotify provides the template.
+      Findings, and where each was closed. The reds are at `9aa0d47` and the greens at `bd56721`;
+      `f9f5ddb` carries the one thing the phase's own build caught after them, which is
+      `StubGenerationAdaptersTest` following the bean that moved:
+      * **T068 shipped `config/ReportEmailConfig` with no test of its own** (HIGH, and the same
+        shape `qa` failed on). A new configuration - two beans, one condition and an HTTP client -
+        landed under a task whose named green was T063's sink-selection cases, which are unit cases
+        over the sink and assert nothing about which beans a context holds. **That is a TDD
+        violation and it is recorded as one**, in the "Approved TDD exceptions" block above, as a
+        second entry marked proposed and **not granted**: the block requires the exception to be
+        written with the design owner's dated approval *before* the commit lands, and it was not.
+        The cases that should have preceded it are `config/ReportEmailConfigTest`, four of them red.
+      * **A pod with the generation half off and the e-mail output on could not start** (the same
+        HIGH finding's substance, and T068's own sharper recorded gap). The `PayloadFileStore` beans
+        and the file-service datasource were behind `courtregister.generation.enabled`, and the
+        e-mail output writes a CSV into the file service before anybody is told about it - so
+        FR-004's deployment with the second output on held neither. They are behind
+        `config/FileServiceNeeded` now, which is generation-**or**-e-mail, in a new
+        `config/FileServiceConfig` beside the relocated datasource configuration; the validator's
+        `courtregister.fileservice.url` rule follows the same sentence and names the half that
+        asked. Nothing generation-only moved. Reds:
+        `a_pod_with_generation_off_and_email_on_starts_and_holds_two_sinks` (*"to have not failed:
+        but context failed to start: ... NoSuchBeanDefinitionException: No qualifying bean of type
+        'uk.gov.hmcts.cp.courtregister.application.PayloadFileStore' available"*),
+        `a_pod_with_email_on_holds_the_mailer_and_the_email_sink_as_singletons` (the same, through
+        `emailReportSink` parameter 0), `the_generating_pods_store_is_unchanged` (*"Expected size: 1
+        but was: 0 in: []"*) and `the_file_service_url_is_required_whenever_either_half_needs_it`
+        (*"to have failed but context started successfully"*).
+      * **`ReportEmailConfig`'s javadoc described where the store came from rather than why it is
+        there** (LOW). It read "the file store it is handed is the same one the generation half
+        writes payloads through", which was the sentence the defect was hiding behind: true of the
+        bean and wrong about the condition. It names `FileServiceNeeded` now, and says that a file
+        in the file service is what the two outward legs have in common.
+      * **The plan's Project Structure named neither the configuration nor the relocation**
+        (spec-validator, MEDIUM). `config/ReportEmailConfig` was a class the plan did not have, and
+        the "either half" condition existed in no document at all - which is why the validator rule
+        could name the generation half alone and read as correct. plan.md gains `ReportEmailConfig`,
+        `FileServiceConfig`, `FileServiceNeeded` and the two CHANGED lines beside them; Complexity
+        Tracking row 1 records that the file-service beans followed the same relocation the
+        scheduling split made, for the same reason; research §4 and data-model.md both state the
+        "either half" condition and the validator rule that matches it.
+      * **"the shared request builder leaves the register path byte-identical" was asserted only
+        over parsed bodies** (spec-validator, LOW). Every case in
+        `NotificationNotifyClientTest` reads `MAPPER.readTree(...)`, which normalises away exactly
+        what the claim is about - the order the four fields were written in - so the suite would
+        have gone on passing through a reordering, and reordering somebody else's command body is a
+        change to their contract whether or not their parser tolerates it.
+        `the_body_is_byte_for_byte_what_the_register_leg_has_always_sent` pins the exact serialised
+        string against a literal. **Green on introduction**, and said so here rather than left to
+        look like a red. Byte-identity *across* the refactor cannot be re-observed now that it has
+        landed; what evidences it is that suite being untouched by T066 and green, and this case
+        holding the same bytes from here on.
+      * **The mailer's "one attempt, no loop" was a reading of the class rather than an
+        assertion** (`qa`). `a_transient_status_is_one_request_and_no_retry` counts the requests for
+        408, 429 and 503 - the three statuses a retry would hide behind - and
+        `two_hundred_and_one_and_two_hundred_and_four_are_refused` covers the other two 2xx a proxy
+        answers with, beside the 200 already pinned. Both **green on introduction**: there is no
+        loop, and there never was one.
+      * **Two of the fold's four refusal arms were unasserted, and the failure line was unread**
+        (`qa`). `SEND_REFUSED` was the only reason any case named, so `SEND_FAILED` and
+        `SEND_UNANSWERED` were reachable only through the masking case, which reads log lines and
+        not the outcome.
+        `a_failed_and_an_unanswered_send_carry_their_own_reasons_and_the_first_refusal_wins` asserts
+        both orders, because which reason the delivery carries is which came first and not which is
+        worst; `the_file_id_is_on_the_warn_line_when_the_store_fails` asserts that the minted id
+        survives the failure, since that is the case where somebody has to go and look for a file.
+        Both **green on introduction**.
+      * **The CSV suite's awkward field had no line break, and its size case was ASCII** (`qa`).
+        A sink that left a break unquoted would make one exception read as two, and a `fileSize`
+        taken off `String.length()` agrees with the byte count of an ASCII file by accident. The
+        awkward value now carries the separator, the quote, a line break and a character outside
+        ASCII in one string, the quoting case asserts the file is three physical lines, and the
+        metadata case is driven from the same value. Both **green on introduction**.
+      **One finding is recorded and not fixed**, deliberately:
+      `courtregister.endpoints.notificationnotify` is required by the validator only where the
+      generation half is enabled, and `ReportEmailConfig` builds its `RestClient` over it - so a pod
+      with the e-mail output on and that endpoint unset starts clean and fails every morning's send.
+      It is the same class of defect as the one this gate fixed and it is **not** on this gate's
+      brief, which enumerated the file-service settings; fixing it here would be an uncatalogued
+      change made inside a remediation commit. It is raised for **review gate 8** at T077.
+      Nothing in this gate changed an outbound contract, a bounded reason an operator's tooling
+      already greps, a status code, or readiness on any deployment. The register leg's body, its
+      suite and its vendored-schema assertions are untouched.
+      Phase close, the second half: the whole-tree `./gradlew build -Dtest.noFailFast=true` run over
+      the greens was **3582 tests, 1 failed** - `StubGenerationAdaptersTest`'s
+      `all_four_modes_together_should_contribute_all_four_stubs`, asserting a `PayloadFileStore` the
+      configuration it imports no longer declares (*"to have a single bean of type
+      <PayloadFileStore> but found no beans of that type"*). That is the relocation's own
+      consequence and it is closed at `f9f5ddb`, which splits the four-port claim into the three
+      ports `StubGenerationConfig` still holds and one case of its own over `FileServiceConfig` -
+      the mode key unmoved, the e-mail half getting the same no-op, and a pod that writes no file
+      building neither adapter.)
 
 **Checkpoint**: US4 is implemented and proven under test. It stays switched off in every deployed
 environment until the notificationnotify team provides the template.
@@ -2308,7 +2428,18 @@ been touched.
       service's own that may be written directly (2026-09-14, on `main` at `94bd245`); this task does
       not restate it, it **adds** to that row that the exception CSV is a **second** write through
       the same pinned changesets 001-006, so a reader knows there are now two callers and not one.
-      Docs-only, exempt from the loop.
+      **And it sweeps the seven shipped javadoc citations of `.claude/rules/design_rules.md` by
+      path** - `grep -rn '.claude/rules' src/main src/test` finds them, in `ExceptionReportJob`,
+      `IntakeAgeSweep`, `ProcessingMetricsTest`, `ExceptionReportJobTest`, `IntakeAgeSweepTest`
+      (two) and `PdfPayloadMapperTest` - rewording each to cite the rule **by name** ("the service's
+      design rules on absorbed refusals") instead. A tooling path in shipped source is an attribution
+      fingerprint: it names the harness that wrote the line rather than the rule the line is about,
+      and it is the repository convention that no such trace is left in code, comments or docs. The
+      two `technical-rules.md` citations in `ComparatorContractTest` and `JsonParity` are the same
+      class of trace and go with them; the one in `src/test/resources/goldens/progression/
+      PROVENANCE.md` does too. **Approved by the design owner, 2026-09-15.** Deferred here from
+      review gates 5 and 6, which both recorded it as belonging with this sync. Docs-only, exempt
+      from the loop.
 - [ ] T075 [P] `.specify/memory/constitution.md` - `### Increments` gains **003
       "exception-report"**, 002 moves from "current" to "complete", and the Sync Impact Report header
       is updated for a **MINOR** amendment, **3.1.0 → 3.2.0**, with the bump rationale (a new

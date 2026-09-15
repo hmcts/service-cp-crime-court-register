@@ -578,6 +578,12 @@ the way the framework spells them:
 | `numberOfPages` | `1` |
 | `fileSize` | the CSV's byte count |
 
+The port both writes go through is chosen by `config/FileServiceNeeded` - `courtregister.generation
+.enabled` **or** `courtregister.report.email.enabled` - and not by the generation half's switch
+alone, because those are the two halves that write a file. `courtregister.fileservice.url` is
+required of whichever of them is on, the refusal naming the half that asked, and the mode key
+`courtregister.generation.fileservice-mode` still chooses LIVE or STUB for both.
+
 The two inserts are `FileServicePayloadStore`'s own, character for character, in the same order:
 **content first**, because `metadata.file_id` is a foreign key onto `content.file_id`. The content
 column is `bytea` and takes the CSV's UTF-8 bytes. **`FileServicePayloadStoreIT` owns the

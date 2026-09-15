@@ -256,6 +256,19 @@ below as an assumption rather than left as a marker.
   than the body. So arbitrary personalisation keys are contract-legal, and **the counts and the
   window travel in `personalisation`** as FR-006 and acceptance scenario 4.4 ask. No wording in the
   spec has to weaken: the body carries the summary, the CSV carries the detail.
+- **Both halves write a file, so the port is behind an "either half" condition.** Review gate 7
+  found the consequence of not saying so: the LIVE and STUB `PayloadFileStore` beans and the second
+  datasource under them were declared behind `courtregister.generation.enabled`, so a pod with the
+  generation half off and this output on held no store, no pool, and could not start - the FR-004
+  deployment this output exists for. They are in `config/FileServiceConfig` and
+  `config/FileServiceDataSourceConfig` behind `config/FileServiceNeeded` now, which answers
+  `courtregister.generation.enabled` **or** `courtregister.report.email.enabled`. An OR is what a
+  shared downstream needs and is what `@ConditionalOnProperty` cannot express, which is why it is a
+  `Condition` class. It is **not** a second cutover lever: neither setting decides which
+  implementation is live, and the one lever is still the `CourtRegisterService` flag the nightly job
+  reads. `PropertiesValidator` follows the same sentence - `courtregister.fileservice.url` is
+  required by whichever half writes a file, and the refusal names the half that asked. Nothing
+  generation-only moved: the renderer, the notifier and the flag reader are chosen where they were.
 - **The file-service write is permitted.** The design owner ruled on 2026-09-14 that the framework
   file service is the one store outside this service's own that may be written directly (design Q20,
   closed). The ruling is **already written down**: the consumed-contracts row "the framework
