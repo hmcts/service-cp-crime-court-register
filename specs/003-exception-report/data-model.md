@@ -58,8 +58,13 @@ Notes that matter:
   than a growing ledger. The same still-late request appears in Monday's report and in Tuesday's
   (acceptance scenario 1.6), and that is correct: a report is a statement about a moment.
 - **A request is reported under at most one kind per run** (FR-013). The two intake predicates are
-  disjoint by construction - `FAILED` is terminal and `RECEIVED`/`RETRYING` are not - so a request
-  that was late and has since failed appears once, as `REQUEST_FAILED`.
+  disjoint by construction - `FAILED` is terminal and `RECEIVED`/`RETRYING` are not - but they are
+  two statements taken a moment apart against a log the pipeline is still writing to, so a request
+  that fails between them comes back from both, as does one whose status column disagrees with
+  itself. `ExceptionReportService.build` therefore folds the two answers on `(source, request_id)`
+  and keeps the **failure**: a parked request is not going to finish on its own, and it is the
+  outcome an operator acts on. The fold is in the service because no single statement can see the
+  other's answer.
 - **A register recorded while the flag was OFF is never late.** `recordedUnbatchedBefore(...)`
   carries `activeUnbatched()`'s own predicate, which already excludes it, and that is exactly the
   spec's rule: those rows are the existing `list-batches --recorded-while-off` command's concern.
@@ -354,9 +359,9 @@ One thing wrong, of one kind. Every field that does not apply to the kind is `nu
 | `kind` | `ExceptionKind` | yes | yes | yes | yes | yes |
 | `source` | `String` | yes | yes | - | - | - |
 | `requestId` | `UUID` | yes | yes | - | - | - |
-| `hearingId` | `UUID` | yes | yes | - | - | - |
+| `hearingId` | `UUID` | yes | yes | yes, on the never-batched source only | - | - |
 | `hearingDay` | `LocalDate` | yes | yes | - | - | - |
-| `batchId` | `UUID` | - | - | yes (absent for a never-batched register) | yes | yes |
+| `batchId` | `UUID` | - | - | yes (absent for a never-batched register, which carries `hearingId` instead) | yes | yes |
 | `notificationId` | `UUID` | - | - | - | - | yes |
 | `courtCentreId` | `UUID` | - | - | yes | yes | yes |
 | `registerDate` | `LocalDate` | - | - | yes | yes | yes |
@@ -376,6 +381,13 @@ systemdocgenerator's `sdg_reason` (Principle VII).
 state machines; the values are bounded by those machines' own `CHECK` constraints, and the service
 never composes one.
 
+Two fields are **refused** rather than defaulted, in the record's compact constructor: the `kind`,
+which every count, query and CSV column is taken over, and `BATCH_FAILED`'s `reason`. A dead batch's
+reason is the whole of what it tells an operator - a `BATCH_LATE` entry names the stage it stopped
+at, and a failed batch carrying nothing says only that a batch ended - and the read that produces one
+selects a column the table declares `NOT NULL` on a row whose status is `FAILED`, so an absent value
+is a projection that has drifted from its table.
+
 ### `ExceptionReport`
 
 | Field | Type | Meaning |
@@ -383,7 +395,13 @@ never composes one.
 | `runId` | `String` | The correlation the caller opened and passed in, the same value `RunCorrelation` put in the MDC |
 | `window` | `ReportWindow` | What was asked for |
 | `snapshotAt` | `Instant` | When the reads were taken, which is not the same as when the events were written |
-| `entries` | `List<ExceptionEntry>` | Oldest first, across all five kinds |
+| `entries` | `List<ExceptionEntry>` | Oldest first, across all five kinds; ties broken by `kind` in enum order and then by the most specific identifier the entry carries |
+
+The tiebreak is not decoration. Age settles almost every pair, but not two things that went wrong at
+the same moment, and a sort that stopped at the age would leave those in whatever order the eight
+reads happen to be made in - the never-batched registers are read *after* the dead batches, so a
+stranded register sorted below a failed batch of the same age for no reason anybody could state, and
+two mornings of one report could not be diffed against each other.
 
 Plus `Map<ExceptionKind, Integer> counts()`, which answers **zero for every kind that has none**
 rather than omitting it, so the summary event always carries five numbers and an empty morning is
@@ -576,7 +594,9 @@ that must hold, and each is a named test:
 | Predicate | Holds because |
 |---|---|
 | Every `FAILED` request whose `updated_at` is inside the window appears exactly once | the read is a single statement over a primary-key-unique table; `SC-001` pins it over fifty mixed seeded rows |
-| No request appears under two kinds in one run | the two intake predicates partition on `status` (FR-013) |
+| No request appears under two kinds in one run | the two intake predicates partition on `status`, and `build` folds the two answers on `(source, request_id)` with the failure winning, because the statements are taken a moment apart (FR-013) |
+| Two exceptions of one age come back in the same order every run | the sort falls through to `kind` in enum order and then to the entry's most specific identifier |
+| A `BATCH_FAILED` entry always carries a bounded reason | `ExceptionEntry`'s compact constructor refuses one that does not |
 | A report with no entries still produces a summary with five zeroes | `counts()` answers zero for an absent kind (FR-012) |
 | The report writes nothing | every repository the service holds is a read interface in the test, verified with `verifyNoMoreInteractions` over the write methods (FR-014) |
 | The two gauges exist and read zero from start-up | both are registered in `ProcessingMetrics`' constructor (acceptance scenario 2.1) |

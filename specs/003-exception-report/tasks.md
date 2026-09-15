@@ -929,6 +929,10 @@ identifiers and nothing else.
       timestamp; each projection carries its own),
       `a_request_is_reported_under_at_most_one_kind_per_run` (FR-013: the two intake predicates
       partition on status, so a request that was late and has since failed appears once),
+      `each_late_batch_stage_is_asked_about_its_own_limit` (omitted from this list when it was
+      written, landed with the rest at `3261883`: the two rendering stages are held to the
+      rendering limit and a rendered batch to the notification limit, captured off the three reads
+      - one duration passed to all three would make the three stages one question),
       `an_empty_window_yields_five_zero_counts_and_no_entries` (FR-012),
       `the_same_still_late_request_appears_in_two_consecutive_windows` (scenario 1.6: a report is a
       snapshot of a moment, not a ledger of new arrivals),
@@ -1108,7 +1112,7 @@ identifiers and nothing else.
       -Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 36 tests, 0 failures, 0 errors;
       `both_logback_files_declare_the_arguments_provider` passes over both parameterisations. The
       provider sits beside `<mdc/>` in both files and nothing else in either changed.)
-- [ ] T037 Phase close: `./gradlew build` green; **review gate 4** (FR-002's field list, the
+- [x] T037 Phase close: `./gradlew build` green; **review gate 4** (FR-002's field list, the
       no-PII gate over both events, the read-only claim, the logging library's containment to one
       adapter, and that the summary event claims no delivery it could not observe); findings land as
       red/green pairs.
@@ -1121,12 +1125,105 @@ identifiers and nothing else.
       sinks held a field named `name` beside the port's `name()`, and `UseVarargs` once in
       `ExceptionReportServiceTest`. All three are style rather than behaviour and all three are
       closed at `49a15f4`.
-      **Review gate 4 has not run**, and this task is not complete until it has: the field list,
-      the no-PII gate over both events, the read-only claim, the logging library's containment to
-      one adapter, and the summary event claiming no delivery it could not observe. The plan's
-      test matrix already carries every row this phase's suites need -
-      `ExceptionReportServiceTest`, `ExceptionReportDeliveryTest`, `LogEventReportSinkTest` and
-      the extended `TelemetryPrivacyTest` - so `plan.md` is untouched by this phase.)
+      **Phase 4 was merged onto the increment branch before the gate ran**, at `77aff70`: the
+      phase had been built on a branch taken before Phase 3 landed, and the two touched
+      `config/ProcessingMetrics`. It resolved to **Phase 3's** version, whose
+      `exceptionReportRun(ReportRunOutcome)` and `intakeSweepFailure(SweepFailureReason)` take
+      enums; the Phase 4 stand-in `a00cdcf`, which declared String overloads so the report could
+      compile while Phase 3 was in flight, is superseded by it. Nothing in the report needed
+      changing - it calls only `exceptionReportDelivery(ReportSinkName, DeliveryStatus)` and
+      `exceptionsReported(ExceptionKind, int)`, which the Phase 3 surface already carried with the
+      same enum shape - and no other file conflicted. The merged tree built green with no fix:
+      `./gradlew build` BUILD SUCCESSFUL, exit 0, 3422 tests, 0 failures, 0 errors.
+      **Review gate 4 ran against the merged Phase 4 content** with three read-only reviewers.
+      Verdicts: `code-reviewer` **PASS** (0 high, 0 medium, 4 low), `spec-validator`
+      **COMPLIANT** (3 low), `qa` **FAIL** - narrow, and on two missing pins rather than on a
+      failing suite. The five things the gate was called for were found clean: FR-002's field list
+      matches data-model.md's ten and thirteen in the assertions that hold them, the no-PII gate
+      holds over both events (every value a token, no address selected by any read, no
+      `sdg_reason` anywhere), the read-only claim is verified over every repository the service
+      holds, `net.logstash.logback.argument.StructuredArguments` appears in `LogEventReportSink`
+      and nowhere else in `src/main`, and the summary event carries no `delivered_*` field of any
+      kind.
+      Findings, and where each was closed:
+      * **the FR-013 case could not fail.** `a_request_is_reported_under_at_most_one_kind_per_run`
+        seeded one read and asserted the entry that read produced, so no arrangement of the
+        service could have failed it while it claimed to pin the partition. It seeds the same
+        `(source, requestId)` in **both** intake answers now - what two statements taken a moment
+        apart against a log the pipeline is still writing to produce, and what a status column
+        that disagrees with itself produces - and asks for one entry, the failure. Red at
+        `757f996` ("Expected size: 1 but was: 2"), green at `f0ba22f`: `build` folds the two
+        answers on `(source, request_id)` with the failure winning, in the service because no
+        single statement can see the other's answer.
+      * **two exceptions of one age came back in whatever order the reads were made in** (QA).
+        The sort stopped at the age and `List.sort` is stable, so a never-batched register - read
+        *after* the dead batches - sorted below a failed batch of the same age for no reason
+        anybody could state, and two mornings of one report could not be diffed against each
+        other. `OLDEST_FIRST` falls through to `kind` in the enumeration's own order and then to
+        the most specific identifier the entry carries. Red
+        `entries_at_the_same_age_are_ordered_by_kind_then_identifier` at `757f996`, green at
+        `f0ba22f`.
+      * **a dead batch could be reported with no reason at all.** The reason is the whole of what
+        `BATCH_FAILED` tells an operator - `BATCH_LATE` names the stage it stopped at, and a
+        failed batch carrying nothing says only that a batch ended - and because the log sink
+        omits absent fields rather than emitting nulls, such a row would leave no trace of its own
+        emptiness. The read selects a column the table declares `NOT NULL` on a `FAILED` row, so
+        an absent one is a projection that has drifted from its table. `ExceptionEntry`'s compact
+        constructor refuses it. Red `a_batch_failed_entry_with_no_bounded_reason_is_refused` at
+        `757f996`, green at `f0ba22f`.
+      * **the one delivery nobody planned for was the one that escaped.** `askedOf` asked
+        `sink.name()` **inside** the catch, and a sink names itself off the thing it delivers
+        through - so the sink that has just broken is exactly the one that may no longer be able
+        to answer. A throw there left `deliver`, taking the outcomes of every sink already asked
+        with it, which is the loss the catch exists to prevent. The name is read once, before the
+        sink is asked. Red
+        `a_sink_whose_name_cannot_be_read_is_still_recorded_and_the_others_still_run` at
+        `757f996`, green at `f0ba22f`.
+      * **`<arguments/>` was asserted as characters** (spec-validator). A text search for the tag
+        is satisfied by it sitting inside an XML comment - the one shape a well-meant edit
+        actually takes, somebody quietening a local run - and by it sitting anywhere else in the
+        file, where logback would never read it as a provider. `both_logback_files_declare_the_arguments_provider`
+        parses the file and asks the encoder's own provider list. **Green on introduction**, at
+        `757f996`: both shipped files declare it properly.
+      * **the report's precondition was asked of the two classes together** (code-reviewer). The
+        `isNotEmpty()` inside `should_have_reached_every_line_the_two_legs_can_write` was
+        satisfied by `LogEventReportSink`'s two statements alone, so `ExceptionReportService`
+        could have declared none and the sweep would still have said it covered them. It is
+        `allSatisfy` over `GenerationLegs.THE_REPORT` now. **Green on introduction**, at
+        `757f996`; `theReportsLoggers()` went with it.
+      * **a read failure had no case at all** (QA). `build` has no catch and never had one, so an
+        outage already leaves unchanged and nothing is counted - but nothing said so, and the
+        distinction is the one FR-007's absorbed refusal turns on: a sink that refuses has a
+        built report to be classified against, and a read that refuses leaves an all-clear about
+        the half nobody could see. `a_read_failure_leaves_the_service_and_makes_no_report` is
+        **green on introduction**, at `757f996`, and the commit body says so.
+      * **an empty report had no case of its own** (code-reviewer, LOW). Every sink case seeded at
+        least one entry, so the loop writing nothing was covered only by the count assertions.
+        `an_empty_report_writes_exactly_one_event` is **green on introduction**, at `757f996`.
+      * LOW, folded into the two commits with no red of their own: `stuckSinceFriday()` carried
+        the parked request's id, which made the every-kind fixture seed one request twice
+        (`757f996`); `GenerationLegs.anUnfinishedRequest()` carried it too, which the fold would
+        have left with no REQUEST_LATE line to sweep (`f0ba22f`); and `kv(...)` was named in both
+        logback files, `data-model.md`, `research.md` and `plan.md` while the sink has written
+        `value(...)` since it was written - the same field, the wrong name (`f0ba22f`).
+      Record-keeping this phase's ticks got wrong, corrected here rather than by editing T029:
+      * T029's list omits `each_late_batch_stage_is_asked_about_its_own_limit`, which landed with
+        the rest at `3261883`. Added to the list above and to plan.md's matrix row.
+      Documentation this gate moved, against the earlier claim that `plan.md` was untouched by
+      this phase: plan.md's matrix rows for `ExceptionReportServiceTest`,
+      `ExceptionReportDeliveryTest`, `LogEventReportSinkTest`, `ExceptionReportModelTest` and
+      `TelemetryPrivacyTest` carry the cases above; data-model.md records the fold, the tiebreak
+      and the `BATCH_FAILED` reason as invariants, and its `ExceptionEntry` table now shows
+      `hearingId` on `BATCH_LATE` from the never-batched source - which the code has always
+      carried, and which is an identifier like every other value in that table.
+      Nothing in the gate asked for a `doc/DEFECT-FIXES.md` row and none was added: every finding
+      is about this increment's own report, not about a legacy behaviour.
+      Phase-close build **after** the findings landed, at `f0ba22f`: `./gradlew build
+      -Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 3427 tests over 562 suites, 0 failures,
+      0 errors; `checkstyleMain` and `checkstyleTest` at `maxWarnings = 0`, `pmdMain` and
+      `pmdTest`, and `jacocoTestCoverageVerification` at LINE 0.88 / BRANCH 0.85 all ran in that
+      one invocation and none of them was loosened - nothing under `gradle/`, `config/`,
+      `.github/` or `build.gradle` moved anywhere in Phase 4 or in this gate. Phase 5 may start.)
 
 **Checkpoint**: the report exists and writes its events. Nothing schedules it yet - that is Phase 5.
 
