@@ -2,8 +2,10 @@ package uk.gov.hmcts.cp.courtregister.application;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.List;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
+import uk.gov.hmcts.cp.courtregister.domain.DeliveryOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionReport;
 import uk.gov.hmcts.cp.courtregister.domain.ReportWindow;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedRequestRepository;
@@ -101,5 +103,17 @@ public class ExceptionReportService {
      */
     public ExceptionReport build(final ReportWindow window, final String runId) {
         return new ExceptionReport(runId, window, clock.instant(), List.of());
+    }
+
+    /**
+     * Hands one report to the sinks the caller chose, and says how each of them went.
+     *
+     * @param report the report to deliver
+     * @param sinks  the sinks this caller delivers to
+     * @return one outcome per sink, in the order they were asked
+     */
+    public List<DeliveryOutcome> deliver(final ExceptionReport report,
+            final Collection<ExceptionReportSink> sinks) {
+        return List.of();
     }
 }

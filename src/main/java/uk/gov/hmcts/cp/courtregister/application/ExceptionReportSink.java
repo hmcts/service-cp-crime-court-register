@@ -2,6 +2,7 @@ package uk.gov.hmcts.cp.courtregister.application;
 
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionReport;
+import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
 
 /**
  * Where one built report is delivered.
@@ -17,6 +18,20 @@ import uk.gov.hmcts.cp.courtregister.domain.ExceptionReport;
  * is that a report goes somewhere and that the somewhere says how it went.
  */
 public interface ExceptionReportSink {
+
+    /**
+     * Which of the two audiences this sink is, as the bounded label a line and a series carry.
+     *
+     * <p>A sink says its own name because the service has to be able to name a sink that
+     * <strong>broke</strong>. The contract below is that a sink answers rather than throws, and an
+     * implementation that throws anyway has to be classified by whoever asked it - and an outcome
+     * is addressed to a sink. Without this, the one delivery nobody planned for would be the one
+     * the run could not attribute, and {@code delivered_log} and {@code delivered_email} on the
+     * run's own line would be guesses.
+     *
+     * @return the bounded name of this sink
+     */
+    ReportSinkName name();
 
     /**
      * Delivers one report, answering how it went rather than throwing.
