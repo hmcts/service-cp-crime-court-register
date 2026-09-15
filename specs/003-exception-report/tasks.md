@@ -1868,7 +1868,8 @@ second read path.
       unchanged and `RegisterGenerationJobTest.the_run_id_should_not_outlive_the_run` is untouched
       and green.
       Findings, and where each was closed. The reds are at `2505125` and the greens at `3f8d502`
-      unless another commit is named:
+      unless another commit is named; `d6b9fcf` renames the two new factories for PMD and
+      `b749460` closes the fixture finding:
       * **the default window was computed inside the `--since` guard** (MEDIUM). A window nobody
         typed that could not be computed came back as exit 1 `unreadable-argument` with the usage
         line under it, sending an operator to look for an argument they never gave. The two windows
@@ -1944,14 +1945,19 @@ second read path.
         either caller reads - both read presence off the sinks the context contributed, and saying
         otherwise is what let the two copies diverge in the first place; and T052's tick narrative
         said one case landed beyond the task's list when two did - `--help` is the second. All four
-        corrected in this commit.
+        corrected at `d6b9fcf`, which carries the documentation this gate touched as well as the
+        rename, and the command's own class javadoc, which described neither new answer.
       Nothing in this gate changed an outbound contract, a bounded reason an operator's tooling
       already greps, or the five existing commands. `email-output-disabled` still names its setting,
       the exit codes are unchanged, and `delivered_email=disabled` is the word both callers now use
       for the context the MVP deploys.
       Phase close, the second half: `./gradlew build -Dtest.noFailFast=true` BUILD SUCCESSFUL,
-      exit 0, TESTS_LINE; Checkstyle at `maxWarnings = 0` over main and test, PMD over both, and the
-      JaCoCo gate at LINE 0.88 / BRANCH 0.85, none of them loosened.
+      exit 0, 3570 tests over 573 suites, 0 failures, 0 errors, 0 skipped; Checkstyle at
+      `maxWarnings = 0` over main and test, PMD over both, and the JaCoCo gate at LINE 0.88 /
+      BRANCH 0.85, none of them loosened. The run before it was green over the whole suite and red
+      on PMD alone - `ShortMethodName` on both new factories and `ConfusingTernary` on the word's
+      two negated branches - closed at `d6b9fcf` as names and conditions, with no branch, value or
+      line changed.
       **The finding gate 5 deferred is still deferred**: several shipped javadoc comments cite
       `.claude/rules/design_rules.md` by path, `ExceptionReportJob` among them, and the sweep that
       respells them belongs with Phase 8's documentation sync. No code changed for it here.)
