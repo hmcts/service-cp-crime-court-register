@@ -2537,7 +2537,7 @@ been touched.
       otherwise raise against it - that no DEFECT-FIXES row was added, because there is no legacy
       oracle for a capability that was never built. `.claude/agents/qa.md` needed nothing: it lists
       neither the ports nor the commands.
-- [ ] T077 [A] Final `./gradlew clean jacocoTestReport build` green on the branch (PMD over main and
+- [x] T077 [A] Final `./gradlew clean jacocoTestReport build` green on the branch (PMD over main and
       test, Checkstyle at `maxWarnings = 0`, the JaCoCo gate at its existing floors and not
       loosened); **review gate 8** over the whole increment against the seven gates of
       `.claude/rules/workflow.md`, checked rather than asserted: no REST surface anywhere under
@@ -2555,6 +2555,75 @@ been touched.
       96.89%** against the 0.88 floor and **BRANCH 1966/2189 = 89.81%** against the 0.85 floor
       (instruction 96.68%, method 98.31%, class 100%). **Review gate 8 remains open** and is the
       other half of this task.
+      **Review gate 8 ran with four reviewers** over the whole increment. Verdicts: `code-reviewer`
+      **PASS** (1 medium, 4 low), `qa` **PASS** (four follow-ups), `spec-validator` **COMPLIANT**
+      (2 low), `codex` **NOT SAFE TO MERGE** (3 high, 4 medium, 2 low). The seven gates of
+      `.claude/rules/workflow.md` were **checked rather than asserted** and are clean: no REST
+      surface anywhere under `src/main/java` (no `@RestController`, `@Controller` or any mapping
+      annotation), no `System.out` / `System.err` / `printStackTrace()` outside the javadoc of
+      `batch/cli/StandardOutput` that forbids them, no wildcard import in main or test, no empty
+      catch block in main, no PII at INFO or above (`TelemetryPrivacyTest`'s eleven groups green,
+      including the two arms of the sweep this gate added to the drive), and **`doc/DEFECT-FIXES.md`
+      byte-identical**: `git diff 94bd245 HEAD -- doc/DEFECT-FIXES.md` is empty. No row was added,
+      which is right - this increment has no legacy oracle.
+      The reds are at `a6e574e`, one commit carrying 31 failing assertions over 450 cases with the
+      compile-safe seams they needed. Every finding and the commit that closed it:
+      * **A scheduled run's window ended at the moment the scheduler fired it** (Codex, HIGH), so
+        two consecutive windows overlapped by however long the pod was busy; and **the three
+        window-bounded reads bound the start alone** (Codex, HIGH), so nothing closed them at the
+        other end. `2b80c62`: `forScheduledRun` is `[before(occurrence), occurrence)`, the reads are
+        `failedBetween(from, to)` over `>= :from AND < :to`, and the command's
+        `sinceLastScheduledRun` still ends at `now` because a snapshot's exclusive end at this
+        instant excludes nothing. Reds: *"expected: 2026-09-15T06:00:00Z but was:
+        2026-09-15T06:00:00.050Z"*, *"Wanted but not invoked: requests.failedBetween(...)"* and
+        three *"Expecting empty but was: [...status=FAILED...]"*. spec.md's FR-003 and data-model.md
+        carry the half-open wording, and **"a skipped run loses its period" is kept as documented**.
+      * **A report had no ceiling** (Codex, HIGH), judged as a configurable cap rather than a lock
+        change. `179cf25`: `courtregister.report.max-entries` at 5000, the oldest kept, the rest
+        counted. The counts are **not** capped - `ExceptionReport` carries them as a component with
+        a `whole(...)` factory - and the summary event's eleventh field and both run lines say
+        `truncated=N`. Reds: *"expected: 5000 but was: 0"*, *"to have failed but context started
+        successfully"*, *"to contain entries: ["truncated"="4"]"*.
+      * **The send identity was required of neither half** (Codex, MEDIUM) - the finding review
+        gate 7 named and left. `345138d`, beside the endpoint rule it mirrors; three test contexts
+        that enable generation without it follow at `85a1549`.
+      * **The report's mailer threw for every refusal but one** (Codex, MEDIUM), with the body
+        composed outside its own `try`, so one recipient's problem became every recipient's.
+        `bc97032`: the body moves inside, every `RuntimeException` answers `UNANSWERED`, and
+        `EmailReportSink` closes the same gap from the other side.
+      * **The five downstream reads were unindexed** (Codex, MEDIUM). `b93632f`:
+        `V5__exception_report_batch_and_notification_indexes.sql`, five partial indexes, each on its
+        own stage column and spelled as its statement spells its predicate. `SchemaMigrationV4IT` is
+        targeted at V4 so it keeps measuring one migration.
+      * **`ReportRunOutcome.from` called a partially delivered sink a failure** (Codex, MEDIUM).
+        `e1be504`: FAILED only where every sink delivered nothing.
+      * **The CSV ended its records LF** (Codex, LOW). `d6b5432`: CRLF, per RFC 4180, with the
+        header's own ending pinned so two dialects in one file cannot pass.
+      * **`SweepFailureReason` was in no bounded vocabulary and the sweep's `unexpected` arm had
+        never been driven** (`qa`). `940acf1`, which also extends `GenerationLegs` to the two lines
+        this gate's other fixes added.
+      * **SC-001's case asserted identifiers and not counts** (`qa`). `9bc4e25` adds
+        `exceptionEvents(written).hasSize(failures.size())` - **green on introduction**, and said so
+        rather than left to look like a red - and tags the two wall-clock cases `@Tag("timing")`,
+        wired as `-PexcludeTags=timing` with a README line.
+      * **Two recordings for one settlement in `DistributionPipeline`** (`code-reviewer`, MEDIUM).
+        `54dc7ae`: `requestSettled(Timing, RequestStatus)` counts and times, the `RequestOutcome`
+        overload is gone, nothing published changes.
+      * **The CLI's two empty catches, the duplicated delivery word, and two stale seam javadocs**
+        (`code-reviewer`, LOW). `e22f54a`; `eb10374` for the last stale seam narrative.
+      * **Documentation drift** (`spec-validator`, 2 LOW): plan.md's Project Structure and test
+        matrix, and the DEFECT-FIXES baseline. `5237a87`.
+      * `8b75b4c` carries the PMD and Checkstyle this gate's own changes left behind - an
+        `IdenticalCatchBranches`, four `OnlyOneReturn`, a literal, a short method name, a
+        suppression that stopped suppressing anything, two misplaced javadocs and three import
+        orders.
+      **Final build**: `./gradlew clean jacocoTestReport build -Dtest.noFailFast=true` **BUILD
+      SUCCESSFUL, exit 0**, 10m 31s, 24 tasks executed - the whole suite with PMD over main and
+      test, Checkstyle at `maxWarnings = 0` and the JaCoCo gate at its existing floors, none of them
+      loosened. **3614 tests over 576 suites, 0 failures, 0 errors, 0 skipped.** Coverage, read off
+      `build/reports/jacoco/test/jacocoTestReport.xml`: **LINE 6543/6753 = 96.89%** against the 0.88
+      floor and **BRANCH 1987/2212 = 89.83%** against the 0.85 floor (instruction 96.68%, method
+      98.32%, class 100%). **Review gate 8 is closed.**
 
 ---
 
