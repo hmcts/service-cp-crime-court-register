@@ -43,9 +43,6 @@ class ExceptionReportModelTest {
 
     private static final ZoneId COURTS = ZoneId.of("Europe/London");
 
-    /** A report no cap touched, which is every morning these cases are about. */
-    private static final int NOTHING_DROPPED = 0;
-
     private static final String COURTS_ZONE = "Europe/London";
 
     /** The morning report: 07:00 on a weekday, read in the courts' own zone. */
@@ -277,8 +274,8 @@ class ExceptionReportModelTest {
         @Test
         void a_report_without_entries_is_refused() {
             softly.assertThatThrownBy(
-                            () -> new ExceptionReport(RUN_ID, aWindow(), aWindow().to(), null,
-                                    NOTHING_DROPPED))
+                            () -> ExceptionReport.whole(RUN_ID, aWindow(), aWindow().to(),
+                                    null))
                     .as("an absent list is not an empty morning: a report that quietly read as "
                             + "nothing wrong is exactly the silence this service exists to end, "
                             + "and the rest of this model refuses a null rather than interpreting "
@@ -537,8 +534,8 @@ class ExceptionReportModelTest {
     // --- fixtures -----------------------------------------------------------------------------
 
     private static ExceptionReport report(final ExceptionEntry... entries) {
-        return new ExceptionReport(RUN_ID, aWindow(), london(2026, 9, 14, 7, 0),
-                List.of(entries), NOTHING_DROPPED);
+        return ExceptionReport.whole(RUN_ID, aWindow(), london(2026, 9, 14, 7, 0),
+                List.of(entries));
     }
 
     private static ReportWindow aWindow() {

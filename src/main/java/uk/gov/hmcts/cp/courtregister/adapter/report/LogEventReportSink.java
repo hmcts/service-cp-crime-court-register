@@ -26,10 +26,14 @@ import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
  * shape of a structured event is an adapter's concern in exactly the way an HTTP body is, so the
  * application layer imports no logging library (Principle V).
  *
- * <p>Two events. {@code courtregister_exception_report}, once per run, carries ten fields: the
- * event name, the run id, the window's two ends, the snapshot, and the five counts - present even
+ * <p>Two events. {@code courtregister_exception_report}, once per run, carries eleven fields: the
+ * event name, the run id, the window's two ends, the snapshot, the five counts - present even
  * when they are nought, so an empty morning is distinguishable from a morning the report did not
- * run. {@code courtregister_exception}, once per entry, carries the event name, the run id, the
+ * run - and the number the entry cap dropped. The counts are of what the reads found and the
+ * events are of what the report carries, so without that eleventh field a query would find fewer
+ * events than the counts imply and nothing would say whether a sink had broken.
+ *
+ * <p>{@code courtregister_exception}, once per entry, carries the event name, the run id, the
  * kind, and then <strong>only the fields that apply to that kind</strong>: an absent field is what
  * makes a KQL {@code isnotempty()} mean what it says, where a null would read as "was not known"
  * rather than as "does not apply".
@@ -72,8 +76,8 @@ public class LogEventReportSink implements ExceptionReportSink {
     @Override
     public DeliveryOutcome deliver(final ExceptionReport report) {
         final Map<ExceptionKind, Integer> counts = report.counts();
-        LOG.info("The exception report for this run has been built, and its window and its five "
-                        + "counts are the fields of this line.",
+        LOG.info("The exception report for this run has been built; its window, its five counts "
+                        + "and what the entry cap dropped are the fields of this line.",
                 value(EVENT, SUMMARY_EVENT),
                 value(RUN_ID, report.runId()),
                 value("window_from", report.window().from().toString()),
@@ -83,7 +87,8 @@ public class LogEventReportSink implements ExceptionReportSink {
                 value("request_late", counts.get(ExceptionKind.REQUEST_LATE)),
                 value("batch_late", counts.get(ExceptionKind.BATCH_LATE)),
                 value("batch_failed", counts.get(ExceptionKind.BATCH_FAILED)),
-                value("notification_failed", counts.get(ExceptionKind.NOTIFICATION_FAILED)));
+                value("notification_failed", counts.get(ExceptionKind.NOTIFICATION_FAILED)),
+                value("truncated", report.truncated()));
 
         for (final ExceptionEntry entry : report.entries()) {
             LOG.info("One of the exceptions this report found, with everything known about it in "

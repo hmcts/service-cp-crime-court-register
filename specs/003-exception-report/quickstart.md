@@ -184,7 +184,7 @@ ContainerLogV2
 ```
 
 ```kusto
-// did the report run, and what did it find - the summary event, ten fields
+// did the report run, and what did it find - the summary event, eleven fields
 ContainerLogV2
 | where TimeGenerated > ago(7d)
 | where LogMessage.event == "courtregister_exception_report"
@@ -197,7 +197,8 @@ ContainerLogV2
           requestLate      = toint(LogMessage.request_late),
           batchLate        = toint(LogMessage.batch_late),
           batchFailed      = toint(LogMessage.batch_failed),
-          notificationFailed = toint(LogMessage.notification_failed)
+          notificationFailed = toint(LogMessage.notification_failed),
+          truncated          = toint(LogMessage.truncated)
 | order by TimeGenerated desc
 ```
 

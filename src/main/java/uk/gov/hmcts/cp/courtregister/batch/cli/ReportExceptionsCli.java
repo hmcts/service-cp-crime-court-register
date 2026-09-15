@@ -291,7 +291,7 @@ public class ReportExceptionsCli {
             final ExceptionReport report = reporting.build(window, RunCorrelation.current());
             final List<DeliveryOutcome> delivered = reporting.deliver(report, asked);
             table(report);
-            runLine(window, report.entries().size(), delivered, emailAsked, startedAt);
+            runLine(window, report, delivered, emailAsked, startedAt);
             return everySinkTookIt(delivered) ? CliMain.SUCCESS : CliMain.FAILED;
         } catch (ReportNotWritten notWritten) {
             // The destination refused a line of the table, which is not a report that could not be
@@ -512,12 +512,12 @@ public class ReportExceptionsCli {
      * states a value for is a field that can quietly stop being a duration at all.
      *
      * @param window     the window that was read
-     * @param entries    how many exceptions the report held, across all five kinds
+     * @param report     what the reads found, for its count and for what the cap dropped
      * @param delivered  one outcome per sink asked, in the order they were asked
      * @param emailAsked whether {@code --email} was given and accepted
      * @param startedAt  when the invocation opened its correlation
      */
-    private void runLine(final ReportWindow window, final int entries,
+    private void runLine(final ReportWindow window, final ExceptionReport report,
             final List<DeliveryOutcome> delivered, final boolean emailAsked,
             final Instant startedAt) {
 
@@ -525,7 +525,8 @@ public class ReportExceptionsCli {
                 + " run_id=" + RunCorrelation.current()
                 + " window_from=" + window.from()
                 + " window_to=" + window.to()
-                + " entries=" + entries
+                + " entries=" + report.entries().size()
+                + " truncated=" + report.truncated()
                 + " delivered_log=" + said(ReportSinkName.LOG, delivered, true)
                 + " delivered_email=" + said(ReportSinkName.EMAIL, delivered, emailAsked)
                 + " outcome=" + ReportRunOutcome.from(delivered).name().toLowerCase(Locale.ROOT)

@@ -66,9 +66,6 @@ class EmailReportSinkTest {
     /** Three Youth Offending Team inboxes, which is what "one send per recipient" is about. */
     private static final String FIRST = "first.inbox@example.invalid";
 
-    /** A report no cap touched, which is every morning these cases are about. */
-    private static final int NOTHING_DROPPED = 0;
-
     private static final String SECOND = "second.inbox@example.invalid";
 
     private static final String THIRD = "third.inbox@example.invalid";
@@ -402,8 +399,7 @@ class EmailReportSinkTest {
     }
 
     private static ExceptionReport aReportOf(final ExceptionEntry... entries) {
-        return new ExceptionReport(RUN_ID, WINDOW, SNAPSHOT_AT, List.of(entries),
-                NOTHING_DROPPED);
+        return ExceptionReport.whole(RUN_ID, WINDOW, SNAPSHOT_AT, List.of(entries));
     }
 
     private static ExceptionEntry oneRequestFailed() {

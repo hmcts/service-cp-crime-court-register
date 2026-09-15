@@ -16,6 +16,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
@@ -79,9 +80,6 @@ class ReportExceptionsCliTest {
 
     /** The moment every window in this suite ends at, fixed so the arithmetic is readable. */
     private static final Instant NOW = Instant.parse("2026-09-15T09:30:00Z");
-
-    /** A report no cap touched, which is every morning these cases are about. */
-    private static final int NOTHING_DROPPED = 0;
 
     /** The report's own schedule, which is what an absent window is measured back through. */
     private static final String CRON = "0 0 7 * * MON-FRI";
@@ -204,7 +202,7 @@ class ReportExceptionsCliTest {
 
     /** Three exceptions, one of each of three kinds, given to the service to answer with. */
     private static ExceptionReport aReportOf(final String runId, final ReportWindow window) {
-        return new ExceptionReport(runId, window, NOW, List.of(
+        return ExceptionReport.whole(runId, window, NOW, List.of(
                 new ExceptionEntry(ExceptionKind.REQUEST_LATE, "RESULTS", REQUEST_ID, HEARING_ID,
                         REGISTER_DATE, null, null, null, null, "RETRYING", 2, null, YOUNGEST),
                 new ExceptionEntry(ExceptionKind.BATCH_FAILED, null, null, null, null, BATCH_ID,
@@ -212,7 +210,7 @@ class ReportExceptionsCliTest {
                         MIDDLE),
                 new ExceptionEntry(ExceptionKind.NOTIFICATION_FAILED, null, null, null, null,
                         BATCH_ID, NOTIFICATION_ID, COURT_CENTRE, REGISTER_DATE, "FAILED", 3, "502",
-                        OLDEST)), NOTHING_DROPPED);
+                        OLDEST)));
     }
 
     /** Arranges the service to answer the three exceptions, delivered as the caller says. */
@@ -552,8 +550,8 @@ class ReportExceptionsCliTest {
         @Test
         void an_empty_window_should_print_one_line_saying_so() {
             when(reporting.build(any(ReportWindow.class), any())).thenAnswer(invocation ->
-                    new ExceptionReport(invocation.getArgument(1), invocation.getArgument(0), NOW,
-                            List.of(), NOTHING_DROPPED));
+                    ExceptionReport.whole(invocation.getArgument(1),
+                            invocation.getArgument(0), NOW, List.of()));
             when(reporting.deliver(any(ExceptionReport.class), anyCollection()))
                     .thenReturn(List.of(tookIt(ReportSinkName.LOG)));
 
@@ -655,8 +653,8 @@ class ReportExceptionsCliTest {
         @Test
         void the_last_line_should_carry_the_truncated_count() {
             when(reporting.build(any(ReportWindow.class), any())).thenAnswer(invocation ->
-                    new ExceptionReport(invocation.getArgument(1), invocation.getArgument(0), NOW,
-                            List.of(), 7));
+                    new ExceptionReport(invocation.getArgument(1), invocation.getArgument(0),
+                            NOW, List.of(), 7, Map.of()));
             when(reporting.deliver(any(ExceptionReport.class), anyCollection()))
                     .thenReturn(List.of(tookIt(ReportSinkName.LOG)));
 

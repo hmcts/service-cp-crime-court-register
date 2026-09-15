@@ -103,14 +103,6 @@ public class ExceptionReportService {
     /** What a register that no batch was ever assembled for is, as its own state's name. */
     private static final String RECORDED = "RECORDED";
 
-    /**
-     * What a report that the cap did not touch dropped, which is every ordinary morning.
-     *
-     * <p><strong>Seam.</strong> The cap itself lands with the setting that states it; until then
-     * a report carries every entry the reads found and says so.
-     */
-    private static final int NOTHING_DROPPED = 0;
-
     private final ProcessedRequestRepository requests;
 
     private final RegisterBatchRepository batches;
@@ -125,12 +117,7 @@ public class ExceptionReportService {
 
     private final Duration notifiedWithin;
 
-    /**
-     * How many exceptions one report may carry.
-     *
-     * <p><strong>Seam.</strong> Held here so the setting's shape is real; the truncation itself
-     * lands with the fold that applies it.
-     */
+    /** How many exceptions one report may carry before the rest are dropped and counted. */
     private final int maxEntries;
 
     private final String generationCron;
@@ -244,10 +231,47 @@ public class ExceptionReportService {
         }
 
         entries.sort(OLDEST_FIRST);
-        final ExceptionReport report =
-                new ExceptionReport(runId, window, snapshotAt, entries, NOTHING_DROPPED);
+        final ExceptionReport report = capped(runId, window, snapshotAt, entries);
         report.counts().forEach(metrics::exceptionsReported);
         return report;
+    }
+
+    /**
+     * The report, with the oldest entries kept and the rest counted rather than written.
+     *
+     * <p>A morning can be arbitrarily bad, and the log sink writes one event per entry: without a
+     * ceiling a single outage is a write that outlives the run's own lock, and the events of the
+     * morning anybody actually needed are behind the fifty thousand nobody read.
+     *
+     * <p><strong>The counts are taken before the cap and never after it.</strong> A count that
+     * shrank with the list would make the worst morning of the year read as a quieter one, which is
+     * the exact reading this feature exists to make impossible. So the summary's five numbers are
+     * what the reads found and the {@code truncated} number says how many of them no output wrote:
+     * a reader who finds fewer events than the counts imply is told how many are missing rather
+     * than left to wonder whether a sink broke.
+     *
+     * <p>Oldest first is the half kept, because the oldest exception has been wrong longest and is
+     * where a support engineer starts. The tail is not lost: it is the next run's, and it is
+     * counted here.
+     *
+     * @param runId      the correlation the caller opened
+     * @param window     what was asked for
+     * @param snapshotAt when the reads were taken
+     * @param entries    everything found, already sorted oldest first
+     * @return the report, truncated where it had to be
+     */
+    private ExceptionReport capped(final String runId, final ReportWindow window,
+            final Instant snapshotAt, final List<ExceptionEntry> entries) {
+
+        if (entries.size() <= maxEntries) {
+            return ExceptionReport.whole(runId, window, snapshotAt, entries);
+        }
+        final int dropped = entries.size() - maxEntries;
+        LOG.warn("The morning report found more exceptions than one report carries, so the oldest "
+                        + "were kept and the rest are the next run's. run_id={} kept={} dropped={}",
+                runId, maxEntries, dropped);
+        return new ExceptionReport(runId, window, snapshotAt, entries.subList(0, maxEntries),
+                dropped, ExceptionReport.countsOf(entries));
     }
 
     /**

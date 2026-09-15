@@ -502,6 +502,16 @@ courtregister:
     # refused, because unset and zero are different things to mean.
     #
     # There is also NO window key. The window is the cron above.
+    #
+    # How many exceptions one report may carry. A morning can be arbitrarily bad and the log sink
+    # writes one event per exception, so without a ceiling a single outage is a write that outlives
+    # the run's own lock and the events anybody needed are behind the fifty thousand nobody read.
+    # Over the cap the OLDEST are kept - they have been wrong longest - and the rest are counted as
+    # truncated on the summary event and on both run lines. The five counts are NOT capped: they are
+    # what the reads found, because a count that shrank with the list would make the worst morning of
+    # the year read as a quieter one. A zero is refused at startup: a report that carries nothing is
+    # indistinguishable from a morning with nothing wrong on it.
+    max-entries: ${COURTREGISTER_REPORT_MAX_ENTRIES:5000}
     email:
       # The e-mail output, switchable independently of the Log Analytics output: a stack whose
       # notificationnotify template has not been provided yet still writes the events, and support

@@ -178,6 +178,7 @@ public class PropertiesValidator implements InitializingBean {
     private static final String REPORT_REQUEST_TERMINAL_WITHIN = REPORT + ".request-terminal-within";
     private static final String REPORT_BATCH_GENERATED_WITHIN = REPORT + ".batch-generated-within";
     private static final String REPORT_NOTIFIED_WITHIN = REPORT + ".notified-within";
+    private static final String REPORT_MAX_ENTRIES = REPORT + ".max-entries";
     private static final String REPORT_EMAIL_ENABLED = REPORT + ".email.enabled";
     private static final String REPORT_EMAIL_TEMPLATE = REPORT + ".email.template-id";
     private static final String REPORT_EMAIL_RECIPIENTS = REPORT + ".email.recipients";
@@ -1407,8 +1408,26 @@ public class PropertiesValidator implements InitializingBean {
         requirePositive(report.requestTerminalWithin(), REPORT_REQUEST_TERMINAL_WITHIN);
         requirePositive(report.notifiedWithin(), REPORT_NOTIFIED_WITHIN);
         validateTheRenderingLimitIsUsableWhereverItCameFrom(report, generation);
+        validateTheReportCanCarryAtLeastOneException(report);
         validateTheReportLockOutlivesItsRun(report);
         validateTheReportCanReachSomebody(report);
+    }
+
+    /**
+     * A report capped at nothing is a morning that reads exactly like a quiet one.
+     *
+     * <p>The cap exists so that one very bad night cannot become a line-per-exception write that
+     * outlives its own lock, and it keeps the oldest entries and counts what it dropped. At zero it
+     * keeps none of them: the summary's five counts would still be true and every exception event
+     * would be missing, which is the same silence the whole feature exists to end - and it would be
+     * discovered at 07:00 on the morning it mattered rather than at startup.
+     */
+    private static void validateTheReportCanCarryAtLeastOneException(final ReportProperties report) {
+        if (report.maxEntries() < 1) {
+            throw new IllegalStateException(REPORT_MAX_ENTRIES + " (" + report.maxEntries()
+                    + ") must be at least 1 - a report that carries no exception at all is"
+                    + " indistinguishable from a morning with nothing wrong on it");
+        }
     }
 
     /**

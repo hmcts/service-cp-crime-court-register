@@ -30,12 +30,14 @@ import uk.gov.hmcts.cp.courtregister.domain.ReportWindow;
  * which window it covers, what correlation the whole of it happened under, and how it went.
  *
  * <p><strong>The window needs no setting.</strong> It opens at the previous occurrence of this
- * job's own cron and closes at the moment the run fired, so a Monday run reads back to Friday and
- * every failure lands in exactly one report. A duration beside the schedule would be one fact
- * written twice, and the morning the two disagreed would be the morning something fell into the gap
- * between two windows - or was reported in both. The cron and the zone are handed in as well as
- * annotated on for that reason: they have to be the same two strings, and a window measured through
- * a different schedule than the one that fired would open on a morning that never ran.
+ * job's own cron and closes at this run's own occurrence, so a Monday run reads back to Friday and
+ * every failure lands in exactly one report. Both ends are the schedule's and neither is the
+ * scheduler's: an end taken off the firing instant would move with how busy the pod was, and the
+ * slice between two runs' start times would be read by both. A duration beside the schedule would
+ * be one fact written twice, and the morning the two disagreed would be the morning something fell
+ * into the gap between two windows. The cron and the zone are handed in as well as annotated on for
+ * that reason: they have to be the same two strings, and a window measured through a different
+ * schedule than the one that fired would open on a morning that never ran.
  *
  * <p><strong>The line is written after every sink has returned.</strong> It carries
  * {@code delivered_log} and {@code delivered_email}, which are claims about deliveries that have
@@ -182,10 +184,12 @@ public class ExceptionReportJob {
         final Instant startedAt = clock.instant();
         final ReportWindow window = ReportWindow.forScheduledRun(cron, zone, startedAt);
         int entries = NOTHING_BUILT;
+        int truncated = NOTHING_BUILT;
         List<DeliveryOutcome> delivered = List.of();
         try {
             final ExceptionReport report = reporting.build(window, runId);
             entries = report.entries().size();
+            truncated = report.truncated();
             delivered = reporting.deliver(report, sinks);
             return report;
         } catch (RuntimeException stopped) {
@@ -198,7 +202,7 @@ public class ExceptionReportJob {
                     stopped.getClass().getName());
             throw stopped;
         } finally {
-            recorded(runId, window, entries, delivered, startedAt);
+            recorded(runId, window, entries, truncated, delivered, startedAt);
         }
     }
 
@@ -217,18 +221,19 @@ public class ExceptionReportJob {
      *
      * @param runId     the correlation this run happened under, as the caller handed it in
      * @param window    the window that was read
-     * @param entries   how many exceptions the report held, across all five kinds
+     * @param entries   how many exceptions the report carried, across all five kinds
+     * @param truncated how many more the reads found and the cap dropped
      * @param delivered one outcome per sink asked, in the order they were asked
      * @param startedAt when the run opened its correlation
      */
     private void recorded(final String runId, final ReportWindow window, final int entries,
-            final List<DeliveryOutcome> delivered, final Instant startedAt) {
+            final int truncated, final List<DeliveryOutcome> delivered, final Instant startedAt) {
 
         final ReportRunOutcome outcome = ReportRunOutcome.from(delivered);
         metrics.exceptionReportRun(outcome);
-        LOG.info("event={} run_id={} window_from={} window_to={} entries={} delivered_log={} "
-                        + "delivered_email={} outcome={} duration_ms={}",
-                RUN_EVENT, runId, window.from(), window.to(), entries,
+        LOG.info("event={} run_id={} window_from={} window_to={} entries={} truncated={} "
+                        + "delivered_log={} delivered_email={} outcome={} duration_ms={}",
+                RUN_EVENT, runId, window.from(), window.to(), entries, truncated,
                 said(ReportSinkName.LOG, delivered), said(ReportSinkName.EMAIL, delivered),
                 outcome.name().toLowerCase(Locale.ROOT),
                 Duration.between(startedAt, clock.instant()).toMillis());

@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -69,9 +70,6 @@ class ExceptionReportJobTest {
 
     /** Returned when a meter is absent, so a missing instrument fails as an assertion. */
     private static final double ABSENT = -1;
-
-    /** A report no cap touched, which is every morning these cases are about. */
-    private static final int NOTHING_DROPPED = 0;
 
     /** The report's own schedule, which is also what its window is measured back through. */
     private static final String CRON = "0 0 7 * * MON-FRI";
@@ -260,7 +258,7 @@ class ExceptionReportJobTest {
         try (CapturedLog log = CapturedLog.capturing(ExceptionReportJob.class)) {
             when(reporting.build(any(), any())).thenAnswer(call -> new ExceptionReport(
                     call.getArgument(1), ReportWindow.forScheduledRun(CRON, ZONE, FIRED_AT),
-                    FIRED_AT, List.of(), 3));
+                    FIRED_AT, List.of(), 3, Map.of()));
             delivered(DeliveryStatus.DELIVERED, ReportSinkName.LOG);
 
             jobOver(List.of(logSink)).run();
@@ -453,8 +451,8 @@ class ExceptionReportJobTest {
 
     /** A morning with nothing wrong on it, which is what most of these cases are about. */
     private static ExceptionReport emptyReport(final String runId) {
-        return new ExceptionReport(runId, ReportWindow.forScheduledRun(CRON, ZONE, FIRED_AT),
-                FIRED_AT, List.of(), NOTHING_DROPPED);
+        return ExceptionReport.whole(runId, ReportWindow.forScheduledRun(CRON, ZONE, FIRED_AT),
+                FIRED_AT, List.of());
     }
 
     private static DeliveryOutcome outcome(

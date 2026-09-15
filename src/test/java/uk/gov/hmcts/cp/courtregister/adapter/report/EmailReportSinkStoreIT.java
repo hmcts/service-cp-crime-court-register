@@ -62,9 +62,6 @@ class EmailReportSinkStoreIT {
     /** The database created inside the shared container to carry the framework's schema. */
     private static final String DATABASE = "fileservice_email";
 
-    /** A report no cap touched, which is every morning these cases are about. */
-    private static final int NOTHING_DROPPED = 0;
-
     /** The plain-DDL translation of the vendored changesets; the changesets remain the authority. */
     private static final Path SCHEMA = Path.of("docker", "fileservice", "init.sql");
 
@@ -297,9 +294,9 @@ class EmailReportSinkStoreIT {
 
     /** The report the sink is given: one window, one snapshot, the entries in the order handed in. */
     private static ExceptionReport reportOf(final ExceptionEntry... entries) {
-        return new ExceptionReport("a-run-the-caller-already-opened",
+        return ExceptionReport.whole("a-run-the-caller-already-opened",
                 new ReportWindow(SNAPSHOT_AT.minusSeconds(3600), SNAPSHOT_AT), SNAPSHOT_AT,
-                List.of(entries), NOTHING_DROPPED);
+                List.of(entries));
     }
 
     private static ExceptionEntry requestFailed(final long ageSeconds) {

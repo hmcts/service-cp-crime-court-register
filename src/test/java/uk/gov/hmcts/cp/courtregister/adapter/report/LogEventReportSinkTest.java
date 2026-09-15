@@ -47,9 +47,6 @@ class LogEventReportSinkTest {
 
     private static final Instant WINDOW_FROM = Instant.parse("2026-09-14T06:00:00Z");
 
-    /** A report no cap touched, which is every morning these cases are about. */
-    private static final int NOTHING_DROPPED = 0;
-
     private static final Instant WINDOW_TO = Instant.parse("2026-09-15T06:00:00Z");
 
     private static final Instant SNAPSHOT_AT = Instant.parse("2026-09-15T06:00:01Z");
@@ -118,7 +115,8 @@ class LogEventReportSinkTest {
         void the_summary_event_carries_the_truncated_count() {
             final Map<String, String> capped = fieldsOf(summaryFrom(new ExceptionReport(RUN_ID,
                     new ReportWindow(WINDOW_FROM, WINDOW_TO), SNAPSHOT_AT,
-                    List.of(requestFailed()), 4)));
+                    List.of(requestFailed()), 4,
+                    Map.of(ExceptionKind.REQUEST_FAILED, 5))));
 
             assertThat(capped)
                     .as("how many the cap dropped, so a query that finds one event under a count "
@@ -380,8 +378,8 @@ class LogEventReportSinkTest {
     }
 
     private static ExceptionReport reportOf(final ExceptionEntry... entries) {
-        return new ExceptionReport(RUN_ID, new ReportWindow(WINDOW_FROM, WINDOW_TO), SNAPSHOT_AT,
-                List.of(entries), NOTHING_DROPPED);
+        return ExceptionReport.whole(RUN_ID, new ReportWindow(WINDOW_FROM, WINDOW_TO),
+                SNAPSHOT_AT, List.of(entries));
     }
 
     private static ExceptionEntry requestFailed() {

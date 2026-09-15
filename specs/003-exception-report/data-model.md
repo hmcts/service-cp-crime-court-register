@@ -409,7 +409,9 @@ is a projection that has drifted from its table.
 | `runId` | `String` | The correlation the caller opened and passed in, the same value `RunCorrelation` put in the MDC |
 | `window` | `ReportWindow` | What was asked for |
 | `snapshotAt` | `Instant` | When the reads were taken, which is not the same as when the events were written |
-| `entries` | `List<ExceptionEntry>` | Oldest first, across all five kinds; ties broken by `kind` in enum order and then by the most specific identifier the entry carries |
+| `entries` | `List<ExceptionEntry>` | Oldest first, across all five kinds; ties broken by `kind` in enum order and then by the most specific identifier the entry carries. **At most `courtregister.report.max-entries` of them** |
+| `truncated` | `int` | How many more the reads found and the cap dropped; nought on every ordinary morning |
+| `counts` | `Map<ExceptionKind, Integer>` | How many of each kind the reads found, **before** the cap, zero-filled |
 
 The tiebreak is not decoration. Age settles almost every pair, but not two things that went wrong at
 the same moment, and a sort that stopped at the age would leave those in whatever order the eight
@@ -417,9 +419,17 @@ reads happen to be made in - the never-batched registers are read *after* the de
 stranded register sorted below a failed batch of the same age for no reason anybody could state, and
 two mornings of one report could not be diffed against each other.
 
-Plus `Map<ExceptionKind, Integer> counts()`, which answers **zero for every kind that has none**
-rather than omitting it, so the summary event always carries five numbers and an empty morning is
-distinguishable from a morning the report did not run (FR-012, acceptance scenario 1.5).
+`counts` answers **zero for every kind that has none** rather than omitting it, so the summary event
+always carries five numbers and an empty morning is distinguishable from a morning the report did
+not run (FR-012, acceptance scenario 1.5). It is a **component rather than a derivation**, which is
+the whole of what the cap costs the model: a count taken from `entries` would shrink with them, and
+the worst morning of the year would read as a quieter one. `ExceptionReport.whole(...)` is the
+factory for a report the cap did not reach, whose counts are its own entries'.
+
+**The cap keeps the oldest.** A morning can be arbitrarily bad and the log sink writes one event per
+entry, so without a ceiling one outage is a write that outlives the run's own lock. The oldest have
+been wrong longest and are where a support engineer starts; the tail is the next run's, and it is
+counted rather than lost.
 
 The `runId` is an argument rather than something the report reads for itself:
 `ExceptionReportService.build(ReportWindow window, String runId)` takes it, and whoever opened the
@@ -664,10 +674,16 @@ group already makes about the other five commands).
 | `event` | string | `courtregister_exception_report` |
 | `run_id` | string | the run's correlation, the same value on every line of the run |
 | `window_from`, `window_to`, `snapshot_at` | ISO-8601 instants | |
-| `request_failed`, `request_late`, `batch_late`, `batch_failed`, `notification_failed` | integers | always present, zero included |
+| `request_failed`, `request_late`, `batch_late`, `batch_failed`, `notification_failed` | integers | always present, zero included; **what the reads found**, never what the cap kept |
+| `truncated` | integer | how many the entry cap dropped; nought on every ordinary morning |
 
-**Ten fields**: `event`, `run_id`, the three instants and the five counts. That number is stated
-once, here, and the log sink's test counts against it.
+**Eleven fields**: `event`, `run_id`, the three instants, the five counts and `truncated`. That
+number is stated once, here, and the log sink's test counts against it.
+
+The last of them is what makes the other five readable. The counts are of what the reads found and
+the exception events are of what the report carries, so a query over a capped morning finds fewer
+events than the counts imply; `truncated` says how many are missing, and a reader who is not told
+that is a reader deciding whether a sink broke.
 
 **The summary event carries no delivery status, deliberately.** It is written *by* a sink, while the
 other sink may not have been asked yet and this one cannot know how it went itself - a sink that
@@ -682,7 +698,7 @@ belongs to whoever held every outcome, which is the job (or the command), after 
 
 ```
 event=exception_report_run run_id=<id> window_from=<instant> window_to=<instant> entries=<n>
-  delivered_log=ok|failed delivered_email=ok|failed|skipped|disabled
+  truncated=<n> delivered_log=ok|failed delivered_email=ok|failed|skipped|disabled
   outcome=delivered|partial|failed duration_ms=<n>
 ```
 
@@ -692,6 +708,7 @@ event=exception_report_run run_id=<id> window_from=<instant> window_to=<instant>
 | `run_id` | the run's correlation |
 | `window_from`, `window_to` | the window that was read |
 | `entries` | how many exceptions the report holds, across all five kinds |
+| `truncated` | how many more the reads found and `courtregister.report.max-entries` dropped |
 | `delivered_log` | `ok` or `failed` |
 | `delivered_email` | `ok`, `failed`, `skipped` (the command was run without `--email`) or `disabled` (there is no e-mail sink on the context, which is what `courtregister.report.email.enabled=false` produces). Both callers read presence off the sinks the context contributed, never off the setting |
 | `outcome` | `delivered` (every sink asked said ok), `partial` (at least one sink asked failed and at least one said ok), or `failed` (the run could not build the report, or no sink asked said ok) |
@@ -699,7 +716,7 @@ event=exception_report_run run_id=<id> window_from=<instant> window_to=<instant>
 
 It is a flat line rather than a structured event for the reason the run report already is one: it is
 one line per run, read by eye and by a single-field filter, not a row a saved query aggregates.
-`ReportExceptionsCli` prints the **equivalent** as its last line, with the same nine fields in the
+`ReportExceptionsCli` prints the **equivalent** as its last line, with the same ten fields in the
 same order - `duration_ms` included, measured on the injected clock between the invocation opening
 its correlation and writing this line, exactly as the job measures its own - so an on-demand run
 says the same things about its own delivery that the 07:00 run does. The fold behind `outcome` and
