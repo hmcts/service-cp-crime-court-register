@@ -238,11 +238,6 @@ public class EmailReportSink implements ExceptionReportSink {
      * @param report the report being delivered
      * @return the fold: everybody, some, or nobody
      */
-    // PMD.AvoidInstantiatingObjectsInLoops: one mail per recipient is the contract, not an
-    // allocation to be hoisted - notificationnotify keys its aggregate on the notification id, so
-    // one object reused would be one e-mail addressed to everybody and one resend that could only
-    // be made to all of them.
-    @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
     private DeliveryOutcome sent(final UUID fileId, final ExceptionReport report) {
         final Map<String, String> personalisation = personalisationOf(report);
         int accepted = NONE;
@@ -289,6 +284,10 @@ public class EmailReportSink implements ExceptionReportSink {
      * outcome, which the fold below turns into a bounded reason and a refused count, and the line
      * names the failure by class because its message belongs to whatever raised it.
      *
+     * <p>One {@code ReportMail} per recipient is the contract and not an allocation to hoist:
+     * notificationnotify keys its aggregate on the notification id, so one object reused would be
+     * one e-mail addressed to everybody and one resend that could only be made to all of them.
+     *
      * @param notificationId  this recipient's own id, minted before the call
      * @param recipient       the address, masked wherever it is said
      * @param fileId          the attachment's id
@@ -304,8 +303,9 @@ public class EmailReportSink implements ExceptionReportSink {
             final UUID fileId, final Map<String, String> personalisation,
             final ExceptionReport report) {
 
+        MailOutcome outcome;
         try {
-            return mailer.send(new ReportMail(
+            outcome = mailer.send(new ReportMail(
                     notificationId, templateId, recipient, fileId, personalisation));
         } catch (RuntimeException broken) {
             LOG.warn("The report's mailer broke rather than answering for one recipient, so this "
@@ -313,8 +313,9 @@ public class EmailReportSink implements ExceptionReportSink {
                             + "notification_id={} recipient={} cause={}",
                     report.runId(), notificationId, masked(recipient),
                     broken.getClass().getName());
-            return new MailOutcome(MailStatus.UNANSWERED, null);
+            outcome = new MailOutcome(MailStatus.UNANSWERED, null);
         }
+        return outcome;
     }
 
     /**

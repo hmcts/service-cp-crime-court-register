@@ -429,11 +429,6 @@ class ExceptionReportEndToEndIT {
     // --- running the report ------------------------------------------------------------------
 
     /**
-     * One morning's run, through the job the schedule fires, with everything it said.
-     *
-     * @return the lines the run wrote, in the order it wrote them
-     */
-    /**
      * How long ago a row has to have failed to fall inside the window the 07:00 run will read.
      *
      * <p>The scheduled window is <strong>aligned to the schedule and half-open</strong>: it ends at
@@ -455,6 +450,11 @@ class ExceptionReportEndToEndIT {
         return Duration.between(window.to().minus(A_FEW_MINUTES), now);
     }
 
+    /**
+     * One morning's run, through the job the schedule fires, with everything it said.
+     *
+     * @return the lines the run wrote, in the order it wrote them
+     */
     private static List<ILoggingEvent> runTheMorningReport() {
         try (CapturedLog log = CapturedLog.capturing(SERVICE_LOGGERS)) {
             service.getBean(ExceptionReportJob.class).run();

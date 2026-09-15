@@ -184,6 +184,9 @@ public class PropertiesValidator implements InitializingBean {
     private static final String REPORT_EMAIL_TEMPLATE = REPORT + ".email.template-id";
     private static final String REPORT_EMAIL_RECIPIENTS = REPORT + ".email.recipients";
 
+    /** The least a report may carry and still be a report rather than a quiet morning. */
+    private static final int ONE_EXCEPTION = 1;
+
     /** The hour the report's schedule is a wall-clock requirement in, for the zone refusal. */
     private static final String REPORT_HOUR = "07:00";
 
@@ -1458,10 +1461,11 @@ public class PropertiesValidator implements InitializingBean {
      * discovered at 07:00 on the morning it mattered rather than at startup.
      */
     private static void validateTheReportCanCarryAtLeastOneException(final ReportProperties report) {
-        if (report.maxEntries() < 1) {
+        if (report.maxEntries() < ONE_EXCEPTION) {
             throw new IllegalStateException(REPORT_MAX_ENTRIES + " (" + report.maxEntries()
-                    + ") must be at least 1 - a report that carries no exception at all is"
-                    + " indistinguishable from a morning with nothing wrong on it");
+                    + ") must be at least " + ONE_EXCEPTION + " - a report that carries no"
+                    + " exception at all is indistinguishable from a morning with nothing wrong"
+                    + " on it");
         }
     }
 

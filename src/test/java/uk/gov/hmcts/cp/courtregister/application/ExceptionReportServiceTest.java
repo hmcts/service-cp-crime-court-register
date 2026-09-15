@@ -603,15 +603,6 @@ class ExceptionReportServiceTest {
         }
 
         /**
-         * The window has two ends, and the three failure reads are asked about both of them.
-         *
-         * <p>They were asked about the start alone, which made a report a statement about
-         * "everything since" rather than about a period: a row that failed while the run was
-         * reading came back in this morning's report and again in tomorrow's, because tomorrow's
-         * window opens where this one was supposed to close. The two late kinds are deliberately
-         * unbounded and are asked about a cut-off instead, which is a different question.
-         */
-        /**
          * A report is read by a person, and a bad morning is not a reason to write for ever.
          *
          * <p>The cap is on the <em>entries</em> and never on the counts: a morning that dropped
@@ -656,6 +647,15 @@ class ExceptionReportServiceTest {
                     .isZero();
         }
 
+        /**
+         * The window has two ends, and the three failure reads are asked about both of them.
+         *
+         * <p>They were asked about the start alone, which made a report a statement about
+         * "everything since" rather than about a period: a row that failed while the run was
+         * reading came back in this morning's report and again in tomorrow's, because tomorrow's
+         * window opens where this one was supposed to close. The two late kinds are deliberately
+         * unbounded and are asked about a cut-off instead, which is a different question.
+         */
         @Test
         void the_three_failure_reads_are_asked_with_both_ends_of_the_window() {
             service.build(WINDOW, RUN_ID);

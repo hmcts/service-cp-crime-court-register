@@ -158,7 +158,7 @@ public class ProcessingMetrics {
      * that can drift: a path that remembered one and forgot the other publishes a count with no
      * duration, or a duration with no count, and the two series an operator reads together stop
      * agreeing about how many requests finished. The terminal state is the same fact both of them
-     * are about, so it is taken once and answers both - {@link RequestOutcome#of} is where the two
+     * are about, so it is taken once and answers both - {@code RequestOutcome.reached} is where the two
      * vocabularies meet, and it is written once.
      *
      * <p>Refuses a state that is not terminal. A sample taken from {@code RECEIVED} or
@@ -178,7 +178,7 @@ public class ProcessingMetrics {
                     + " is not a terminal state, so a duration sample taken here would time an "
                     + "attempt rather than a run");
         }
-        counter(PROCESSED, OUTCOME_TAG, RequestOutcome.of(outcome).label()).increment();
+        counter(PROCESSED, OUTCOME_TAG, RequestOutcome.reached(outcome).label()).increment();
         timing.sample.stop(Timer.builder(REQUEST_DURATION)
                 .description("Time from the guard admitting a run to the terminal state it reached")
                 .tag(OUTCOME_TAG, code(outcome))

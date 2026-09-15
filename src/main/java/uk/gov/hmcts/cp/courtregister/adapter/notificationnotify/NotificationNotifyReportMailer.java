@@ -5,7 +5,6 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatusCode;
-import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.application.ReportMailer;
@@ -95,16 +94,15 @@ public class NotificationNotifyReportMailer implements ReportMailer {
                     mail.personalisation()));
             outcome = NotificationNotifyCommand.post(restClient, mail.notificationId(),
                     systemUserId, body, (sent, answer) -> outcomeOf(answer.getStatusCode(), mail));
-        } catch (ResourceAccessException unreachable) {
-            outcome = unanswered(mail, unreachable);
-        } catch (RuntimeException refusedToAsk) {
-            // Everything else that can stop one send before a verdict exists: a body that could not
-            // be written, a client that would not build a request. The body is composed INSIDE the
-            // try for exactly this reason - composed outside it, a serialisation failure left this
-            // method as a throw, reached the sink's own catch, and became the whole delivery
-            // failing rather than one recipient's: the addresses after it in the list were never
-            // asked at all.
-            outcome = unanswered(mail, refusedToAsk);
+        } catch (RuntimeException noVerdict) {
+            // Everything that can stop one send before a verdict exists, and they are one fact to
+            // the caller: a connect failure or a read timeout (ResourceAccessException), a body
+            // that could not be written, a client that would not build a request. The body is
+            // composed INSIDE the try for exactly that reason - composed outside it, a
+            // serialisation failure left this method as a throw, reached the sink's own catch, and
+            // became the whole delivery failing rather than one recipient's, with the addresses
+            // after it in the list never asked at all.
+            outcome = unanswered(mail, noVerdict);
         }
         return outcome;
     }

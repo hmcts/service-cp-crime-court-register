@@ -402,11 +402,13 @@ public class ReportExceptionsCli {
      * @return the instant, or empty where this is not one
      */
     private static Optional<Instant> asInstant(final String typed) {
+        Optional<Instant> read;
         try {
-            return Optional.of(Instant.parse(typed));
+            read = Optional.of(Instant.parse(typed));
         } catch (DateTimeParseException notAnInstant) {
-            return Optional.empty();
+            read = Optional.empty();
         }
+        return read;
     }
 
     /**
@@ -420,11 +422,13 @@ public class ReportExceptionsCli {
      * @return the duration, or empty where this is not one
      */
     private static Optional<Duration> asDuration(final String typed) {
+        Optional<Duration> read;
         try {
-            return Optional.of(Duration.parse(typed));
+            read = Optional.of(Duration.parse(typed));
         } catch (DateTimeParseException notADuration) {
-            return Optional.empty();
+            read = Optional.empty();
         }
+        return read;
     }
 
     /**

@@ -263,15 +263,19 @@ public class ExceptionReportService {
     private ExceptionReport capped(final String runId, final ReportWindow window,
             final Instant snapshotAt, final List<ExceptionEntry> entries) {
 
+        final ExceptionReport report;
         if (entries.size() <= maxEntries) {
-            return ExceptionReport.whole(runId, window, snapshotAt, entries);
+            report = ExceptionReport.whole(runId, window, snapshotAt, entries);
+        } else {
+            final int dropped = entries.size() - maxEntries;
+            LOG.warn("The morning report found more exceptions than one report carries, so the "
+                            + "oldest were kept and the rest are the next run's. run_id={} kept={} "
+                            + "dropped={}",
+                    runId, maxEntries, dropped);
+            report = new ExceptionReport(runId, window, snapshotAt, entries.subList(0, maxEntries),
+                    dropped, ExceptionReport.countsOf(entries));
         }
-        final int dropped = entries.size() - maxEntries;
-        LOG.warn("The morning report found more exceptions than one report carries, so the oldest "
-                        + "were kept and the rest are the next run's. run_id={} kept={} dropped={}",
-                runId, maxEntries, dropped);
-        return new ExceptionReport(runId, window, snapshotAt, entries.subList(0, maxEntries),
-                dropped, ExceptionReport.countsOf(entries));
+        return report;
     }
 
     /**

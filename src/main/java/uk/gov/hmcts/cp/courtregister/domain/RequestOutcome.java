@@ -40,7 +40,7 @@ public enum RequestOutcome {
      * @throws IllegalArgumentException where the state is not terminal, because a run that has not
      *                                  finished has not finished in any particular way
      */
-    public static RequestOutcome of(final RequestStatus status) {
+    public static RequestOutcome reached(final RequestStatus status) {
         return switch (status) {
             case COMPLETED -> COMPLETED;
             case FAILED -> FAILED;
