@@ -19,6 +19,7 @@ import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.PayloadMetadata;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifier;
 import uk.gov.hmcts.cp.courtregister.config.CourtRegisterProperties;
+import uk.gov.hmcts.cp.courtregister.config.FileServiceConfig;
 import uk.gov.hmcts.cp.courtregister.config.StubGenerationConfig;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
@@ -66,13 +67,29 @@ class StubGenerationAdaptersTest {
     private static final String FILESERVICE_MODE_STUB =
             "courtregister.generation.fileservice-mode=STUB";
 
+    /** The generation half's own switch, which is one of the two the file service is behind. */
+    private static final String GENERATION_ENABLED = "courtregister.generation.enabled=true";
+
+    /** And the morning report's e-mail output, which is the other. */
+    private static final String EMAIL_ENABLED = "courtregister.report.email.enabled=true";
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(StubGenerationTestConfiguration.class);
+
+    /** The file service's own configuration, which the stand-in moved to at review gate 7. */
+    private final ApplicationContextRunner fileService = new ApplicationContextRunner()
+            .withUserConfiguration(FileServiceTestConfiguration.class);
 
     @Configuration(proxyBeanMethods = false)
     @EnableConfigurationProperties(CourtRegisterProperties.class)
     @Import(StubGenerationConfig.class)
     static class StubGenerationTestConfiguration {
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(CourtRegisterProperties.class)
+    @Import(FileServiceConfig.class)
+    static class FileServiceTestConfiguration {
     }
 
     /**
@@ -211,6 +228,15 @@ class StubGenerationAdaptersTest {
 
     /**
      * What every one of the four is selected by, which is the property and never a profile alone.
+     *
+     * <p>Three of them are selected by a mode key and nothing else. The file service's stand-in is
+     * selected by the same key and from a different
+     * configuration. It moved to {@link FileServiceConfig} with the live one when review gate 7
+     * found that the morning report writes a file too, so the mode alone is no longer enough to
+     * contribute it: a pod that writes no file at all builds neither adapter, whatever the mode
+     * says. The cases below are three ports and then that one, rather than four together, because
+     * they are now answered by two conditions and a case that ran them as one would say which
+     * without being able to show it.
      */
     @Nested
     @DisplayName("selection")
@@ -224,30 +250,51 @@ class StubGenerationAdaptersTest {
                             + "never asked for")
                     .doesNotHaveBean(FeatureFlagReader.class)
                     .doesNotHaveBean(DocumentRenderer.class)
-                    .doesNotHaveBean(RegisterNotifier.class)
-                    .doesNotHaveBean(PayloadFileStore.class));
+                    .doesNotHaveBean(RegisterNotifier.class));
         }
 
         @Test
-        void each_of_the_four_should_carry_its_own_condition() {
+        void each_of_the_three_should_carry_its_own_condition() {
             runner.withPropertyValues(SDG_MODE_STUB).run(context -> assertThat(context)
                     .as("each downstream has its own mode key, so a suite can stub "
-                            + "systemdocgenerator and keep the file service live")
+                            + "systemdocgenerator and keep the notifier live")
                     .hasSingleBean(DocumentRenderer.class)
                     .doesNotHaveBean(FeatureFlagReader.class)
-                    .doesNotHaveBean(RegisterNotifier.class)
-                    .doesNotHaveBean(PayloadFileStore.class));
+                    .doesNotHaveBean(RegisterNotifier.class));
         }
 
         @Test
-        void all_four_modes_together_should_contribute_all_four_stubs() {
-            runner.withPropertyValues(FLAG_MODE_STUB, SDG_MODE_STUB, NN_MODE_STUB,
-                            FILESERVICE_MODE_STUB)
+        void all_three_modes_together_should_contribute_all_three_stubs() {
+            runner.withPropertyValues(FLAG_MODE_STUB, SDG_MODE_STUB, NN_MODE_STUB)
                     .run(context -> assertThat(context)
                             .hasSingleBean(FeatureFlagReader.class)
                             .hasSingleBean(DocumentRenderer.class)
-                            .hasSingleBean(RegisterNotifier.class)
+                            .hasSingleBean(RegisterNotifier.class));
+        }
+
+        @Test
+        void the_file_services_stand_in_is_the_same_mode_key_behind_whichever_half_writes_a_file() {
+            fileService.withPropertyValues(FILESERVICE_MODE_STUB, GENERATION_ENABLED)
+                    .run(context -> assertThat(context)
+                            .as("the key did not move with the bean: one file service, so renaming "
+                                    + "the setting would be a change to every chart to say the "
+                                    + "same thing")
+                            .hasSingleBean(PayloadFileStore.class)
+                            .getBean(PayloadFileStore.class)
+                            .isInstanceOf(StubPayloadFileStore.class));
+
+            fileService.withPropertyValues(FILESERVICE_MODE_STUB, EMAIL_ENABLED)
+                    .run(context -> assertThat(context)
+                            .as("and the morning report's local run gets the same no-op, which is "
+                                    + "the whole of why the bean is behind an either-half condition")
                             .hasSingleBean(PayloadFileStore.class));
+
+            fileService.withPropertyValues(FILESERVICE_MODE_STUB)
+                    .run(context -> assertThat(context)
+                            .as("a pod that writes no file builds neither adapter, whatever the "
+                                    + "mode says: a stand-in nothing would call is a bean an "
+                                    + "operator has to be told to ignore")
+                            .doesNotHaveBean(PayloadFileStore.class));
         }
     }
 }
