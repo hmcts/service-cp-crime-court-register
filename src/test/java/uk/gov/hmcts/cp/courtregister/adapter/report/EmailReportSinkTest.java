@@ -251,6 +251,72 @@ class EmailReportSinkTest {
         verify(mailer, never()).send(any());
     }
 
+    /**
+     * The two refusal kinds the fold had no case of its own for, and which of them it reports.
+     *
+     * <p>{@code SEND_REFUSED} was the only reason any case asserted, so the other two arms of
+     * {@code reasonFor} were reachable only through the masking case, which reads log lines and not
+     * the outcome. The claim here is the one the sink's own comment makes: the first refusal's
+     * reason is the delivery's, a later one of another kind is still counted, and the counts say
+     * how many of each there were.
+     */
+    @Test
+    void a_failed_and_an_unanswered_send_carry_their_own_reasons_and_the_first_refusal_wins() {
+        when(mailer.send(any()))
+                .thenReturn(new MailOutcome(MailStatus.FAILED, 503))
+                .thenReturn(new MailOutcome(MailStatus.UNANSWERED, null))
+                .thenReturn(new MailOutcome(MailStatus.ACCEPTED, 202));
+
+        assertThat(delivered(aReportOf(oneRequestFailed()), THREE))
+                .as("the one that stopped the morning first is the one to act on: a 503 is a "
+                        + "resend and an unanswered send is a send nobody knows the fate of, and "
+                        + "one reason on one outcome cannot describe both")
+                .isEqualTo(new DeliveryOutcome(ReportSinkName.EMAIL,
+                        DeliveryStatus.PARTIALLY_DELIVERED, ReportDeliveryReason.SEND_FAILED,
+                        1, 2));
+
+        when(mailer.send(any()))
+                .thenReturn(new MailOutcome(MailStatus.UNANSWERED, null))
+                .thenReturn(new MailOutcome(MailStatus.FAILED, 503))
+                .thenReturn(new MailOutcome(MailStatus.REFUSED, 400));
+
+        assertThat(delivered(aReportOf(oneRequestFailed()), THREE))
+                .as("and the other way round it is the unanswered one, because which reason the "
+                        + "delivery carries is which came first and not which is worst")
+                .isEqualTo(new DeliveryOutcome(ReportSinkName.EMAIL, DeliveryStatus.NOT_DELIVERED,
+                        ReportDeliveryReason.SEND_UNANSWERED, 0, 3));
+    }
+
+    /**
+     * The id that was minted is on the line that says nothing was sent under it.
+     *
+     * <p>Ids before calls is only worth the discipline if the id survives the failure: an
+     * attachment that could not be stored is the case where somebody has to look for a file, and a
+     * warning naming the reason but not the id sends them to look for nothing.
+     */
+    @Test
+    void the_file_id_is_on_the_warn_line_when_the_store_fails() {
+        try (CapturedLog log = CapturedLog.capturing(EmailReportSink.class)) {
+            doThrow(new PayloadStoreUnavailableException(
+                    "the file service could not be reached to write the report's content row"))
+                    .when(files).storeText(any(), any(), any());
+
+            delivered(aReportOf(oneRequestFailed()), THREE);
+
+            final ArgumentCaptor<UUID> minted = ArgumentCaptor.forClass(UUID.class);
+            verify(files).storeText(minted.capture(), any(), any());
+            assertThat(log.renderings())
+                    .as("the warning names the file nobody is being told about, its bounded reason "
+                            + "and the class of what refused - and never that class's message, "
+                            + "which is where a connection string turns up")
+                    .anyMatch(line -> line.contains("file_id=" + minted.getValue())
+                            && line.contains(
+                                    "reason=" + ReportDeliveryReason.ATTACHMENT_STORE_UNAVAILABLE)
+                            && line.contains(
+                                    "cause=" + PayloadStoreUnavailableException.class.getName()));
+        }
+    }
+
     @Test
     void every_address_is_masked_in_every_line_the_sink_writes() {
         try (CapturedLog log = CapturedLog.capturing(EmailReportSink.class)) {

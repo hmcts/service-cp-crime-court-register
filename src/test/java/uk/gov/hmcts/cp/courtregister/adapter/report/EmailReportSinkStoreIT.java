@@ -91,6 +91,19 @@ class EmailReportSinkStoreIT {
     /** The producing context, which is the one field on an entry another system chose the text of. */
     private static final String SOURCE = "cpp-context-results";
 
+    /** The one character RFC 4180 reserves, named so the expected text below is readable. */
+    private static final String QUOTE = "\"";
+
+    /**
+     * Every awkward thing a producing context's own text can be, in one value.
+     *
+     * <p>The separator, the quote character, a line break and a character outside ASCII: the four
+     * that respectively split a row, end a field early, split an entry in two, and make a size
+     * counted in characters differ from a size counted in bytes.
+     */
+    private static final String AWKWARD_SOURCE =
+            "a source with a comma, a \"quote\", a line break\nand Ynys Môn"; // o-circ
+
     private static final UUID REQUEST_ID = UUID.fromString("4c8e1a70-9b2d-4f36-8a57-c1d0e9f3b284");
 
     private static final UUID HEARING_ID = UUID.fromString("9e2b4c60-1d38-4a75-9f04-6b3c8d1e5a72");
@@ -175,23 +188,37 @@ class EmailReportSinkStoreIT {
     @Test
     void the_csv_is_utf_8_with_newline_endings_and_rfc_4180_quoting() {
         final ExceptionEntry awkward = new ExceptionEntry(ExceptionKind.REQUEST_FAILED,
-                "a source with a comma, a \"quote\" and Ynys Môn", REQUEST_ID, HEARING_ID,
-                HEARING_DAY, null, null, null, null, "FAILED", 1, "DEAD_LETTERED", 600); // o-circ
+                AWKWARD_SOURCE, REQUEST_ID, HEARING_ID,
+                HEARING_DAY, null, null, null, null, "FAILED", 1, "DEAD_LETTERED", 600);
         final ReportMail mail = deliver(reportOf(awkward)).getFirst();
 
-        assertThat(new String(contentOf(mail.fileId()).orElseThrow(), StandardCharsets.UTF_8))
+        final String csv =
+                new String(contentOf(mail.fileId()).orElseThrow(), StandardCharsets.UTF_8);
+
+        assertThat(csv)
                 .as("the bytes are UTF-8 and the rows end with a newline: a \\r\\n ending or a "
                         + "byte the reader guesses at is an attachment that opens wrong somewhere "
                         + "else, and the producing context is the one field whose text this "
                         + "service did not choose")
                 .doesNotContain("\r")
-                .contains("\"a source with a comma, a \"\"quote\"\" and Ynys Môn\"") // o-circ
+                .contains(QUOTE + "a source with a comma, a \"\"quote\"\", a line break\nand Ynys "
+                        + "Môn" + QUOTE) // o-circ
                 .endsWith("\n");
+        assertThat(csv.lines())
+                .as("a line break inside a quoted field is a field and not a row: a header, the "
+                        + "two physical lines that one entry occupies, and nothing else - a sink "
+                        + "that left the break unquoted would make one exception read as two")
+                .hasSize(3);
     }
 
     @Test
     void the_metadata_names_the_file_court_register_exceptions_dated_in_europe_london() {
-        final ReportMail mail = deliver(reportOf(requestFailed(600))).getFirst();
+        // A non-ASCII producing context, so the size claim below is about bytes: every other
+        // fixture here is ASCII, and over ASCII a fileSize taken off String.length() agrees with
+        // the byte count of the file and the row would describe it correctly by accident.
+        final ReportMail mail = deliver(reportOf(new ExceptionEntry(ExceptionKind.REQUEST_FAILED,
+                AWKWARD_SOURCE, REQUEST_ID, HEARING_ID, HEARING_DAY, null, null, null, null,
+                "FAILED", 3, "DEAD_LETTERED", 600))).getFirst();
         final byte[] content = contentOf(mail.fileId()).orElseThrow();
 
         final JsonNode metadata = MAPPER.readTree(metadataOf(mail.fileId()).orElseThrow());

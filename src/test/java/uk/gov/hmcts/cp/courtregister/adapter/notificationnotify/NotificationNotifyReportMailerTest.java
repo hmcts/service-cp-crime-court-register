@@ -281,6 +281,42 @@ class NotificationNotifyReportMailerTest {
                 .isEqualTo(new MailOutcome(MailStatus.FAILED, status));
     }
 
+    /**
+     * The absence of a loop, stated as a request count rather than as a reading of the class.
+     *
+     * <p>The three statuses another attempt <em>could</em> change are the ones a retry would be
+     * hidden behind, so they are the ones counted: this mailer makes one attempt and answers, and
+     * the resend is the support engineer's decision off the run's own line. A loop here would spend
+     * a budget the scheduled run holds and cannot see.
+     */
+    @ParameterizedTest
+    @ValueSource(ints = {408, 429, 503})
+    void a_transient_status_is_one_request_and_no_retry(final int status) {
+        commandAnswering(status);
+
+        assertThat(send(MAIL)).isEqualTo(new MailOutcome(MailStatus.FAILED, status));
+        notificationNotify.verify(1, postRequestedFor(urlEqualTo(commandPath(NOTIFICATION_ID))));
+    }
+
+    /**
+     * The other two 2xx a proxy or a rewritten route answers with, beside the 200 already pinned.
+     *
+     * <p>202 and nothing else is success. A 201 or a 204 means something other than the command
+     * endpoint answered, and counting either as a delivery would tell support a report is on its way
+     * that nobody was asked to send.
+     */
+    @ParameterizedTest
+    @ValueSource(ints = {201, 204})
+    void two_hundred_and_one_and_two_hundred_and_four_are_refused(final int status) {
+        commandAnswering(status);
+
+        assertThat(send(MAIL))
+                .as("a 2xx that is not 202 is not an acceptance, and asking again under the same "
+                        + "identity cannot make it one")
+                .isEqualTo(new MailOutcome(MailStatus.REFUSED, status));
+        notificationNotify.verify(1, postRequestedFor(urlEqualTo(commandPath(NOTIFICATION_ID))));
+    }
+
     @Test
     void the_register_paths_body_is_unchanged() {
         final UUID registerNotificationId =
