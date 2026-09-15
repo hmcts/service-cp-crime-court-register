@@ -25,6 +25,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -33,6 +34,7 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.adapter.notificationnotify.NotificationNotifyClient;
+import uk.gov.hmcts.cp.courtregister.adapter.notificationnotify.NotificationNotifyReportMailer;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DeliveryObserver;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DocumentEventListener;
 import uk.gov.hmcts.cp.courtregister.adapter.report.LogEventReportSink;
@@ -84,6 +86,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
+import uk.gov.hmcts.cp.courtregister.domain.ReportMail;
 import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
 import uk.gov.hmcts.cp.courtregister.domain.ReportWindow;
 import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
@@ -172,7 +175,8 @@ public final class GenerationLegs implements AutoCloseable {
                     DocumentEventListener.class,
                     DocumentOutcomeSinkImpl.class,
                     RegisterNotifierService.class,
-                    NotificationNotifyClient.class),
+                    NotificationNotifyClient.class,
+                    NotificationNotifyReportMailer.class),
             THE_REPORT.stream()).toList();
 
     /** Everything a meter's name or label may never carry, whoever it describes. */
@@ -342,6 +346,15 @@ public final class GenerationLegs implements AutoCloseable {
 
     private final ExceptionReportJob reportJob;
 
+    /**
+     * The report's own send, over the same socket the register leg's client uses.
+     *
+     * <p>Real rather than doubled for the reason the other two clients are: it is one of the two
+     * classes in this increment with an address in its hands and a far end's status line in its
+     * answers, so every line it can write has to be written over something that really answered.
+     */
+    private final NotificationNotifyReportMailer reportMailer;
+
     private final IntakeAgeSweep sweep;
 
     private GenerationLegs(final WireMockServer wireMock, final MeterRegistry registry) {
@@ -368,6 +381,8 @@ public final class GenerationLegs implements AutoCloseable {
         this.reportJob = new ExceptionReportJob(reporting, List.of(logSink), REPORT_CRON,
                 GenerationProperties.COURTS_ZONE, intakeMetrics, clock);
         this.sweep = new IntakeAgeSweep(requestLog, intakeMetrics, REPORT_LIMIT, clock);
+        this.reportMailer = new NotificationNotifyReportMailer(
+                restClientFor(wireMock.baseUrl()), SYSTEM_USER_ID, MAPPER);
     }
 
     /**
@@ -404,6 +419,7 @@ public final class GenerationLegs implements AutoCloseable {
         theNotifyingLeg();
         theNotifiersClient();
         theExceptionReport();
+        theReportsMailer();
         theMorningRun();
         theOnDemandReport();
         theIntakeGaugeRefresh();
@@ -1116,6 +1132,47 @@ public final class GenerationLegs implements AutoCloseable {
                 "the store could not be reached to read what went wrong overnight",
                 new IllegalStateException("the connection pool is empty")));
         whateverItAnswers(reportJob::run);
+    }
+
+    /**
+     * The three lines the report's mailer can write, over three answers a far end really gives.
+     *
+     * <p>One of the two classes in this increment that holds an address, and the arrangements below
+     * hand it a marked one on purpose: what this sweep is for is the claim that the address it was
+     * given reaches no line of its own accord. Nothing here masks it - the mailer names the
+     * notification, the file and a status code and nothing else, and the masking lives in the sink
+     * above it, where the list of addresses is.
+     *
+     * <p>A refusal, a retryable answer and an answer that never came: the first two carry a status
+     * line this service did not write, and the third carries a cause whose message names the host
+     * it could not reach. All three are lines the sweep holds to identifiers and bounded codes.
+     */
+    private void theReportsMailer() {
+        emailCommandAnswering(HttpStatus.BAD_REQUEST.value());
+        whateverItAnswers(() -> reportMailer.send(reportMail()));
+
+        emailCommandAnswering(HttpStatus.SERVICE_UNAVAILABLE.value());
+        whateverItAnswers(() -> reportMailer.send(reportMail()));
+
+        emailCommandFaulting();
+        whateverItAnswers(() -> reportMailer.send(reportMail()));
+    }
+
+    /**
+     * One report e-mail, addressed to a marker and carrying the five counts and the window.
+     *
+     * @return the mail the arrangements above send
+     */
+    private static ReportMail reportMail() {
+        return new ReportMail(UUID.randomUUID(), TEMPLATE_ID, PersonalDataMarkers.RECIPIENT_EMAIL,
+                UUID.randomUUID(), Map.of(
+                        "request_failed", "1",
+                        "request_late", "0",
+                        "batch_late", "0",
+                        "batch_failed", "1",
+                        "notification_failed", "0",
+                        "window_from", "2026-09-14T06:00:00Z",
+                        "window_to", "2026-09-15T06:00:00Z"));
     }
 
     /**

@@ -5,12 +5,12 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatusCode;
-import org.springframework.http.MediaType;
 import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.adapter.http.RetryPolicy;
+import uk.gov.hmcts.cp.courtregister.adapter.notificationnotify.NotificationNotifyCommand.Verdict;
 import uk.gov.hmcts.cp.courtregister.application.NotificationOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifier;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
@@ -70,23 +70,22 @@ public class NotificationNotifyClient implements RegisterNotifier {
      * The command's path under the notificationnotify context, exactly as its RAML declares it.
      *
      * <p>The notification's own identity is the path parameter, and the whole of what makes a retry
-     * idempotent on the other side.
+     * idempotent on the other side. Named here as the shared builder spells it rather than spelled
+     * again: two copies of a path are two things to change on the morning it moves.
      */
-    public static final String COMMAND_PATH =
-            "/notificationnotify-command-api/command/api/rest/notificationnotify/notifications/"
-                    + "{notificationId}";
+    public static final String COMMAND_PATH = NotificationNotifyCommand.COMMAND_PATH;
 
     /** The command's vendor media type; the framework routes on it, so it is not a formality. */
-    public static final String EMAIL_MEDIA_TYPE = "application/vnd.notificationnotify.email+json";
+    public static final String EMAIL_MEDIA_TYPE = NotificationNotifyCommand.EMAIL_MEDIA_TYPE;
 
     /**
      * The CPP identity header. Its value is never logged - it is either a secret or a user
      * identifier, and neither belongs in a log index.
      */
-    public static final String IDENTITY_HEADER = "CJSCPPUID";
+    public static final String IDENTITY_HEADER = NotificationNotifyCommand.IDENTITY_HEADER;
 
     /** The one status the contract calls success. */
-    public static final int ACCEPTED = 202;
+    public static final int ACCEPTED = NotificationNotifyCommand.ACCEPTED;
 
     private static final Logger LOG = LoggerFactory.getLogger(NotificationNotifyClient.class);
 
@@ -129,17 +128,13 @@ public class NotificationNotifyClient implements RegisterNotifier {
                 new Personalisation(notification.recipientName())));
         final int status;
         try {
-            status = restClient.post()
-                    // The row's own identity, and the client has none of its own to put here: the
-                    // row arrives persisted, so a resend is this call again with the same row and
-                    // therefore the same path (research section 10).
-                    .uri(COMMAND_PATH, notification.notificationId())
-                    .headers(headers -> {
-                        headers.setContentType(MediaType.parseMediaType(EMAIL_MEDIA_TYPE));
-                        headers.set(IDENTITY_HEADER, identity);
-                    })
-                    .body(body)
-                    .exchange((sent, answer) -> classify(answer, notification));
+            // The row's own identity, and the client has none of its own to put here: the row
+            // arrives persisted, so a resend is this call again with the same row and therefore
+            // the same path (research section 10). The request itself is composed by the builder
+            // this package's two adapters share, so the shape the report posts and the shape this
+            // posts are one shape and not two that agree today.
+            status = NotificationNotifyCommand.post(restClient, notification.notificationId(),
+                    identity, body, (sent, answer) -> classify(answer, notification));
         } catch (ResourceAccessException unreachable) {
             // Connect failure, read timeout, connection dropped: the request may or may not have
             // reached notificationnotify, and the e-mail may already be on its way. Unknown is not
@@ -175,7 +170,8 @@ public class NotificationNotifyClient implements RegisterNotifier {
             throws IOException {
         final HttpStatusCode statusCode = response.getStatusCode();
         final int status = statusCode.value();
-        if (status != ACCEPTED) {
+        final Verdict verdict = NotificationNotifyCommand.verdictOf(statusCode);
+        if (verdict != Verdict.TAKEN) {
             if (statusCode.is2xxSuccessful()) {
                 // The contract declares one success. A 200 or a 204 means something other than the
                 // command endpoint answered - a proxy, or a route that no longer reaches it - and
@@ -186,7 +182,7 @@ public class NotificationNotifyClient implements RegisterNotifier {
                         notification.notificationId(), notification.batchId(), status);
                 throw refused(status);
             }
-            if (RetryPolicy.retryable(status)) {
+            if (verdict == Verdict.RETRYABLE) {
                 // 408, 429 and every server error, from the one policy all this service's clients
                 // hold (C3). The asking again is the run's: this client is told nothing about what
                 // is left of the budget, so a loop here would spend one it cannot see.
