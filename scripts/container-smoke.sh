@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
 # Container smoke: build the image, run it against the committed compose dependencies, require it to
-# report readiness inside the 60-second budget (spec SC-101/SC-103, container half), and then run one
-# operations command through the entrypoint that dispatches them (FR-016). Tears the stack down
-# on every exit path, success or failure.
+# report readiness inside the 60-second budget (spec SC-101/SC-103, container half), and then run two
+# operations commands through the entrypoint that dispatches them (FR-016) - one per half, and
+# neither of them writes anything. Tears the stack down on every exit path, success or failure.
 #
 # This is the local equivalent of the "Container smoke" step in
 # .github/workflows/ci-build-publish.yml; both run this same script, so the two cannot drift.
@@ -115,7 +115,7 @@ log "PASS: readiness reported UP within the ${READINESS_BUDGET_SECONDS}s budget"
 # so the only way support regenerates a date, resends a batch's failed recipients or reads the
 # cutover flag is `kubectl exec ... -- ./startup.sh <command>` (FR-016, research 13) - and that path
 # is in the entrypoint, not in the application, so no JUnit suite covers it. What is proved here is
-# what only the built image can prove: the five names reach CliMain out of the fat jar rather than
+# what only the built image can prove: the six names reach CliMain out of the fat jar rather than
 # starting a second application, the script is executable at the path the runbooks name, and the
 # code the command answered with is the code the container exits on.
 #
@@ -158,3 +158,53 @@ if ! printf '%s\n' "$cli_output" | grep -q '^flag=ON$'; then
 fi
 
 log "PASS: startup.sh check-flag printed flag=ON and exited 0"
+
+# The second command, and the second thing only the built image can prove: that the sixth name
+# reaches CliMain as well, that the report's reads answer against a real database rather than a
+# fixture, and that what a runbook step greps for is on the operator's stream and not only in the
+# log. `--since 1h` because the window is what an incident is asked in - a bare invocation would
+# read back to the last scheduled run, which on a freshly started stack is a window nothing has
+# happened in either, but says so through a schedule rather than through an argument.
+#
+# Like `check-flag` it reads and changes nothing. `--email` is deliberately NOT given: the compose
+# stack has the e-mail output switched on, and an invocation that asked for it would write a CSV
+# into the file service and post to the notificationnotify stub - a smoke run that left something
+# behind it. Without the flag the sink is `skipped`, which is the word for an output that exists
+# and an invocation that did not want it.
+log "running report-exceptions --since 1h through the entrypoint"
+if report_output=$(compose exec --no-TTY app ./startup.sh report-exceptions --since 1h 2>&1); then
+  report_status=0
+else
+  report_status=$?
+fi
+
+if [ "$report_status" -ne 0 ]; then
+  log "FAIL: startup.sh report-exceptions --since 1h exited ${report_status}, and 0 is the only"
+  log "      code a report that was built and taken by every sink it asked carries"
+  printf '%s\n' "$report_output" | grep -E '^(counts|event|command)=?' || \
+    printf '%s\n' "$report_output" | tail -5
+  exit 1
+fi
+
+# Exit 0 alone is not the whole assertion, for the reason check-flag's line is not: a command that
+# dispatched nothing and returned would also be 0. Two lines are required and they say different
+# things - the counts line is the report, and the run line is how it was delivered - so a run that
+# built a report and told nobody, or told somebody about no report, fails here rather than passing.
+if ! printf '%s\n' "$report_output" | grep -q '^counts '; then
+  log "FAIL: startup.sh report-exceptions exited 0 without printing the counts line"
+  printf '%s\n' "$report_output" | tail -5
+  exit 1
+fi
+
+# Matched anywhere on the stream rather than at the end of it, exactly as check-flag's reading is.
+# The command writes its lines to the operator's stream and the JVM logs to the same one, so the
+# last thing on it is whatever the context said on the way down - a connection pool closing, a
+# meter registry that could not reach a collector. The claim is that the run's own line was
+# written, not that nothing was printed after it.
+if ! printf '%s\n' "$report_output" | grep -q '^event=exception_report_run '; then
+  log "FAIL: startup.sh report-exceptions exited 0 without printing the run's own line"
+  printf '%s\n' "$report_output" | tail -5
+  exit 1
+fi
+
+log "PASS: startup.sh report-exceptions --since 1h printed its counts and its run line, and exited 0"
