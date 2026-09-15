@@ -87,6 +87,16 @@ services:
       ARTEMIS_BROKER_URL: tcp://artemis:61616
       ARTEMIS_USER: admin
       ARTEMIS_PASSWORD: admin
+      # The 07:00 Europe/London weekday report. Independent of COURTREGISTER_GENERATION_ENABLED:
+      # the report is a read of this service's own store and must keep running on a pod that
+      # generates nothing, which is what makes an intake-only deployment alertable. Its window
+      # needs no setting: a run reports from the previous scheduled run to now, so Monday reads
+      # back to Friday and nothing falls between two windows.
+      COURTREGISTER_REPORT_ENABLED: "true"
+      # The intake gauges refresh on this interval in EVERY service JVM, whether or not the report
+      # or the generation half is enabled, and under no lock: a gauge describes the JVM that
+      # publishes it, so alerts aggregate across pods with max(). Ten minutes by default.
+      COURTREGISTER_INTAKE_GAUGE_REFRESH: 10m
 
   postgres:
     image: postgres:16
