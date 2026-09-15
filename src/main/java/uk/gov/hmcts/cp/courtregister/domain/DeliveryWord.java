@@ -1,0 +1,61 @@
+package uk.gov.hmcts.cp.courtregister.domain;
+
+import java.util.List;
+
+/**
+ * What a run line says about one sink, as the bounded {@code delivered_log} /
+ * {@code delivered_email} value.
+ *
+ * <p>Four words, and each of them is a different operational fact. {@code ok} and {@code failed}
+ * are about a sink that was asked. {@code skipped} is <em>nobody asked</em> - the output is on this
+ * deployment and this invocation did not want it, which only the command can produce because the
+ * 07:00 run asks every sink there is. {@code disabled} is <em>nobody could</em> - there is no such
+ * sink on this context at all, so no decision was taken by anybody.
+ *
+ * <p><strong>One function, two callers.</strong> The job and the command write the same line about
+ * the same two fields, and they wrote it from a copy each until review gate 6: the job called an
+ * absent e-mail sink {@code disabled} and the command called the same absent sink {@code skipped},
+ * which is the divergence a shared word makes impossible rather than merely unlikely. A dashboard
+ * filtered on these values and an operator reading a terminal have to partition a morning the same
+ * way, and two folds are two partitions waiting to happen.
+ */
+public enum DeliveryWord {
+
+    /** The sink was asked and it took the report. */
+    OK,
+
+    /** The sink was asked and it did not, wholly or in part; the rest is a resend. */
+    FAILED,
+
+    /** The sink is on this context and this invocation chose not to ask it. */
+    SKIPPED,
+
+    /** There is no sink of this name here at all, so nothing was decided by anybody. */
+    DISABLED;
+
+    /**
+     * The word for one sink, from what this context holds, what was asked and what came back.
+     *
+     * @param sink          which sink the field is about
+     * @param delivered     one outcome per sink asked, in the order they were asked
+     * @param onThisContext whether a sink of that name exists on this context at all
+     * @param asked         whether this invocation asked it
+     * @return the one word the line carries
+     */
+    public static DeliveryWord of(final ReportSinkName sink, final List<DeliveryOutcome> delivered,
+            final boolean onThisContext, final boolean asked) {
+
+        throw new UnsupportedOperationException(
+                "the run line's one word for a sink lands next; this is its red run");
+    }
+
+    /**
+     * How the word is written, which is the rendering every bounded label here is published under.
+     *
+     * @return the lower-case word
+     */
+    public String said() {
+        throw new UnsupportedOperationException(
+                "the run line's one word for a sink lands next; this is its red run");
+    }
+}

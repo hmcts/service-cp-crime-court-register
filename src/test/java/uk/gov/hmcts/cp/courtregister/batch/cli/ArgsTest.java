@@ -431,6 +431,21 @@ class ArgsTest {
                     .hasSize(TEN_NAMES);
         }
 
+        @Test
+        void since_and_email_given_twice_should_be_refused_by_name() {
+            softly.assertThatThrownBy(() -> Args.parse(List.of("--since", "2h", "--since", "1h")))
+                    .as("two windows is two questions, and a parser that kept either of them "
+                            + "would be choosing which incident the operator was asking about")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("--" + Args.SINCE);
+            softly.assertThatThrownBy(() -> Args.parse(List.of("--email", "--email")))
+                    .as("and the sixth command's two names are both this service's own, so both "
+                            + "are named when they are doubled rather than refused by a message "
+                            + "that says only that something was")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("--" + Args.EMAIL);
+        }
+
         @ParameterizedTest(name = "{0}")
         @MethodSource("uk.gov.hmcts.cp.courtregister.batch.cli.ArgsTest"
                 + "#whatTheOtherFiveCommandsTake")

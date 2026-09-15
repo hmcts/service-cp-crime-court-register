@@ -295,6 +295,146 @@ class ExceptionReportModelTest {
         }
     }
 
+    /**
+     * The fold and the word the run line is written from, which the job and the command share.
+     *
+     * <p>They shared nothing until review gate 6: each held a private copy of the three-state fold
+     * and of the {@code delivered_email} word, and the copies had already diverged - the job called
+     * an absent e-mail sink {@code disabled} and the command called the same absent sink
+     * {@code skipped}. A dashboard filtered on the counter and an operator reading a terminal have
+     * to partition a morning the same way, so the fold and the word live here, are asserted here,
+     * and the two callers agree by construction rather than by review.
+     *
+     * <p>The four words are four different operational facts and the cases below are one per fact,
+     * because the pair that is easy to conflate - "nobody asked" and "nobody could" - is exactly
+     * the pair the two copies conflated.
+     */
+    @Nested
+    @DisplayName("the run's own fold and the word it says about a sink")
+    class TheRunsOwnWords {
+
+        @Test
+        void a_run_every_sink_it_asked_took_is_delivered() {
+            softly.assertThat(outcomeOf(List.of(took(ReportSinkName.LOG),
+                            took(ReportSinkName.EMAIL))))
+                    .as("both audiences were told, which is the only shape that is simply done")
+                    .isEqualTo(ReportRunOutcome.DELIVERED);
+        }
+
+        @Test
+        void a_run_one_of_two_sinks_took_is_partial() {
+            softly.assertThat(outcomeOf(List.of(took(ReportSinkName.LOG),
+                            refused(ReportSinkName.EMAIL))))
+                    .as("a report that reached one of its two audiences is neither a success nor a "
+                            + "silence: it is a resend (FR-007)")
+                    .isEqualTo(ReportRunOutcome.PARTIAL);
+        }
+
+        @Test
+        void a_run_no_sink_took_is_failed() {
+            softly.assertThat(outcomeOf(List.of(refused(ReportSinkName.LOG),
+                            refused(ReportSinkName.EMAIL))))
+                    .as("nobody was told what went wrong, which is the one outcome that has to be "
+                            + "alertable on its own")
+                    .isEqualTo(ReportRunOutcome.FAILED);
+        }
+
+        @Test
+        void a_run_that_asked_nobody_is_failed() {
+            softly.assertThat(outcomeOf(List.of()))
+                    .as("a run that asked nobody is a run that could not build a report at all, or "
+                            + "one on a context holding no sink - and either way nothing was told")
+                    .isEqualTo(ReportRunOutcome.FAILED);
+        }
+
+        @Test
+        void a_sink_that_told_some_of_its_recipients_has_not_taken_the_report() {
+            softly.assertThat(outcomeOf(List.of(new DeliveryOutcome(ReportSinkName.EMAIL,
+                            DeliveryStatus.PARTIALLY_DELIVERED, ReportDeliveryReason.SEND_FAILED,
+                            2, 1))))
+                    .as("two of the three were told and the third is a resend, so the sink has not "
+                            + "taken it - the nuance is the run's outcome rather than a delivery "
+                            + "ticked off")
+                    .isEqualTo(ReportRunOutcome.FAILED);
+        }
+
+        @Test
+        void the_word_for_a_sink_that_was_asked_is_ok_or_failed() {
+            softly.assertThat(wordFor(ReportSinkName.LOG, List.of(took(ReportSinkName.LOG)), true))
+                    .as("asked, and it took it")
+                    .isEqualTo(DeliveryWord.OK);
+            softly.assertThat(wordFor(ReportSinkName.LOG, List.of(refused(ReportSinkName.LOG)),
+                            true))
+                    .as("asked, and it did not")
+                    .isEqualTo(DeliveryWord.FAILED);
+        }
+
+        @Test
+        void the_word_for_a_sink_that_is_here_and_was_not_asked_is_skipped() {
+            softly.assertThat(wordFor(ReportSinkName.EMAIL, List.of(took(ReportSinkName.LOG)),
+                            false))
+                    .as("nobody asked: the output exists on this deployment and this invocation "
+                            + "did not want it, which only the command can produce")
+                    .isEqualTo(DeliveryWord.SKIPPED);
+        }
+
+        @Test
+        void the_word_for_a_sink_that_is_not_on_this_context_is_disabled_asked_or_not() {
+            final List<DeliveryOutcome> onlyTheLog = List.of(took(ReportSinkName.LOG));
+
+            softly.assertThat(answered(() -> DeliveryWord.of(ReportSinkName.EMAIL, onlyTheLog,
+                            false, false), null))
+                    .as("nobody could: there is no e-mail output here at all, which is a different "
+                            + "fact from an invocation choosing not to use one")
+                    .isEqualTo(DeliveryWord.DISABLED);
+            softly.assertThat(answered(() -> DeliveryWord.of(ReportSinkName.EMAIL, onlyTheLog,
+                            false, true), null))
+                    .as("and a caller that asks every sink there is - which is what the 07:00 run "
+                            + "does - says the same word about the sink that is not there")
+                    .isEqualTo(DeliveryWord.DISABLED);
+        }
+
+        @Test
+        void the_job_and_the_command_say_the_same_word_about_the_same_context() {
+            final List<DeliveryOutcome> onlyTheLog = List.of(took(ReportSinkName.LOG));
+
+            softly.assertThat(answered(() -> DeliveryWord.of(ReportSinkName.EMAIL, onlyTheLog,
+                            false, true), null))
+                    .as("the divergence this type exists to end: one caller asks every sink and "
+                            + "the other asks the ones it chose, and an e-mail sink that is not on "
+                            + "the context is the same absence to both of them")
+                    .isEqualTo(answered(() -> DeliveryWord.of(ReportSinkName.EMAIL, onlyTheLog,
+                            false, false), null));
+        }
+
+        @Test
+        void the_word_is_written_the_way_every_bounded_label_here_is() {
+            softly.assertThat(answered(() -> DeliveryWord.DISABLED.said(), ""))
+                    .as("lower case, said once here rather than spelled by each caller: a label a "
+                            + "caller renders is a label a caller can render differently")
+                    .isEqualTo("disabled");
+        }
+
+        private ReportRunOutcome outcomeOf(final List<DeliveryOutcome> delivered) {
+            return answered(() -> ReportRunOutcome.of(delivered), null);
+        }
+
+        private DeliveryWord wordFor(final ReportSinkName sink,
+                final List<DeliveryOutcome> delivered, final boolean asked) {
+
+            return answered(() -> DeliveryWord.of(sink, delivered, true, asked), null);
+        }
+
+        private DeliveryOutcome took(final ReportSinkName sink) {
+            return DeliveryOutcome.delivered(sink);
+        }
+
+        private DeliveryOutcome refused(final ReportSinkName sink) {
+            return new DeliveryOutcome(sink, DeliveryStatus.NOT_DELIVERED,
+                    ReportDeliveryReason.SEND_FAILED, 0, 1);
+        }
+    }
+
     // --- the model, asked so that a seam's refusal is recorded rather than thrown ---------------
 
     /**

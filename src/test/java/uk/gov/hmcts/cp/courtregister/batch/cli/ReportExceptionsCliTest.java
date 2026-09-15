@@ -47,6 +47,7 @@ import uk.gov.hmcts.cp.courtregister.domain.ReportDeliveryReason;
 import uk.gov.hmcts.cp.courtregister.domain.ReportRunOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
 import uk.gov.hmcts.cp.courtregister.domain.ReportWindow;
+import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
 
 /**
@@ -164,11 +165,34 @@ class ReportExceptionsCliTest {
                         List.of("courtregister-support@example.test")));
     }
 
+    /**
+     * The same settings with a schedule nothing can be measured back through.
+     *
+     * <p>A deployment cannot reach this - {@code PropertiesValidator} refuses a cron it cannot
+     * parse at startup - and that is not what the case below is about. What it is about is which
+     * of the two answers an operator gets when the default window cannot be computed: a window
+     * nobody typed is not an argument they got wrong.
+     */
+    private static ReportProperties withoutAReadableSchedule() {
+        return new ReportProperties(true, "every weekday morning at seven", ZONE, false,
+                Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(15),
+                Duration.ofMinutes(30), new ReportProperties.Email(false,
+                        "11111111-1111-1111-1111-111111111111",
+                        List.of("courtregister-support@example.test")));
+    }
+
     /** The command over the sinks a deployment holds. */
     private ReportExceptionsCli command(final ReportProperties settings,
             final ExceptionReportSink... onThisContext) {
 
-        return new ReportExceptionsCli(reporting, List.of(onThisContext), settings, clock, output);
+        return command(settings, clock, onThisContext);
+    }
+
+    /** The same, over a clock a case moves by hand. */
+    private ReportExceptionsCli command(final ReportProperties settings, final Clock over,
+            final ExceptionReportSink... onThisContext) {
+
+        return new ReportExceptionsCli(reporting, List.of(onThisContext), settings, over, output);
     }
 
     /** Three exceptions, one of each of three kinds, given to the service to answer with. */
@@ -288,6 +312,24 @@ class ReportExceptionsCliTest {
                             + "schedule is one fact written twice")
                     .isEqualTo(ReportWindow.sinceLastScheduledRun(CRON, ZONE, NOW));
         }
+
+        @Test
+        void a_default_window_that_cannot_be_computed_is_the_reports_failure_not_the_operators() {
+            final int code = command(withoutAReadableSchedule(), logSink).run(List.of());
+
+            softly.assertThat(code)
+                    .as("nobody typed a window, so nobody can be told their argument was "
+                            + "unreadable: this is the command failing to build its report, which "
+                            + "is exit 2 and a thing a runbook may retry")
+                    .isEqualTo(CliMain.FAILED);
+            softly.assertThat(printed)
+                    .as("under the same bounded reason a read that would not answer carries, and "
+                            + "never naming --since, which the operator never gave")
+                    .anyMatch(line -> line.contains("outcome=failed"))
+                    .noneMatch(line -> line.contains(CliMain.UNREADABLE_ARGUMENT))
+                    .noneMatch(line -> line.contains("--" + Args.SINCE + " "));
+            verifyNoInteractions(reporting, logSink, emailSink);
+        }
     }
 
     /**
@@ -339,7 +381,7 @@ class ReportExceptionsCliTest {
         }
 
         @ParameterizedTest(name = "--since {0}")
-        @ValueSource(strings = {"last-tuesday", "0h"})
+        @ValueSource(strings = {"last-tuesday", "0h", "2026-09-16T06:00:00Z"})
         void the_refusal_should_name_since_and_never_quote_the_token(final String typed) {
             command(withoutEmail(), logSink).run(List.of("--since", typed));
 
@@ -348,6 +390,19 @@ class ReportExceptionsCliTest {
                             + "to receive a pasted credential as an instant")
                     .noneMatch(line -> line.contains(typed))
                     .anyMatch(line -> line.contains("--" + Args.SINCE));
+        }
+
+        @Test
+        void an_instant_exactly_now_should_be_refused() {
+            final int code =
+                    command(withoutEmail(), logSink).run(List.of("--since", NOW.toString()));
+
+            softly.assertThat(code)
+                    .as("the boundary as the code has it: the window must open strictly before it "
+                            + "closes, so now is refused rather than read as a window of no width "
+                            + "- which would report nothing and look exactly like a quiet night")
+                    .isEqualTo(CliMain.REFUSED);
+            verifyNoInteractions(reporting, logSink, emailSink);
         }
 
         @Test
@@ -379,12 +434,37 @@ class ReportExceptionsCliTest {
                             + "command declined and changed nothing, which is not a failure to "
                             + "retry")
                     .isEqualTo(CliMain.REFUSED);
-            softly.assertThat(printed.getFirst())
-                    .as("and the line names the setting, because the answer to it is a deployment "
-                            + "change rather than a different invocation")
-                    .contains("outcome=refused")
-                    .contains("courtregister.report.email.enabled");
+            softly.assertThat(printed)
+                    .as("and that is the whole of the terminal: the refusal naming the setting, "
+                            + "because the answer to it is a deployment change rather than a "
+                            + "different invocation, and the usage line under it - no table, no "
+                            + "counts line and no run line, because nothing was read")
+                    .containsExactly("command=" + CliMain.REPORT_EXCEPTIONS
+                            + " outcome=refused reason=email-output-disabled"
+                            + " setting=courtregister.report.email.enabled",
+                            ReportExceptionsCli.USAGE);
             verifyNoInteractions(reporting, logSink, emailSink);
+        }
+
+        @Test
+        void email_asked_where_the_output_is_on_and_no_sink_is_wired_should_name_the_sink() {
+            final int code =
+                    command(withEmail(), logSink).run(List.of("--since", "2h", "--email"));
+
+            softly.assertThat(code)
+                    .as("the branch Phase 7's conditional bean makes unreachable on a deployed "
+                            + "context and nothing in this class's own type makes impossible: the "
+                            + "sinks are handed in, so a context that switched the output on "
+                            + "without wiring one declines rather than quietly running log-only")
+                    .isEqualTo(CliMain.REFUSED);
+            softly.assertThat(printed.getFirst())
+                    .as("and it names the sink rather than the setting: the setting is on and "
+                            + "correct, so an operator sent to change it would be sent to the one "
+                            + "place there is nothing to change")
+                    .contains("reason=email-output-not-wired")
+                    .contains("sink=email")
+                    .doesNotContain("setting=");
+            verifyNoInteractions(reporting, emailSink);
         }
 
         @Test
@@ -479,6 +559,18 @@ class ReportExceptionsCliTest {
                     .as("one line saying so, so a window that covers nothing is read as an "
                             + "answer rather than as a command that did not run")
                     .isEqualTo("exceptions=none");
+            softly.assertThat(printed)
+                    .as("and all three lines are still written: the saying-so line, the five "
+                            + "zeroes with the window they are over, and the run's own line - a "
+                            + "quiet window is the shape that most looks like a command that never "
+                            + "ran, so it is the one that has to say the most")
+                    .hasSize(3);
+            softly.assertThat(printed.get(1))
+                    .startsWith("counts request_failed=0")
+                    .contains("notification_failed=0");
+            softly.assertThat(lastLine())
+                    .contains("event=exception_report_run")
+                    .contains("entries=0");
         }
 
         @Test
@@ -521,10 +613,22 @@ class ReportExceptionsCliTest {
 
         @Test
         void the_last_line_should_be_the_runs_own_and_written_after_every_sink_has_returned() {
-            reportAnswered(List.of(tookIt(ReportSinkName.LOG), tookIt(ReportSinkName.EMAIL)));
+            final List<String> whenAsked = new ArrayList<>();
+            when(reporting.build(any(ReportWindow.class), any())).thenAnswer(invocation ->
+                    aReportOf(invocation.getArgument(1), invocation.getArgument(0)));
+            when(reporting.deliver(any(ExceptionReport.class), anyCollection()))
+                    .thenAnswer(invocation -> {
+                        whenAsked.addAll(printed);
+                        return List.of(tookIt(ReportSinkName.LOG), tookIt(ReportSinkName.EMAIL));
+                    });
 
             command(withEmail(), logSink, emailSink).run(List.of("--since", "2h", "--email"));
 
+            softly.assertThat(whenAsked)
+                    .as("read at the moment the sinks were asked: a command that wrote the line "
+                            + "first would be reporting a delivery nobody had observed, and the "
+                            + "morning that mattered would be the morning a sink was refusing")
+                    .noneMatch(line -> line.contains("event=exception_report_run"));
             softly.assertThat(lastLine())
                     .as("the equivalent of the job's exception_report_run line: the same four "
                             + "things about its own delivery, written last because delivered_log "
@@ -536,6 +640,64 @@ class ReportExceptionsCliTest {
                     .contains(" delivered_log=ok")
                     .contains(" delivered_email=ok")
                     .contains(" outcome=delivered");
+        }
+
+        @Test
+        void the_last_line_should_carry_duration_ms_from_the_clock() {
+            final AdjustableClock moving = AdjustableClock.startingAt(NOW);
+            when(reporting.build(any(ReportWindow.class), any())).thenAnswer(invocation ->
+                    aReportOf(invocation.getArgument(1), invocation.getArgument(0)));
+            when(reporting.deliver(any(ExceptionReport.class), anyCollection()))
+                    .thenAnswer(invocation -> {
+                        moving.advance(Duration.ofMillis(250));
+                        return List.of(tookIt(ReportSinkName.LOG));
+                    });
+
+            command(withoutEmail(), moving, logSink).run(List.of("--since", "2h"));
+
+            softly.assertThat(lastLine())
+                    .as("measured on the clock this command was handed, between opening the "
+                            + "correlation and writing this line, exactly as the 07:00 run "
+                            + "measures its own: a duration read off a second, un-injected clock "
+                            + "is a field no case can state a value for")
+                    .contains(" duration_ms=250");
+        }
+
+        @Test
+        void a_context_with_no_log_sink_should_exit_could_not() {
+            when(reporting.build(any(ReportWindow.class), any())).thenAnswer(invocation ->
+                    aReportOf(invocation.getArgument(1), invocation.getArgument(0)));
+            when(reporting.deliver(any(ExceptionReport.class), anyCollection()))
+                    .thenReturn(List.of());
+
+            final int code = command(withoutEmail()).run(List.of("--since", "2h"));
+
+            softly.assertThat(code)
+                    .as("a command that told nobody anything has not succeeded, whatever it "
+                            + "printed: the table is a terminal and the sinks are the record, and "
+                            + "a context holding neither sink is a deployment to fix")
+                    .isEqualTo(CliMain.FAILED);
+            softly.assertThat(lastLine())
+                    .as("and the run's own line says so under the same three-state fold the "
+                            + "morning run is counted by")
+                    .contains(" delivered_log=disabled")
+                    .contains(" outcome=failed");
+        }
+
+        @Test
+        void an_email_sink_that_is_not_here_should_be_disabled_in_the_words_the_job_uses() {
+            reportAnswered(List.of(tookIt(ReportSinkName.LOG)));
+
+            command(withEmail(), logSink).run(List.of("--since", "2h"));
+
+            softly.assertThat(lastLine())
+                    .as("the output is switched on in the settings and no sink was contributed, "
+                            + "which is the shape the two copies of this word disagreed about: the "
+                            + "job says disabled about a sink that is not on the context, and a "
+                            + "command that said skipped would be describing a decision nobody "
+                            + "made")
+                    .contains(" delivered_email=disabled")
+                    .doesNotContain(" delivered_email=skipped");
         }
 
         @Test

@@ -1,5 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
+import java.util.List;
+
 /**
  * How one run of the exception report ended, as the bounded {@code outcome} label.
  *
@@ -21,5 +23,26 @@ public enum ReportRunOutcome {
     PARTIAL,
 
     /** No sink took it, so the morning's exceptions were not told to anybody. */
-    FAILED
+    FAILED;
+
+    /**
+     * How one run went, folded from what each sink it asked answered.
+     *
+     * <p>Here rather than in the job and again in the command. The two held a copy each until
+     * review gate 6, and a fold written twice is a morning the counter and the terminal can come to
+     * disagree about - which is the same class of defect as the two words for an absent sink that
+     * {@link DeliveryWord} ends.
+     *
+     * <p>A run that asked nobody - which is a run that could not build a report at all, or one on a
+     * context holding no sink - is {@link #FAILED}, because nothing was told. A sink that delivered
+     * to some of its recipients has not taken the report: the rest is a resend, and that nuance is
+     * expressed here as {@link #PARTIAL} rather than hidden inside a sink's own answer.
+     *
+     * @param delivered one outcome per sink asked, in the order they were asked
+     * @return the bounded outcome
+     */
+    public static ReportRunOutcome of(final List<DeliveryOutcome> delivered) {
+        throw new UnsupportedOperationException(
+                "the run's own three-state fold lands next; this is its red run");
+    }
 }
