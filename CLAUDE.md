@@ -36,7 +36,7 @@ Jira: none — this work carries no ticket; it lands on plain `main`
 | **Design (authoritative)** | Confluence — [Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service) (CRA space). This repo carries **no** design narrative; do not create `doc/*_DESIGN.md`, `SOLUTION_BRIEF.md`, `API_CONTRACTS.md` or `CHANGELOG.md` here |
 | Defect-fix register | `doc/DEFECT-FIXES.md` |
 | Constitution | `.specify/memory/constitution.md` |
-| Specifications | `specs/001-court-register-port/` (complete), `specs/002-consolidate-progression-leg/` (complete) |
+| Specifications | `specs/001-court-register-port/` (complete), `specs/002-consolidate-progression-leg/` (complete), `specs/003-exception-report/` (complete) |
 | Inbound message schema | `src/main/resources/contracts/distribution-command.schema.json` |
 | Register contract (frozen) | `src/main/resources/contracts/progression/` (+ `PROVENANCE.md`) |
 

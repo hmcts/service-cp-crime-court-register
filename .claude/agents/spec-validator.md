@@ -134,7 +134,10 @@ Read the active `specs/*/spec.md` first and judge findings against **that story'
 against 381 recorded legacy runs. **002-consolidate-progression-leg** absorbs progression's leg:
 the register store in place of the POST, the nightly job, the four platform adapters, the
 `public.event` listener, the flag gate, the operations CLI, and the `P` rows appended to the
-register. Judge against `specs/002-consolidate-progression-leg/tasks.md`:
+register — **also complete**. **003-exception-report** adds the 07:00 run that reports what the two
+halves left behind, its two sinks, the intake sweep and the sixth operations command, and adds
+**no** `doc/DEFECT-FIXES.md` row: there is no legacy oracle for a capability that was never built.
+Judge against the active increment's `tasks.md`:
 
 - A stubbed adapter is **expected while its phase has not landed**, not drift — provided the **port interface** is shaped to the real contract and the stub is obviously a stub (named as such, logs at debug/info without PII, unreachable in a production profile). Both adapter modes default to `LIVE`, so a stub reachable by default in a deployed profile is drift, not a transitional state.
 - Fixes land with their phase: judge fix presence against the phase the tasks.md says has been completed, not against the end state.
