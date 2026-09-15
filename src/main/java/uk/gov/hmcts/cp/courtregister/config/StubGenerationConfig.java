@@ -6,26 +6,28 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import uk.gov.hmcts.cp.courtregister.adapter.stub.StubDocumentRenderer;
 import uk.gov.hmcts.cp.courtregister.adapter.stub.StubFeatureFlagReader;
-import uk.gov.hmcts.cp.courtregister.adapter.stub.StubPayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.adapter.stub.StubRegisterNotifier;
 import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
-import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifier;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 
 /**
  * The downstream half's stand-ins, kept for local runs and for the suites that address no downstream.
  *
- * <p>One configuration for four ports rather than four configurations of one, which is the opposite
- * of the choice {@link StubPayloadConfig} and {@link StubSubscriptionsConfig} make - and the reason
- * is that these four are not chosen together. Each downstream has its own mode key, so a suite can
- * stub the file service and keep systemdocgenerator live, and each bean below carries its own
- * condition; grouping them costs nothing because the alternative is four files whose only difference
- * is one property name. What they do share is a reason for existing: the container suites whose
- * subject is the batch state machine have no interest in a second Postgres, a broker or an App
- * Configuration store, and the compose stack answers with WireMock and a real file-service database
- * when the subject <em>is</em> the downstream.
+ * <p>One configuration for three ports rather than three configurations of one, which is the
+ * opposite of the choice {@link StubPayloadConfig} and {@link StubSubscriptionsConfig} make - and
+ * the reason is that these three are not chosen together. Each downstream has its own mode key, so a
+ * suite can stub systemdocgenerator and keep the notifier live, and each bean below carries its own
+ * condition; grouping them costs nothing because the alternative is three files whose only
+ * difference is one property name. What they do share is a reason for existing: the container suites
+ * whose subject is the batch state machine have no interest in a broker or an App Configuration
+ * store, and the compose stack answers with WireMock when the subject <em>is</em> the downstream.
+ *
+ * <p><strong>The file service's stand-in is no longer among them.</strong> It moved to
+ * {@link FileServiceConfig} with the live one, behind {@link FileServiceNeeded}, because the morning
+ * report writes a file too and a local run of that half wants the same no-op. The mode key is
+ * unchanged - {@code courtregister.generation.fileservice-mode} is still where STUB is asked for.
  *
  * <p>Never the default, and not selectable where the service is deployed. A bean is contributed only
  * where the mode says {@code STUB}, so an environment that says nothing gets the real adapter, and
@@ -54,17 +56,6 @@ public class StubGenerationConfig {
      */
     private static final FlagDecision UNREADABLE_ANSWER =
             new FlagDecision.Unreadable(FlagDecision.UnreadableReason.NOT_CONFIGURED);
-
-    /**
-     * The payload-store port, served by the logging no-op.
-     *
-     * @return the port
-     */
-    @Bean
-    @ConditionalOnProperty(prefix = GENERATION, name = "fileservice-mode", havingValue = STUB)
-    public PayloadFileStore payloadFileStore() {
-        return new StubPayloadFileStore();
-    }
 
     /**
      * The renderer port, served by the stub that accepts a request and invents no document.

@@ -2376,10 +2376,21 @@ class ConfigurationValidationTest {
                     });
         }
 
+        /**
+         * Three settings and not two, since review gate 7.
+         *
+         * <p>The e-mail output writes the exception list into the framework file service and
+         * attaches it by id, so {@code courtregister.fileservice.url} is required of it exactly as
+         * it is required of the nightly run - and was required of the run alone until the gate,
+         * which is what made a report pod with this output on a pod that could not start.
+         * {@code ReportEmailConfigTest} owns the refusal; what this case says is that the settings
+         * together are a deployment that starts.
+         */
         @Test
-        void an_enabled_email_output_with_both_settings_should_start() {
+        void an_enabled_email_output_with_everything_it_needs_should_start() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
-                    A_RECIPIENT).run(context -> assertThat(context).hasNotFailed());
+                    A_RECIPIENT, FILESERVICE_URL_PROPERTY)
+                    .run(context -> assertThat(context).hasNotFailed());
         }
 
         /**

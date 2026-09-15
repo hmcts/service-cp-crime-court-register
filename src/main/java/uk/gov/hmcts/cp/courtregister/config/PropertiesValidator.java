@@ -335,6 +335,7 @@ public class PropertiesValidator implements InitializingBean {
         validateTheStubsAreNotWhereRegistersAreProduced(properties, generation);
         validateTheLocalCredentialIsNowhereARealFlagIsRead(properties, feature);
         validateGenerationHasTheDownstreamsItNeeds(properties, generation, feature);
+        validateWhicheverHalfWritesAFileCanReachTheFileService(properties, generation, report);
         validateTheCompletionMechanismCanHearAnOutcome(generation, brokerUrl);
     }
 
@@ -1167,9 +1168,6 @@ public class PropertiesValidator implements InitializingBean {
             final CourtRegisterProperties properties, final GenerationProperties generation,
             final FeatureFlagProperties feature) {
         if (generation.enabled()) {
-            requireForGeneration(properties.fileservice().url(), FILESERVICE_URL,
-                    "systemdocgenerator renders only a payload that is already in the file service,"
-                            + " and there is nowhere to put one");
             requireForGeneration(feature.endpoint(), FEATURE_ENDPOINT,
                     "the run reads the cutover flag before it does anything else, and an unreadable"
                             + " flag is a run skipped every night");
@@ -1239,6 +1237,44 @@ public class PropertiesValidator implements InitializingBean {
                             + GenerationProperties.COMPLETION_EVENT + " and " + GENERATION_ENABLED
                             + " is true - without it every batch waits for an outcome nobody will"
                             + " send, until the reconciler times it out");
+        }
+    }
+
+    /**
+     * Whichever half writes a file has to have a file service to write it into.
+     *
+     * <p>The file service is the one downstream the two outward legs share: the nightly run stores a
+     * render payload and hands systemdocgenerator its id, and the morning report stores the
+     * exception list as a CSV and hands notificationnotify its id. The URL was required of the
+     * generation half alone, which made a pod in FR-004's shape with the e-mail output on a pod that
+     * starts clean, reports itself healthy, and fails at 07:00 with nothing to attach - the exact
+     * shape of failure this validator exists to turn into a refused deploy.
+     *
+     * <p>The refusal names <strong>which half asked</strong>, because the value to set is the same
+     * either way and the thing an operator has to know is why a pod that renders nothing wants a
+     * file service at all.
+     *
+     * <p>Only the URL. The credentials stay optional for the reason
+     * {@link FileServiceDataSourceConfig} gives - a stack that authenticates the pod itself supplies
+     * neither - and the URL is the one of the three that has no other way of arriving.
+     */
+    private static void validateWhicheverHalfWritesAFileCanReachTheFileService(
+            final CourtRegisterProperties properties, final GenerationProperties generation,
+            final ReportProperties report) {
+
+        if (hasText(properties.fileservice().url())) {
+            return;
+        }
+        if (generation.enabled()) {
+            throw new IllegalStateException(FILESERVICE_URL + MUST_BE_SET_WHEN + GENERATION_ENABLED
+                    + " is true - systemdocgenerator renders only a payload that is already in the"
+                    + " file service, and there is nowhere to put one");
+        }
+        if (report.email().enabled()) {
+            throw new IllegalStateException(FILESERVICE_URL + MUST_BE_SET_WHEN
+                    + REPORT_EMAIL_ENABLED + " is true - the report's exception list is attached by"
+                    + " file-service id, so a morning with nowhere to write the CSV is a morning"
+                    + " support is told nothing about, on a pod that renders no document at all");
         }
     }
 

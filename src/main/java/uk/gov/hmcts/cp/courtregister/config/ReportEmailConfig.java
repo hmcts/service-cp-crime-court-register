@@ -42,6 +42,14 @@ import uk.gov.hmcts.cp.courtregister.application.ReportMailer;
  * conditional on the generation half being enabled and this output must work on the pod FR-004
  * describes, which generates nothing. Excluded from the {@code test} profile alongside the rest of
  * the live wiring.
+ *
+ * <p><strong>The file this output writes is what made the same argument about a third bean.</strong>
+ * The CSV goes into the framework file service before anybody is told about it, and the
+ * {@code PayloadFileStore} that writes it - and the second datasource under that - were declared
+ * behind the generation half's switch, so the pod this configuration exists for could not start.
+ * Both are behind {@link FileServiceNeeded} now, which is this switch or the generation half's;
+ * {@link PropertiesValidator} refuses either half with no {@code courtregister.fileservice.url},
+ * naming the half that asked.
  */
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
@@ -79,10 +87,12 @@ public class ReportEmailConfig {
     /**
      * The e-mail sink, which is the second {@code ExceptionReportSink} on a context that has one.
      *
-     * <p>The file store it is handed is the same one the generation half writes payloads through:
-     * one caller more of a pinned, write-only contract, not a second use of it.
+     * <p>The file store it is handed is the port the generation half also writes payloads through -
+     * one caller more of a pinned, write-only contract, not a second use of it - and the reason that
+     * port is chosen by {@link FileServiceNeeded} rather than by the generation half's switch: a
+     * file in the file service is what the two outward legs have in common.
      *
-     * @param files      where the CSV goes
+     * @param files      where the CSV goes, over the shared file-service port
      * @param mailer     the report's own send
      * @param properties the report's settings, for the template and the recipients
      * @return the sink

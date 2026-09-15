@@ -19,10 +19,17 @@ import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
  * CSV and hands notificationnotify its id. So the port's two adapters belong behind
  * {@link FileServiceNeeded} rather than behind the generation half's switch - a report pod with the
  * e-mail output on and no {@code PayloadFileStore} is a pod that cannot start, and that is what a
- * bean declared on {@code LiveGenerationConfig} made it.
+ * bean declared on {@link LiveGenerationConfig} made it.
  *
- * <p>A seam for now: the condition answers no, so this configuration contributes nothing and the
- * two beans below are still resolved where they were. The relocation lands with the condition.
+ * <p><strong>The mode key does not move with them.</strong> {@code courtregister.generation
+ * .fileservice-mode} is still where a deployment says LIVE or STUB, because it is one file service
+ * and renaming the setting would be a change to every chart and every stack file to say the same
+ * thing. What changed is which pods read it, not what it is called.
+ *
+ * <p>The two beans are the ones {@link LiveGenerationConfig} and {@link StubGenerationConfig}
+ * declared, moved verbatim; nothing generation-only followed them. The renderer, the notifier and
+ * the flag reader are still chosen where they were, because a pod that e-mails a report renders
+ * nothing, notifies no Youth Offending Team and reads no cutover flag.
  */
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")

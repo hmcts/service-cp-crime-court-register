@@ -4,8 +4,8 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import javax.sql.DataSource;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -17,20 +17,24 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * service and takes its id - so this service inserts the {@code metadata} and {@code content} rows
  * the framework's own repositories insert, and reads nothing back (plan, Complexity Tracking).
  *
- * <p>Present only where generation is enabled. A deployment that runs the intake half alone opens
- * no connection to a database it has no use for, and the local run and every context-load test are
- * spared a second Postgres. {@link PropertiesValidator} refuses an enabled generation with no
- * {@code courtregister.fileservice.url}, so this configuration never has to guess at one.
+ * <p>Present where <em>either</em> half writes a file, which is {@link FileServiceNeeded}: the
+ * nightly run stores a render payload, and the morning report stores the CSV notificationnotify
+ * attaches by id. Read as the generation half's switch alone - which it was until review gate 7 - a
+ * pod in FR-004's shape with the e-mail output on held no pool at all, and the sink over it could
+ * not be built. A deployment that writes no file still opens no connection to a database it has no
+ * use for, and the local run and every context-load test are still spared a second Postgres.
+ * {@link PropertiesValidator} refuses either half with no {@code courtregister.fileservice.url}, so
+ * this configuration never has to guess at one.
  *
  * <p><strong>Neither bean is a default autowiring candidate.</strong> Both would otherwise be found
  * by type: Spring Boot's own {@code DataSource} and {@code JdbcClient} auto-configurations are
  * conditional on there being no such bean, so declaring these unqualified would silently take the
- * processed log's datasource away the moment generation was enabled - the store this service
- * records into, removed by switching on the half that reads it. Both are therefore reached by name
+ * processed log's datasource away the moment either half was enabled - the store this service
+ * records into, removed by switching on a half that reads it. Both are therefore reached by name
  * only, and everything that already injects a {@code JdbcClient} by type keeps the one it had.
  */
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
+@Conditional(FileServiceNeeded.class)
 public class FileServiceDataSourceConfig {
 
     /** The name the file-service datasource is qualified by; it is never found by type. */
@@ -50,8 +54,10 @@ public class FileServiceDataSourceConfig {
      *
      * <p>The same value the processed log's pool carries, for the same reason - the pod must start
      * with the database down so that actuator is up to report readiness honestly, and a pod that
-     * cannot start cannot tell anyone why. This datasource gates readiness only while a run is in
-     * progress, so a file service that is unreachable at 09:00 is not a pod that rolls.
+     * cannot start cannot tell anyone why. This datasource gates readiness only while a generation
+     * run is in progress, so a file service that is unreachable at 09:00 is not a pod that rolls -
+     * and on a pod that only e-mails the report, no generation run ever starts, so it never gates
+     * readiness at all.
      */
     private static final long INITIALIZATION_FAIL_TIMEOUT = -1L;
 
