@@ -2543,7 +2543,10 @@ been touched.
       `.claude/rules/workflow.md`, checked rather than asserted: no REST surface anywhere under
       `src/main/java`, no `System.out` / `System.err` / `printStackTrace()`, no wildcard import, no
       empty catch, no PII at INFO or above, and `doc/DEFECT-FIXES.md` byte-identical to its state at
-      `720d659`. Report the test totals and the coverage figures.
+      `94bd245` - the commit on `main` that last changed it, which is the baseline the register has
+      to be unchanged against; `720d659` is this branch's first commit and names the same bytes,
+      but the register's own baseline is where the register last moved. Report the test totals and
+      the coverage figures.
       **Build half done; the review gate is not.** `./gradlew clean jacocoTestReport build
       -Dtest.noFailFast=true` **BUILD SUCCESSFUL, exit 0**, 10m 45s, 24 tasks executed - the whole
       suite with PMD over main and test, Checkstyle at `maxWarnings = 0` and the JaCoCo gate at its

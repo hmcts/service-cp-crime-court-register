@@ -185,7 +185,7 @@ specs/003-exception-report/
 ├── spec.md
 ├── plan.md              # This file
 ├── research.md          # Decisions with rationale and alternatives
-├── data-model.md        # V4 indexes, the report model, the repository projections, the predicates
+├── data-model.md        # V4 and V5 indexes, the report model, the projections, the predicates
 ├── quickstart.md        # Local run, the CLI, reading the events, the KQL support will use
 ├── contracts/
 │   └── README.md        # Nothing vendored here; points at 002's notificationnotify and fileservice
@@ -204,27 +204,42 @@ src/main/java/uk/gov/hmcts/cp/courtregister/
 │   ├── ExceptionReportSink.java           # NEW port: DeliveryOutcome deliver(ExceptionReport)
 │   ├── ReportMailer.java                  # NEW port: MailOutcome send(ReportMail) - the report's own
 │   │                                      #   send, so RegisterNotifier keeps its register-only shape
+│   ├── DistributionPipeline.java          # CHANGED: one settlement is one recording - the count
+│   │                                      #   and the duration are one call (review gate 8)
 │   ├── PayloadFileStore.java              # CHANGED: + storeText(UUID, String, PayloadMetadata)
 │   └── RegisterStore.java                 # CHANGED: + recordedUnbatchedBefore(Instant), the projection
 │                                          #   with its age in SQL; activeUnbatched() unchanged
 ├── domain/
-│   ├── ExceptionReport.java               # NEW: runId, window, snapshotAt, entries, counts()
+│   ├── ExceptionReport.java               # NEW: runId, window, snapshotAt, entries, truncated,
+│   │                                      #   counts - stated rather than derived, so the cap
+│   │                                      #   cannot shrink them (review gate 8)
 │   ├── ExceptionEntry.java                # NEW: one exception, of one kind
 │   ├── ExceptionKind.java                 # NEW enum: REQUEST_FAILED, REQUEST_LATE, BATCH_LATE,
 │   │                                      #   BATCH_FAILED, NOTIFICATION_FAILED
-│   ├── ReportWindow.java                  # NEW: from, to, + sinceLastScheduledRun(cron, zone, now)
+│   ├── ReportWindow.java                  # NEW: from (inclusive), to (exclusive),
+│   │                                      #   + forScheduledRun(cron, zone, firedAt) - both ends
+│   │                                      #   the schedule's - and sinceLastScheduledRun(cron,
+│   │                                      #   zone, now) for the caller with no occurrence
 │   ├── LastScheduledRun.java              # NEW: the most recent occurrence of a given cron in a given
 │   │                                      #   zone before now - the generation cron for the unbatched
 │   │                                      #   rule, the report cron for the window. In domain/, not
 │   │                                      #   batch/: a pure computation, and ReportWindow calls it
 │   ├── DeliveryOutcome.java               # NEW: sink, status, reason, accepted, refused
 │   ├── ReportSinkName.java                # NEW enum: LOG, EMAIL (the bounded `sink` label)
+│   ├── ReportRunOutcome.java              # NEW enum: DELIVERED, PARTIAL, FAILED, and the fold
+│   │                                      #   both run lines and the run counter share
+│   ├── DeliveryWord.java                  # NEW enum: OK, FAILED, SKIPPED, DISABLED, and the one
+│   │                                      #   `said(...)` the job and the command both call
+│   ├── SweepFailureReason.java            # NEW enum: STORE_UNAVAILABLE, UNEXPECTED - the sweep's
+│   │                                      #   two bounded reasons, typed after review gate 3
 │   ├── DeliveryStatus.java                # NEW enum: DELIVERED, PARTIALLY_DELIVERED, NOT_DELIVERED
 │   ├── ReportDeliveryReason.java          # NEW bounded enum (data-model.md)
 │   ├── ReportMail.java                    # NEW: notificationId, templateId, sendToAddress, fileId,
 │   │                                      #   Map<String,String> personalisation
 │   ├── MailOutcome.java                   # NEW: status + responseCode, with MailStatus
 │   ├── MailStatus.java                    # NEW enum: ACCEPTED, REFUSED, FAILED, UNANSWERED
+│   ├── RequestStatus.java                 # CHANGED: + isTerminal(), which the request timer and
+│   │                                      #   RequestOutcome.of(...) both read
 │   ├── ProcessedRequestSummary.java       # NEW: the intake projection the report reads
 │   ├── FailedNotification.java            # NEW: the notification projection, with its batch's keys
 │   ├── BatchException.java                # NEW: the batch projection - batchId, courtCentreId,
@@ -251,24 +266,36 @@ src/main/java/uk/gov/hmcts/cp/courtregister/
 │   └── EmailReportSink.java               # NEW: CSV -> PayloadFileStore.storeText -> ReportMailer
 ├── adapter/notificationnotify/
 │   ├── NotificationNotifyReportMailer.java # NEW: the ReportMailer adapter, same HTTP shape
-│   └── NotificationNotifyClient.java      # CHANGED: its request composition moves behind a
-│                                          #   package-private builder both adapters call. The
-│                                          #   RegisterNotifier body and behaviour are unchanged
+│   ├── NotificationNotifyCommand.java     # NEW package-private: the URI, the vendor media type,
+│   │                                      #   the CJSCPPUID header and the 202-only rule, shared
+│   │                                      #   by both adapters so "the same shape" is a fact
+│   └── NotificationNotifyClient.java      # CHANGED: its request composition moves behind that
+│                                          #   builder. The RegisterNotifier body and behaviour
+│                                          #   are unchanged
 ├── adapter/fileservice/
 │   └── FileServicePayloadStore.java       # CHANGED: storeText, the same two inserts in the same order
+├── adapter/stub/
+│   └── StubPayloadFileStore.java          # CHANGED: + storeText, the no-op behind the same port
 ├── persistence/
-│   ├── ProcessedRequestRepository.java    # CHANGED: + failedSince, + nonTerminalOlderThan,
+│   ├── ProcessedRequestRepository.java    # CHANGED: + failedBetween, + nonTerminalOlderThan,
 │   │                                      #   + oldestNonTerminal; ages computed in SQL
 │   ├── RegisterBatchRepository.java       # CHANGED: + latePending, + lateGenerating, + lateGenerated,
-│   │                                      #   + failedSince, all answering BatchException with the age
+│   │                                      #   + failedBetween, all answering BatchException with the age
 │   │                                      #   in SQL; sdg_reason never selected. 002's three entity
 │   │                                      #   reads are untouched
 │   ├── JdbcRegisterStore.java             # CHANGED: + recordedUnbatchedBefore, sharing
 │   │                                      #   activeUnbatched()'s predicate, written once
-│   └── RegisterNotificationRepository.java # CHANGED: + failedSince
+│   └── RegisterNotificationRepository.java # CHANGED: + failedBetween
 └── config/
     ├── ReportProperties.java              # NEW @ConfigurationProperties("courtregister.report")
     ├── CourtRegisterProperties.java       # CHANGED: + nested Intake(gaugeRefresh=10m)
+    ├── CliModeConfig.java                 # CHANGED: the CLI mode key is a constant the scheduling
+    │                                       #   configurations and NotCliMode all read, written once
+    ├── GenerationProperties.java          # CHANGED: the courts-zone rule is shared with the
+    │                                       #   report's, the same rule rather than a similar one
+    ├── GenerationHealth.java              # CHANGED: follows the beans that moved to
+    │                                       #   FileServiceConfig; nothing it reports changes
+    ├── FileServiceRunHealthIndicator.java # CHANGED: the same relocation, and no more
     ├── SchedulingInfrastructureConfig.java # NEW: @EnableScheduling, @EnableSchedulerLock, LockProvider,
     │                                       #   active whenever not CLI - no enabled-flag condition at all,
     │                                       #   because the sweep needs @Scheduled on every service JVM.
@@ -315,11 +342,15 @@ src/main/java/uk/gov/hmcts/cp/courtregister/
                                            #   courtregister.fileservice.url required by whichever half
                                            #   writes a file, the refusal naming the half that asked
 src/main/resources/db/migration/V4__processed_request_report_indexes.sql
+src/main/resources/db/migration/V5__exception_report_batch_and_notification_indexes.sql
+                                           # the four batch reads' partial indexes and the
+                                           # notification read's (review gate 8)
 src/main/resources/application.yaml        # the courtregister.report block
 src/main/resources/logback.xml             # + <arguments/>
 src/main/resources/logback-cli.xml         # + <arguments/>
 docker/startup.sh                          # + report-exceptions in the case and in CLI_COMMANDS
 docker-compose.yml                         # + the report env vars on the `app` service
+scripts/container-smoke.sh                 # + the report-exceptions leg through the entrypoint
 ```
 
 ### Port contracts (this increment)
@@ -420,8 +451,10 @@ Layers: **U** unit - **W** WireMock - **PG** Postgres `*IT` - **FS** file-servic
 | Sweep | `IntakeAgeSweepTest` | U | FR-008: both gauges move from the repository's answers; both return to zero when nothing is unfinished; the scheduled method carries `@Scheduled` and **no** `@SchedulerLock`, so every replica refreshes its own gauges; it opens its own `runId`; the fixture is spec scenario 2.2 verbatim - forty minutes old against a thirty-minute threshold (review gate 3: the old one answered a 900 s row as oldest while a 2400 s row sat in the same store, and then counted the 900 s one as over 1800 s); the over-threshold gauge is set from `countNonTerminalOlderThan` and **not** from a materialised list, and `the_cut_off_is_the_threshold_ago_exactly_and_is_not_nudged_either_way` captures the instant it passes; **two** absorbed-refusal cases, `store-unavailable` and `unexpected`, each leaving the gauges at their last reading, counting `courtregister_intake_sweep_failures_total{reason}`, writing one WARN line that names the caught failure by class and repeats **neither its own message nor its cause's**, and not cancelling the schedule - the design rules' "one absorbed refusal is telemetry" clause, and the counter is what makes the absorption visible |
 | Metrics | `ProcessingMetricsTest` (extended) | U | FR-008: `courtregister_oldest_non_terminal_request_age` and `courtregister_non_terminal_requests_over_threshold` exist **from construction** and read zero (scenario 2.1); `courtregister_request_duration{outcome}` records one sample per terminal transition through the opaque `Timing` token, tagged only by the terminal outcome; the **four** counters and their bounded labels - `courtregister_exception_report_runs_total{outcome}` over `delivered`/`partial`/`failed`, `courtregister_exception_report_deliveries_total{sink,outcome}`, `courtregister_exceptions_reported_total{kind}` over all five kinds, and `courtregister_intake_sweep_failures_total{reason}` - the run counter and the sweep counter bounded **by type** after review gate 3 (`the_run_outcome_label_is_one_of_three_bounded_words`, `the_sweep_failure_reason_label_is_one_of_two_bounded_codes`: the rendered labels, and that no String-taking overload survives beside the enum one); `a_non_terminal_status_is_refused_by_the_timer` - `requestSettled(Timing, RETRYING)` throws `IllegalArgumentException` rather than publishing a fifth `outcome` series, over `RequestStatus.isTerminal()`, which `domain/RequestStatusTest` pins |
 | Pipeline | `DistributionPipelineTest` (extended) | U | the duration timer is recorded once per terminal transition, in `settled(...)` and `parked(...)`, and not at all where the guard refused the write - on **either** side of that refusal, the completion one and the parking one (`a_parked_run_that_was_not_dead_lettered_records_no_sample`, review gate 3: the parking side had no case, although the two are separate `instanceof` branches and one could be widened without the other); the pipeline holds a `ProcessingMetrics.Timing` token and imports no Micrometer type, asserted over a source path resolved from `user.dir` |
-| Config | `ReportPropertiesTest` / `ConfigurationValidationTest` (extended) | U | FR-010: the defaults, including `courtregister.intake.gauge-refresh` at `10m`; a zero or negative threshold, refresh or lock refused naming the setting, `batch-generated-within` included where it is set explicitly; a zone other than `Europe/London` refused without the acknowledgement; `email.enabled` with no template or no recipient refused naming the setting (scenario 4.3); an unparseable recipient refused; `lock-at-most-for` below `REPORT_RUN_BUDGET` plus the existing `SCHEDULER_LOCK_MARGIN` refused; an unset `batch-generated-within` resolving to the generation grace period, and an explicitly set one honoured over the grace period beside it (`an_explicit_batch_generated_within_is_honoured`). There is no window setting to refuse. Two **should-start** counterparts sit beside the refusals, so a rule that refuses everything is as visible as one that refuses nothing: `an_acknowledged_override_of_a_known_zone_should_start` and `an_enabled_email_output_with_everything_it_needs_should_start` (three settings and not two since review gate 7: the file-service URL is one of them). Review gate 1 adds: `an_unparseable_cron_refuses_to_start` (the cron is the trigger **and** the window, so an unreadable one is a job that never fires and a window nothing can open), `a_zero_grace_period_makes_the_unset_rendering_limit_refuse` (the resolved limit is held to being positive too, and the refusal names `courtregister.generation.grace-period` - the key the value really came from), `a_malformed_template_id_refuses_to_start`, `a_blank_template_id_with_email_enabled_refuses_to_start`, `a_recipient_list_with_an_empty_entry_refuses_to_start` (both spellings of a stray separator), and `an_acknowledged_override_must_still_be_a_zone_the_jvm_knows` sharpened onto the words only that branch says, so it cannot pass on the unacknowledged refusal. No refusal quotes a cron, a template id or an address back; a duration and a zone id are echoed, as the class's existing refusals echo them. **SC-005 / user story 5 scenario 3**: two `ApplicationContextRunner`s differing only in `request-terminal-within` yield two contexts whose resolved threshold differs and whose other settings do not - a threshold is per environment and takes effect on the next run with no release |
+| Config | `ReportPropertiesTest` / `ConfigurationValidationTest` (extended) | U | FR-010: the defaults, including `courtregister.intake.gauge-refresh` at `10m`; a zero or negative threshold, refresh or lock refused naming the setting, `batch-generated-within` included where it is set explicitly; a zone other than `Europe/London` refused without the acknowledgement; `email.enabled` with no template or no recipient refused naming the setting (scenario 4.3); an unparseable recipient refused; `lock-at-most-for` below `REPORT_RUN_BUDGET` plus the existing `SCHEDULER_LOCK_MARGIN` refused; an unset `batch-generated-within` resolving to the generation grace period, and an explicitly set one honoured over the grace period beside it (`an_explicit_batch_generated_within_is_honoured`). There is no window setting to refuse. Two **should-start** counterparts sit beside the refusals, so a rule that refuses everything is as visible as one that refuses nothing: `an_acknowledged_override_of_a_known_zone_should_start` and `an_enabled_email_output_with_everything_it_needs_should_start` (three settings and not two since review gate 7: the file-service URL is one of them). Review gate 1 adds: `an_unparseable_cron_refuses_to_start` (the cron is the trigger **and** the window, so an unreadable one is a job that never fires and a window nothing can open), `a_zero_grace_period_makes_the_unset_rendering_limit_refuse` (the resolved limit is held to being positive too, and the refusal names `courtregister.generation.grace-period` - the key the value really came from), `a_malformed_template_id_refuses_to_start`, `a_blank_template_id_with_email_enabled_refuses_to_start`, `a_recipient_list_with_an_empty_entry_refuses_to_start` (both spellings of a stray separator), and `an_acknowledged_override_must_still_be_a_zone_the_jvm_knows` sharpened onto the words only that branch says, so it cannot pass on the unacknowledged refusal. No refusal quotes a cron, a template id or an address back; a duration and a zone id are echoed, as the class's existing refusals echo them. **SC-005 / user story 5 scenario 3** is `ReportPropertiesTest`'s, not this row's: two `ApplicationContextRunner`s differing only in `request-terminal-within` yield two contexts whose resolved threshold differs and whose other settings do not - a threshold is per environment and takes effect on the next run with no release. Review gate 8 adds `a_zero_max_entries_refuses_to_start` and `the_system_user_id_is_required_whenever_either_half_sends` |
 | Wiring | `ReportSchedulingConfigTest` | U | the infrastructure-presence cases, all in this one class: `SchedulingInfrastructureConfig` is active whenever the JVM is not a command JVM, whatever the two enabled flags say; `IntakeSweepConfig` likewise, on its own single-thread `TaskScheduler` named `intake-sweep-`; `ReportSchedulingConfig` only behind `courtregister.report.enabled`, on its own single-thread `TaskScheduler` named `exception-report-`; exactly one `LockProvider`; `the_report_wires_with_generation_disabled` - `report.enabled=true` with `generation.enabled=false` yields a fully wired report, which is what the relocated repository beans buy; the generation beans are unchanged |
+| Wiring | `ReportEmailConfigTest` | U | the e-mail output's own beans, which review gate 7 found had no test of their own: a pod with the output on holds the `ReportMailer` and the `EmailReportSink` as singletons; a pod in FR-004's shape - generation off, the output on - **starts**, which it could not while the `PayloadFileStore` beans sat behind the generation switch; a generating pod's store is unchanged; and `courtregister.fileservice.url` is required wherever either half needs it |
+| Wiring | `StubGenerationAdaptersTest` (extended) | U | follows the `payloadFileStore` bean out of `StubGenerationConfig` into `FileServiceConfig`: the stub is still the bean a STUB deployment holds, contributed by the configuration that owns it |
 | Wiring | `CliModeConfigTest` (extended) | U | a CLI context runs **no** scheduled task of any half: none of `SchedulingInfrastructureConfig`, `ReportSchedulingConfig` or `IntakeSweepConfig` is contributed when `courtregister.cli=true`, so `@EnableScheduling` is absent and `@Scheduled` is never processed - which is what makes three configurations unconditional on the two enabled flags safe |
 | CLI | `ReportExceptionsCliTest` | U | FR-009/FR-011: `--since 2h`, `--since 30m`, `--since PT2H` and `--since <instant>` all resolve the window; an absent `--since` uses the same since-the-previous-scheduled-run window the 07:00 job uses; a malformed value is refused as `unreadable-argument` naming `--since` and never quoting the token; the command opens its own `RunCorrelation` and passes the run id into `build(...)`, so every line and event it produces carries one; it delivers to the log sink always and adds the e-mail sink only under `--email`; one line per exception, oldest first, then the counts line, then **the equivalent of the job's `exception_report_run` line, written after every sink has returned**; no line carries a recipient address, because no read selects one; `--email` refused with `declined` (exit 1) when `report.email.enabled` is false, writing nothing; **an option the command does not accept is refused with the usage line and the refusal exit code (user story 3 scenario 4), like every other operations command**; and the command **exits 2** when any sink it asked failed |
 | CLI | `ArgsTest` (extended) | U | `SINCE` is an option and `EMAIL` a flag; `permits` rejects them on the other five commands |
@@ -429,7 +462,7 @@ Layers: **U** unit - **W** WireMock - **PG** Postgres `*IT` - **FS** file-servic
 | CLI | `CliDispatchIT` (extended) | CS | `startup.sh report-exceptions --help` exits 0 inside the image; a mistyped name lists six |
 | Privacy | `TelemetryPrivacyTest` (extended) | U | SC-007: the `GenerationLegs` drive covers all **seven** - `ExceptionReportJob`, `IntakeAgeSweep`, `ExceptionReportService`, both sinks, `NotificationNotifyReportMailer` and `ReportExceptionsCli` - so every LOG statement in them is reached; no marker and no `sdg_reason` reaches a line, a label or the CSV; the operator-token group covers `report-exceptions`; `ShippedConfiguration` requires `<arguments/>` in **both** logback files. Review gate 4 tightens two of these: the provider claim **parses the XML** and asks the encoder's own provider list, so a commented-out tag (still the characters a text search looks for) and a tag outside the encoder both fail it; and the report precondition inside `should_have_reached_every_line_the_two_legs_can_write` is asked **per class** over `GenerationLegs.THE_REPORT`, so one class writing two lines can no longer cover for another declaring none |
 | Privacy | `LogStatementSweepTest` (unchanged, must stay green) | U | no throwable this service did not write is attached anywhere in the seven new classes |
-| E2E | `ExceptionReportEndToEndIT` | E2E | SC-001/003/004/006/008: seed a FAILED request, a 40-minute-old RETRYING request, a batch GENERATING past the limit, a FAILED batch and a FAILED notification; run the job with `courtregister.generation.enabled=false`; read five `courtregister_exception` events and one summary with the five counts and its ten fields, plus the `exception_report_run` line; with the e-mail output on and WireMock standing in, read one send per recipient and the CSV row for each exception. **SC-001**: a second case seeds **at least fifty mixed records** across the five kinds and the terminal states that are not exceptions, and asserts every FAILED request appears exactly once under `REQUEST_FAILED` - zero misses, zero duplicates. **SC-006**: a third seeds a **10,000-row** processed log and asserts a `--since 24h` report is built and written in **under ten seconds**. **SC-008**: a fourth runs the report job **concurrently with a generation run** and asserts the two land on differently named threads and that the generation run line's `duration_ms` is within its normal bound |
+| E2E | `ExceptionReportEndToEndIT` | E2E | SC-001/003/004/006/008: seed a FAILED request, a 40-minute-old RETRYING request, a batch GENERATING past the limit, a FAILED batch and a FAILED notification; run the job with `courtregister.generation.enabled=false`; read five `courtregister_exception` events and one summary with the five counts and its eleven fields, plus the `exception_report_run` line; with the e-mail output on and WireMock standing in, read one send per recipient and the CSV row for each exception. **SC-001**: a second case seeds **at least fifty mixed records** across the five kinds and the terminal states that are not exceptions, and asserts every FAILED request appears exactly once under `REQUEST_FAILED` - zero misses, zero duplicates - and, since review gate 8, that the number of events equals the number of failures, so a row this case never seeded cannot hide inside an assertion about the identifiers it knows. **SC-006**: a third seeds a **10,000-row** processed log and asserts a `--since 24h` report is built and written in **under ten seconds**. **SC-008**: a fourth runs the report job **concurrently with a generation run** and asserts the two land on differently named threads and that the generation run line's `duration_ms` is within its normal bound. The last two carry `@Tag("timing")` - they stay in the default selection, and `-PexcludeTags=timing` leaves them out by name on a loaded machine |
 | Differential | `DifferentialAuditTest` (unchanged, must stay green) | U | no recorded document and no golden moves |
 
 ## Complexity Tracking

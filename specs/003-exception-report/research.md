@@ -2,7 +2,8 @@
 
 Decisions the plan rests on, each with rationale and the alternatives weighed. Settled with the
 design owner on 2026-09-14. Source references are to this repository as at branch
-`003-exception-report` (`720d659`) unless stated otherwise; the 002 artefacts referred to are in
+`003-exception-report` (`94bd245`, which is `main` at the point this branch left it and the commit
+`doc/DEFECT-FIXES.md` was last changed at) unless stated otherwise; the 002 artefacts referred to are in
 `specs/002-consolidate-progression-leg/`. Where something was genuinely undecided it is written
 below as an assumption rather than left as a marker.
 
