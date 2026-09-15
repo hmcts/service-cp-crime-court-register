@@ -19,10 +19,10 @@ public enum ReportRunOutcome {
     /** Every sink the run was configured with took the report. */
     DELIVERED,
 
-    /** At least one sink took it and at least one did not; the rest is resendable. */
+    /** Somebody was told and somebody was not; the rest is resendable. */
     PARTIAL,
 
-    /** No sink took it, so the morning's exceptions were not told to anybody. */
+    /** No sink delivered anything at all, so the morning's exceptions were told to nobody. */
     FAILED;
 
     /**
@@ -33,26 +33,43 @@ public enum ReportRunOutcome {
      * disagree about - which is the same class of defect as the two words for an absent sink that
      * {@link DeliveryWord} ends.
      *
-     * <p>A run that asked nobody - which is a run that could not build a report at all, or one on a
-     * context holding no sink - is {@link #FAILED}, because nothing was told. A sink that delivered
-     * to some of its recipients has not taken the report: the rest is a resend, and that nuance is
-     * expressed here as {@link #PARTIAL} rather than hidden inside a sink's own answer.
+     * <p><strong>{@link #FAILED} means nobody was told, and nothing weaker.</strong> It is the one
+     * outcome an alert has to be able to mean on its own, so it is reserved for the run in which
+     * every sink delivered nothing at all. A sink that told two of its three recipients told two
+     * people: counting that as a morning nobody heard about would send an operator looking for a
+     * report that most of support is reading, and would hide the real silence inside the same
+     * series.
+     *
+     * <p>So a sink that delivered to some of its recipients is {@link #PARTIAL} even where it is
+     * the only sink there is - the rest is a resend, and that nuance is expressed here rather than
+     * hidden inside a sink's own answer. A run that asked nobody at all - one that could not build
+     * a report, or one on a context holding no sink - is {@link #FAILED}, because nothing was told
+     * and there is nothing to resend.
      *
      * @param delivered one outcome per sink asked, in the order they were asked
      * @return the bounded outcome
      */
     public static ReportRunOutcome from(final List<DeliveryOutcome> delivered) {
-        final long accepted = delivered.stream()
-                .filter(outcome -> outcome.status() == DeliveryStatus.DELIVERED)
-                .count();
         final ReportRunOutcome ended;
-        if (accepted == 0) {
+        if (delivered.isEmpty()
+                || delivered.stream().allMatch(ReportRunOutcome::toldNobody)) {
             ended = FAILED;
-        } else if (accepted == delivered.size()) {
+        } else if (delivered.stream().allMatch(outcome ->
+                outcome.status() == DeliveryStatus.DELIVERED)) {
             ended = DELIVERED;
         } else {
             ended = PARTIAL;
         }
         return ended;
+    }
+
+    /**
+     * Whether one sink's answer says that nobody it was asked about heard anything.
+     *
+     * @param outcome one sink's answer
+     * @return true where it delivered to nobody
+     */
+    private static boolean toldNobody(final DeliveryOutcome outcome) {
+        return outcome.status() == DeliveryStatus.NOT_DELIVERED;
     }
 }

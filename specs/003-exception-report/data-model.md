@@ -483,7 +483,14 @@ can mistype, and a mistyped label is not a wrong reading but a new series on whi
 against the right one is silent for ever.
 
 `ReportRunOutcome`'s three are the same three the run line carries: a dashboard filtered on the
-counter and a query over the run lines must partition a morning the same way. `SweepFailureReason`
+counter and a query over the run lines must partition a morning the same way.
+
+**The fold**, `ReportRunOutcome.from`, is stated once here: `DELIVERED` where every sink asked
+delivered fully; `FAILED` where every sink asked delivered **nothing** - or where none was asked at
+all, which is a run that could not build a report; `PARTIAL` everywhere between, which includes a
+lone sink that told some of its recipients. `FAILED` is the one outcome an alert has to be able to
+mean on its own, so it is reserved for the morning nobody heard about; a sink that told two of three
+teams told two people, and folding that into the same series would hide the real silence inside it. `SweepFailureReason`
 has two and must keep two - it is the only evidence the service's one absorbed refusal leaves, and
 an outage of theirs and a bug of ours need telling apart, because one counter for both would make
 the second invisible inside the first.
