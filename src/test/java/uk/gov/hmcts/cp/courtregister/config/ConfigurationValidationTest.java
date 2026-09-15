@@ -2482,6 +2482,44 @@ class ConfigurationValidationTest {
          * so the resolved value is held to being positive too, and the refusal names the key the
          * value really came from rather than the key that was left unset.
          */
+        /**
+         * The endpoint the send is made to, required of whichever half sends.
+         *
+         * <p>{@code ReportEmailConfig} builds the report's own {@code RestClient} over
+         * {@code courtregister.endpoints.notificationnotify}, because the register leg's client is
+         * built only where the generation half is enabled and this output has to work where it is
+         * not - and the setting was required of that half alone. A pod in FR-004's shape with the
+         * e-mail output on therefore started clean, reported itself healthy, and failed every send
+         * at 07:00 against a client with no base URL: the same shape as the file-service URL the
+         * gate before this one moved, one setting along.
+         *
+         * <p>The refusal names the half that asked, for the reason that one does: the value to set
+         * is the same either way, and what an operator has to know is why a pod that renders
+         * nothing wants a notificationnotify endpoint at all.
+         */
+        @Test
+        void the_notificationnotify_endpoint_is_required_whenever_either_half_sends() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
+                    A_RECIPIENT, FILESERVICE_URL_PROPERTY,
+                    "courtregister.endpoints.notificationnotify=  ").run(context -> {
+                        assertThat(context)
+                                .as("the e-mail output posts the report to notificationnotify, so"
+                                        + " a blank endpoint is a morning that fails every send on"
+                                        + " a pod that started clean")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.endpoints.notificationnotify")
+                                .hasMessageContaining(REPORT + ".email.enabled");
+                    });
+
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, A_TEMPLATE, A_RECIPIENT)
+                    .run(context -> assertThat(context)
+                            .as("and of neither half on a pod that sends nothing at all: a setting"
+                                    + " demanded of a deployment that cannot use it is a deploy"
+                                    + " that fails for no reason")
+                            .hasNotFailed());
+        }
+
         @Test
         void a_zero_grace_period_makes_the_unset_rendering_limit_refuse() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY, REPORT + ".enabled=true",
