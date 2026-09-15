@@ -25,7 +25,6 @@ import uk.gov.hmcts.cp.courtregister.domain.ExceptionKind;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.ReportRunOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
-import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.SettlementOperation;
 import uk.gov.hmcts.cp.courtregister.domain.SweepFailureReason;
@@ -91,23 +90,23 @@ class ProcessingMetricsTest {
 
         @Test
         void a_completed_request_should_increment_the_completed_series() {
-            metrics.requestSettled(RequestOutcome.COMPLETED);
+            settled(RequestStatus.COMPLETED);
 
             assertThat(counter(ProcessingMetrics.PROCESSED, "outcome", "completed")).isEqualTo(1);
         }
 
         @Test
         void a_parked_request_should_increment_the_failed_series() {
-            metrics.requestSettled(RequestOutcome.FAILED);
+            settled(RequestStatus.FAILED);
 
             assertThat(counter(ProcessingMetrics.PROCESSED, "outcome", "failed")).isEqualTo(1);
         }
 
         @Test
         void the_two_outcomes_should_be_separate_series() {
-            metrics.requestSettled(RequestOutcome.COMPLETED);
-            metrics.requestSettled(RequestOutcome.COMPLETED);
-            metrics.requestSettled(RequestOutcome.FAILED);
+            settled(RequestStatus.COMPLETED);
+            settled(RequestStatus.COMPLETED);
+            settled(RequestStatus.FAILED);
 
             assertThat(counter(ProcessingMetrics.PROCESSED, "outcome", "completed")).isEqualTo(2);
             assertThat(counter(ProcessingMetrics.PROCESSED, "outcome", "failed")).isEqualTo(1);
@@ -143,9 +142,14 @@ class ProcessingMetricsTest {
 
         @Test
         void it_should_carry_the_outcome_label_and_nothing_else() {
-            metrics.requestSettled(RequestOutcome.COMPLETED);
+            settled(RequestStatus.COMPLETED);
 
             assertThat(tagKeysOf(ProcessingMetrics.PROCESSED)).containsExactly("outcome");
+        }
+
+        /** One settlement, which is one call: the count and the duration are one recording. */
+        private void settled(final RequestStatus outcome) {
+            metrics.requestSettled(metrics.startRequestTiming(), outcome);
         }
     }
 
@@ -775,7 +779,8 @@ class ProcessingMetricsTest {
 
         @Test
         void exercising_everything_should_register_exactly_the_documented_instruments() {
-            metrics.requestSettled(RequestOutcome.COMPLETED);
+            metrics.requestSettled(metrics.startRequestTiming(),
+                    RequestStatus.COMPLETED);
             metrics.completed(CompletionReason.SUBMITTED);
             metrics.pipelineFailed(FailureClassification.TRANSIENT);
             metrics.transformationAnomaly(TransformationAnomaly.LETTER_DELIVERY_DROPPED);
@@ -819,7 +824,8 @@ class ProcessingMetricsTest {
 
         @Test
         void no_instrument_should_carry_an_identifying_label() {
-            metrics.requestSettled(RequestOutcome.COMPLETED);
+            metrics.requestSettled(metrics.startRequestTiming(),
+                    RequestStatus.COMPLETED);
             metrics.completed(CompletionReason.NO_YOUTH_DEFENDANTS);
             metrics.pipelineFailed(FailureClassification.TRANSIENT);
             metrics.transformationAnomaly(TransformationAnomaly.UNRESOLVABLE_YOUTH_DEFENDANT);
@@ -954,7 +960,8 @@ class ProcessingMetricsTest {
                 for (final TransformationAnomaly anomaly : TransformationAnomaly.values()) {
                     scraped.transformationAnomaly(anomaly);
                 }
-                scraped.requestSettled(RequestOutcome.COMPLETED);
+                scraped.requestSettled(scraped.startRequestTiming(),
+                        RequestStatus.COMPLETED);
                 scraped.pipelineFailed(FailureClassification.TRANSIENT);
                 scraped.deadLettered(DeadLetterReason.COLLISION);
                 scraped.settlementFailed(SettlementOperation.COMPLETE);

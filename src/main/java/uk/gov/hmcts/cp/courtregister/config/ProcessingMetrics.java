@@ -151,22 +151,22 @@ public class ProcessingMetrics {
     }
 
     /**
-     * A request reached a terminal outcome.
+     * A request reached a terminal state: counts it and records how long it took to get there.
      *
-     * @param outcome how the request finished
-     */
-    public void requestSettled(final RequestOutcome outcome) {
-        counter(PROCESSED, OUTCOME_TAG, outcome.label()).increment();
-    }
-
-    /**
-     * Records how long an admitted run took to reach the terminal state the guard accepted.
+     * <p><strong>One settlement is one recording.</strong> The count and the duration were two
+     * calls, made side by side at every settlement in {@code DistributionPipeline}, and a pair like
+     * that can drift: a path that remembered one and forgot the other publishes a count with no
+     * duration, or a duration with no count, and the two series an operator reads together stop
+     * agreeing about how many requests finished. The terminal state is the same fact both of them
+     * are about, so it is taken once and answers both - {@link RequestOutcome#of} is where the two
+     * vocabularies meet, and it is written once.
      *
      * <p>Refuses a state that is not terminal. A sample taken from {@code RECEIVED} or
      * {@code RETRYING} would time an attempt rather than a run - the broker is going to deliver the
      * message again - and would publish it under an {@code outcome} value nothing documents and no
      * alert reads. A timer records in silence, so the caller that did it would never find out;
-     * refusing here is the only place that can tell them.
+     * refusing here is the only place that can tell them. The refusal comes before either
+     * instrument moves, so a refused call leaves no half-recorded settlement behind.
      *
      * @param timing  the token {@link #startRequestTiming()} answered
      * @param outcome the terminal state the run reached
@@ -178,6 +178,7 @@ public class ProcessingMetrics {
                     + " is not a terminal state, so a duration sample taken here would time an "
                     + "attempt rather than a run");
         }
+        counter(PROCESSED, OUTCOME_TAG, RequestOutcome.of(outcome).label()).increment();
         timing.sample.stop(Timer.builder(REQUEST_DURATION)
                 .description("Time from the guard admitting a run to the terminal state it reached")
                 .tag(OUTCOME_TAG, code(outcome))

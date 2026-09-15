@@ -23,7 +23,6 @@ import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.ReferenceDataUnavailableException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
-import uk.gov.hmcts.cp.courtregister.domain.RequestOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
@@ -913,9 +912,11 @@ public class DistributionPipeline {
      * <p>A superseded runner's completion affects no rows and comes back as an abandon; counting it
      * as a completed request would report work that was never recorded.
      *
-     * <p>Two counters, answering two questions. {@code requestSettled} says the request finished;
-     * {@code completed} says <em>how</em> — which of the five ways a court-register run ends well.
-     * Four of them send nothing, and a single undifferentiated success is the legacy defect C33.
+     * <p>Two recordings, answering two questions. {@code requestSettled} says the request finished
+     * and how long it took - one call, because the terminal state is one fact and a count without
+     * its duration is a pair that has drifted; {@code completed} says <em>how</em> it finished -
+     * which of the five ways a court-register run ends well. Four of them send nothing, and a
+     * single undifferentiated success is the legacy defect C33.
      */
     private GuardDecision completed(final RunClaim claim, final CompletionReason reason,
             final ProcessingMetrics.Timing timing) {
@@ -947,7 +948,6 @@ public class DistributionPipeline {
         if (outcome instanceof GuardDecision.Complete) {
             LOG.info("Run finished. source={} requestId={} reason={}",
                     claim.source(), claim.requestId(), reason.value());
-            metrics.requestSettled(RequestOutcome.COMPLETED);
             metrics.completed(reason);
             metrics.requestSettled(timing, RequestStatus.COMPLETED);
         }
@@ -1006,7 +1006,6 @@ public class DistributionPipeline {
     private GuardDecision parked(final GuardDecision outcome,
             final ProcessingMetrics.Timing timing) {
         if (outcome instanceof GuardDecision.DeadLetter) {
-            metrics.requestSettled(RequestOutcome.FAILED);
             metrics.requestSettled(timing, RequestStatus.FAILED);
         }
         return outcome;
