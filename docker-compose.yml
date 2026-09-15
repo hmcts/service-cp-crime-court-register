@@ -98,6 +98,14 @@ services:
       # describes the JVM that publishes it, so alerts aggregate across pods with max(). Ten
       # minutes by default.
       COURTREGISTER_INTAKE_GAUGE_REFRESH: 10m
+      # The e-mail output, switched separately from the Log Analytics output. On locally so the
+      # WireMock notificationnotify stub is exercised; off in every environment until the
+      # notificationnotify team provides the template.
+      COURTREGISTER_REPORT_EMAIL_ENABLED: "true"
+      # Local-only dummies. Never a real template id and never a real address: in a deployed
+      # environment both arrive from Key Vault through the CSI driver.
+      CR_REPORT_TEMPLATE_ID: 22222222-2222-2222-2222-222222222222
+      COURTREGISTER_REPORT_RECIPIENTS: support@example.invalid
 
   postgres:
     image: postgres:16
