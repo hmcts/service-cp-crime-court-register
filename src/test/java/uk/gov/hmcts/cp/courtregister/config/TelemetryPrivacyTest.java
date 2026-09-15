@@ -979,6 +979,15 @@ class TelemetryPrivacyTest {
             assertThat(declared)
                     .as("a scan that found no statement would make the sweep above cover nothing")
                     .hasSizeGreaterThan(EVERY_LINE_THE_LEGS_WRITE);
+            assertThat(declared.stream()
+                            .filter(statement -> theReportsLoggers().contains(
+                                    statement.loggerName()))
+                            .toList())
+                    .as("the report's two classes are inside the enumeration now, and a class that "
+                            + "declares no statement contributes nothing for the reach assertion "
+                            + "below to cover - it is widened past in silence, and the sweep says "
+                            + "it covered them while covering nothing of theirs")
+                    .isNotEmpty();
             assertThat(LogStatement.keyCollisionsIn(declared))
                     .as("two statements one key cannot tell apart: the event from either satisfies "
                             + "both declarations, so the assertion below is met without the second "
@@ -1030,6 +1039,21 @@ class TelemetryPrivacyTest {
                             + "messages are bounded phrases written in this repository for that; a "
                             + "line of its own would be a second, unasserted way out")
                     .isEmpty();
+        }
+
+        /**
+         * The loggers of the report's two classes, which are inside {@link GenerationLegs#THE_LEGS}.
+         *
+         * <p>Read off the classes rather than listed, for the reason every enumeration in this
+         * suite is: a third class added to the report is inside the precondition from the moment
+         * it is named there.
+         *
+         * @return the logger name of each of the report's classes
+         */
+        private Set<String> theReportsLoggers() {
+            return GenerationLegs.THE_REPORT.stream()
+                    .map(Class::getName)
+                    .collect(Collectors.toUnmodifiableSet());
         }
 
         private List<String> renderings() {

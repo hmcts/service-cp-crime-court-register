@@ -17,6 +17,7 @@ import static org.mockito.Mockito.when;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.http.Fault;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.jms.JMSException;
 import jakarta.jms.TextMessage;
 import java.time.Duration;
@@ -25,6 +26,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Stream;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
@@ -32,8 +34,11 @@ import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.adapter.notificationnotify.NotificationNotifyClient;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DeliveryObserver;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DocumentEventListener;
+import uk.gov.hmcts.cp.courtregister.adapter.report.LogEventReportSink;
 import uk.gov.hmcts.cp.courtregister.adapter.systemdocgenerator.SystemDocGeneratorClient;
 import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSinkImpl;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
@@ -47,8 +52,10 @@ import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
+import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.AssembledBatch;
 import uk.gov.hmcts.cp.courtregister.domain.BatchAssembly;
+import uk.gov.hmcts.cp.courtregister.domain.BatchException;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
@@ -57,19 +64,29 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterCaseOrApplication;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDefendant;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
+import uk.gov.hmcts.cp.courtregister.domain.DeadLetterReason;
 import uk.gov.hmcts.cp.courtregister.domain.Deadline;
+import uk.gov.hmcts.cp.courtregister.domain.DeliveryOutcome;
+import uk.gov.hmcts.cp.courtregister.domain.ExceptionReport;
+import uk.gov.hmcts.cp.courtregister.domain.FailedNotification;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 import uk.gov.hmcts.cp.courtregister.domain.GateDecision;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.PayloadStoreUnavailableException;
+import uk.gov.hmcts.cp.courtregister.domain.ProcessedRequestSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
+import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotification;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
+import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
+import uk.gov.hmcts.cp.courtregister.domain.ReportWindow;
+import uk.gov.hmcts.cp.courtregister.domain.RequestStatus;
 import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 import uk.gov.hmcts.cp.courtregister.persistence.NotificationClaim;
 import uk.gov.hmcts.cp.courtregister.persistence.NotificationSettlement;
+import uk.gov.hmcts.cp.courtregister.persistence.ProcessedRequestRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 
@@ -118,22 +135,78 @@ public final class GenerationLegs implements AutoCloseable {
     public static final UUID NOTIFICATION_ID =
             UUID.fromString("66666666-7777-4888-8999-aaaaaaaaaaaa");
 
-    /** The classes that write a line between a recorded register and the e-mail about it. */
-    public static final List<Class<?>> THE_LEGS = List.of(
-            RegisterGenerationJob.class,
-            RegisterGenerationService.class,
-            SystemDocGeneratorClient.class,
-            GenerationReconciler.class,
-            DocumentEventListener.class,
-            DocumentOutcomeSinkImpl.class,
-            RegisterNotifierService.class,
-            NotificationNotifyClient.class);
+    /**
+     * The two classes the morning's exception report writes its own lines from.
+     *
+     * <p>Named on their own as well as inside {@link #THE_LEGS}, because a class that declares no
+     * statement contributes nothing to a sweep over declarations and is passed over in silence. A
+     * suite that widens the enumeration has to be able to say the classes it added really brought
+     * lines with them, or it has widened the list and not the claim.
+     */
+    public static final List<Class<?>> THE_REPORT = List.of(
+            ExceptionReportService.class,
+            LogEventReportSink.class);
+
+    /**
+     * The classes that write a line about a register: the two legs, and the report over both.
+     *
+     * <p>The report is inside this list rather than in a sweep of its own because the rule is one
+     * rule. Its entries name the batches and the notifications the legs above produced, and a
+     * claim about what may reach the estate's index that held for the e-mail but not for the
+     * morning's report would be a rule enforced on one half of a service.
+     */
+    public static final List<Class<?>> THE_LEGS = Stream.concat(
+            Stream.of(
+                    RegisterGenerationJob.class,
+                    RegisterGenerationService.class,
+                    SystemDocGeneratorClient.class,
+                    GenerationReconciler.class,
+                    DocumentEventListener.class,
+                    DocumentOutcomeSinkImpl.class,
+                    RegisterNotifierService.class,
+                    NotificationNotifyClient.class),
+            THE_REPORT.stream()).toList();
 
     /** Everything a meter's name or label may never carry, whoever it describes. */
     public static final List<String> NOTHING_A_SERIES_MAY_CARRY = List.of(
             PersonalDataMarkers.RECIPIENT_EMAIL,
             PersonalDataMarkers.RECIPIENT_ORGANISATION,
             PersonalDataMarkers.GENERATOR_REASON);
+
+    /** The request the morning's report is about, fixed so a suite can look for it. */
+    public static final UUID REQUEST_ID = UUID.fromString("4c8e1a70-9b2d-4f36-8a57-c1d0e9f3b284");
+
+    /** The hearing that request carries, which the stranded register carries too. */
+    private static final UUID HEARING_ID =
+            UUID.fromString("9e2b4c60-1d38-4a75-9f04-6b3c8d1e5a72");
+
+    /** The correlation the report's drive runs under, which the caller gives and never reads. */
+    private static final String RUN_ID = "report-drive-1";
+
+    /** The source the intake half attributes the request to, which is not a person's name. */
+    private static final String SOURCE = "RESULTS";
+
+    /** The schedule that decides what "the last run left this behind" means. */
+    private static final String GENERATION_CRON = "0 0 18 * * MON-FRI";
+
+    /**
+     * The one limit the three report thresholds are all given.
+     *
+     * <p>This fixture is about the lines, not about the thresholds: every row it seeds is answered
+     * by a doubled read whatever cut-off the service computes, so three separate durations would
+     * be three numbers nothing here depends on.
+     */
+    private static final Duration REPORT_LIMIT = Duration.ofMinutes(30);
+
+    /** The ages the three kinds of projection carry, as the database would have computed them. */
+    private static final long A_REQUESTS_AGE = 5_400L;
+
+    private static final long A_BATCHS_AGE = 7_200L;
+
+    private static final long A_REGISTERS_AGE = 9_000L;
+
+    /** The status line notificationnotify refused one team's e-mail with. */
+    private static final int REFUSED_STATUS = 400;
 
     private static final UUID PAYLOAD_FILE_ID =
             UUID.fromString("bbbbbbbb-cccc-4ddd-8eee-ffffffffffff");
@@ -199,6 +272,8 @@ public final class GenerationLegs implements AutoCloseable {
     private final RegisterNotificationRepository notifications =
             mock(RegisterNotificationRepository.class);
 
+    private final ProcessedRequestRepository requestLog = mock(ProcessedRequestRepository.class);
+
     private final PayloadFileStore payloadFileStore = mock(PayloadFileStore.class);
 
     private final BatchAssembler assembler = mock(BatchAssembler.class);
@@ -221,6 +296,10 @@ public final class GenerationLegs implements AutoCloseable {
 
     private final RegisterGenerationJob job;
 
+    private final ExceptionReportService reporting;
+
+    private final LogEventReportSink logSink = new LogEventReportSink();
+
     private GenerationLegs(final WireMockServer wireMock, final MeterRegistry registry) {
         this.contexts = wireMock;
         this.metrics = new GenerationMetrics(registry);
@@ -239,6 +318,10 @@ public final class GenerationLegs implements AutoCloseable {
         this.listener = new DocumentEventListener(sink, metrics, DeliveryObserver.NONE);
         this.job = new RegisterGenerationJob(gate, store, assembler, generation, reconciler,
                 metrics, settings(), clock);
+        this.reporting = new ExceptionReportService(requestLog, batches, notifications, store,
+                REPORT_LIMIT, REPORT_LIMIT, REPORT_LIMIT, GENERATION_CRON,
+                GenerationProperties.COURTS_ZONE, new ProcessingMetrics(new SimpleMeterRegistry()),
+                clock);
     }
 
     /**
@@ -274,6 +357,7 @@ public final class GenerationLegs implements AutoCloseable {
         theOutcomeSink();
         theNotifyingLeg();
         theNotifiersClient();
+        theExceptionReport();
     }
 
     // --- the nightly run -------------------------------------------------------------------------
@@ -893,6 +977,103 @@ public final class GenerationLegs implements AutoCloseable {
         whateverItAnswers(() -> listener.onPublicEvent(message(eventName, body)));
     }
 
+    // --- the morning's report ---------------------------------------------------------------------
+
+    /**
+     * One morning with an exception of every kind, delivered to the log and to a sink that breaks.
+     *
+     * <p>A single arrangement rather than several, because the report's two classes write three
+     * lines between them and all three are about one report: the summary, one line per entry, and
+     * the one the service leaves behind when a sink could not be handed the report at all. The
+     * entries cover all five kinds, and within {@code BATCH_LATE} all four stages, so the
+     * per-entry line is written over every shape of entry there is - including the two that carry
+     * no batch and the three that carry no request.
+     *
+     * <p><strong>The sink that breaks carries markers in its message</strong>, and that is the
+     * whole point of driving it. The rule is that a caught failure is named by its class and never
+     * by its message, because the message belongs to whoever raised it; a sink whose failure said
+     * nothing about anybody would leave that rule asserted against a string that could not have
+     * leaked in the first place.
+     *
+     * <p>The report reads and writes nothing of its own, so its reads are the doubles the two legs
+     * above already hold, answering one row apiece.
+     */
+    private void theExceptionReport() {
+        when(requestLog.failedSince(any())).thenReturn(List.of(aParkedRequest()));
+        when(requestLog.nonTerminalOlderThan(any())).thenReturn(List.of(anUnfinishedRequest()));
+        when(batches.latePending(any())).thenReturn(List.of(aLateBatch(BatchStatus.PENDING)));
+        when(batches.lateGenerating(any())).thenReturn(List.of(aLateBatch(BatchStatus.GENERATING)));
+        when(batches.lateGenerated(any())).thenReturn(List.of(aLateBatch(BatchStatus.GENERATED)));
+        when(batches.failedSince(any())).thenReturn(List.of(aDeadBatch()));
+        when(store.recordedUnbatchedBefore(any())).thenReturn(List.of(aStrandedRegister()));
+        when(notifications.failedSince(any())).thenReturn(List.of(aRefusedNotification()));
+
+        final ExceptionReport report =
+                reporting.build(new ReportWindow(AT.minus(Duration.ofDays(1)), AT), RUN_ID);
+        whateverItAnswers(() -> reporting.deliver(report, List.of(logSink, aSinkThatBreaks())));
+    }
+
+    /** A request the intake half parked, carrying the bounded reason it was parked under. */
+    private static ProcessedRequestSummary aParkedRequest() {
+        return new ProcessedRequestSummary(SOURCE, REQUEST_ID, HEARING_ID, REGISTER_DATE,
+                RequestStatus.FAILED, MAX_ATTEMPTS, DeadLetterReason.VALIDATION.label(), AT, AT,
+                A_REQUESTS_AGE);
+    }
+
+    /** A request that arrived and has reached no terminal state since, which carries no reason. */
+    private static ProcessedRequestSummary anUnfinishedRequest() {
+        return new ProcessedRequestSummary(SOURCE, REQUEST_ID, HEARING_ID, REGISTER_DATE,
+                RequestStatus.RECEIVED, 1, null, AT, AT, A_REQUESTS_AGE);
+    }
+
+    /** A batch still at one of its three stages long after it should have left it. */
+    private static BatchException aLateBatch(final BatchStatus status) {
+        return new BatchException(BATCH_ID, COURT_CENTRE, REGISTER_DATE, status, null, 1,
+                A_BATCHS_AGE);
+    }
+
+    /** A batch that ended, named by its own bounded reason and never by the generator's words. */
+    private static BatchException aDeadBatch() {
+        return new BatchException(BATCH_ID, COURT_CENTRE, REGISTER_DATE, BatchStatus.FAILED,
+                BatchFailureReason.GENERATION_FAILED, 1, A_BATCHS_AGE);
+    }
+
+    /** A register the last scheduled run left where it was, which has no batch to be named by. */
+    private static RecordedRegisterSummary aStrandedRegister() {
+        return new RecordedRegisterSummary(UUID.randomUUID(), HEARING_ID, COURT_CENTRE,
+                REGISTER_DATE, AT, A_REGISTERS_AGE);
+    }
+
+    /** One team's e-mail that was refused, named by its identity and by no address. */
+    private static FailedNotification aRefusedNotification() {
+        return new FailedNotification(NOTIFICATION_ID, BATCH_ID, COURT_CENTRE, REGISTER_DATE,
+                NotificationStatus.FAILED, REFUSED_STATUS, MAX_ATTEMPTS, AT, A_BATCHS_AGE);
+    }
+
+    /**
+     * A sink that cannot take the report, and whose refusal names a team and an address.
+     *
+     * <p>The second sink of the pair on purpose: the first has to still be asked, and what the
+     * service says about this one has to name its class and nothing it wrote.
+     *
+     * @return a sink that throws rather than answering
+     */
+    private static ExceptionReportSink aSinkThatBreaks() {
+        return new ExceptionReportSink() {
+            @Override
+            public ReportSinkName name() {
+                return ReportSinkName.EMAIL;
+            }
+
+            @Override
+            public DeliveryOutcome deliver(final ExceptionReport report) {
+                throw new IllegalStateException("the mail context refused the report addressed to "
+                        + PersonalDataMarkers.RECIPIENT_ORGANISATION + " at "
+                        + PersonalDataMarkers.RECIPIENT_EMAIL);
+            }
+        };
+    }
+
     /**
      * Runs one arrangement and lets it answer however it answers.
      *
@@ -930,7 +1111,8 @@ public final class GenerationLegs implements AutoCloseable {
     }
 
     private static GenerationProperties settings() {
-        return new GenerationProperties(true, "0 0 18 * * MON-FRI", "Europe/London", false,
+        return new GenerationProperties(true, GENERATION_CRON, GenerationProperties.COURTS_ZONE,
+                false,
                 RUN_DEADLINE, RUN_DEADLINE.plusMinutes(10), GRACE_PERIOD,
                 GenerationProperties.COMPLETION_EVENT,
                 GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE,
