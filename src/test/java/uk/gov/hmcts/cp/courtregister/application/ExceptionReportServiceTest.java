@@ -2,6 +2,7 @@ package uk.gov.hmcts.cp.courtregister.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -185,8 +186,9 @@ class ExceptionReportServiceTest {
     /**
      * The cap the case under way runs with, set before the service is built.
      *
-     * <p>A field rather than a constant because two cases are about the cap itself and every other
-     * one is about a report no cap could reach; the default is far beyond anything seeded here.
+     * <p>A field rather than a constant because four cases are about the cap itself and every
+     * other one is about a report no cap could reach; the default is far beyond anything seeded
+     * here.
      */
     private int maxEntries = MAX_ENTRIES;
 
@@ -605,20 +607,21 @@ class ExceptionReportServiceTest {
         /**
          * A report is read by a person, and a bad morning is not a reason to write for ever.
          *
-         * <p>The cap is on the <em>entries</em> and never on the counts: a morning that dropped
-         * entries is a worse morning than one that did not, and a count that shrank with the list
-         * would make the worst night of the year read as a quiet one. So the counts stay whole,
-         * the oldest entries are what is kept - they are the ones that have been wrong longest -
-         * and how many were dropped is a number the report carries and every output says.
+         * <p>The cap is on the <em>recurring</em> kinds and never on the counts: a morning that
+         * dropped entries is a worse morning than one that did not, and a count that shrank with
+         * the list would make the worst night of the year read as a quiet one. So the counts stay
+         * whole, the oldest late entries are what is kept - they are the ones that have been wrong
+         * longest - and how many were dropped is a number the report carries and every output says.
+         *
+         * <p>Dropping a late entry costs nothing that is not recovered: the two late kinds are
+         * asked about a cut-off rather than a window, so whatever is still late at the next run is
+         * read again by it.
          */
         @Test
-        void a_report_over_the_cap_keeps_the_oldest_entries_and_counts_what_it_dropped() {
-            maxEntries = 2;
-            service = new ExceptionReportService(requests, batches, notifications, registers,
-                    REQUEST_TERMINAL_WITHIN, BATCH_GENERATED_WITHIN, NOTIFIED_WITHIN, maxEntries,
-                    GENERATION_CRON, COURTS_ZONE, metrics, Clock.fixed(NOW, ZoneOffset.UTC));
-            when(requests.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(
-                    parkedAged(9_000L), parkedAged(8_000L), parkedAged(7_000L)));
+        void the_cap_keeps_the_oldest_late_entries_and_drops_the_newest() {
+            cappedAt(2);
+            when(requests.nonTerminalOlderThan(any())).thenReturn(List.of(
+                    stillOpenAged(9_000L), stillOpenAged(8_000L), stillOpenAged(7_000L)));
 
             final ExceptionReport report = service.build(WINDOW, RUN_ID);
 
@@ -634,7 +637,67 @@ class ExceptionReportServiceTest {
             assertThat(report.counts())
                     .as("the counts are the reads' own and are never capped: the whole point of "
                             + "the number beside them is that they stay true")
-                    .containsEntry(ExceptionKind.REQUEST_FAILED, 3);
+                    .containsEntry(ExceptionKind.REQUEST_LATE, 3);
+        }
+
+        /**
+         * A failure the cap drops is a failure nothing reports, ever.
+         *
+         * <p>The three failure kinds are read over a half-open window aligned to the schedule, so
+         * every row belongs to exactly one run's window and no later run reads it again. A cap that
+         * could drop one of those would hide it permanently - the quiet, invisible loss this whole
+         * feature exists to end - and it would do it on precisely the morning the report was
+         * longest, which is the morning it mattered most. So the ceiling bounds the two kinds that
+         * recur by construction and nothing else, and {@code truncated} counts late entries alone.
+         */
+        @Test
+        void the_cap_never_drops_a_failure_kind() {
+            cappedAt(2);
+            when(requests.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(
+                    parkedAged(9_000L), parkedAged(8_000L), parkedAged(7_000L)));
+            when(requests.nonTerminalOlderThan(any())).thenReturn(List.of(
+                    stillOpenAged(6_000L), stillOpenAged(5_000L), stillOpenAged(4_000L)));
+
+            final ExceptionReport report = service.build(WINDOW, RUN_ID);
+
+            assertThat(report.entries())
+                    .as("every failure the window found, whatever the cap, and the oldest two of "
+                            + "the late kind beside them: a failure dropped here is a failure no "
+                            + "window would ever read again")
+                    .extracting(ExceptionEntry::kind, ExceptionEntry::ageSeconds)
+                    .containsExactly(
+                            tuple(ExceptionKind.REQUEST_FAILED, 9_000L),
+                            tuple(ExceptionKind.REQUEST_FAILED, 8_000L),
+                            tuple(ExceptionKind.REQUEST_FAILED, 7_000L),
+                            tuple(ExceptionKind.REQUEST_LATE, 6_000L),
+                            tuple(ExceptionKind.REQUEST_LATE, 5_000L));
+            assertThat(report.truncated())
+                    .as("and what was dropped is the one late entry, so the number beside a "
+                            + "capped morning counts only what the next run will say again")
+                    .isEqualTo(1);
+            assertThat(report.counts())
+                    .as("the counts stay the reads' own on both kinds")
+                    .containsEntry(ExceptionKind.REQUEST_FAILED, 3)
+                    .containsEntry(ExceptionKind.REQUEST_LATE, 3);
+        }
+
+        @Test
+        void a_report_of_only_failures_over_the_cap_is_complete_and_not_truncated() {
+            cappedAt(2);
+            when(requests.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(
+                    parkedAged(9_000L), parkedAged(8_000L), parkedAged(7_000L)));
+
+            final ExceptionReport report = service.build(WINDOW, RUN_ID);
+
+            assertThat(report.entries())
+                    .as("a morning of nothing but failures is reported whole however long it is - "
+                            + "there is no later run that would pick up the tail")
+                    .extracting(ExceptionEntry::ageSeconds)
+                    .containsExactly(9_000L, 8_000L, 7_000L);
+            assertThat(report.truncated())
+                    .as("and nothing was dropped, so the number that would have an operator look "
+                            + "for missing events stays at nought")
+                    .isZero();
         }
 
         @Test
@@ -714,6 +777,32 @@ class ExceptionReportServiceTest {
         return new ProcessedRequestSummary(SOURCE, UUID.randomUUID(), HEARING_ID, HEARING_DAY,
                 RequestStatus.FAILED, ATTEMPTS, "schema-violation",
                 WINDOW_FROM, WINDOW_FROM.plus(Duration.ofMinutes(1)), ageSeconds);
+    }
+
+    /**
+     * Rebuilds the service under way with a stated cap, which is a constructor argument.
+     *
+     * @param cap how many of the recurring kinds this case's report may carry
+     */
+    private void cappedAt(final int cap) {
+        maxEntries = cap;
+        service = new ExceptionReportService(requests, batches, notifications, registers,
+                REQUEST_TERMINAL_WITHIN, BATCH_GENERATED_WITHIN, NOTIFIED_WITHIN, maxEntries,
+                GENERATION_CRON, COURTS_ZONE, metrics, Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    /**
+     * A request still open at a stated age and an identity of its own.
+     *
+     * <p>Its own identity for the reason {@link #parkedAged(long)} has one: the cases about the cap
+     * seed several at once, and a shared identity would have the fold that keeps a request out of
+     * two kinds do the dropping instead of the cap.
+     */
+    private static ProcessedRequestSummary stillOpenAged(final long ageSeconds) {
+        return new ProcessedRequestSummary(SOURCE, UUID.randomUUID(), HEARING_ID, HEARING_DAY,
+                RequestStatus.RETRYING, ATTEMPTS, null,
+                WINDOW_FROM.minus(Duration.ofDays(3)), WINDOW_FROM.minus(Duration.ofDays(2)),
+                ageSeconds);
     }
 
     private static ProcessedRequestSummary parked() {
