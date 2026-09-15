@@ -69,6 +69,19 @@ public record Args(Map<String, String> options, Set<String> flags) {
     public static final String HELP = "help";
 
     /**
+     * How far back the report reaches, as an instant or as a duration before now.
+     *
+     * <p>Read by {@code report-exceptions} and by nothing else. The value is not interpreted here:
+     * an instant, an ISO-8601 duration and the {@code 2d}/{@code 2h}/{@code 30m}/{@code 90s}
+     * shorthands are all tokens to this parser, and the refusal for a window that cannot be read
+     * belongs where the command can say which argument it could not use.
+     */
+    public static final String SINCE = "since";
+
+    /** Send the report to the configured recipients as well as printing it. */
+    public static final String EMAIL = "email";
+
+    /**
      * Every name the five commands between them take, and the whole of what a refusal may repeat.
      *
      * <p>These eight are this service's own text, fixed by research §13, so a refusal that names
