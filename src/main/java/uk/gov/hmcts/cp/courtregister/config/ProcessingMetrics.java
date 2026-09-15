@@ -3,9 +3,11 @@ package uk.gov.hmcts.cp.courtregister.config;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import org.springframework.stereotype.Component;
@@ -36,6 +38,16 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
  * anomaly counter records a register that was produced with a part skipped (fixes C19, C20 and C27),
  * which is deliberately not a failure: {@code TRANSFORMATION_FAILED} is reserved for a
  * transformation that cannot produce a document at all.
+ *
+ * <p>Increment 003 adds the four instruments the design promised and 001 never built. Two are
+ * gauges about work that has not finished - the age of the oldest unfinished request, and how many
+ * of them are over the intake threshold - refreshed on their own fixed delay by
+ * {@code batch.IntakeAgeSweep} in every JVM and under no lock, so a pod publishes its own reading
+ * and an alert aggregates across pods with {@code max()}. The third is the request-duration timer,
+ * tagged by the terminal outcome and by nothing else. The fourth is the report's own three
+ * counters, beside which sits {@code courtregister_intake_sweep_failures_total}: the sweep's read
+ * failure is the one refusal this service absorbs, and this counter is what makes the absorption
+ * visible.
  *
  * <p>Dead-letter <em>depth</em> is deliberately absent: it is read from Azure Monitor's native queue
  * metric. This service counts the dead-letters it performs, which is a different question.
@@ -90,6 +102,15 @@ public class ProcessingMetrics {
     private final AtomicInteger intakeSuspendedState = new AtomicInteger(DOWN);
 
     /**
+     * The two readings the intake sweep publishes, held for the same reason and refreshed on their
+     * own fixed delay in every JVM. Nothing locks the sweep, so each pod's pair describes the pod
+     * that published it and an alert aggregates them across pods with {@code max()} - the oldest
+     * unfinished request is the oldest any pod can see.
+     */
+    private final AtomicLong oldestNonTerminalSeconds = new AtomicLong();
+    private final AtomicInteger nonTerminalOverThreshold = new AtomicInteger();
+
+    /**
      * How the Service Bus gauge answers, at the moment it is asked.
      *
      * <p>A supplier rather than a remembered number, because the state it reports is partly a
@@ -117,6 +138,14 @@ public class ProcessingMetrics {
                         state -> state.get().getAsBoolean() ? UP : DOWN)
                 .description("1 while the Service Bus health component is up, 0 while it is down")
                 .register(registry);
+        Gauge.builder(OLDEST_NON_TERMINAL_REQUEST_AGE, oldestNonTerminalSeconds,
+                        AtomicLong::doubleValue)
+                .description("Age in seconds of the oldest request that has not finished")
+                .register(registry);
+        Gauge.builder(NON_TERMINAL_REQUESTS_OVER_THRESHOLD, nonTerminalOverThreshold,
+                        AtomicInteger::doubleValue)
+                .description("Requests unfinished for longer than the intake threshold")
+                .register(registry);
     }
 
     /**
@@ -126,6 +155,28 @@ public class ProcessingMetrics {
      */
     public void requestSettled(final RequestOutcome outcome) {
         counter(PROCESSED, OUTCOME_TAG, outcome.label()).increment();
+    }
+
+    /**
+     * Records how long an admitted run took to reach the terminal state the guard accepted.
+     *
+     * @param timing  the token {@link #startRequestTiming()} answered
+     * @param outcome the terminal state the run reached
+     */
+    public void requestSettled(final Timing timing, final RequestStatus outcome) {
+        timing.sample.stop(Timer.builder(REQUEST_DURATION)
+                .description("Time from the guard admitting a run to the terminal state it reached")
+                .tag(OUTCOME_TAG, code(outcome))
+                .register(registry));
+    }
+
+    /**
+     * Starts timing one admitted run.
+     *
+     * @return the token to hand back when the run reaches a terminal state
+     */
+    public Timing startRequestTiming() {
+        return new Timing(Timer.start(registry));
     }
 
     /**
@@ -253,7 +304,7 @@ public class ProcessingMetrics {
      *            where nothing is unfinished
      */
     public void oldestNonTerminalRequestAge(final Duration age) {
-        // T025 registers the gauge this sets.
+        oldestNonTerminalSeconds.set(age.toSeconds());
     }
 
     /**
@@ -262,26 +313,7 @@ public class ProcessingMetrics {
      * @param count how many requests are over it, or zero where none is
      */
     public void nonTerminalRequestsOverThreshold(final int count) {
-        // T025 registers the gauge this sets.
-    }
-
-    /**
-     * Starts timing one admitted run.
-     *
-     * @return the token to hand back when the run reaches a terminal state
-     */
-    public Timing startRequestTiming() {
-        return new Timing();
-    }
-
-    /**
-     * Records how long an admitted run took to reach the terminal state the guard accepted.
-     *
-     * @param timing  the token {@link #startRequestTiming()} answered
-     * @param outcome the terminal state the run reached
-     */
-    public void requestSettled(final Timing timing, final RequestStatus outcome) {
-        // T025 records the sample this token holds.
+        nonTerminalOverThreshold.set(count);
     }
 
     /**
@@ -290,7 +322,7 @@ public class ProcessingMetrics {
      * @param outcome {@code delivered}, {@code partial} or {@code failed}
      */
     public void exceptionReportRun(final String outcome) {
-        // T025 registers the counter this moves.
+        counter(EXCEPTION_REPORT_RUNS, OUTCOME_TAG, outcome).increment();
     }
 
     /**
@@ -300,7 +332,11 @@ public class ProcessingMetrics {
      * @param outcome how completely it was delivered
      */
     public void exceptionReportDelivery(final ReportSinkName sink, final DeliveryStatus outcome) {
-        // T025 registers the counter this moves.
+        Counter.builder(EXCEPTION_REPORT_DELIVERIES)
+                .tag(SINK_TAG, code(sink))
+                .tag(OUTCOME_TAG, code(outcome))
+                .register(registry)
+                .increment();
     }
 
     /**
@@ -310,7 +346,7 @@ public class ProcessingMetrics {
      * @param count how many of them the report carried
      */
     public void exceptionsReported(final ExceptionKind kind, final int count) {
-        // T025 registers the counter this moves.
+        counter(EXCEPTIONS_REPORTED, KIND_TAG, code(kind)).increment(count);
     }
 
     /**
@@ -319,7 +355,7 @@ public class ProcessingMetrics {
      * @param reason the bounded code for what stopped it, never a message
      */
     public void intakeSweepFailure(final String reason) {
-        // T025 registers the counter this moves.
+        counter(INTAKE_SWEEP_FAILURES, REASON_TAG, reason).increment();
     }
 
     /**
@@ -333,8 +369,10 @@ public class ProcessingMetrics {
      */
     public static final class Timing {
 
-        private Timing() {
-            // Minted by startRequestTiming and read by requestSettled; T025 gives it its sample.
+        private final Timer.Sample sample;
+
+        private Timing(final Timer.Sample sample) {
+            this.sample = sample;
         }
     }
 
