@@ -17,9 +17,13 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
  *       a register as a side effect of listing one, and it would take that delivery from the pod
  *       whose job it is - {@code max-concurrent-calls} is shared by every consumer on the
  *       queue.</li>
- *   <li><strong>The nightly scheduler.</strong> The lock makes the 18:00 run one run; a CLI pod
- *       that held a scheduler would be a second replica of it, and a command that ran long enough
- *       to reach 18:00 London would generate the night twice.</li>
+ *   <li><strong>Every scheduler.</strong> The lock makes the 18:00 run one run; a CLI pod that
+ *       held a scheduler would be a second replica of it, and a command that ran long enough to
+ *       reach 18:00 London would generate the night twice. The same argument holds for the other
+ *       three schedules the service now carries - the grace-period reconciler, the 07:00 exception
+ *       report and the intake gauge refresh - which is why the condition goes on
+ *       {@link SchedulingInfrastructureConfig} as well: that is where {@code @EnableScheduling}
+ *       lives, and without it nothing processes {@code @Scheduled} at all.</li>
  *   <li><strong>The public-event listener container.</strong> The durable subscription is shared,
  *       so a command that subscribed would be one more consumer the broker load-balances outcomes
  *       to - and it would take deliveries a process about to exit will not finish, leaving each of
@@ -38,13 +42,24 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
  * script itself never names the property: what it decides is whether an invocation reaches
  * {@code CliMain} at all, and a JVM that got there sets this itself.
  *
- * <p><strong>The three conditionals are on the configurations rather than on the beans.</strong>
- * {@code ServiceBusConsumerConfig} owns both the processor client and the one component permitted
- * to start it, {@code SchedulingConfig} owns {@code @EnableScheduling} as well as the job, and
+ * <p><strong>The conditionals are on the configurations rather than on the beans, and there are
+ * five of them.</strong> {@code ServiceBusConsumerConfig} owns both the processor client and the
+ * one component permitted to start it; {@link SchedulingInfrastructureConfig} owns
+ * {@code @EnableScheduling}, {@code @EnableSchedulerLock} and the one {@code LockProvider};
+ * {@link SchedulingConfig} owns the generation scheduler and the job on it;
+ * {@link ReportSchedulingConfig} and {@link IntakeSweepConfig} own theirs; and
  * {@code PublicEventsConfig} owns the container factory as well as the listener - so switching the
  * configuration off is what makes the absence complete. A bean-level condition would leave a client
  * nothing can start, a scheduler with nothing on it, or a container factory with no listener to
- * create one from: three half-absences to reason about instead of three plain ones.
+ * create one from: half-absences to reason about instead of plain ones.
+ *
+ * <p><strong>Two of the five are conditional on this and on nothing else.</strong>
+ * {@link SchedulingInfrastructureConfig} and {@link IntakeSweepConfig} carry no enabled-flag
+ * condition at all, deliberately: the gauges must refresh wherever the intake half runs, which
+ * includes a pod with the report and the generation half both switched off. That makes this
+ * condition the only thing keeping either of them off a command JVM, which is why
+ * {@code CliModeConfigTest} asserts the absence of all three scheduling configurations rather than
+ * of the job alone.
  *
  * <p>Readiness is unaffected by all three. {@code intakeStartup} is contributed by
  * {@link IntakeStartupHealth}, which is deliberately outside the consumer's own configuration and
