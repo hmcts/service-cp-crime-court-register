@@ -627,8 +627,11 @@ about `RegisterNotifier`, `RegisterNotification` or the `yotsName` body moves.
 
 ## The CSV attachment
 
-One header row and one row per entry, in the entries' own order, UTF-8, `\n` line endings, RFC 4180
-quoting. The columns are the union of the entry table above - thirteen, one per component, `kind`
+One header row and one row per entry, in the entries' own order, UTF-8, **`\r\n` record endings**,
+RFC 4180 quoting. CRLF is the dialect, because RFC 4180 says so and because this file is opened in a
+spreadsheet on somebody's desktop rather than parsed: a bare newline is an ending a reader has to
+guess at. A line break *inside* a quoted field is whatever the producing context wrote, is not a
+record ending, and is quoted rather than translated. The columns are the union of the entry table above - thirteen, one per component, `kind`
 included - with an empty field where the kind does not carry it:
 
 ```

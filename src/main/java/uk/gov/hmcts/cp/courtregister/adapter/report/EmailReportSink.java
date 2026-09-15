@@ -80,8 +80,15 @@ public class EmailReportSink implements ExceptionReportSink {
 
     private static final char SEPARATOR = ',';
 
-    /** Newline endings, stated once: a CSV that ends its rows some other way opens wrong. */
-    private static final char ROW_END = '\n';
+    /**
+     * CRLF record endings, stated once, which is the dialect RFC 4180 states.
+     *
+     * <p>This attachment is opened in a spreadsheet on somebody's desktop rather than parsed, so
+     * the ending is the one the format specifies and not the one this JVM's platform happens to
+     * use. A line break <em>inside</em> a quoted field is whatever the producing context wrote and
+     * is not a record ending; only the endings written here are CRLF.
+     */
+    private static final String ROW_END = "\r\n";
 
     private static final char QUOTE = '"';
 
