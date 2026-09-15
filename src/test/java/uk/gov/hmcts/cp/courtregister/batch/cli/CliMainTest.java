@@ -259,16 +259,14 @@ class CliMainTest {
 
         @Test
         void report_exceptions_should_be_in_the_registry() {
-            final GenericApplicationContext anyContext = new GenericApplicationContext();
-            anyContext.refresh();
-            try {
+            try (GenericApplicationContext anyContext = new GenericApplicationContext()) {
+                anyContext.refresh();
+
                 softly.assertThat(CliMain.registryOf(anyContext, output))
                         .as("a name in COMMANDS with no entry in the registry is answered with the "
                                 + "usage and a refusal, which reads exactly like a mistyped name: "
                                 + "the two lists are one list")
                         .containsKey(CliMain.REPORT_EXCEPTIONS);
-            } finally {
-                anyContext.close();
             }
         }
 

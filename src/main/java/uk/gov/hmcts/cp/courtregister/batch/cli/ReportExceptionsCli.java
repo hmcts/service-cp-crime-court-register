@@ -95,6 +95,15 @@ public class ReportExceptionsCli {
     /** And nobody could: there is no e-mail output here at all, which is a different fact. */
     private static final String DISABLED = "disabled";
 
+    /**
+     * Roughly how long the counts line comes out, so the builder is sized once rather than grown.
+     *
+     * <p>Five bounded names, five numbers and the two instants: a hundred and sixty characters is
+     * the shape of it, and being a little over costs one allocation nobody measures while being
+     * under costs several.
+     */
+    private static final int A_COUNTS_LINE = 160;
+
     /** The line a window that covers nothing answers with, because silence is never the signal. */
     private static final String NOTHING_WRONG = "exceptions=none";
 
@@ -399,7 +408,7 @@ public class ReportExceptionsCli {
             report.entries().forEach(entry -> output.accept(lineFor(entry)));
         }
         final Map<ExceptionKind, Integer> counts = report.counts();
-        final StringBuilder line = new StringBuilder("counts");
+        final StringBuilder line = new StringBuilder(A_COUNTS_LINE).append("counts");
         for (final ExceptionKind kind : ExceptionKind.values()) {
             line.append(' ').append(kind.name().toLowerCase(Locale.ROOT))
                     .append('=').append(counts.get(kind));
