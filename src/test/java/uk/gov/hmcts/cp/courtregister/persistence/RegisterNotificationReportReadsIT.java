@@ -3,9 +3,16 @@ package uk.gov.hmcts.cp.courtregister.persistence;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.data.Offset.offset;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
@@ -74,6 +81,9 @@ class RegisterNotificationReportReadsIT {
             "the report's failed-notification read implements this statement; this is its red run";
 
     private static final long SECONDS_OF_SLACK = 5;
+
+    /** Enough rows that the planner has a table worth choosing an index for. */
+    private static final int SEEDED_ROWS = 2000;
 
     private static ReportReadsDatabase database;
     private static RegisterBatchRepository batches;
@@ -164,6 +174,25 @@ class RegisterNotificationReportReadsIT {
     }
 
     @Test
+    void failed_since_excludes_a_row_failed_at_or_after_the_window_end() {
+        final RegisterBatch batch = batch(MONDAY);
+        final Instant boundary = minutesAgo(45);
+        settled(batch, "boundary@example.gov.uk", NotificationStatus.FAILED, 500, boundary);
+        settled(batch, "later@example.gov.uk", NotificationStatus.FAILED, 500, minutesAgo(20));
+
+        softly.assertThat(failedBetween(hoursAgo(4), boundary))
+                .as("the window is half-open, so a send refused on the very instant a run's "
+                        + "window closes belongs to the next run and not to this one: the two "
+                        + "ends abut, and a Youth Offending Team named by both reports is a team "
+                        + "support chases twice for one e-mail")
+                .isEmpty();
+        softly.assertThat(failedBetween(hoursAgo(4), boundary.minusSeconds(1)))
+                .as("and neither is the refusal after it, which is what makes the morning's "
+                        + "report a statement about a closed period")
+                .isEmpty();
+    }
+
+    @Test
     void failed_since_includes_a_row_failed_exactly_at_the_window_start() {
         final RegisterBatch batch = batch(MONDAY);
         final Instant settledAt = minutesAgo(30);
@@ -198,6 +227,23 @@ class RegisterNotificationReportReadsIT {
                 .contains("extract(epoch");
     }
 
+    /**
+     * The read is made every weekday morning, so it is planned rather than assumed.
+     *
+     * <p>{@code ANALYZE} first, then {@code enable_seqscan = off} for the session, for the reasons
+     * {@code ProcessedRequestReportReadsIT} states: what is asserted is that the statement
+     * <em>can</em> use the index V5 adds, rather than that today's row count made it cheapest.
+     */
+    @Test
+    void the_report_read_is_served_by_a_v5_index() throws SQLException {
+        seedManyRows();
+
+        softly.assertThat(planFor(hoursAgo(4)))
+                .as("the refused sends inside the window, found without reading past every "
+                        + "e-mail every batch in the estate has ever had accepted")
+                .contains("idx_notification_failed_sent");
+    }
+
     @Test
     void the_email_address_column_is_never_selected() {
         final RegisterBatch batch = batch(MONDAY);
@@ -225,7 +271,86 @@ class RegisterNotificationReportReadsIT {
         return answered.get();
     }
 
+    private List<FailedNotification> failedBetween(final Instant from, final Instant to) {
+        final AtomicReference<List<FailedNotification>> answered = new AtomicReference<>(List.of());
+        softly.assertThatCode(() -> answered.set(repository.failedBetween(from, to)))
+                .as(SEAM)
+                .doesNotThrowAnyException();
+        return answered.get();
+    }
+
+    // --- the plan the database makes of the statement the repository really ran -----------------
+
+    /**
+     * Runs the read, takes the statement it prepared, and asks the database to plan that statement.
+     *
+     * @param since the window's start, which is what the placeholders bind to
+     * @return the plan, as the lines EXPLAIN answered with
+     * @throws SQLException where the session itself could not be opened
+     */
+    private String planFor(final Instant since) throws SQLException {
+        database.forgetStatements();
+        failedBetween(since, Instant.now());
+        final List<String> executed = database.statements();
+        softly.assertThat(executed)
+                .as("one read is one statement, and the plan asked for below is that statement's")
+                .hasSize(1);
+        final String sql = executed.isEmpty() ? "SELECT 1" : executed.get(0);
+
+        try (Connection connection = database.openConnection();
+             Statement session = connection.createStatement()) {
+            session.execute("ANALYZE " + NOTIFICATION_TABLE);
+            session.execute("ANALYZE " + BATCH_TABLE);
+            session.execute("SET enable_seqscan = off");
+            final StringBuilder lines = new StringBuilder();
+            try (PreparedStatement explain = connection.prepareStatement("EXPLAIN " + sql)) {
+                for (int marker = 1; marker <= placeholders(sql); marker++) {
+                    explain.setObject(marker, OffsetDateTime.ofInstant(since, ZoneOffset.UTC));
+                }
+                try (ResultSet rows = explain.executeQuery()) {
+                    while (rows.next()) {
+                        lines.append(rows.getString(1)).append('\n');
+                    }
+                }
+            }
+            return lines.toString();
+        }
+    }
+
+    private static int placeholders(final String sql) {
+        return (int) sql.chars().filter(character -> character == '?').count();
+    }
+
     // --- seeding ------------------------------------------------------------------------------
+
+    /**
+     * A table worth planning over: one batch and two thousand recipients' rows on it.
+     *
+     * <p>Written in one statement rather than two thousand, because what the case needs is a table
+     * the planner has statistics about. Most of them are accepted, which is the shape a healthy
+     * estate has and the shape the partial index exists for.
+     */
+    private void seedManyRows() {
+        final RegisterBatch batch = batch(TUESDAY);
+        database.jdbcClient()
+                .sql("""
+                        INSERT INTO register_notification (
+                            notification_id, batch_id, email_address, recipient_name,
+                            template_name, template_id, status, response_code, sent_at, attempts)
+                        SELECT gen_random_uuid(), :batchId, 'yot-' || g || '@example.gov.uk',
+                               'Example Youth Offending Team', :templateName, :templateId,
+                               CASE WHEN g % 40 = 0 THEN 'FAILED' ELSE 'ACCEPTED' END,
+                               CASE WHEN g % 40 = 0 THEN 500 ELSE 202 END,
+                               now() - (g || ' minutes')::interval,
+                               1
+                          FROM generate_series(1, :rows) AS g
+                        """)
+                .param("batchId", batch.batchId())
+                .param("templateName", TEMPLATE_NAME)
+                .param("templateId", TEMPLATE_ID)
+                .param("rows", SEEDED_ROWS)
+                .update();
+    }
 
     /**
      * A batch of its own court centre, inserted where a batch enters the table.

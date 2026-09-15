@@ -44,6 +44,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param batchGeneratedWithin     how long a batch may stay PENDING or GENERATING before it is
  *                                 reported late; <strong>unset by design</strong>, and resolved
  *                                 from the generation half's grace period
+ * @param maxEntries               how many exceptions one report may carry before the oldest are
+ *                                 kept and the rest counted as dropped
  * @param email                    the e-mail output, switchable on its own
  */
 @ConfigurationProperties(prefix = "courtregister.report")
@@ -56,6 +58,7 @@ public record ReportProperties(
         @DefaultValue("30m") Duration requestTerminalWithin,
         @DefaultValue("15m") Duration notifiedWithin,
         Duration batchGeneratedWithin,
+        int maxEntries,
         @DefaultValue Email email) {
 
     /**

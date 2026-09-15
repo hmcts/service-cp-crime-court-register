@@ -51,10 +51,14 @@ class ExceptionReportDeliveryTest {
 
     private static final Instant NOW = Instant.parse("2026-09-15T06:00:00Z");
 
+    /** A report no cap touched, which is every morning these cases are about. */
+    private static final int NOTHING_DROPPED = 0;
+
     private static final String RUN_ID = "run-4b19c7e0";
 
     private static final ExceptionReport REPORT = new ExceptionReport(RUN_ID,
-            new ReportWindow(NOW.minus(Duration.ofDays(1)), NOW), NOW, List.of());
+            new ReportWindow(NOW.minus(Duration.ofDays(1)), NOW), NOW, List.of(),
+            NOTHING_DROPPED);
 
     /** Three recipients, one refused, is how the e-mail sink answers a partial delivery. */
     private static final int ACCEPTED = 2;
@@ -72,7 +76,7 @@ class ExceptionReportDeliveryTest {
                 mock(RegisterBatchRepository.class),
                 mock(RegisterNotificationRepository.class),
                 mock(RegisterStore.class),
-                Duration.ofMinutes(30), Duration.ofMinutes(10), Duration.ofMinutes(15),
+                Duration.ofMinutes(30), Duration.ofMinutes(10), Duration.ofMinutes(15), 5000,
                 "0 0 18 * * MON-FRI", "Europe/London",
                 new ProcessingMetrics(registry), Clock.fixed(NOW, ZoneOffset.UTC));
     }

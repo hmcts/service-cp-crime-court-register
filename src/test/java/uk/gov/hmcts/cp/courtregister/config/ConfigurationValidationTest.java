@@ -103,6 +103,10 @@ class ConfigurationValidationTest {
     private static final String NN_ENDPOINT_PROPERTY =
             "courtregister.endpoints.notificationnotify=http://notificationnotify.internal:8080";
 
+    /** The CJSCPPUID both outward legs post under; a secret, and never quoted back in a refusal. */
+    private static final String ENDPOINTS_IDENTITY_PROPERTY =
+            "courtregister.endpoints.system-user-id=6b1f0c94-2d75-4e38-a9c1-0f7b4e2d85a3";
+
     /** The notificationnotify template the register e-mail is sent with, and a UUID (P9). */
     private static final String TEMPLATE_ID = "5c9a0e21-3d47-4f18-9b62-0a71c4e8d530";
 
@@ -130,7 +134,7 @@ class ConfigurationValidationTest {
     private final ApplicationContextRunner generating = runner.withPropertyValues(
             CONNECTION_STRING_PROPERTY, GENERATION_ENABLED_PROPERTY, FILESERVICE_URL_PROPERTY,
             FLAG_ENDPOINT_PROPERTY, FLAG_LABEL_PROPERTY, SDG_ENDPOINT_PROPERTY, NN_ENDPOINT_PROPERTY,
-            TEMPLATE_PROPERTY, BROKER_URL_PROPERTY);
+            ENDPOINTS_IDENTITY_PROPERTY, TEMPLATE_PROPERTY, BROKER_URL_PROPERTY);
 
     @Configuration(proxyBeanMethods = false)
     @EnableConfigurationProperties({CourtRegisterProperties.class, GenerationProperties.class,
@@ -2257,6 +2261,26 @@ class ConfigurationValidationTest {
                     });
         }
 
+        /**
+         * A cap of zero is a report that carries nothing, which is the one reading this feature
+         * exists to make impossible: every morning would look like a quiet one, and the counts
+         * beside the empty list would be the only thing saying otherwise. It is the same argument
+         * the zero durations are refused under, one setting along.
+         */
+        @Test
+        void a_zero_max_entries_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    REPORT + ".max-entries=0").run(context -> {
+                        assertThat(context)
+                                .as("a report capped at nothing writes no exception event at all,"
+                                        + " which is indistinguishable from a morning with nothing"
+                                        + " wrong on it")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(REPORT + ".max-entries");
+                    });
+        }
+
         @Test
         void a_zero_notified_within_refuses_to_start() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
@@ -2390,7 +2414,8 @@ class ConfigurationValidationTest {
         @Test
         void an_enabled_email_output_with_everything_it_needs_should_start() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
-                    A_RECIPIENT, FILESERVICE_URL_PROPERTY, NN_ENDPOINT_PROPERTY)
+                    A_RECIPIENT, FILESERVICE_URL_PROPERTY, NN_ENDPOINT_PROPERTY,
+                    ENDPOINTS_IDENTITY_PROPERTY)
                     .run(context -> assertThat(context).hasNotFailed());
         }
 
@@ -2494,7 +2519,7 @@ class ConfigurationValidationTest {
         @Test
         void the_notificationnotify_endpoint_is_required_whenever_either_half_sends() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
-                    A_RECIPIENT, FILESERVICE_URL_PROPERTY,
+                    A_RECIPIENT, FILESERVICE_URL_PROPERTY, ENDPOINTS_IDENTITY_PROPERTY,
                     "courtregister.endpoints.notificationnotify=  ").run(context -> {
                         assertThat(context)
                                 .as("the e-mail output posts the report to notificationnotify, so"
@@ -2511,6 +2536,53 @@ class ConfigurationValidationTest {
                             .as("and of neither half on a pod that sends nothing at all: a setting"
                                     + " demanded of a deployment that cannot use it is a deploy"
                                     + " that fails for no reason")
+                            .hasNotFailed());
+        }
+
+        /**
+         * The identity the send is made under, required of whichever half sends.
+         *
+         * <p>The finding review gate 7 named and left: it fixed the endpoint and said out loud that
+         * {@code courtregister.endpoints.system-user-id} was asked of neither half, because giving
+         * it a rule there would have been a new refusal inside a remediation commit. This is the
+         * gate that catalogues it. Both outward legs put the value in the {@code CJSCPPUID} header
+         * of every {@code send-email-notification} they make, and the framework refuses a command
+         * without one - so a deployment that sets the endpoint and forgets the identity is a pod
+         * that starts clean, reports itself healthy, and has every send refused: the Youth
+         * Offending Teams at 18:00, or support at 07:00.
+         *
+         * <p>The value is <strong>never quoted back</strong>. It is a secret, and a startup failure
+         * is a log line in the same index as every other.
+         */
+        @Test
+        void the_system_user_id_is_required_whenever_either_half_sends() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, EMAIL_ENABLED, A_TEMPLATE,
+                    A_RECIPIENT, FILESERVICE_URL_PROPERTY, NN_ENDPOINT_PROPERTY,
+                    "courtregister.endpoints.system-user-id=  ").run(context -> {
+                        assertThat(context)
+                                .as("an endpoint with no identity to post under is every send"
+                                        + " refused, on a pod that started clean")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.endpoints.system-user-id")
+                                .hasMessageContaining(REPORT + ".email.enabled");
+                    });
+
+            generating.withPropertyValues("courtregister.endpoints.system-user-id=  ")
+                    .run(context -> {
+                        assertThat(context)
+                                .as("and the same of the half that tells the Youth Offending"
+                                        + " Teams, because it is the same header on the same"
+                                        + " command")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.endpoints.system-user-id")
+                                .hasMessageContaining("courtregister.generation.enabled");
+                    });
+
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, A_TEMPLATE, A_RECIPIENT)
+                    .run(context -> assertThat(context)
+                            .as("and of neither half on a pod that sends nothing at all")
                             .hasNotFailed());
         }
 

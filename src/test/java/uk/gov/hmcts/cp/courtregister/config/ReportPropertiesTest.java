@@ -67,6 +67,29 @@ class ReportPropertiesTest {
     }
 
     @Test
+    @DisplayName("the entry cap is five thousand unless a deployment says otherwise")
+    void max_entries_defaults_to_5000() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(context.getBean(ReportProperties.class).maxEntries())
+                    .as("a default in the record as well as in the yaml, for the reason every"
+                            + " other one here is: a missing configuration file cannot silently"
+                            + " change how much of a bad morning support is shown")
+                    .isEqualTo(5000);
+        });
+
+        runner.withPropertyValues("courtregister.report.max-entries=250").run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(context.getBean(ReportProperties.class).maxEntries())
+                    .as("and a deployment's own ceiling is its own, which is what makes the cap a"
+                            + " setting rather than a constant")
+                    .isEqualTo(250);
+        });
+    }
+
+    @Test
     @DisplayName("the report ships the defaults the plan's configuration table documents")
     void report_defaults_are_the_documented_ones() {
         runner.run(context -> {
@@ -86,6 +109,11 @@ class ReportPropertiesTest {
                     .as("the one undefaulted duration: unset binds null and is resolved, never"
                             + " written twice")
                     .isNull();
+            assertThat(report.maxEntries())
+                    .as("the entry cap: five thousand exceptions is far past the morning anybody"
+                            + " reads one by one, and a report with no ceiling is one bad night"
+                            + " away from a line-per-entry write that outlives its own lock")
+                    .isEqualTo(5000);
             assertThat(report.email().enabled())
                     .as("false until the notificationnotify template is provided")
                     .isFalse();

@@ -70,6 +70,9 @@ class ExceptionReportJobTest {
     /** Returned when a meter is absent, so a missing instrument fails as an assertion. */
     private static final double ABSENT = -1;
 
+    /** A report no cap touched, which is every morning these cases are about. */
+    private static final int NOTHING_DROPPED = 0;
+
     /** The report's own schedule, which is also what its window is measured back through. */
     private static final String CRON = "0 0 7 * * MON-FRI";
 
@@ -242,6 +245,30 @@ class ExceptionReportJobTest {
                     .contains("delivered_log=ok")
                     .contains("outcome=delivered")
                     .contains("duration_ms=");
+        }
+    }
+
+    /**
+     * The run line says how much of the morning the cap left out.
+     *
+     * <p>{@code entries} is what the report holds and {@code truncated} is what it does not, and a
+     * line carrying only the first would say a bad night was an ordinary one - the number of lines
+     * written is exactly the number a cap makes untrustworthy.
+     */
+    @Test
+    void the_run_line_says_how_many_entries_the_cap_dropped() {
+        try (CapturedLog log = CapturedLog.capturing(ExceptionReportJob.class)) {
+            when(reporting.build(any(), any())).thenAnswer(call -> new ExceptionReport(
+                    call.getArgument(1), ReportWindow.forScheduledRun(CRON, ZONE, FIRED_AT),
+                    FIRED_AT, List.of(), 3));
+            delivered(DeliveryStatus.DELIVERED, ReportSinkName.LOG);
+
+            jobOver(List.of(logSink)).run();
+
+            assertThat(theRunLine(log))
+                    .as("a morning the cap touched says so on its own line, beside the count of "
+                            + "what it did carry")
+                    .contains("truncated=3");
         }
     }
 
@@ -427,7 +454,7 @@ class ExceptionReportJobTest {
     /** A morning with nothing wrong on it, which is what most of these cases are about. */
     private static ExceptionReport emptyReport(final String runId) {
         return new ExceptionReport(runId, ReportWindow.forScheduledRun(CRON, ZONE, FIRED_AT),
-                FIRED_AT, List.of());
+                FIRED_AT, List.of(), NOTHING_DROPPED);
     }
 
     private static DeliveryOutcome outcome(

@@ -236,6 +236,9 @@ public final class GenerationLegs implements AutoCloseable {
     /** The status line notificationnotify refused one team's e-mail with. */
     private static final int REFUSED_STATUS = 400;
 
+    /** The shipped entry cap, stated rather than defaulted: no case here is about truncation. */
+    private static final int MAX_ENTRIES = 5000;
+
     private static final UUID PAYLOAD_FILE_ID =
             UUID.fromString("bbbbbbbb-cccc-4ddd-8eee-ffffffffffff");
 
@@ -369,7 +372,7 @@ public final class GenerationLegs implements AutoCloseable {
         this.job = new RegisterGenerationJob(gate, store, assembler, generation, reconciler,
                 metrics, settings(), clock);
         this.reporting = new ExceptionReportService(requestLog, batches, notifications, store,
-                REPORT_LIMIT, REPORT_LIMIT, REPORT_LIMIT, GENERATION_CRON,
+                REPORT_LIMIT, REPORT_LIMIT, REPORT_LIMIT, MAX_ENTRIES, GENERATION_CRON,
                 GenerationProperties.COURTS_ZONE, intakeMetrics, clock);
         this.reportJob = new ExceptionReportJob(reporting, List.of(logSink), REPORT_CRON,
                 GenerationProperties.COURTS_ZONE, intakeMetrics, clock);
@@ -1261,22 +1264,33 @@ public final class GenerationLegs implements AutoCloseable {
      */
     private static ReportProperties reportSettings() {
         return new ReportProperties(true, REPORT_CRON, GenerationProperties.COURTS_ZONE, false,
-                Duration.ofMinutes(15), REPORT_LIMIT, REPORT_LIMIT, REPORT_LIMIT,
+                Duration.ofMinutes(15), REPORT_LIMIT, REPORT_LIMIT, REPORT_LIMIT, MAX_ENTRIES,
                 new ReportProperties.Email(false, null, List.of()));
     }
 
     /**
-     * The one refusal this service absorbs, and the one WARN line that makes it visible.
+     * The one refusal this service absorbs, and the two WARN lines that make it visible.
      *
-     * <p>Driven last because it leaves the request log refusing, and because it is the only line
-     * the sweep can write: everything else it does is two gauges moving, which no capture sees. The
-     * refusal carries the store's own words and a cause of its own, both of which the sweep must
-     * keep out of the log - a caught exception's message belongs to whatever raised it.
+     * <p>Driven last because it leaves the request log refusing, and because these are the only
+     * lines the sweep can write: everything else it does is two gauges moving, which no capture
+     * sees. The refusal carries the store's own words and a cause of its own, both of which the
+     * sweep must keep out of the log - a caught exception's message belongs to whatever raised it.
+     *
+     * <p><strong>Both arms, because the sweep has two and they mean different things.</strong> An
+     * outage of theirs and a bug of ours are counted under two bounded reasons precisely so one
+     * cannot hide inside the other, and the arm that was never driven was the one whose reason no
+     * sweep had ever read - so nothing here said whether {@code unexpected} was a word this service
+     * is allowed to write into a reason slot at all.
      */
     private void theIntakeGaugeRefresh() {
-        when(requestLog.oldestNonTerminal()).thenThrow(new StoreUnavailableException(
-                "the store could not be reached to read the oldest unfinished request",
-                new IllegalStateException("the connection pool is empty")));
+        when(requestLog.oldestNonTerminal())
+                .thenThrow(new StoreUnavailableException(
+                        "the store could not be reached to read the oldest unfinished request",
+                        new IllegalStateException("the connection pool is empty")))
+                .thenThrow(new IllegalStateException(
+                        "the gauge refresh met something nobody classified, about "
+                                + PersonalDataMarkers.CHILD_NAME));
+        whateverItAnswers(sweep::sweepScheduled);
         whateverItAnswers(sweep::sweepScheduled);
     }
 

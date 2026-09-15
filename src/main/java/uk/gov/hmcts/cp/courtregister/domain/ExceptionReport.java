@@ -19,12 +19,14 @@ import java.util.Objects;
  * @param window     what was asked for
  * @param snapshotAt when the reads were taken, which is not when the events were written
  * @param entries    every exception found, oldest first, across all five kinds
+ * @param truncated  how many the cap dropped, which is nought on every ordinary morning
  */
 public record ExceptionReport(
         String runId,
         ReportWindow window,
         Instant snapshotAt,
-        List<ExceptionEntry> entries) {
+        List<ExceptionEntry> entries,
+        int truncated) {
 
     /**
      * Freezes the entries, so what a sink writes is what the reads found - and refuses an absent

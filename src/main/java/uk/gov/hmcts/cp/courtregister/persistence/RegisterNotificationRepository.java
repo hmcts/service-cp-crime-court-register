@@ -370,6 +370,20 @@ public class RegisterNotificationRepository {
     }
 
     /**
+     * The report's NOTIFICATION_FAILED read over a half-open window.
+     *
+     * <p><strong>Seam.</strong> The statement behind it still binds the window's start alone; the
+     * exclusive end lands with the half-open window itself.
+     *
+     * @param from the window's start, inclusive
+     * @param to   the window's end, exclusive
+     * @return every refused or unanswered send settled inside it, oldest first
+     */
+    public List<FailedNotification> failedBetween(final Instant from, final Instant to) {
+        return failedSince(from);
+    }
+
+    /**
      * The statement's own account of what it did, as the three answers a caller acts on.
      *
      * @param applied what the statement returned: whether the row was still unsettled when it ran,

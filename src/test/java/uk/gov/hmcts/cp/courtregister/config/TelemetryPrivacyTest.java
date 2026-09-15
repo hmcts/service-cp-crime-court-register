@@ -216,6 +216,9 @@ class TelemetryPrivacyTest {
     private static final int MAX_STATUS = 599;
 
     private static final int MAX_DELIVERY_COUNT = 5;
+
+    /** The shipped entry cap, stated rather than defaulted: no case here is about truncation. */
+    private static final int MAX_ENTRIES = 5000;
     private static final Duration RUN_DEADLINE = Duration.ofMinutes(4);
 
     /** Reads a {@code reason=} or {@code detail=} token out of a formatted line. */
@@ -689,7 +692,8 @@ class TelemetryPrivacyTest {
         private static ReportProperties reportSettings() {
             return new ReportProperties(true, "0 0 7 * * MON-FRI", GenerationProperties.COURTS_ZONE,
                     false, Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(15),
-                    Duration.ofMinutes(30), new ReportProperties.Email(false, null, List.of()));
+                    Duration.ofMinutes(30), MAX_ENTRIES,
+                    new ReportProperties.Email(false, null, List.of()));
         }
 
         /**

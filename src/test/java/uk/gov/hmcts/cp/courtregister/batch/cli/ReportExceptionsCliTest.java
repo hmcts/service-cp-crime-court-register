@@ -80,8 +80,14 @@ class ReportExceptionsCliTest {
     /** The moment every window in this suite ends at, fixed so the arithmetic is readable. */
     private static final Instant NOW = Instant.parse("2026-09-15T09:30:00Z");
 
+    /** A report no cap touched, which is every morning these cases are about. */
+    private static final int NOTHING_DROPPED = 0;
+
     /** The report's own schedule, which is what an absent window is measured back through. */
     private static final String CRON = "0 0 7 * * MON-FRI";
+
+    /** The shipped entry cap, stated rather than defaulted: no case here is about truncation. */
+    private static final int MAX_ENTRIES = 5000;
 
     private static final String ZONE = "Europe/London";
 
@@ -161,6 +167,7 @@ class ReportExceptionsCliTest {
     private static ReportProperties settings(final boolean email) {
         return new ReportProperties(true, CRON, ZONE, false, Duration.ofMinutes(15),
                 Duration.ofMinutes(30), Duration.ofMinutes(15), Duration.ofMinutes(30),
+                MAX_ENTRIES,
                 new ReportProperties.Email(email, "11111111-1111-1111-1111-111111111111",
                         List.of("courtregister-support@example.test")));
     }
@@ -176,7 +183,7 @@ class ReportExceptionsCliTest {
     private static ReportProperties withoutAReadableSchedule() {
         return new ReportProperties(true, "every weekday morning at seven", ZONE, false,
                 Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(15),
-                Duration.ofMinutes(30), new ReportProperties.Email(false,
+                Duration.ofMinutes(30), MAX_ENTRIES, new ReportProperties.Email(false,
                         "11111111-1111-1111-1111-111111111111",
                         List.of("courtregister-support@example.test")));
     }
@@ -205,7 +212,7 @@ class ReportExceptionsCliTest {
                         MIDDLE),
                 new ExceptionEntry(ExceptionKind.NOTIFICATION_FAILED, null, null, null, null,
                         BATCH_ID, NOTIFICATION_ID, COURT_CENTRE, REGISTER_DATE, "FAILED", 3, "502",
-                        OLDEST)));
+                        OLDEST)), NOTHING_DROPPED);
     }
 
     /** Arranges the service to answer the three exceptions, delivered as the caller says. */
@@ -546,7 +553,7 @@ class ReportExceptionsCliTest {
         void an_empty_window_should_print_one_line_saying_so() {
             when(reporting.build(any(ReportWindow.class), any())).thenAnswer(invocation ->
                     new ExceptionReport(invocation.getArgument(1), invocation.getArgument(0), NOW,
-                            List.of()));
+                            List.of(), NOTHING_DROPPED));
             when(reporting.deliver(any(ExceptionReport.class), anyCollection()))
                     .thenReturn(List.of(tookIt(ReportSinkName.LOG)));
 
@@ -640,6 +647,25 @@ class ReportExceptionsCliTest {
                     .contains(" delivered_log=ok")
                     .contains(" delivered_email=ok")
                     .contains(" outcome=delivered");
+        }
+
+        /**
+         * The command's last line says the same thing the 07:00 run's does, in the same word.
+         */
+        @Test
+        void the_last_line_should_carry_the_truncated_count() {
+            when(reporting.build(any(ReportWindow.class), any())).thenAnswer(invocation ->
+                    new ExceptionReport(invocation.getArgument(1), invocation.getArgument(0), NOW,
+                            List.of(), 7));
+            when(reporting.deliver(any(ExceptionReport.class), anyCollection()))
+                    .thenReturn(List.of(tookIt(ReportSinkName.LOG)));
+
+            command(withoutEmail(), logSink).run(List.of("--since", "2h"));
+
+            softly.assertThat(lastLine())
+                    .as("an operator reading a truncated table has to be told it was truncated on "
+                            + "the same line that tells them how much of it they are looking at")
+                    .contains(" truncated=7");
         }
 
         @Test

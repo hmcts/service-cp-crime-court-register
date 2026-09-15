@@ -161,6 +161,26 @@ class ProcessedRequestReportReadsIT {
         }
 
         @Test
+        void failed_since_excludes_a_row_failed_at_or_after_the_window_end() {
+            seed(RequestStatus.FAILED, "store-unavailable", Duration.ofHours(4),
+                    Duration.ofHours(1));
+            final Instant parkedAt = parkedAtOf(failedBetween(hoursAgo(9), hoursAgo(-1)));
+            seed(RequestStatus.FAILED, "schema-violation", Duration.ofHours(4),
+                    Duration.ofMinutes(30));
+
+            softly.assertThat(failedBetween(hoursAgo(9), parkedAt))
+                    .as("the window is half-open, so a request parked on the very instant a run's "
+                            + "window closes belongs to the next run and not to this one: the two "
+                            + "ends abut, and a row on the boundary counted by both is a failure "
+                            + "support is sent after twice")
+                    .isEmpty();
+            softly.assertThat(failedBetween(hoursAgo(9), parkedAt.minusSeconds(1)))
+                    .as("and neither is anything after it, which is the reads' half of the "
+                            + "aligned window: a report is a statement about a closed period")
+                    .isEmpty();
+        }
+
+        @Test
         void non_terminal_older_than_returns_received_and_retrying_oldest_first() {
             final UUID oldest = seed(RequestStatus.RECEIVED, null, Duration.ofHours(4),
                     Duration.ofHours(4));
@@ -330,6 +350,10 @@ class ProcessedRequestReportReadsIT {
 
     private List<ProcessedRequestSummary> failedSince(final Instant since) {
         return answered(() -> repository.failedSince(since));
+    }
+
+    private List<ProcessedRequestSummary> failedBetween(final Instant from, final Instant to) {
+        return answered(() -> repository.failedBetween(from, to));
     }
 
     private List<ProcessedRequestSummary> nonTerminalOlderThan(final Instant createdBefore) {

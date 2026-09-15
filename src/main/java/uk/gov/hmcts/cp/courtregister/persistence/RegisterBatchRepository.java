@@ -538,6 +538,20 @@ public class RegisterBatchRepository {
     }
 
     /**
+     * The report's BATCH_FAILED read over a half-open window.
+     *
+     * <p><strong>Seam.</strong> The statement behind it still binds the window's start alone; the
+     * exclusive end lands with the half-open window itself.
+     *
+     * @param from the window's start, inclusive
+     * @param to   the window's end, exclusive
+     * @return every batch failed inside it, oldest first
+     */
+    public List<BatchException> failedBetween(final Instant from, final Instant to) {
+        return failedSince(from);
+    }
+
+    /**
      * Statement 6 - moves a batch from the state the caller read it in to the state it decided on.
      *
      * <p>The move is asked of {@link BatchStatus} before it is attempted, so the state machine is

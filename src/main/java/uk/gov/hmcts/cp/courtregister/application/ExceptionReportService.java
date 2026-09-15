@@ -101,6 +101,14 @@ public class ExceptionReportService {
     /** What a register that no batch was ever assembled for is, as its own state's name. */
     private static final String RECORDED = "RECORDED";
 
+    /**
+     * What a report that the cap did not touch dropped, which is every ordinary morning.
+     *
+     * <p><strong>Seam.</strong> The cap itself lands with the setting that states it; until then
+     * a report carries every entry the reads found and says so.
+     */
+    private static final int NOTHING_DROPPED = 0;
+
     private final ProcessedRequestRepository requests;
 
     private final RegisterBatchRepository batches;
@@ -114,6 +122,14 @@ public class ExceptionReportService {
     private final Duration batchGeneratedWithin;
 
     private final Duration notifiedWithin;
+
+    /**
+     * How many exceptions one report may carry.
+     *
+     * <p><strong>Seam.</strong> Held here so the setting's shape is real; the truncation itself
+     * lands with the fold that applies it.
+     */
+    private final int maxEntries;
 
     private final String generationCron;
 
@@ -133,6 +149,7 @@ public class ExceptionReportService {
      * @param requestTerminalWithin how long a request may stay unfinished before it is late
      * @param batchGeneratedWithin  how long a batch may stay unrendered before it is late
      * @param notifiedWithin        how long a rendered batch may go untold before it is late
+     * @param maxEntries            how many exceptions one report may carry
      * @param generationCron        the generation schedule, which decides what "left behind" means
      * @param generationZone        the zone that schedule is read in
      * @param metrics               the instrument facade
@@ -146,6 +163,7 @@ public class ExceptionReportService {
             final Duration requestTerminalWithin,
             final Duration batchGeneratedWithin,
             final Duration notifiedWithin,
+            final int maxEntries,
             final String generationCron,
             final String generationZone,
             final ProcessingMetrics metrics,
@@ -157,6 +175,7 @@ public class ExceptionReportService {
         this.requestTerminalWithin = requestTerminalWithin;
         this.batchGeneratedWithin = batchGeneratedWithin;
         this.notifiedWithin = notifiedWithin;
+        this.maxEntries = maxEntries;
         this.generationCron = generationCron;
         this.generationZone = generationZone;
         this.metrics = metrics;
@@ -221,7 +240,7 @@ public class ExceptionReportService {
 
         entries.sort(OLDEST_FIRST);
         final ExceptionReport report =
-                new ExceptionReport(runId, window, snapshotAt, entries);
+                new ExceptionReport(runId, window, snapshotAt, entries, NOTHING_DROPPED);
         report.counts().forEach(metrics::exceptionsReported);
         return report;
     }

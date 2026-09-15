@@ -113,6 +113,34 @@ class ProcessingMetricsTest {
             assertThat(counter(ProcessingMetrics.PROCESSED, "outcome", "failed")).isEqualTo(1);
         }
 
+        /**
+         * One settlement is one recording, made where the run is known to have ended.
+         *
+         * <p>Two calls said the same thing at every settlement in {@code DistributionPipeline} -
+         * the counter by its outcome and the timer by its terminal status - and the pair could
+         * drift: a path that remembered one and forgot the other would publish a count with no
+         * duration, or a duration with no count, and the two series an operator reads side by side
+         * would disagree about how many requests finished. The status the timer refuses to take
+         * unless it is terminal is the same fact the counter's outcome carries, so the facade takes
+         * it once and answers both.
+         */
+        @Test
+        void the_terminal_outcome_is_counted_where_the_run_is_timed() {
+            metrics.requestSettled(metrics.startRequestTiming(), RequestStatus.COMPLETED);
+            metrics.requestSettled(metrics.startRequestTiming(), RequestStatus.FAILED);
+
+            assertThat(counter(ProcessingMetrics.PROCESSED, "outcome", "completed"))
+                    .as("counted by the same call that timed it, so a caller cannot record one "
+                            + "without the other")
+                    .isEqualTo(1);
+            assertThat(counter(ProcessingMetrics.PROCESSED, "outcome", "failed"))
+                    .isEqualTo(1);
+            assertThat(timer(ProcessingMetrics.REQUEST_DURATION, "outcome", "completed"))
+                    .as("and the two series are still the two they were, under the same names and "
+                            + "the same label values a dashboard already reads")
+                    .isEqualTo(1);
+        }
+
         @Test
         void it_should_carry_the_outcome_label_and_nothing_else() {
             metrics.requestSettled(RequestOutcome.COMPLETED);

@@ -203,7 +203,8 @@ public class ProcessedLogConfig {
         return new ExceptionReportService(requests, batches, notifications, registers,
                 report.requestTerminalWithin(),
                 PropertiesValidator.resolvedBatchGeneratedWithin(report, generation),
-                report.notifiedWithin(), generation.cron(), generation.zone(), metrics, clock);
+                report.notifiedWithin(), report.maxEntries(), generation.cron(), generation.zone(),
+                metrics, clock);
     }
 
     /**

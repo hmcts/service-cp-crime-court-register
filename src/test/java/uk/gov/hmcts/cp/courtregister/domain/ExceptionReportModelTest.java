@@ -43,6 +43,9 @@ class ExceptionReportModelTest {
 
     private static final ZoneId COURTS = ZoneId.of("Europe/London");
 
+    /** A report no cap touched, which is every morning these cases are about. */
+    private static final int NOTHING_DROPPED = 0;
+
     private static final String COURTS_ZONE = "Europe/London";
 
     /** The morning report: 07:00 on a weekday, read in the courts' own zone. */
@@ -127,8 +130,44 @@ class ExceptionReportModelTest {
                             + "due, and a period boundary is not a thing to be on the wrong side of")
                     .isEqualTo(london(2026, 9, 14, 7, 0));
             softly.assertThat(window.to())
-                    .as("and it ends when the run really started, not when it was due")
-                    .isEqualTo(firing);
+                    .as("and it ends at its own occurrence rather than at the moment the trigger "
+                            + "arrived: the fifty milliseconds between the two belong to the next "
+                            + "window, which opens on exactly this instant")
+                    .isEqualTo(london(2026, 9, 15, 7, 0));
+        }
+
+        @Test
+        void a_scheduled_runs_window_ends_at_its_own_occurrence_not_at_its_start_time() {
+            final Instant firing = london(2026, 9, 15, 7, 0).plusSeconds(2);
+
+            final ReportWindow window = scheduledRun(firing);
+
+            softly.assertThat(window.to())
+                    .as("the end is the occurrence the schedule names and not the reading the "
+                            + "scheduler happened to hand the run: an end taken off the firing "
+                            + "instant moves with how busy the pod was, and a boundary that moves "
+                            + "is a boundary the next run cannot open on")
+                    .isEqualTo(london(2026, 9, 15, 7, 0));
+            softly.assertThat(window.from())
+                    .as("and the start is the occurrence before that one, which is where the run "
+                            + "that last reported closed")
+                    .isEqualTo(london(2026, 9, 14, 7, 0));
+        }
+
+        @Test
+        void a_scheduled_window_is_half_open_so_consecutive_runs_never_overlap() {
+            final ReportWindow monday = scheduledRun(london(2026, 9, 14, 7, 0).plusSeconds(3));
+            final ReportWindow tuesday = scheduledRun(london(2026, 9, 15, 7, 0).plusSeconds(9));
+
+            softly.assertThat(monday.to())
+                    .as("one window closes exactly where the next opens, whatever the two runs' "
+                            + "own start times were: a row failing on that instant belongs to "
+                            + "exactly one of them, and the ends are exclusive so it is the later")
+                    .isEqualTo(tuesday.from());
+            softly.assertThat(tuesday.to())
+                    .as("and the later window closes on its own occurrence in turn, so a failure "
+                            + "after it waits for tomorrow rather than being read by both")
+                    .isEqualTo(london(2026, 9, 15, 7, 0));
         }
 
         @Test
@@ -138,13 +177,14 @@ class ExceptionReportModelTest {
             final ReportWindow window = scheduledRun(firing);
 
             softly.assertThat(window.from())
-                    .as("a run held up half an hour covers its own period and the delay as well: "
-                            + "the window widens and never shrinks, so a failure in the half hour "
-                            + "nobody was watching is reported rather than lost between two reports")
+                    .as("a run held up half an hour still covers its own period: the window is "
+                            + "aligned to the schedule rather than to the scheduler, so a delay "
+                            + "moves neither end and no failure falls between two reports")
                     .isEqualTo(london(2026, 9, 14, 7, 0));
             softly.assertThat(window.to())
-                    .as("and the end is the moment it really ran")
-                    .isEqualTo(firing);
+                    .as("and the end is the occurrence it was due at; what went wrong in the half "
+                            + "hour it was held up is the next run's to report, once")
+                    .isEqualTo(london(2026, 9, 15, 7, 0));
         }
 
         @Test
@@ -237,7 +277,8 @@ class ExceptionReportModelTest {
         @Test
         void a_report_without_entries_is_refused() {
             softly.assertThatThrownBy(
-                            () -> new ExceptionReport(RUN_ID, aWindow(), aWindow().to(), null))
+                            () -> new ExceptionReport(RUN_ID, aWindow(), aWindow().to(), null,
+                                    NOTHING_DROPPED))
                     .as("an absent list is not an empty morning: a report that quietly read as "
                             + "nothing wrong is exactly the silence this service exists to end, "
                             + "and the rest of this model refuses a null rather than interpreting "
@@ -348,14 +389,34 @@ class ExceptionReportModelTest {
         }
 
         @Test
-        void a_sink_that_told_some_of_its_recipients_has_not_taken_the_report() {
+        void a_lone_partially_delivered_sink_is_partial_not_failed() {
             softly.assertThat(outcomeOf(List.of(new DeliveryOutcome(ReportSinkName.EMAIL,
                             DeliveryStatus.PARTIALLY_DELIVERED, ReportDeliveryReason.SEND_FAILED,
                             2, 1))))
-                    .as("two of the three were told and the third is a resend, so the sink has not "
-                            + "taken it - the nuance is the run's outcome rather than a delivery "
-                            + "ticked off")
-                    .isEqualTo(ReportRunOutcome.FAILED);
+                    .as("two of the three recipients hold the report and the third is a resend, "
+                            + "which is the definition of partial: calling it failed tells an "
+                            + "operator nobody was told, and the two people reading it are")
+                    .isEqualTo(ReportRunOutcome.PARTIAL);
+        }
+
+        @Test
+        void a_run_is_failed_only_when_no_sink_delivered_anything() {
+            softly.assertThat(outcomeOf(List.of(took(ReportSinkName.LOG),
+                            new DeliveryOutcome(ReportSinkName.EMAIL,
+                                    DeliveryStatus.PARTIALLY_DELIVERED,
+                                    ReportDeliveryReason.SEND_REFUSED, 1, 2))))
+                    .as("a morning in which the index holds the report and some of support does "
+                            + "is a resend for the rest, not a morning nobody was told about")
+                    .isEqualTo(ReportRunOutcome.PARTIAL);
+            softly.assertThat(outcomeOf(List.of(
+                            new DeliveryOutcome(ReportSinkName.LOG, DeliveryStatus.NOT_DELIVERED,
+                                    ReportDeliveryReason.LOG_WRITE_FAILED, 0, 1),
+                            new DeliveryOutcome(ReportSinkName.EMAIL,
+                                    DeliveryStatus.PARTIALLY_DELIVERED,
+                                    ReportDeliveryReason.SEND_REFUSED, 1, 2))))
+                    .as("and failed is reserved for the morning in which every sink delivered "
+                            + "nothing at all, which is the one an alert has to be able to mean")
+                    .isEqualTo(ReportRunOutcome.PARTIAL);
         }
 
         @Test
@@ -476,7 +537,8 @@ class ExceptionReportModelTest {
     // --- fixtures -----------------------------------------------------------------------------
 
     private static ExceptionReport report(final ExceptionEntry... entries) {
-        return new ExceptionReport(RUN_ID, aWindow(), london(2026, 9, 14, 7, 0), List.of(entries));
+        return new ExceptionReport(RUN_ID, aWindow(), london(2026, 9, 14, 7, 0),
+                List.of(entries), NOTHING_DROPPED);
     }
 
     private static ReportWindow aWindow() {

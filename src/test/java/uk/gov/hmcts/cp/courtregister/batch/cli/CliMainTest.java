@@ -130,6 +130,9 @@ class CliMainTest {
     /** Stood in for an exit code an invocation threw instead of answering with. */
     private static final int NOT_ANSWERED = -1;
 
+    /** The shipped entry cap, stated rather than defaulted: no case here is about truncation. */
+    private static final int MAX_ENTRIES = 5000;
+
     /** What an operator's terminal shows, one entry per line a command wrote. */
     private final List<String> printed = new ArrayList<>();
 
@@ -743,7 +746,8 @@ class CliMainTest {
         private static ReportProperties reportSettings() {
             return new ReportProperties(true, "0 0 7 * * MON-FRI", "Europe/London", false,
                     Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(15),
-                    Duration.ofMinutes(30), new ReportProperties.Email(false, null, List.of()));
+                    Duration.ofMinutes(30), MAX_ENTRIES,
+                    new ReportProperties.Email(false, null, List.of()));
         }
 
         /**

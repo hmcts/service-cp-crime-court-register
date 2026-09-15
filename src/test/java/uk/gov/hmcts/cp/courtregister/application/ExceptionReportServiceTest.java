@@ -164,6 +164,9 @@ class ExceptionReportServiceTest {
 
     private static final int RESPONSE_CODE = 502;
 
+    /** The shipped entry cap, which no case below seeds its way anywhere near. */
+    private static final int MAX_ENTRIES = 5000;
+
     private final ProcessedRequestRepository requests = mock(ProcessedRequestRepository.class);
 
     private final RegisterBatchRepository batches = mock(RegisterBatchRepository.class);
@@ -180,6 +183,14 @@ class ExceptionReportServiceTest {
     private ExceptionReportService service;
 
     /**
+     * The cap the case under way runs with, set before the service is built.
+     *
+     * <p>A field rather than a constant because two cases are about the cap itself and every other
+     * one is about a report no cap could reach; the default is far beyond anything seeded here.
+     */
+    private int maxEntries = MAX_ENTRIES;
+
+    /**
      * Nothing is wrong until a case seeds something.
      *
      * <p>No read is stubbed here on purpose: a mock answers an empty list for a list-returning
@@ -189,7 +200,7 @@ class ExceptionReportServiceTest {
     @BeforeEach
     void nothingIsWrongUntilASeedSaysSo() {
         service = new ExceptionReportService(requests, batches, notifications, registers,
-                REQUEST_TERMINAL_WITHIN, BATCH_GENERATED_WITHIN, NOTIFIED_WITHIN,
+                REQUEST_TERMINAL_WITHIN, BATCH_GENERATED_WITHIN, NOTIFIED_WITHIN, maxEntries,
                 GENERATION_CRON, COURTS_ZONE, metrics,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
@@ -591,6 +602,72 @@ class ExceptionReportServiceTest {
                     .isEqualTo(NOW);
         }
 
+        /**
+         * The window has two ends, and the three failure reads are asked about both of them.
+         *
+         * <p>They were asked about the start alone, which made a report a statement about
+         * "everything since" rather than about a period: a row that failed while the run was
+         * reading came back in this morning's report and again in tomorrow's, because tomorrow's
+         * window opens where this one was supposed to close. The two late kinds are deliberately
+         * unbounded and are asked about a cut-off instead, which is a different question.
+         */
+        /**
+         * A report is read by a person, and a bad morning is not a reason to write for ever.
+         *
+         * <p>The cap is on the <em>entries</em> and never on the counts: a morning that dropped
+         * entries is a worse morning than one that did not, and a count that shrank with the list
+         * would make the worst night of the year read as a quiet one. So the counts stay whole,
+         * the oldest entries are what is kept - they are the ones that have been wrong longest -
+         * and how many were dropped is a number the report carries and every output says.
+         */
+        @Test
+        void a_report_over_the_cap_keeps_the_oldest_entries_and_counts_what_it_dropped() {
+            maxEntries = 2;
+            service = new ExceptionReportService(requests, batches, notifications, registers,
+                    REQUEST_TERMINAL_WITHIN, BATCH_GENERATED_WITHIN, NOTIFIED_WITHIN, maxEntries,
+                    GENERATION_CRON, COURTS_ZONE, metrics, Clock.fixed(NOW, ZoneOffset.UTC));
+            when(requests.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(
+                    parkedAged(9_000L), parkedAged(8_000L), parkedAged(7_000L)));
+
+            final ExceptionReport report = service.build(WINDOW, RUN_ID);
+
+            assertThat(report.entries())
+                    .as("the oldest first and nothing after the cap: the two that have been wrong "
+                            + "longest are the two a support engineer starts with")
+                    .extracting(ExceptionEntry::ageSeconds)
+                    .containsExactly(9_000L, 8_000L);
+            assertThat(report.truncated())
+                    .as("and the number dropped is carried rather than implied, so a reader who "
+                            + "counts three in the counts and two in the list is told why")
+                    .isEqualTo(1);
+            assertThat(report.counts())
+                    .as("the counts are the reads' own and are never capped: the whole point of "
+                            + "the number beside them is that they stay true")
+                    .containsEntry(ExceptionKind.REQUEST_FAILED, 3);
+        }
+
+        @Test
+        void a_report_under_the_cap_drops_nothing() {
+            when(requests.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(parkedAged(9_000L)));
+
+            assertThat(service.build(WINDOW, RUN_ID).truncated())
+                    .as("nought on every ordinary morning, which is what makes a non-zero value "
+                            + "worth alerting on")
+                    .isZero();
+        }
+
+        @Test
+        void the_three_failure_reads_are_asked_with_both_ends_of_the_window() {
+            service.build(WINDOW, RUN_ID);
+
+            verify(requests)
+                    .failedBetween(WINDOW_FROM, NOW);
+            verify(batches)
+                    .failedBetween(WINDOW_FROM, NOW);
+            verify(notifications)
+                    .failedBetween(WINDOW_FROM, NOW);
+        }
+
         @Test
         void the_report_writes_nothing_back() {
             seedOneOfEveryKind();
@@ -625,6 +702,18 @@ class ExceptionReportServiceTest {
 
     private static List<String> names(final Enum<?>... values) {
         return Arrays.stream(values).map(Enum::name).toList();
+    }
+
+    /**
+     * A parked request of a stated age and an identity of its own.
+     *
+     * <p>Its own identity because the cap's case seeds three of them: sharing one would make the
+     * fold that keeps a request out of two kinds do the truncating instead of the cap.
+     */
+    private static ProcessedRequestSummary parkedAged(final long ageSeconds) {
+        return new ProcessedRequestSummary(SOURCE, UUID.randomUUID(), HEARING_ID, HEARING_DAY,
+                RequestStatus.FAILED, ATTEMPTS, "schema-violation",
+                WINDOW_FROM, WINDOW_FROM.plus(Duration.ofMinutes(1)), ageSeconds);
     }
 
     private static ProcessedRequestSummary parked() {

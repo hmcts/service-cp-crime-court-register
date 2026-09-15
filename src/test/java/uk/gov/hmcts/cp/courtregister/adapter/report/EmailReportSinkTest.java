@@ -66,6 +66,9 @@ class EmailReportSinkTest {
     /** Three Youth Offending Team inboxes, which is what "one send per recipient" is about. */
     private static final String FIRST = "first.inbox@example.invalid";
 
+    /** A report no cap touched, which is every morning these cases are about. */
+    private static final int NOTHING_DROPPED = 0;
+
     private static final String SECOND = "second.inbox@example.invalid";
 
     private static final String THIRD = "third.inbox@example.invalid";
@@ -203,6 +206,34 @@ class EmailReportSinkTest {
                         + "act on rather than a morning that failed")
                 .isEqualTo(new DeliveryOutcome(ReportSinkName.EMAIL,
                         DeliveryStatus.PARTIALLY_DELIVERED, ReportDeliveryReason.SEND_REFUSED,
+                        2, 1));
+    }
+
+    /**
+     * A mailer that breaks is one recipient's problem, not the other two recipients' problem.
+     *
+     * <p>The port's contract is that it answers, so a throw reaching this loop is a broken mailer
+     * rather than a refused send - and the sink is the one place that can still do the right thing
+     * with it, which is to count it and ask the next address. Let out, it reaches the service's own
+     * catch and the whole delivery is classified as having failed, so two support inboxes that
+     * would have received the morning's report do not.
+     */
+    @Test
+    void a_mailer_that_throws_for_one_recipient_does_not_stop_the_others() {
+        when(mailer.send(any()))
+                .thenReturn(new MailOutcome(MailStatus.ACCEPTED, 202))
+                .thenThrow(new IllegalStateException("the mail client refused to build a request"))
+                .thenReturn(new MailOutcome(MailStatus.ACCEPTED, 202));
+
+        final DeliveryOutcome outcome = delivered(aReportOf(oneRequestFailed()), THREE);
+
+        verify(mailer, times(3)).send(any());
+        assertThat(outcome)
+                .as("two told and one to resend, exactly as a refusal would be: which of the "
+                        + "mailer's own problems stopped one send is not a reason to stop the "
+                        + "sends after it")
+                .isEqualTo(new DeliveryOutcome(ReportSinkName.EMAIL,
+                        DeliveryStatus.PARTIALLY_DELIVERED, ReportDeliveryReason.SEND_UNANSWERED,
                         2, 1));
     }
 
@@ -371,7 +402,8 @@ class EmailReportSinkTest {
     }
 
     private static ExceptionReport aReportOf(final ExceptionEntry... entries) {
-        return new ExceptionReport(RUN_ID, WINDOW, SNAPSHOT_AT, List.of(entries));
+        return new ExceptionReport(RUN_ID, WINDOW, SNAPSHOT_AT, List.of(entries),
+                NOTHING_DROPPED);
     }
 
     private static ExceptionEntry oneRequestFailed() {

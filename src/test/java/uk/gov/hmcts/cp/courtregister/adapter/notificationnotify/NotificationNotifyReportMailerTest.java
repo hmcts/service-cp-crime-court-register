@@ -8,6 +8,9 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.networknt.schema.Error;
@@ -353,6 +356,65 @@ class NotificationNotifyReportMailerTest {
         assertThat(body.get("personalisation").get("yotsName").stringValue())
                 .isEqualTo("Example Youth Offending Team");
         assertThat(outcome.get().status()).isEqualTo(NotificationStatus.ACCEPTED);
+    }
+
+    /**
+     * The port's contract is that it <strong>answers</strong>, and it answers about everything.
+     *
+     * <p>Only {@code ResourceAccessException} was translated, and the body was written
+     * <em>outside</em> the try at all - so a mapper that refused the body, or a client that
+     * refused for any other reason, left this method as a throw. It reaches the sink's own catch,
+     * which classifies it as the whole delivery having failed: one recipient's problem becomes
+     * every recipient's, and the addresses after it in the list are never asked at all.
+     *
+     * <p>Two arms, because they are two different refusals and both were outside the one branch
+     * that was handled: the serialisation of the body, and a client that refuses in its own type.
+     */
+    @Test
+    void a_serialisation_or_client_failure_is_answered_not_thrown() {
+        final ObjectMapper refusing = mock(ObjectMapper.class);
+        when(refusing.writeValueAsBytes(any()))
+                .thenThrow(new IllegalStateException("no serialiser for the personalisation"));
+        final AtomicReference<MailOutcome> unwritable = new AtomicReference<>();
+
+        assertThatCode(() -> unwritable.set(new NotificationNotifyReportMailer(
+                restClient(), SYSTEM_USER_ID, refusing).send(aReportMail())))
+                .as("a body that could not be written is this recipient's send failing, not the "
+                        + "morning's report failing: the sink counts it and asks the next address")
+                .doesNotThrowAnyException();
+        assertThat(unwritable.get())
+                .as("nothing was sent and nothing answered, which is exactly UNANSWERED")
+                .isEqualTo(new MailOutcome(MailStatus.UNANSWERED, null));
+
+        final AtomicReference<MailOutcome> refused = new AtomicReference<>();
+        assertThatCode(() -> refused.set(new NotificationNotifyReportMailer(
+                clientThatRefusesToCall(), SYSTEM_USER_ID, MAPPER).send(aReportMail())))
+                .as("and a client that refuses in a type of its own - a pool that has been shut "
+                        + "down, a factory that will not build a request - is the same fact to "
+                        + "whoever reads the run's line: this recipient was not told")
+                .doesNotThrowAnyException();
+        assertThat(refused.get())
+                .isEqualTo(new MailOutcome(MailStatus.UNANSWERED, null));
+    }
+
+    /** One report mail, for the cases whose subject is not the body. */
+    private static ReportMail aReportMail() {
+        return new ReportMail(NOTIFICATION_ID, TEMPLATE_ID, SEND_TO_ADDRESS, FILE_ID,
+                Map.of("request_failed", "1"));
+    }
+
+    /**
+     * A client that refuses before a request is ever made, in a type that is not an access failure.
+     *
+     * @return the client
+     */
+    private RestClient clientThatRefusesToCall() {
+        return RestClient.builder()
+                .baseUrl(notificationNotify.baseUrl())
+                .requestFactory((uri, httpMethod) -> {
+                    throw new IllegalStateException("the connection pool has been shut down");
+                })
+                .build();
     }
 
     /**

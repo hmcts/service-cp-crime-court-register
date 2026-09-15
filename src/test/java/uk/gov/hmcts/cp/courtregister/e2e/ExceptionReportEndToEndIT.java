@@ -19,6 +19,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 import tools.jackson.databind.ObjectMapper;
@@ -71,6 +72,17 @@ import uk.gov.hmcts.cp.courtregister.support.ServiceTestSupport;
  */
 @DisplayName("the morning exception report, end to end")
 class ExceptionReportEndToEndIT {
+
+    /**
+     * The tag the two wall-clock cases carry, so a loaded machine can be told to leave them out.
+     *
+     * <p>SC-006's ten seconds and SC-008's "both schedules fired" are the only two claims in this
+     * repository whose answer depends on how busy the host is. They are real criteria and they stay
+     * in the default selection; the tag exists so that a developer on a machine that is also
+     * building something else can exclude them by name rather than by disabling the suite - see
+     * README's Testing section.
+     */
+    private static final String TIMING = "timing";
 
     /** This suite's own database inside the shared container, named apart from every other. */
     private static final String DATABASE = "courtregister_exception_report_e2e";
@@ -293,11 +305,18 @@ class ExceptionReportEndToEndIT {
                         + "exceptions, and a report that named one would send support after "
                         + "something that is not missing")
                 .doesNotContainAnyElementsOf(healthy);
+        assertThat(exceptionEvents(written))
+                .as("one event per exception and no event at all for the thirty-one healthy rows: "
+                        + "the claim above is that no healthy identifier was NAMED, and an event "
+                        + "carrying no identifier this case seeded would satisfy it while still "
+                        + "sending support after a row that is not missing")
+                .hasSize(failures.size());
     }
 
     // --- (c) SC-006 -------------------------------------------------------------------------
 
     @Test
+    @Tag(TIMING)
     @DisplayName("a ten-thousand-row processed log is reported on inside ten seconds")
     void a_since_24h_report_over_ten_thousand_rows_should_be_built_and_written_inside_ten_seconds() {
         seedTenThousandRows();
@@ -327,6 +346,7 @@ class ExceptionReportEndToEndIT {
     // --- (d) SC-008 -------------------------------------------------------------------------
 
     @Test
+    @Tag(TIMING)
     @DisplayName("the morning run and a generation run happen on schedulers of their own")
     void the_report_should_run_beside_a_generation_run_without_either_waiting_for_the_other() {
         stack.flagIs(true);

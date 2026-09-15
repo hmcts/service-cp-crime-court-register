@@ -62,6 +62,9 @@ class EmailReportSinkStoreIT {
     /** The database created inside the shared container to carry the framework's schema. */
     private static final String DATABASE = "fileservice_email";
 
+    /** A report no cap touched, which is every morning these cases are about. */
+    private static final int NOTHING_DROPPED = 0;
+
     /** The plain-DDL translation of the vendored changesets; the changesets remain the authority. */
     private static final Path SCHEMA = Path.of("docker", "fileservice", "init.sql");
 
@@ -93,6 +96,14 @@ class EmailReportSinkStoreIT {
 
     /** The one character RFC 4180 reserves, named so the expected text below is readable. */
     private static final String QUOTE = "\"";
+
+    /**
+     * The record ending RFC 4180 states, which is this file's dialect.
+     *
+     * <p>A line break <em>inside</em> a quoted field is whatever the producing context wrote and is
+     * not a record ending; only the endings this sink writes are CRLF.
+     */
+    private static final String CRLF = "\r\n";
 
     /**
      * Every awkward thing a producing context's own text can be, in one value.
@@ -186,7 +197,7 @@ class EmailReportSinkStoreIT {
     }
 
     @Test
-    void the_csv_is_utf_8_with_newline_endings_and_rfc_4180_quoting() {
+    void the_csv_is_utf_8_with_crlf_endings_and_rfc_4180_quoting() {
         final ExceptionEntry awkward = new ExceptionEntry(ExceptionKind.REQUEST_FAILED,
                 AWKWARD_SOURCE, REQUEST_ID, HEARING_ID,
                 HEARING_DAY, null, null, null, null, "FAILED", 1, "DEAD_LETTERED", 600);
@@ -196,14 +207,21 @@ class EmailReportSinkStoreIT {
                 new String(contentOf(mail.fileId()).orElseThrow(), StandardCharsets.UTF_8);
 
         assertThat(csv)
-                .as("the bytes are UTF-8 and the rows end with a newline: a \\r\\n ending or a "
-                        + "byte the reader guesses at is an attachment that opens wrong somewhere "
-                        + "else, and the producing context is the one field whose text this "
-                        + "service did not choose")
-                .doesNotContain("\r")
+                .as("the bytes are UTF-8 and every record ends CRLF, which is the ending RFC 4180 "
+                        + "states: this attachment is opened in a spreadsheet on somebody's "
+                        + "desktop rather than parsed, and a bare newline is the ending a reader "
+                        + "has to guess at")
                 .contains(QUOTE + "a source with a comma, a \"\"quote\"\", a line break\nand Ynys "
                         + "Môn" + QUOTE) // o-circ
-                .endsWith("\n");
+                .endsWith(CRLF);
+        assertThat(csv.lines().toList().getFirst())
+                .as("and the header's own record ends the same way, which is what makes the "
+                        + "dialect the file's rather than the last row's")
+                .isEqualTo(HEADER);
+        assertThat(csv.indexOf(CRLF))
+                .as("the first record ending is the header's, immediately after the last column "
+                        + "name: a header ended LF and rows ended CRLF is two dialects in one file")
+                .isEqualTo(HEADER.length());
         assertThat(csv.lines())
                 .as("a line break inside a quoted field is a field and not a row: a header, the "
                         + "two physical lines that one entry occupies, and nothing else - a sink "
@@ -281,7 +299,7 @@ class EmailReportSinkStoreIT {
     private static ExceptionReport reportOf(final ExceptionEntry... entries) {
         return new ExceptionReport("a-run-the-caller-already-opened",
                 new ReportWindow(SNAPSHOT_AT.minusSeconds(3600), SNAPSHOT_AT), SNAPSHOT_AT,
-                List.of(entries));
+                List.of(entries), NOTHING_DROPPED);
     }
 
     private static ExceptionEntry requestFailed(final long ageSeconds) {

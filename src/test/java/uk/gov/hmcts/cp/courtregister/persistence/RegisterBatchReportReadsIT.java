@@ -3,9 +3,16 @@ package uk.gov.hmcts.cp.courtregister.persistence;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.data.Offset.offset;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
@@ -76,6 +83,9 @@ class RegisterBatchReportReadsIT {
             "the report's four batch reads implement these statements; this is their red run";
 
     private static final long SECONDS_OF_SLACK = 5;
+
+    /** Enough rows that the planner has a table worth choosing an index for. */
+    private static final int SEEDED_ROWS = 2000;
 
     private static ReportReadsDatabase database;
     private static RegisterBatchRepository repository;
@@ -163,6 +173,24 @@ class RegisterBatchReportReadsIT {
         }
 
         @Test
+        void failed_since_excludes_a_row_failed_at_or_after_the_window_end() {
+            final Instant boundary = minutesAgo(45);
+            failed(MONDAY, boundary);
+            failed(TUESDAY, minutesAgo(20));
+
+            softly.assertThat(failedBetween(hoursAgo(4), boundary))
+                    .as("the window is half-open, so a batch that ended on the very instant a "
+                            + "run's window closes belongs to the next run: the two ends abut, "
+                            + "and a dead batch counted by both is a court centre's day support "
+                            + "chases twice")
+                    .isEmpty();
+            softly.assertThat(failedBetween(hoursAgo(4), boundary.minusSeconds(1)))
+                    .as("and neither is the one that ended later still, which is what makes the "
+                            + "morning's report a statement about a closed period")
+                    .isEmpty();
+        }
+
+        @Test
         void every_read_carries_the_court_centre_the_register_date_and_the_bounded_failure_reason() {
             final RegisterBatch waiting = pending(MONDAY, minutesAgo(90));
             final RegisterBatch requested = generating(MONDAY, minutesAgo(90));
@@ -234,6 +262,37 @@ class RegisterBatchReportReadsIT {
                         .contains("now()")
                         .contains("extract(epoch");
             }
+        }
+
+        /**
+         * Every one of the four is made on a schedule, so every one of them is planned here.
+         *
+         * <p>Two arrangements, and both matter, for the reasons {@code ProcessedRequestReportReadsIT}
+         * states: {@code ANALYZE} first, because a table the planner has no statistics for is a
+         * table it will sequentially scan whatever indexes exist; then
+         * {@code enable_seqscan = off} for the session, so what is asserted is "this query
+         * <em>can</em> use this index" - the claim V5 makes - rather than "today's row count
+         * happened to make it cheapest", which is a case that goes green on a small table and red
+         * on the production one.
+         */
+        @Test
+        void every_report_read_is_served_by_a_v5_index() throws SQLException {
+            seedManyRows();
+
+            softly.assertThat(planFor(minutesAgo(30), () -> latePending(minutesAgo(30))))
+                    .as("a court centre's day nothing has been asked about, found without reading "
+                            + "past every batch the estate has ever rendered")
+                    .contains("idx_batch_late_pending");
+            softly.assertThat(planFor(minutesAgo(30), () -> lateGenerating(minutesAgo(30))))
+                    .as("and the render nobody answered")
+                    .contains("idx_batch_late_generating");
+            softly.assertThat(planFor(minutesAgo(30), () -> lateGenerated(minutesAgo(30))))
+                    .as("and the document nobody was told about")
+                    .contains("idx_batch_late_generated");
+            softly.assertThat(planFor(hoursAgo(4), () -> failedBetween(hoursAgo(4), minutesAgo(1))))
+                    .as("and the batches that ended inside the window, which is the read a bad "
+                            + "morning makes longest")
+                    .contains("idx_batch_failed_at");
         }
 
         @Test
@@ -321,6 +380,101 @@ class RegisterBatchReportReadsIT {
 
     private List<BatchException> failedSince(final Instant since) {
         return answered(() -> repository.failedSince(since));
+    }
+
+    private List<BatchException> failedBetween(final Instant from, final Instant to) {
+        return answered(() -> repository.failedBetween(from, to));
+    }
+
+    // --- the plan the database makes of the statement the repository really ran -----------------
+
+    /**
+     * Runs one read, takes the statement it prepared, and asks the database to plan that statement.
+     *
+     * <p>The statement is taken from the driver rather than spelled again here, because a copy in a
+     * test proves what the copy can use and says nothing about what the repository runs.
+     *
+     * @param parameter what to bind every placeholder to, which is the read's own cut-off
+     * @param read      the read to make
+     * @return the plan, as the lines EXPLAIN answered with
+     * @throws SQLException where the session itself could not be opened
+     */
+    private String planFor(final Instant parameter, final Runnable read) throws SQLException {
+        database.forgetStatements();
+        softly.assertThatCode(read::run).as(SEAM).doesNotThrowAnyException();
+        final List<String> executed = database.statements();
+        softly.assertThat(executed)
+                .as("one read is one statement, and the plan asked for below is that statement's")
+                .hasSize(1);
+        final String sql = executed.isEmpty() ? "SELECT 1" : executed.get(0);
+
+        try (Connection connection = database.openConnection();
+             Statement session = connection.createStatement()) {
+            session.execute("ANALYZE " + BATCH_TABLE);
+            session.execute("SET enable_seqscan = off");
+            return plan(connection, sql, parameter);
+        }
+    }
+
+    private static String plan(final Connection connection, final String sql,
+            final Instant parameter) throws SQLException {
+        final StringBuilder lines = new StringBuilder();
+        try (PreparedStatement explain = connection.prepareStatement("EXPLAIN " + sql)) {
+            for (int marker = 1; marker <= placeholders(sql); marker++) {
+                explain.setObject(marker, OffsetDateTime.ofInstant(parameter, ZoneOffset.UTC));
+            }
+            try (ResultSet rows = explain.executeQuery()) {
+                while (rows.next()) {
+                    lines.append(rows.getString(1)).append('\n');
+                }
+            }
+        }
+        return lines.toString();
+    }
+
+    private static int placeholders(final String sql) {
+        return (int) sql.chars().filter(character -> character == '?').count();
+    }
+
+    /**
+     * A table worth planning over: two thousand batches a year of nights could leave behind.
+     *
+     * <p>Written in one statement rather than two thousand, because what the case needs is a table
+     * the planner has statistics about and not two thousand round trips. The statuses are spread
+     * so that every one of the four partial indexes has rows to find and rows to skip.
+     */
+    private void seedManyRows() {
+        database.jdbcClient()
+                .sql("""
+                        INSERT INTO register_batch (
+                            batch_id, court_centre_id, court_centre_ou_code, court_house,
+                            register_date, file_name, status, failure_reason, completed_by,
+                            system_generated, assembled_at, requested_at, generated_at, failed_at,
+                            attempts, supplement_index)
+                        SELECT gen_random_uuid(), gen_random_uuid(), :ouCode, :courtHouse,
+                               :registerDate, 'court-register.pdf',
+                               CASE WHEN g % 40 = 0 THEN 'PENDING'
+                                    WHEN g % 41 = 0 THEN 'GENERATING'
+                                    WHEN g % 43 = 0 THEN 'GENERATED'
+                                    WHEN g % 47 = 0 THEN 'FAILED'
+                                    ELSE 'NOTIFIED' END,
+                               CASE WHEN g % 47 = 0 AND g % 40 <> 0 AND g % 41 <> 0
+                                         AND g % 43 <> 0 THEN 'GENERATION_FAILED' END,
+                               CASE WHEN g % 40 = 0 OR g % 41 = 0 THEN NULL
+                                    ELSE 'EVENT' END,
+                               true,
+                               now() - (g || ' minutes')::interval,
+                               now() - (g || ' minutes')::interval,
+                               now() - (g || ' minutes')::interval,
+                               now() - (g || ' minutes')::interval,
+                               1, 0
+                          FROM generate_series(1, :rows) AS g
+                        """)
+                .param("ouCode", OU_CODE)
+                .param("courtHouse", COURT_HOUSE)
+                .param("registerDate", MONDAY)
+                .param("rows", SEEDED_ROWS)
+                .update();
     }
 
     private List<BatchException> answered(final Supplier<List<BatchException>> read) {

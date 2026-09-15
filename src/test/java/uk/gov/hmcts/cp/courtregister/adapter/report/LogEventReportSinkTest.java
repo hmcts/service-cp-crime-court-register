@@ -47,6 +47,9 @@ class LogEventReportSinkTest {
 
     private static final Instant WINDOW_FROM = Instant.parse("2026-09-14T06:00:00Z");
 
+    /** A report no cap touched, which is every morning these cases are about. */
+    private static final int NOTHING_DROPPED = 0;
+
     private static final Instant WINDOW_TO = Instant.parse("2026-09-15T06:00:00Z");
 
     private static final Instant SNAPSHOT_AT = Instant.parse("2026-09-15T06:00:01Z");
@@ -75,10 +78,17 @@ class LogEventReportSinkTest {
 
     private static final int ATTEMPTS = 3;
 
-    /** The ten fields the summary event carries, stated once in data-model.md and once here. */
-    private static final List<String> THE_TEN_SUMMARY_FIELDS = List.of(
+    /**
+     * The eleven fields the summary event carries, stated once in data-model.md and once here.
+     *
+     * <p>Eleven since the entry cap: a report that dropped entries has to say so in the same line
+     * as its counts, because the counts are the full ones and a reader comparing them against the
+     * exception events would otherwise find events missing and nothing saying why.
+     */
+    private static final List<String> THE_ELEVEN_SUMMARY_FIELDS = List.of(
             "event", "run_id", "window_from", "window_to", "snapshot_at",
-            "request_failed", "request_late", "batch_late", "batch_failed", "notification_failed");
+            "request_failed", "request_late", "batch_late", "batch_failed", "notification_failed",
+            "truncated");
 
     /**
      * What an identifier, a bounded code, a date or a number looks like, and what free text does
@@ -95,15 +105,41 @@ class LogEventReportSinkTest {
     @DisplayName("the summary event")
     class TheSummary {
 
+        /**
+         * The counts are the full ones and the events are not, so the line has to say the number.
+         *
+         * <p>A capped report writes an event per entry it kept and counts every entry the reads
+         * found, which is the right way round - a count that shrank with the cap would make a bad
+         * morning look like a quieter one - but it leaves a query able to find fewer events than
+         * the summary counts and nothing saying why. {@code truncated} is that field, and it is
+         * nought on every ordinary morning rather than absent, for the reason the five counts are.
+         */
         @Test
-        void one_summary_event_carries_its_ten_fields() {
+        void the_summary_event_carries_the_truncated_count() {
+            final Map<String, String> capped = fieldsOf(summaryFrom(new ExceptionReport(RUN_ID,
+                    new ReportWindow(WINDOW_FROM, WINDOW_TO), SNAPSHOT_AT,
+                    List.of(requestFailed()), 4)));
+
+            assertThat(capped)
+                    .as("how many the cap dropped, so a query that finds one event under a count "
+                            + "of five can tell a truncated morning from a missing write")
+                    .containsEntry("truncated", "4");
+            assertThat(fieldsOf(summaryFrom(reportOf(requestFailed()))))
+                    .as("and nought rather than absent on an ordinary morning, for the reason the "
+                            + "five counts are always present: absent is a field a dashboard has "
+                            + "to interpret")
+                    .containsEntry("truncated", "0");
+        }
+
+        @Test
+        void one_summary_event_carries_its_eleven_fields() {
             final Map<String, String> fields = fieldsOf(summaryFrom(reportOf(requestFailed())));
 
             assertThat(fields)
-                    .as("ten is the number data-model.md states, and this is the assertion that "
+                    .as("eleven is the number data-model.md states, and this is the assertion that "
                             + "holds it: a field added here is a field a saved query does not read "
                             + "and a field removed is one it reads as absent")
-                    .containsOnlyKeys(THE_TEN_SUMMARY_FIELDS.toArray(new String[0]));
+                    .containsOnlyKeys(THE_ELEVEN_SUMMARY_FIELDS.toArray(new String[0]));
             assertThat(fields)
                     .containsEntry("event", "courtregister_exception_report")
                     .containsEntry("run_id", RUN_ID)
@@ -133,7 +169,7 @@ class LogEventReportSinkTest {
                     .satisfies(only -> {
                         assertThat(fieldsOf(only))
                                 .containsEntry("event", "courtregister_exception_report")
-                                .containsOnlyKeys(THE_TEN_SUMMARY_FIELDS.toArray(new String[0]));
+                                .containsOnlyKeys(THE_ELEVEN_SUMMARY_FIELDS.toArray(new String[0]));
                         assertThat(fieldsOf(only))
                                 .as("and the five counts are five noughts, present and readable")
                                 .containsEntry("request_failed", "0")
@@ -345,7 +381,7 @@ class LogEventReportSinkTest {
 
     private static ExceptionReport reportOf(final ExceptionEntry... entries) {
         return new ExceptionReport(RUN_ID, new ReportWindow(WINDOW_FROM, WINDOW_TO), SNAPSHOT_AT,
-                List.of(entries));
+                List.of(entries), NOTHING_DROPPED);
     }
 
     private static ExceptionEntry requestFailed() {

@@ -418,6 +418,20 @@ public class ProcessedRequestRepository {
     }
 
     /**
+     * The report's REQUEST_FAILED read over a half-open window.
+     *
+     * <p><strong>Seam.</strong> The statement behind it still binds the window's start alone; the
+     * exclusive end lands with the half-open window itself.
+     *
+     * @param from the window's start, inclusive
+     * @param to   the window's end, exclusive
+     * @return every parked request settled inside it, oldest first
+     */
+    public List<ProcessedRequestSummary> failedBetween(final Instant from, final Instant to) {
+        return failedSince(from);
+    }
+
+    /**
      * The report's REQUEST_LATE read: the requests still in flight that arrived too long ago.
      *
      * <p><strong>Not bounded by the window, and it must not be.</strong> A request that has been
