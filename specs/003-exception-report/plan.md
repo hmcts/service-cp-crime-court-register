@@ -69,7 +69,7 @@ Spring Framework 6.1, is present on this classpath: `javap -v` over
 Boot 4.1.1 BOM resolves lists `public abstract java.lang.String scheduler();`) and `CronExpression`;
 `JdbcClient` for the nine repository reads and the file-service text write; `RestClient` behind the existing `NotificationNotifyClient` shape; and
 `net.logstash.logback` (already the only encoder `logback.xml` uses), whose
-`StructuredArguments.kv(...)` is what turns the two report events into queryable fields.
+`StructuredArguments.value(...)` is what turns the two report events into queryable fields.
 Test-side: JUnit Jupiter, Mockito, AssertJ, WireMock, Testcontainers Postgres, all present.
 
 **Storage**: PostgreSQL 16. One additive migration, `V4__processed_request_report_indexes.sql`, which
@@ -245,7 +245,7 @@ src/main/java/uk/gov/hmcts/cp/courtregister/
 │   ├── cli/ Args.java                     # CHANGED: + SINCE option, + EMAIL flag
 │   └── cli/ CliMain.java                  # CHANGED: + REPORT_EXCEPTIONS in COMMANDS and registryOf
 ├── adapter/report/
-│   ├── LogEventReportSink.java            # NEW: StructuredArguments.kv(...) - the only logstash import
+│   ├── LogEventReportSink.java            # NEW: StructuredArguments.value(...) - the only logstash import
 │   └── EmailReportSink.java               # NEW: CSV -> PayloadFileStore.storeText -> ReportMailer
 ├── adapter/notificationnotify/
 │   ├── NotificationNotifyReportMailer.java # NEW: the ReportMailer adapter, same HTTP shape

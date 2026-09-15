@@ -53,14 +53,28 @@ public record ExceptionEntry(
         long ageSeconds) {
 
     /**
-     * Refuses an entry with no kind.
+     * Refuses an entry with no kind, and a dead batch with no reason.
      *
-     * <p>The one field all five carry, and the one every count, every query and every CSV column
-     * is taken over. An entry without it is a row a dashboard cannot count and a support engineer
-     * cannot select - and, because the log sink omits absent fields rather than emitting nulls, one
-     * that would leave no trace of its own absence.
+     * <p>The kind is the one field all five carry, and the one every count, every query and every
+     * CSV column is taken over. An entry without it is a row a dashboard cannot count and a support
+     * engineer cannot select - and, because the log sink omits absent fields rather than emitting
+     * nulls, one that would leave no trace of its own absence.
+     *
+     * <p>{@link ExceptionKind#BATCH_FAILED}'s reason is refused for the same reason in a narrower
+     * place. The reason is the whole of what a dead batch tells an operator: a
+     * {@link ExceptionKind#BATCH_LATE} entry names the stage it stopped at and a support engineer
+     * knows what to look at, while a failed batch carrying nothing says only that a batch ended.
+     * The read that produces one selects a column the table declares {@code NOT NULL} on a row
+     * whose status is {@code FAILED}, so an absent value is a projection that has drifted from the
+     * table - a thing to be told about rather than a field to leave quietly out of an event. It is
+     * an {@link IllegalArgumentException} rather than a null check because the kind and the reason
+     * are wrong <em>together</em>: either one alone is a perfectly good entry.
      */
     public ExceptionEntry {
         Objects.requireNonNull(kind, "an exception is of one of the five kinds");
+        if (kind == ExceptionKind.BATCH_FAILED && reason == null) {
+            throw new IllegalArgumentException(
+                    "a batch that failed is reported under the bounded reason it failed for");
+        }
     }
 }

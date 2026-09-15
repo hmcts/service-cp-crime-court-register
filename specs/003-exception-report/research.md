@@ -167,7 +167,8 @@ below as an assumption rather than left as a marker.
   and null, so a KQL `isnotempty()` means what it says. Ten summary fields and thirteen entry
   components are the numbers, stated here and in data-model.md and nowhere else, so there is one
   place to change them. Both are
-  written with `net.logstash.logback.argument.StructuredArguments.kv(...)` inside
+  written as structured arguments, through
+  `net.logstash.logback.argument.StructuredArguments.value(...)`, inside
   `LogEventReportSink`, and both `src/main/resources/logback.xml` and
   `src/main/resources/logback-cli.xml` gain an `<arguments/>` provider so the encoder emits those
   arguments as top-level JSON fields. Container Insights carries the pod's stdout into
@@ -194,7 +195,7 @@ below as an assumption rather than left as a marker.
 - **Rationale**: the platform's own log collection is already shipping every line this service
   writes; SC-003 asks only that the fields be individually queryable, which is a question about the
   encoder rather than about a new pipeline. The `<arguments/>` provider is the one line of
-  configuration that turns `kv("request_id", id)` from message text into a field, and
+  configuration that turns `value("request_id", id)` from message text into a field, and
   `logstash-logback-encoder` is already the only encoder either file declares, so nothing is added to
   the build.
 - **Alternatives rejected**:

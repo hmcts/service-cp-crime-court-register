@@ -176,6 +176,17 @@ public final class GenerationLegs implements AutoCloseable {
     /** The request the morning's report is about, fixed so a suite can look for it. */
     public static final UUID REQUEST_ID = UUID.fromString("4c8e1a70-9b2d-4f36-8a57-c1d0e9f3b284");
 
+    /**
+     * A second request, unfinished, so the drive's report carries one of every kind.
+     *
+     * <p>Both intake rows used to carry {@link #REQUEST_ID}, which is one request answered by two
+     * statements - and the service folds that to one entry now, leaving the drive with no
+     * REQUEST_LATE line to sweep. Two requests, one parked and one still open, is what the
+     * arrangement was always describing.
+     */
+    private static final UUID UNFINISHED_REQUEST_ID =
+            UUID.fromString("1f7a3c85-2d69-4b04-9e13-8c5b0d2f7a46");
+
     /** The hearing that request carries, which the stranded register carries too. */
     private static final UUID HEARING_ID =
             UUID.fromString("9e2b4c60-1d38-4a75-9f04-6b3c8d1e5a72");
@@ -1022,7 +1033,7 @@ public final class GenerationLegs implements AutoCloseable {
 
     /** A request that arrived and has reached no terminal state since, which carries no reason. */
     private static ProcessedRequestSummary anUnfinishedRequest() {
-        return new ProcessedRequestSummary(SOURCE, REQUEST_ID, HEARING_ID, REGISTER_DATE,
+        return new ProcessedRequestSummary(SOURCE, UNFINISHED_REQUEST_ID, HEARING_ID, REGISTER_DATE,
                 RequestStatus.RECEIVED, 1, null, AT, AT, A_REQUESTS_AGE);
     }
 

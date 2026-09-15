@@ -6,7 +6,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
@@ -55,6 +59,27 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 public class ExceptionReportService {
 
     private static final Logger LOG = LoggerFactory.getLogger(ExceptionReportService.class);
+
+    /**
+     * Oldest first, and then the same order twice.
+     *
+     * <p>Age is what an operator reads down, and it settles almost every pair. What it does not
+     * settle is two things that went wrong at the same moment - two batches of one night, a stage
+     * and a failure timed off the same column - and a sort that stopped at the age would leave
+     * those in whatever order the eight reads happened to be made in. That is an order this class
+     * chose by accident: the never-batched registers are read after the dead batches, so a
+     * stranded register would sort below a failed batch of the same age for no reason anybody
+     * could state, and two mornings of the same report could not be diffed against each other.
+     *
+     * <p>So the kind breaks the tie first, in the order the enumeration declares - which reads
+     * down the pipeline, intake before batches before notifications - and then the identifier the
+     * entry is named by, which is the only thing left that is the entry's own.
+     */
+    private static final Comparator<ExceptionEntry> OLDEST_FIRST =
+            Comparator.comparingLong(ExceptionEntry::ageSeconds).reversed()
+                    .thenComparing(ExceptionEntry::kind)
+                    .thenComparing(ExceptionReportService::identifierOf,
+                            Comparator.nullsLast(Comparator.naturalOrder()));
 
     /**
      * The four stages a BATCH_LATE entry can be stuck at, as bounded codes.
@@ -141,6 +166,19 @@ public class ExceptionReportService {
     /**
      * Everything wrong at one moment, over one window, oldest first.
      *
+     * <p><strong>One request is one problem.</strong> The two intake predicates are meant to
+     * partition on status - {@code FAILED} is terminal and {@code RECEIVED} and {@code RETRYING}
+     * are not - but they are two statements taken a moment apart against a log the pipeline is
+     * still writing to, so a request that fails between them comes back from both, and so does one
+     * whose status column disagrees with itself. The failure wins: a parked request is not going to
+     * finish on its own, and it is the outcome an operator acts on (FR-013). The fold is here
+     * rather than in the statements because no single statement can see the other's answer.
+     *
+     * <p>A read that cannot be taken <strong>leaves</strong>, and no partial report is composed
+     * from the reads that could. The one absorbed refusal on this path is a sink's
+     * ({@link #deliver}): a sink that refuses has a built report to be classified against, while a
+     * read that refuses leaves an all-clear about the half nobody could see.
+     *
      * @param window what was asked for
      * @param runId  the correlation the caller opened
      * @return the report, stamped with the run id it was given
@@ -149,12 +187,16 @@ public class ExceptionReportService {
         final Instant snapshotAt = clock.instant();
         final List<ExceptionEntry> entries = new ArrayList<>();
 
+        final Set<String> reported = new HashSet<>();
         for (final ProcessedRequestSummary failed : requests.failedSince(window.from())) {
+            reported.add(identityOf(failed));
             entries.add(intake(ExceptionKind.REQUEST_FAILED, failed, failed.failureReason()));
         }
         for (final ProcessedRequestSummary late
                 : requests.nonTerminalOlderThan(snapshotAt.minus(requestTerminalWithin))) {
-            entries.add(intake(ExceptionKind.REQUEST_LATE, late, null));
+            if (reported.add(identityOf(late))) {
+                entries.add(intake(ExceptionKind.REQUEST_LATE, late, null));
+            }
         }
         for (final BatchException late : batches.latePending(snapshotAt.minus(batchGeneratedWithin))) {
             entries.add(batch(ExceptionKind.BATCH_LATE, late, AWAITING_RENDER_REQUEST));
@@ -177,7 +219,7 @@ public class ExceptionReportService {
             entries.add(notification(refused));
         }
 
-        entries.sort(Comparator.comparingLong(ExceptionEntry::ageSeconds).reversed());
+        entries.sort(OLDEST_FIRST);
         final ExceptionReport report =
                 new ExceptionReport(runId, window, snapshotAt, entries);
         report.counts().forEach(metrics::exceptionsReported);
@@ -217,6 +259,13 @@ public class ExceptionReportService {
      * the line names the caught failure by <strong>class</strong>, because its message belongs to
      * whatever library raised it and is exactly where an address or a connection string turns up.
      *
+     * <p><strong>The name is read once, before the sink is asked.</strong> A sink names itself off
+     * the thing it delivers through, so the sink that has just broken is exactly the one that may
+     * no longer be able to answer. Read inside the catch, that second question makes the one
+     * delivery nobody planned for the one that leaves this class - taking with it the outcomes of
+     * every sink already asked, which is the loss the catch exists to prevent. Read here it is
+     * asked while the sink is still whole, and the classification always has a name to carry.
+     *
      * @param sink   the sink to ask
      * @param report the report to hand it
      * @return how it went
@@ -227,14 +276,15 @@ public class ExceptionReportService {
     // question, one in the sink's own words and one in this service's.
     @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
     private DeliveryOutcome askedOf(final ExceptionReportSink sink, final ExceptionReport report) {
+        final ReportSinkName named = sink.name();
         try {
             return sink.deliver(report);
         } catch (RuntimeException broken) {
             LOG.warn("The exception report could not be handed to the {} sink, which broke with a "
                             + "{}. The report stands and every other sink is still asked.",
-                    sink.name(), broken.getClass().getName());
-            return new DeliveryOutcome(sink.name(), DeliveryStatus.NOT_DELIVERED,
-                    brokenSinkReason(sink.name()), 0, 0);
+                    named, broken.getClass().getName());
+            return new DeliveryOutcome(named, DeliveryStatus.NOT_DELIVERED,
+                    brokenSinkReason(named), 0, 0);
         }
     }
 
@@ -252,6 +302,35 @@ public class ExceptionReportService {
             case LOG -> ReportDeliveryReason.LOG_WRITE_FAILED;
             case EMAIL -> ReportDeliveryReason.SEND_FAILED;
         };
+    }
+
+    /**
+     * The request one intake row is about, as the key the two reads are folded on.
+     *
+     * @param summary the projection the statement answered
+     * @return the request's identity
+     */
+    private static String identityOf(final ProcessedRequestSummary summary) {
+        return summary.source() + ":" + summary.requestId();
+    }
+
+    /**
+     * The most specific identifier the entry carries, or nothing where it carries none.
+     *
+     * <p>Most specific rather than first present: a refused notification names its own row and its
+     * batch, and ordering it by the batch would put every refusal of one batch in an order the
+     * rows themselves do not have.
+     *
+     * @param entry one thing wrong
+     * @return the identifier it is named by, as text, or {@code null}
+     */
+    private static String identifierOf(final ExceptionEntry entry) {
+        final Object named = Stream.of(entry.requestId(), entry.notificationId(), entry.batchId(),
+                        entry.hearingId())
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+        return named == null ? null : named.toString();
     }
 
     /**

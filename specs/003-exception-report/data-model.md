@@ -669,7 +669,8 @@ four things about its own delivery that the 07:00 run does.
 `kind`**, of which each kind carries only its own. Fields that do not apply to the kind
 are **absent**, so a KQL `isnotempty()` distinguishes "does not apply" from "was not known".
 
-Both are emitted through `StructuredArguments.kv(...)` and reach the encoder as top-level JSON
+Both are emitted as structured arguments, through `StructuredArguments.value(...)`, and reach
+the encoder as top-level JSON
 fields because both `logback.xml` and `logback-cli.xml` declare an `<arguments/>` provider. Without
 that provider the values are still rendered into the message text and every query would need
 `parse()`, which is what `TelemetryPrivacyTest.ShippedConfiguration` is extended to prevent.
