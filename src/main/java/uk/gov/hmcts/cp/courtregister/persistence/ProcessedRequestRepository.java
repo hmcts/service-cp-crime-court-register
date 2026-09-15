@@ -208,7 +208,28 @@ public class ProcessedRequestRepository {
             """;
 
     /**
-     * Statement 8 - the oldest request that has not finished, which is the sweep's first gauge.
+     * Statement 8 - how many requests are still in flight past the cut-off, as a number.
+     *
+     * <p><strong>The same predicate again, spelled the same way again</strong>, for the same
+     * reason: {@code idx_request_non_terminal_created} is partial, Postgres matches a partial
+     * index by proving the query's predicate implies the index's, and a differently spelled
+     * equivalent is a planner coin toss. The sweep runs this every refresh interval for the life
+     * of every pod.
+     *
+     * <p>A count rather than the list it used to size. The sweep wants one number, and reading the
+     * rows to get it is a read whose cost grows with the backlog it is reporting - slowest on the
+     * morning the reading matters most - while every row it materialises is a case carried into a
+     * JVM to be counted and dropped. On this register that case belongs to a youth.
+     */
+    private static final String COUNT_NON_TERMINAL_OLDER_THAN = """
+            SELECT count(*)
+              FROM processed_request
+             WHERE status IN ('RECEIVED', 'RETRYING')
+               AND created_at < :createdBefore
+            """;
+
+    /**
+     * Statement 9 - the oldest request that has not finished, which is the sweep's first gauge.
      *
      * <p>The same predicate and the same index, without the cut-off and with a limit: the sweep
      * asks how old the oldest unfinished request is and nothing else, and reading the whole list to
@@ -418,14 +439,20 @@ public class ProcessedRequestRepository {
     /**
      * The intake sweep's second gauge: how many requests are over the threshold, as a number.
      *
-     * <p>Seam. The statement lands with the paired implementation.
+     * <p>Shares {@link #nonTerminalOlderThan(Instant)}'s predicate exactly, so the gauge and the
+     * report's REQUEST_LATE list cannot disagree about which requests are late. The boundary is
+     * exclusive - {@code created_at < :cutOff} - so a request created exactly the threshold ago
+     * is not yet over it, and neither caller may nudge its cut-off to soften that.
      *
      * @param createdBefore the cut-off: now less the intake threshold
      * @return how many RECEIVED or RETRYING requests arrived before it
      */
     public long countNonTerminalOlderThan(final Instant createdBefore) {
-        throw new UnsupportedOperationException(
-                "the sweep's count read lands with its implementation; this is its red run");
+        return StoreOutage.translating("count the requests still in flight past a cut-off",
+                () -> jdbcClient.sql(COUNT_NON_TERMINAL_OLDER_THAN)
+                        .param("createdBefore", offsetOf(createdBefore))
+                        .query(Long.class)
+                        .single());
     }
 
     /**

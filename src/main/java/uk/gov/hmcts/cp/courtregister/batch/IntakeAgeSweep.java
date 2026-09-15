@@ -9,6 +9,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.ProcessedRequestSummary;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
+import uk.gov.hmcts.cp.courtregister.domain.SweepFailureReason;
 import uk.gov.hmcts.cp.courtregister.persistence.ProcessedRequestRepository;
 
 /**
@@ -50,12 +51,6 @@ import uk.gov.hmcts.cp.courtregister.persistence.ProcessedRequestRepository;
 public class IntakeAgeSweep {
 
     private static final Logger LOG = LoggerFactory.getLogger(IntakeAgeSweep.class);
-
-    /** The store could not be reached at all: the reason a refresh is missing during an outage. */
-    private static final String STORE_UNAVAILABLE = "store-unavailable";
-
-    /** Anything else the read raised, which is a bug here rather than an outage there. */
-    private static final String UNEXPECTED = "unexpected";
 
     private final ProcessedRequestRepository requests;
     private final ProcessingMetrics metrics;
@@ -101,6 +96,14 @@ public class IntakeAgeSweep {
      * age is the one the database computed in the statement that selected the row: no stored
      * timestamp is subtracted from a JVM reading, and two pods reading one row agree.
      *
+     * <p>The second reading is a <em>count</em>, not the size of a list. Sizing a list would make
+     * this read's cost grow with the backlog it is reporting - slowest on the morning the reading
+     * matters most - and would carry every unfinished request's row into this JVM to be counted
+     * and dropped. The cut-off is {@code now} less the threshold exactly, and the statement's
+     * boundary is exclusive, so a request created exactly the threshold ago is not over it: the
+     * report's REQUEST_LATE read shares that boundary, and a tolerance added here to soften it
+     * would make the gauge and the morning report disagree about the same request.
+     *
      * <p>The second catch is total on purpose, which is why the rule against it is suppressed here:
      * this method may not throw. A fixed-delay schedule cancels the task that throws, so a failure
      * this method let out would take both readings off the air for the life of the pod - and a
@@ -115,14 +118,14 @@ public class IntakeAgeSweep {
                     .map(ProcessedRequestSummary::ageSeconds)
                     .map(Duration::ofSeconds)
                     .orElse(Duration.ZERO);
-            final int overThreshold = requests.nonTerminalOlderThan(cutOff).size();
+            final int overThreshold = Math.toIntExact(requests.countNonTerminalOlderThan(cutOff));
 
             metrics.oldestNonTerminalRequestAge(oldest);
             metrics.nonTerminalRequestsOverThreshold(overThreshold);
         } catch (StoreUnavailableException gone) {
-            absorbed(STORE_UNAVAILABLE, gone);
+            absorbed(SweepFailureReason.STORE_UNAVAILABLE, gone);
         } catch (RuntimeException unexpected) {
-            absorbed(UNEXPECTED, unexpected);
+            absorbed(SweepFailureReason.UNEXPECTED, unexpected);
         }
     }
 
@@ -137,7 +140,7 @@ public class IntakeAgeSweep {
      * @param reason  the bounded code this refresh is counted under
      * @param failure what stopped it, named by class and never by message
      */
-    private void absorbed(final String reason, final RuntimeException failure) {
+    private void absorbed(final SweepFailureReason reason, final RuntimeException failure) {
         metrics.intakeSweepFailure(reason);
         LOG.warn("Intake gauge refresh could not be taken; the gauges keep their last reading. "
                         + "reason={} type={}",

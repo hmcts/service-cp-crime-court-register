@@ -162,10 +162,22 @@ public class ProcessingMetrics {
     /**
      * Records how long an admitted run took to reach the terminal state the guard accepted.
      *
+     * <p>Refuses a state that is not terminal. A sample taken from {@code RECEIVED} or
+     * {@code RETRYING} would time an attempt rather than a run - the broker is going to deliver the
+     * message again - and would publish it under an {@code outcome} value nothing documents and no
+     * alert reads. A timer records in silence, so the caller that did it would never find out;
+     * refusing here is the only place that can tell them.
+     *
      * @param timing  the token {@link #startRequestTiming()} answered
      * @param outcome the terminal state the run reached
+     * @throws IllegalArgumentException where the run has not reached a terminal state
      */
     public void requestSettled(final Timing timing, final RequestStatus outcome) {
+        if (!outcome.isTerminal()) {
+            throw new IllegalArgumentException(outcome
+                    + " is not a terminal state, so a duration sample taken here would time an "
+                    + "attempt rather than a run");
+        }
         timing.sample.stop(Timer.builder(REQUEST_DURATION)
                 .description("Time from the guard admitting a run to the terminal state it reached")
                 .tag(OUTCOME_TAG, code(outcome))
@@ -319,26 +331,18 @@ public class ProcessingMetrics {
     }
 
     /**
-     * Counts one exception-report run under the word its run line carries.
-     *
-     * @param outcome {@code delivered}, {@code partial} or {@code failed}
-     */
-    public void exceptionReportRun(final String outcome) {
-        counter(EXCEPTION_REPORT_RUNS, OUTCOME_TAG, outcome).increment();
-    }
-
-    /**
      * Counts one exception-report run under the bounded outcome its run line carries.
      *
-     * <p>Seam. Review gate 3's finding is that the label must be bounded by the compiler rather
-     * than by review; this overload is the shape that bounds it, and the body that publishes it is
-     * the paired implementation's.
+     * <p>The parameter is an enumeration rather than the word itself, which is the whole of review
+     * gate 3's finding: a label a caller spells is a label a caller can mistype, and a mistyped
+     * label is not a wrong reading but a new series, on which the alert written against the right
+     * one is silent for ever. The three constants render to the three words the run line carries,
+     * through the same {@link #code(Enum)} every other bounded label here goes through.
      *
      * @param outcome how the run as a whole went
      */
     public void exceptionReportRun(final ReportRunOutcome outcome) {
-        // Seam: the counter this publishes lands with the implementation that replaces the
-        // String-taking overload above.
+        counter(EXCEPTION_REPORT_RUNS, OUTCOME_TAG, code(outcome)).increment();
     }
 
     /**
@@ -366,25 +370,18 @@ public class ProcessingMetrics {
     }
 
     /**
-     * Counts a gauge refresh the intake sweep could not take.
-     *
-     * @param reason the bounded code for what stopped it, never a message
-     */
-    public void intakeSweepFailure(final String reason) {
-        counter(INTAKE_SWEEP_FAILURES, REASON_TAG, reason).increment();
-    }
-
-    /**
      * Counts a gauge refresh the intake sweep could not take, under a bounded reason.
      *
-     * <p>Seam, for the same finding and in the same shape as
-     * {@link #exceptionReportRun(ReportRunOutcome)}.
+     * <p>Enumerated for the reason {@link #exceptionReportRun(ReportRunOutcome)} is, and with more
+     * riding on it: this counter is the only evidence the service's one absorbed refusal leaves
+     * behind, and evidence published under a label nobody queries is no evidence at all. Two codes,
+     * because an outage of theirs and a bug of ours need telling apart - one series moves during
+     * somebody else's incident and stops when it ends, the other should be flat at zero for ever.
      *
      * @param reason what stopped it, never a message
      */
     public void intakeSweepFailure(final SweepFailureReason reason) {
-        // Seam: the counter this publishes lands with the implementation that replaces the
-        // String-taking overload above.
+        counter(INTAKE_SWEEP_FAILURES, REASON_TAG, code(reason)).increment();
     }
 
     /**

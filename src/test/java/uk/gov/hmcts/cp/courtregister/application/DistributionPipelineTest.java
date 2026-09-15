@@ -1654,6 +1654,7 @@ class DistributionPipelineTest {
                     .filter(name -> name.startsWith("io.micrometer"))
                     .toList();
             final List<String> micrometerImports = Files.readAllLines(Path.of(
+                            System.getProperty("user.dir"),
                             "src/main/java/uk/gov/hmcts/cp/courtregister/application",
                             "DistributionPipeline.java")).stream()
                     .filter(line -> line.startsWith("import io.micrometer"))
