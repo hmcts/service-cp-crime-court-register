@@ -913,7 +913,7 @@ identifiers and nothing else.
 
 ### Tests first ⚠️
 
-- [ ] T029 [P] [US1] `application/ExceptionReportServiceTest` -
+- [x] T029 [P] [US1] `application/ExceptionReportServiceTest` -
       `a_failed_request_inside_the_window_is_one_request_failed_entry`,
       `an_unfinished_request_past_the_threshold_is_one_request_late_entry_whether_or_not_it_arrived_inside_the_window`
       (the late kinds are deliberately **not** bounded by the window: a request stuck for three days
@@ -944,7 +944,16 @@ identifiers and nothing else.
       Seams: `application/ExceptionReportService` with its constructor and
       `ExceptionReport build(ReportWindow window, String runId)` throwing. Red: the returned report
       has no entries where one `REQUEST_FAILED` was seeded.
-- [ ] T030 [P] [US1] `application/ExceptionReportDeliveryTest` - over
+      (red at `3261883`: 16 tests, 12 failures, 0 errors, every one an assertion.
+      `a_failed_request_inside_the_window_is_one_request_failed_entry` on "[a request the pipeline
+      parked is the intake half's exception, and the report exists to name it on the morning
+      after] Expected size: 1 but was: 0 in: []" - the predicted red exactly. The seam answers an
+      empty report rather than throwing, so all twelve fail on what the fold produced. One
+      correction landed later, at `e4c53b6`: the late-request fixture was seeded at 9 000 seconds
+      against a twenty-four hour window, and its own closing assertion is that the row is older
+      than the window is wide - the row a window-bounded read would have dropped - so it could not
+      hold whatever the service did. Three days now, which is the case's own narrative.)
+- [x] T030 [P] [US1] `application/ExceptionReportDeliveryTest` - over
       `List<DeliveryOutcome> deliver(ExceptionReport report, Collection<ExceptionReportSink> sinks)`,
       which takes the sinks from its **caller** rather than from the context, because the 07:00 run
       delivers to every sink and the command delivers to the log sink always and the e-mail sink
@@ -961,7 +970,14 @@ identifiers and nothing else.
       `a_caught_failure_is_named_by_class_and_never_by_message` (a message belongs to whatever
       library raised it and is exactly where a connection string turns up). Red: the second sink is
       never asked once the first throws.
-- [ ] T031 [P] [US1] `adapter/report/LogEventReportSinkTest` (using `support/CapturedLog`) -
+      (red at `4629755`: 8 tests, 8 failures, 0 errors, every one an assertion.
+      `the_sinks_delivered_to_are_the_ones_the_caller_passed` on "[the caller chooses: the 07:00
+      run delivers to every sink on the context, and the command adds the e-mail sink only under
+      --email] Expecting actual: [] to contain exactly (and in same order): [LOG, EMAIL]". One
+      deviation, additive: the port gains `ReportSinkName name()` in the same commit, because the
+      contract is that a sink answers rather than throws, so the one delivery nobody planned for
+      is the one whose outcome has to be attributed by whoever asked.)
+- [x] T031 [P] [US1] `adapter/report/LogEventReportSinkTest` (using `support/CapturedLog`) -
       `one_summary_event_carries_its_ten_fields` (`event`, `run_id`, `window_from`, `window_to`,
       `snapshot_at` and the **five** counts - `request_failed`, `request_late`, `batch_late`,
       `batch_failed`, `notification_failed`; ten is the number data-model.md states and this is the
@@ -980,13 +996,24 @@ identifiers and nothing else.
       value rendered into the message is a value a saved query has to `parse()` back out.
       Seam: `adapter/report/LogEventReportSink` implementing `ExceptionReportSink` with `deliver`
       throwing. Red: no event is captured at all.
-- [ ] T032 [P] [US1] `config/TelemetryPrivacyTest.ShippedConfiguration` (extend) -
+      (red at `6414ca3`: 9 tests, 8 failures, 0 errors, every one an assertion.
+      `one_exception_event_is_written_per_entry` on "[one event per exception, so a saved query
+      counts rows rather than parsing a list out of one line] Expected size: 3 but was: 0 in: []".
+      The seam names itself and answers delivered without writing anything, so the ninth case -
+      the one about the name and the outcome - is green on introduction and says so. The summary's
+      ten fields are held to being exactly ten with `containsOnlyKeys`, so an addition fails as
+      loudly as a removal.)
+- [x] T032 [P] [US1] `config/TelemetryPrivacyTest.ShippedConfiguration` (extend) -
       `both_logback_files_declare_the_arguments_provider`, asserted over
       `src/main/resources/logback.xml` **and** `src/main/resources/logback-cli.xml`, beside the
       `<mdc/>` claim the nested class already makes: a command's lines reach the same index as a
       pod's, and without the provider every query needs `parse()`. Red: `<arguments/>` is absent from
       both files.
-- [ ] T033 [P] [US1] `support/GenerationLegs` (extend) - `THE_LEGS` gains `ExceptionReportService`
+      (red at `602c148`: 5 tests in `ShippedConfiguration`, 2 failures, 0 errors, both assertions,
+      one per parameterisation. `[2] configuration = "logback-cli.xml"` on "[without the arguments
+      provider every field of both report events is rendered into the message and every query
+      needs parse()] Expecting actual: "<configuration> ... to contain: "<arguments/>"".)
+- [x] T033 [P] [US1] `support/GenerationLegs` (extend) - `THE_LEGS` gains `ExceptionReportService`
       and `LogEventReportSink`, and `driveEverything()` drives both so **every** LOG statement in
       them is reached, with `support/PersonalDataMarkers` wherever a person could be named. The
       remaining five classes (`ExceptionReportJob`, `IntakeAgeSweep`, `EmailReportSink`,
@@ -994,10 +1021,35 @@ identifiers and nothing else.
       implementation tasks and the whole set of seven is swept at T071. Red: the coverage assertion
       names the LOG statements in `ExceptionReportService` and `LogEventReportSink` that no leg
       reaches.
+      (red at `1b40f57`: 36 tests over `TelemetryPrivacyTest`, 3 failures, 0 errors, every one an
+      assertion; two of the three are T032's, still red until T036.
+      **The predicted red could not be shown as written, and the reason is recorded in the commit
+      body.** It presupposes the statements exist, and both classes were still seams that write
+      nothing: `LogStatement.everyOneIn` reads declarations out of the sources, so adding a class
+      that declares none widens the list without widening the claim, and the sweep goes on
+      reporting green while covering nothing of theirs. The case therefore gains the precondition
+      this suite already writes twice over in its own idiom - a scan that found nothing would make
+      the assertion vacuous - narrowed to the two classes just added:
+      `[A] and the drive above reached every line the two legs can write` on "[the report's two
+      classes are inside the enumeration now, and a class that declares no statement contributes
+      nothing for the reach assertion below to cover] Expecting actual not to be empty". It fails
+      at nought and has teeth the moment the lines land, which is also what makes the reach
+      assertion below it mean anything for them.
+      Two deviations, both additive. The precondition is an assertion inside
+      `config/TelemetryPrivacyTest`, the suite that owns the sweep, so the commit touches that
+      file as well as `support/GenerationLegs`; `THE_REPORT` is published beside `THE_LEGS` and
+      `THE_LEGS` is composed from it, so the two cannot drift. And the report's
+      `ProcessingMetrics` is registered on a registry of its own rather than the leg's, because
+      the label vocabulary the leg sweep holds every series to is generation's - the report's
+      three counters are Phase 3's to declare and T022's to sweep.
+      The marker the drive carries is on the sink that breaks, whose failure names a team and an
+      address: the rule is that a caught failure is named by class and never by message, and a
+      failure that said nothing about anybody would leave that rule asserted against a string that
+      could not have leaked.)
 
 ### Implementation
 
-- [ ] T034 [US1] `application/ExceptionReportService` - **two methods**.
+- [x] T034 [US1] `application/ExceptionReportService` - **two methods**.
       `ExceptionReport build(ReportWindow window, String runId)` makes the **eight** reads of
       data-model.md's predicate table - `ProcessedRequestRepository.failedSince` and
       `.nonTerminalOlderThan`; `RegisterBatchRepository.latePending`, `.lateGenerating`,
@@ -1013,22 +1065,68 @@ identifiers and nothing else.
       retried. It depends on the repositories and on nothing else, imports no logging library, no
       Micrometer type beyond the metrics facade and no MDC, and reads the `CourtRegisterService` flag
       nowhere. Green: T029, T030, and the `ExceptionReportService` half of T033.
-- [ ] T035 [US1] `adapter/report/LogEventReportSink` - the two events of data-model.md written with
+      (green at `942e3c0`: `./gradlew test --tests '*ExceptionReportServiceTest*' --tests
+      '*ExceptionReportDeliveryTest*' --tests '*TelemetryPrivacyTest*' -Dtest.noFailFast=true`,
+      60 tests, 2 failures, 0 errors - both of them T032's two logback cases, which stay red until
+      T036. T029, T030 and the `ExceptionReportService` half of T033 are green: the sweep's
+      precondition now finds the service's line and the drive reaches it. `checkstyleMain` and
+      `pmdMain` exit 0. The four `BATCH_LATE` sources fold into one kind carrying the stage it is
+      stuck at as a bounded code - `awaiting-batch`, `awaiting-render-request`, `awaiting-render`,
+      `awaiting-notification` - written as four constants rather than four sentences, because
+      `reason` is a parsed slot and what goes in one comes from a vocabulary. `askedOf` carries
+      the repository's usual `PMD.AvoidCatchingGenericException` / `PMD.OnlyOneReturn` pair with
+      the comment the convention asks for: the port's contract is that a sink answers rather than
+      throws, so the catch cannot be narrower than any broken sink, and the two exits answer one
+      question - once in the sink's words and once in this service's.)
+- [x] T035 [US1] `adapter/report/LogEventReportSink` - the two events of data-model.md written with
       `net.logstash.logback.argument.StructuredArguments.kv(...)`, **the only class in `src/main`
       that imports it**, which is the whole reason the log output is a sink rather than a `log.info`
       in the service: the summary's **ten** fields, and one exception event per entry over all five
       kinds. The summary carries **no delivery status** - that is the job's line, not a sink's claim.
       Fields that do not apply to a kind are omitted, not emitted as null, and nothing another system
       wrote is emitted at all. Green: T031, and the `LogEventReportSink` half of T033.
-- [ ] T036 [US1] The `<arguments/>` provider added to `src/main/resources/logback.xml` **and**
+      (green at `78b2757`: `./gradlew test --tests '*LogEventReportSinkTest*' --tests
+      '*TelemetryPrivacyTest*' -Dtest.noFailFast=true`, 45 tests, 2 failures, 0 errors - again
+      T032's two, which stay red until T036. All nine of T031 are green, and so is the
+      `LogEventReportSink` half of T033: the leg sweep now finds both of the sink's statements and
+      the drive reaches both. `checkstyleMain` and `pmdMain` exit 0.
+      **One deviation from this task's wording, and the sink's own contract decides it.** The
+      arguments are `StructuredArguments.value(...)` rather than `kv(...)`. Both reach the
+      `<arguments/>` provider as the same field; `kv` additionally renders as `name=value` where a
+      `{}` placeholder consumes it, which is the whole point of `kv` - and neither of these lines
+      has a placeholder, nor may ever grow one, which is what
+      `no_identifier_appears_in_the_message_text` insists on. T031's `fieldsOf` reads each
+      argument through the marker's public `toStringSelf()`, `getFieldValue()` being protected, so
+      the value-only form is also the only one that suite can read a bare value out of. The class
+      is still the only one in `src/main` that imports `StructuredArguments`.)
+- [x] T036 [US1] The `<arguments/>` provider added to `src/main/resources/logback.xml` **and**
       `src/main/resources/logback-cli.xml`, inside the existing
       `LoggingEventCompositeJsonEncoder` provider list, beside `<mdc/>`. Nothing else in either file
       changes and no dependency is added - `logstash-logback-encoder` is already the only encoder
       either file declares. Green: T032.
+      (green at `ac5ded4`: `./gradlew test --tests '*TelemetryPrivacyTest*'
+      -Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 36 tests, 0 failures, 0 errors;
+      `both_logback_files_declare_the_arguments_provider` passes over both parameterisations. The
+      provider sits beside `<mdc/>` in both files and nothing else in either changed.)
 - [ ] T037 Phase close: `./gradlew build` green; **review gate 4** (FR-002's field list, the
       no-PII gate over both events, the read-only claim, the logging library's containment to one
       adapter, and that the summary event claims no delivery it could not observe); findings land as
       red/green pairs.
+      (build half done at `49a15f4`: `./gradlew build -Dtest.noFailFast=true` BUILD SUCCESSFUL,
+      exit 0, 3394 tests over 558 suites, 0 failures, 0 errors; Checkstyle at `maxWarnings = 0`
+      over main and test, PMD over both, and the JaCoCo gate at LINE 0.88 / BRANCH 0.85, none of
+      them loosened. The first phase-close run, at `ac5ded4`, was green on every task but
+      `pmdTest`, which carried three findings in test files this phase had landed -
+      `AvoidFieldNameMatchingMethodName` twice in `ExceptionReportDeliveryTest`, where both stub
+      sinks held a field named `name` beside the port's `name()`, and `UseVarargs` once in
+      `ExceptionReportServiceTest`. All three are style rather than behaviour and all three are
+      closed at `49a15f4`.
+      **Review gate 4 has not run**, and this task is not complete until it has: the field list,
+      the no-PII gate over both events, the read-only claim, the logging library's containment to
+      one adapter, and the summary event claiming no delivery it could not observe. The plan's
+      test matrix already carries every row this phase's suites need -
+      `ExceptionReportServiceTest`, `ExceptionReportDeliveryTest`, `LogEventReportSinkTest` and
+      the extended `TelemetryPrivacyTest` - so `plan.md` is untouched by this phase.)
 
 **Checkpoint**: the report exists and writes its events. Nothing schedules it yet - that is Phase 5.
 

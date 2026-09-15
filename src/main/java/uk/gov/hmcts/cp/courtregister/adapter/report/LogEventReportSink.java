@@ -1,0 +1,149 @@
+package uk.gov.hmcts.cp.courtregister.adapter.report;
+
+import static net.logstash.logback.argument.StructuredArguments.value;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import net.logstash.logback.argument.StructuredArgument;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
+import uk.gov.hmcts.cp.courtregister.domain.DeliveryOutcome;
+import uk.gov.hmcts.cp.courtregister.domain.ExceptionEntry;
+import uk.gov.hmcts.cp.courtregister.domain.ExceptionKind;
+import uk.gov.hmcts.cp.courtregister.domain.ExceptionReport;
+import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
+
+/**
+ * The report, written as the two structured events Log Analytics reads.
+ *
+ * <p><strong>The only class in {@code src/main} that imports
+ * {@code net.logstash.logback.argument.StructuredArguments}</strong>, and that containment is the
+ * whole reason the log output is a sink rather than a {@code log.info} in the service. Log
+ * Analytics has to read {@code kind}, {@code request_id} and {@code batch_id} as separate fields
+ * (SC-003, FR-005), which means the values must reach the encoder as structured arguments; the
+ * shape of a structured event is an adapter's concern in exactly the way an HTTP body is, so the
+ * application layer imports no logging library (Principle V).
+ *
+ * <p>Two events. {@code courtregister_exception_report}, once per run, carries ten fields: the
+ * event name, the run id, the window's two ends, the snapshot, and the five counts - present even
+ * when they are nought, so an empty morning is distinguishable from a morning the report did not
+ * run. {@code courtregister_exception}, once per entry, carries the event name, the run id, the
+ * kind, and then <strong>only the fields that apply to that kind</strong>: an absent field is what
+ * makes a KQL {@code isnotempty()} mean what it says, where a null would read as "was not known"
+ * rather than as "does not apply".
+ *
+ * <p><strong>The summary claims no delivery.</strong> It is written by a sink, while the other sink
+ * may not have been asked yet and while this one cannot observe its own write reaching an index. A
+ * line announcing {@code delivered_email} would be reporting an outcome nobody had observed. How
+ * the report travelled is the run's own fact, and it belongs to whoever held every outcome - the
+ * job, or the command, after every sink has returned.
+ *
+ * <p>Nothing is rendered into the message text of either line. A value inside the message is a
+ * value every saved query has to {@code parse()} back out, which is exactly the field parsing the
+ * structured arguments exist to avoid.
+ */
+public class LogEventReportSink implements ExceptionReportSink {
+
+    /** The summary event's name, which is also the field a query selects on. */
+    public static final String SUMMARY_EVENT = "courtregister_exception_report";
+
+    /** The per-exception event's name. */
+    public static final String EXCEPTION_EVENT = "courtregister_exception";
+
+    private static final Logger LOG = LoggerFactory.getLogger(LogEventReportSink.class);
+
+    private static final String EVENT = "event";
+
+    private static final String RUN_ID = "run_id";
+
+    @Override
+    public ReportSinkName name() {
+        return ReportSinkName.LOG;
+    }
+
+    /**
+     * Writes the summary and one event per exception, and says the log was told.
+     *
+     * @param report the report to write
+     * @return delivered, with the one audience a log has
+     */
+    @Override
+    public DeliveryOutcome deliver(final ExceptionReport report) {
+        final Map<ExceptionKind, Integer> counts = report.counts();
+        LOG.info("The exception report for this run has been built, and its window and its five "
+                        + "counts are the fields of this line.",
+                value(EVENT, SUMMARY_EVENT),
+                value(RUN_ID, report.runId()),
+                value("window_from", report.window().from().toString()),
+                value("window_to", report.window().to().toString()),
+                value("snapshot_at", report.snapshotAt().toString()),
+                value("request_failed", counts.get(ExceptionKind.REQUEST_FAILED)),
+                value("request_late", counts.get(ExceptionKind.REQUEST_LATE)),
+                value("batch_late", counts.get(ExceptionKind.BATCH_LATE)),
+                value("batch_failed", counts.get(ExceptionKind.BATCH_FAILED)),
+                value("notification_failed", counts.get(ExceptionKind.NOTIFICATION_FAILED)));
+
+        for (final ExceptionEntry entry : report.entries()) {
+            LOG.info("One of the exceptions this report found, with everything known about it in "
+                    + "the fields of this line.", fieldsOf(entry, report.runId()));
+        }
+        return DeliveryOutcome.delivered(ReportSinkName.LOG);
+    }
+
+    /**
+     * One entry's fields, in the order the entry declares them, with the inapplicable ones absent.
+     *
+     * @param entry one thing wrong
+     * @param runId the correlation every line of the run carries
+     * @return the structured arguments the encoder emits as fields
+     */
+    private static Object[] fieldsOf(final ExceptionEntry entry, final String runId) {
+        final List<StructuredArgument> fields = new ArrayList<>();
+        fields.add(value(EVENT, EXCEPTION_EVENT));
+        fields.add(value(RUN_ID, runId));
+        fields.add(value("kind", entry.kind().name()));
+        text(fields, "source", entry.source());
+        text(fields, "request_id", entry.requestId());
+        text(fields, "hearing_id", entry.hearingId());
+        text(fields, "hearing_day", entry.hearingDay());
+        text(fields, "batch_id", entry.batchId());
+        text(fields, "notification_id", entry.notificationId());
+        text(fields, "court_centre_id", entry.courtCentreId());
+        text(fields, "register_date", entry.registerDate());
+        text(fields, "status", entry.status());
+        number(fields, "attempts", entry.attempts());
+        text(fields, "reason", entry.reason());
+        fields.add(value("age_seconds", entry.ageSeconds()));
+        return fields.toArray();
+    }
+
+    /**
+     * Adds an identifier, a date or a bounded code, or adds nothing at all.
+     *
+     * @param fields the fields being assembled
+     * @param name   the field's name
+     * @param carried its value, or {@code null} where the kind does not carry it
+     */
+    private static void text(final List<StructuredArgument> fields, final String name,
+            final Object carried) {
+        if (carried != null) {
+            fields.add(value(name, carried.toString()));
+        }
+    }
+
+    /**
+     * Adds a count as a number, so a query can compare it without casting, or adds nothing.
+     *
+     * @param fields the fields being assembled
+     * @param name   the field's name
+     * @param carried its value, or {@code null} where the kind does not carry it
+     */
+    private static void number(final List<StructuredArgument> fields, final String name,
+            final Integer carried) {
+        if (carried != null) {
+            fields.add(value(name, carried));
+        }
+    }
+}
