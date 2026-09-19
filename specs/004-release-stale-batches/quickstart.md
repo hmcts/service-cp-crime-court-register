@@ -9,7 +9,13 @@ sets up. Only the differences are written out.
 
 ## Local dependencies
 
+**Start from a clean store.** `V6` narrows two CHECK constraints, and Postgres refuses to add a
+constraint to a table that already holds a violating row — so a volume carrying a batch failed
+`GENERATION_TIMED_OUT` or completed by `RECONCILER` (anything a pre-004 local run produced) makes the
+migration fail at start-up. Either delete those rows or start clean:
+
 ```bash
+docker compose down -v
 docker compose up -d postgres servicebus-emulator artemis fileservice-postgres wiremock
 ```
 
@@ -110,10 +116,14 @@ What the run line says:
 
 ```text
 event=register_generation_run run_id=... gate=proceed reason=overridden batches=1 requested=1
-generating=1 failed=0 pending=0 deferred=0 rows=2 rows_generating=2 ... released=1 duration_ms=...
+generating=1 failed=0 pending=0 deferred=0 rows=2 rows_generating=2 ...
+released_batches=1 released_registers=2 duration_ms=...
 ```
 
-`released=1` — where the line used to carry `reconciled=`. And in the store:
+`released_batches=1 released_registers=2` — where the line used to carry `reconciled=`. The two
+registers are counted here **and** in `rows=`, because the same run re-batched them: the released
+numbers say what the night had to undo, and are deliberately not part of either total. And in the
+store:
 
 ```sql
 SELECT batch_id, status, failure_reason, completed_by FROM register_batch ORDER BY assembled_at;
@@ -142,7 +152,8 @@ The listener acknowledges it and drops it:
 ```bash
 curl -s localhost:8082/actuator/metrics/courtregister_public_events_ignored_total \
   | jq '.availableTags[] | select(.tag=="reason") | .values'
-# includes "late-acceptance-ignored"
+# includes "terminal-batch" - the reason this increment adds, because before it this drop
+# was a WARN and moved no counter at all
 ```
 
 and the store is unchanged:
@@ -180,11 +191,21 @@ COURTREGISTER_GENERATION_COMPLETION=poll-only ./gradlew bootRun
 ## Reading it in a deployed environment
 
 ```kql
-// batches a night gave up on, per run
+// batches a night gave up on, and the hearings that came back with them
 ContainerLogV2
 | where LogMessage has "event=register_generation_run"
-| extend released = extract(@"released=(\d+)", 1, LogMessage, typeof(int))
-| summarize sum(released) by bin(TimeGenerated, 1d)
+| extend batches   = extract(@"released_batches=(\d+)", 1, LogMessage, typeof(int)),
+         registers = extract(@"released_registers=(\d+)", 1, LogMessage, typeof(int))
+| summarize sum(batches), sum(registers) by bin(TimeGenerated, 1d)
+```
+
+And the other side of it, which used to be invisible:
+
+```kql
+// outcomes arriving for batches that had already ended
+ContainerLogV2
+| where LogMessage has "courtregister_public_events_ignored_total"
+| where LogMessage has "terminal-batch"
 ```
 
 A night with a non-zero `released` is a night something did not hear from systemdocgenerator. A run

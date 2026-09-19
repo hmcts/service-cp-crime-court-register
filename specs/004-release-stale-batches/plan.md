@@ -2,150 +2,181 @@
 
 **Branch**: `004-release-stale-batches` | **Date**: 2026-09-19 | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `/specs/004-release-stale-batches/spec.md`
+**Revised**: 2026-09-19 after two independent design reviews; the changes they forced are marked
+**[review]** throughout and summarised in "What the reviews changed" below.
 
 ## Summary
 
 A batch that is still waiting for its render when the next nightly run begins, and has been waiting
-at least `courtregister.generation.stale-after` (default **30m**), is failed
-`BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN` and its registers are released in the same statement,
+long enough, is failed `BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN` and its registers are released,
 so the run's own assembly puts them in a batch tonight. The pass is the first thing the run does
-after the flag gate and before `store.activeUnbatched()`, and it is the whole of the new behaviour.
+after the flag gate and before `store.activeUnbatched()`.
 
-Everything else in this increment is **removal**. `GenerationReconciler` goes, and with it its
-`@Scheduled`/`@SchedulerLock` timer, its lock name, its cadence read from the grace period, the
-end-of-run `tally.chased(reconciler.reconcile())`, and the entire systemdocgenerator query path:
-`DocumentRenderer.query`, `SystemDocGeneratorClient.query` (the `GET document/{payloadFileId}` call
-and its answer parsing), `StubDocumentRenderer.query` and `domain/DocumentStatus`. The
+**The whole of the release is one fenced store operation [review].**
+`RegisterStore.failAndReleaseStale(scheduledCutoff, manualCutoff)` issues a single statement whose
+`WHERE` clause *is* the staleness rule, fails every matching batch under the new reason and releases
+its registers in the same transaction, and answers with the batches it actually changed. There is no
+read followed by a mark: a batch that stopped being stale in between simply does not match, so there
+is no refused transition to throw out of the run, and there is no window in which a batch is FAILED
+while its registers are still stamped to it — which would be a **lost register**, invisible to every
+later run because `activeUnbatched` means `batch_id IS NULL`.
+
+Everything else is **removal**. `GenerationReconciler` goes, and with it its `@Scheduled`/
+`@SchedulerLock` timer, its lock, its cadence read from the grace period, the end-of-run
+`tally.chased(reconciler.reconcile())`, and the entire systemdocgenerator query path:
+`DocumentRenderer.query`, `SystemDocGeneratorClient.query` (`GET document/{payloadFileId}` and its
+answer parsing), `StubDocumentRenderer.query` and `domain/DocumentStatus`. The
 `courtregister.generation.completion` setting goes with them, because `poll-only` named a way of
-learning an outcome that no longer exists (FR-013). What replaces `GenerationReconciler` is two
-smaller classes that split what it conflated:
+learning an outcome that no longer exists. `BatchFailureReason.GENERATION_TIMED_OUT` and
+`CompletedBy.RECONCILER` go too, from the enums **and** from the schema's bounded lists
+**[review, revised]** — nothing is deployed, so no row anybody must read carries them.
 
-- **`batch/StaleBatchReleaser`** — the pass. Two reads (`pendingSince`, `generatingSince`), one
-  `store.markFailed(..., NOT_COMPLETED_BY_NEXT_RUN, null, null)` per stale batch, a count returned to
-  the run. No schedule, no lock of its own, no HTTP client, no renderer. Called by
-  `RegisterGenerationJob` and by nothing else.
-- **`batch/BatchAgeSweep`** — the three readings the retired timer used to take on its way past:
-  `courtregister_oldest_generating_age`, `courtregister_oldest_pending_age` and
-  `courtregister_oldest_generated_age`, refreshed on its own fixed delay, in every non-command JVM
-  that has the generation half, under **no** lock, settling **nothing**, on a `TaskScheduler` of its
-  own declared by a new `config/BatchSweepConfig`. It is `IntakeAgeSweep`'s
-  shape exactly, for `IntakeAgeSweep`'s reason: a gauge describes the JVM that publishes it, and a
-  reading taken once a night is not a reading (FR-011). It also keeps the "a batch holds a document
-  nobody was told about" WARN the retired pass wrote, which was a report and never an ending.
+Two small things replace what the removal would otherwise take with it:
 
-The run report's `reconciled` becomes `released`, counting batches as `reconciled` did, and the
-`courtregister_generation_reconciled_total` counter becomes
-`courtregister_generation_released_total`. `courtregister.generation.grace-period` becomes
-`courtregister.generation.stale-after` and its default moves from `10m` to `30m`;
-`courtregister.report.batch-generated-within` stops resolving from it and takes its own
-`@DefaultValue("10m")`, so the 07:00 report's threshold does not move as a side effect
-(clarification 5).
+- **`batch/StaleBatchReleaser`** — the pass. Two cutoffs from the clock and the settings, one call to
+  `failAndReleaseStale`, one line per released batch, two counters, two numbers back to the run. No
+  schedule, no lock, no renderer, no HTTP client.
+- **`batch/BatchAgeSweep`** — the three readings the retired timer took on its way past
+  (`courtregister_oldest_generating_age`, `_pending_age`, `_generated_age`) plus the "this batch holds
+  a document nobody was told about" WARN, on its own lockless fixed delay in every non-command JVM
+  that has the generation half. A Micrometer gauge never decays, so leaving these to a once-a-night
+  pass would freeze three readings at whatever the last run saw; the GENERATED-but-unnotified one is
+  the only in-hours signal that a document is owed its e-mails.
 
-Two values are **retired but kept readable**: `BatchFailureReason.GENERATION_TIMED_OUT` and
-`CompletedBy.RECONCILER`. `RegisterBatchRepository` maps both columns back through `valueOf`, and the
-07:00 report reads FAILED batches every morning, so narrowing either vocabulary would make a read of
-a row written before this change throw. They stay in the enums and in the V2 check constraints, gain
-an `isRetired()` statement of their own, and `JdbcRegisterStore` refuses to write either again
-(FR-012). One additive migration, `V6__batch_failure_reason_not_completed.sql`, widens
-`register_batch_failure_reason_chk` for the new reason and narrows nothing.
+Three further consequences the reviews surfaced, each now a requirement:
 
-Nothing about the register document, the inbound message, the file service, notificationnotify or
-the App Configuration flag changes. One consumed contract stops being *called* — systemdocgenerator's
-query endpoint — which is not a contract change and needs nobody's agreement.
+- **A late outcome for an ended batch is not counted today [review].** `DocumentOutcomeSinkImpl`
+  logs the refused transition at WARN and moves no counter; the ignored counter fires for a foreign
+  source, an unknown correlation, a payload mismatch and three envelope faults, and
+  `late-acceptance-ignored` / `late-failure-ignored` belong to the *notifications* counter and are a
+  different thing. This increment adds the bounded reason `terminal-batch`, because after 004 that
+  drop is the guarantee against a double e-mail (FR-008, SC-010).
+- **An operator's batch gets the longer grace [review].** A manual generation holds no run lock and
+  has the whole sixty-minute requesting deadline; a batch it assembled at 17:25 is over thirty
+  minutes old at 18:00. A `system_generated = false` batch is therefore stale only after
+  `max(staleAfter, lockAtMostFor)` (FR-017).
+- **The 07:00 report reports a released batch under its own kind [review].** `ExceptionKind` gains
+  `BATCH_RELEASED`, informational, because the registers of a released batch were re-rendered the
+  same night and reporting them beside real failures sends support after something already fixed
+  (FR-019).
 
-Design authority: the design owner's decision of 2026-09-19, recorded in the spec's Context with its
-four grounds and its one trade.
+The run report's `reconciled` becomes **two** numbers, `released_batches` and `released_registers`
+**[review]**, and `courtregister_generation_reconciled_total` is retired in favour of
+`courtregister_generation_released_batches_total` and `_released_registers_total`.
+`courtregister.generation.grace-period` becomes `courtregister.generation.stale-after` (default `10m`
+→ `30m`), and `courtregister.report.batch-generated-within` stops resolving from it and takes its own
+`@DefaultValue("10m")`.
+
+One additive migration, `V6__stale_batch_release.sql`, widens the failure-reason vocabulary by the
+new value and narrows it and the two attribution constraints by the retired ones.
+
+Nothing about the register document, the inbound message, the file service, notificationnotify or the
+App Configuration flag changes. One consumed contract stops being *called* — systemdocgenerator's
+query endpoint — which is not a contract change.
+
+Design authority: the design owner's decision of 2026-09-19 (spec Context), as revised by the two
+design reviews of the same day (spec Clarifications, second session).
+
+## What the reviews changed
+
+| # | Finding | Effect on this plan |
+|---|---|---|
+| 1 | `failure_reason` is CHECK-constrained to six values in `V2`; the new reason would be rejected by Postgres | `V6` migration, and `SchemaMigrationV2IT` extended to hold the enum and the constraint to each other in both directions |
+| 2 | `markFailed` + `releaseFailed` is two operations with a read between them; a crash or a race strands registers on a terminal batch | The whole pass becomes one fenced statement, `failAndReleaseStale`; concurrent `*IT`s in both race orders; SC-009 |
+| 3 | The refused-transition drop is logged, not counted | New bounded reason `terminal-batch` on `courtregister_public_events_ignored_total`; FR-008, SC-010 |
+| 4 | The retirement's blast radius is wider than the three classes named | Full file inventory below, including the three gauges, the counter, `RunReport`, `RunCorrelation`'s nesting javadoc and sixteen suites |
+| 5 | The report's late-batch threshold derives from the grace period | Its own setting at the previous derived value |
+| 6 → revised | Keep the retired vocabulary as history / **remove it** | Removed from the enums and the schema; the migration's one operational caveat recorded |
+| A | A refused mark inside the run ends the whole night | Fenced statement, and an explicit "no single batch may end the run" requirement |
+| B | `poll-only` would re-render every batch nightly for ever | The setting is deleted |
+| C | Three gauges lose their only publisher and freeze | `BatchAgeSweep` |
+| D | A manual generation spanning 18:00 would have its render orphaned | The longer grace for `system_generated = false` |
+| E | A released batch would be reported as a failure at 07:00 | `ExceptionKind.BATCH_RELEASED` |
+| F | The pass is behind the flag gate, so a flag-OFF night releases nothing | Accepted and stated (FR-018) |
+| G | Further files; and the pass closes the gap the retired reads left for PENDING batches with no payload id | Inventory below; FR-020 and a pinning test |
+| H | Column is `assembled_at`; `grace-period` has no env placeholder; `attributionOf` takes `null` | Reflected throughout; the outside-repo STE item softened to "check, probably nothing" |
+
+**One review claim did not check out and is recorded as such**: `docker/sdg-echo/sdg-echo.py` does
+**not** implement the query endpoint — it only watches WireMock's journal and publishes
+`document-available` onto the topic. The query stub is a WireMock mapping, and that is what is
+deleted. `sdg-echo.py` is untouched.
 
 ## Technical Context
 
 **Language/Version**: Java 25, Spring Boot 4.1 (Gradle wrapper; unchanged from 001–003).
 
 **Primary Dependencies**: **none added, and one use removed.** ShedLock loses a lock (the run keeps
-its own); Spring's `@Scheduled` loses a trigger and gains one (`BatchAgeSweep`'s fixed delay, read as
-a placeholder exactly as `IntakeAgeSweep` reads `courtregister.intake.gauge-refresh`); `RestClient`
-loses a call. Micrometer, `JdbcClient`, Jackson and the rest are untouched.
+its own); `@Scheduled` loses a trigger and gains one; `RestClient` loses a call. Micrometer,
+`JdbcClient` and Jackson are untouched.
 
-**Storage**: PostgreSQL 16. One additive, forward-only migration,
-`V6__batch_failure_reason_not_completed.sql`, which widens one CHECK constraint and adds no column,
-no table and no index. `register_batch_completed_by_shape_chk` is **not** changed: the new reason is
-not generator-attributed, so it falls in that constraint's third arm exactly as the four existing
-unattributed reasons do, and the arm is already written as an equality rather than a list.
+**Storage**: PostgreSQL 16. One additive, forward-only migration, `V6__stale_batch_release.sql`,
+which rewrites three CHECK constraints and adds no column, no table and no index:
+`register_batch_failure_reason_chk` (+ the new reason, − the retired one),
+`register_batch_completed_by_chk` (− `RECONCILER`) and `register_batch_completed_by_shape_chk`
+(its attributed list narrows to `GENERATION_FAILED` alone). The new statement,
+`failAndReleaseStale`, adds no index either: it filters on `status` and the two stamps, which the
+existing in-flight reads already filter on.
 
-**Testing**: as 002 and 003. New and changed suites: `StaleBatchReleaserTest` (unit, Mockito+AssertJ)
-and `BatchAgeSweepTest` (unit, `SimpleMeterRegistry`) replacing `GenerationReconcilerTest`;
-`RegisterGenerationJobTest` gains the ordering, the boundary and the run-line cases;
-`DocumentOutcomeSinkTest` gains the late-outcome-for-a-released-batch cases;
-`SystemDocGeneratorClientTest`, `StubGenerationAdaptersTest`, `GenerationWiringContextTest`,
-`GenerationFailureEndToEndIT`, `support/GenerationLegs`, `support/GenerationStackSupport` and
-`support/GeneratedRegisters` lose their query wiring; `SchemaMigrationV2IT` and `RegisterStoreIT`
-gain the new reason and the write-path refusals; `ConfigurationValidationTest` and
-`ReportPropertiesTest` follow the rename and the un-borrowing; `BatchFailureReasonTest` and
-`BatchStateTest` follow the widened enum; `TelemetryPrivacyTest` drives the two new classes;
-`CliModeConfigTest` and `ReportSchedulingConfigTest` follow the schedule count from four to four (one
-out, one in). One new end-to-end case, in `GenerationFailureEndToEndIT`, carries SC-001 and SC-003:
-a batch left GENERATING overnight is released, re-batched, rendered and notified once, and the
-original batch's late `document-available` moves nothing.
+**Testing**: as 002 and 003, plus **two concurrency `*IT`s** that are new in kind for this repository
+and are the evidence for SC-009: one races `markRequested` against the pass and one races
+`markGenerated` against it, each in both winner orders, each asserting no register is stamped to a
+terminal batch and exactly one notification aggregate exists per key. Otherwise: `StaleBatchReleaserTest`
+and `BatchAgeSweepTest` replace `GenerationReconcilerTest`; `RegisterGenerationJobTest`,
+`DocumentOutcomeSinkTest`, `RegisterStoreIT`, `SchemaMigrationV2IT`, `RegisterBatchRepositoryIT`,
+`RegisterBatchReportReadsIT`, `ExceptionReportServiceTest`, `ReportExceptionsCliTest`,
+`BatchFailureReasonTest`, `BatchStateTest`, `GenerationMetricsTest`, `ConfigurationValidationTest`,
+`ReportPropertiesTest`, `GenerationWiringContextTest`, `CliModeConfigTest`,
+`ReportSchedulingConfigTest`, `PublicEventsHealthIndicatorTest`, `DocumentEventListenerTest`/`IT`,
+`TelemetryPrivacyTest`, `SystemDocGeneratorClientTest`, `StubGenerationAdaptersTest`,
+`GenerationEndToEndIT`, `GenerationFailureEndToEndIT` and the three `support/` classes all follow.
 
 **Target Platform**: AKS, port 4550 (local 8082). After this change the generation half carries
 **one** ShedLock lock (`register-generation`) and **one** cron, plus one lockless fixed delay on a
-scheduler of its own; the context therefore holds four `TaskScheduler` beans where it held three, and
-still four `@Scheduled` methods where it held four — the reconciliation timer out, the batch-age
-sweep in. The report half is untouched.
+scheduler of its own: four `TaskScheduler` beans where there were three, and four `@Scheduled`
+methods where there were four — the reconciliation timer out, the batch-age sweep in.
 
-**Performance Goals**: the pass adds two indexed reads and at most one statement per stale batch to
-the front of a run whose budget is sixty minutes. On a healthy estate it finds nothing. Its worst
-case is bounded by how many court centre days can be in flight at once, which is bounded by the
-number of court centres, and each batch is its own attempt so one refusal does not cost the rest.
-SC-004 (zero calls to systemdocgenerator between runs) is met by construction once the query path is
-deleted: there is no code left that could make one.
+**Performance Goals**: the pass is **one statement** at the front of a run whose budget is sixty
+minutes. SC-004 (zero calls to systemdocgenerator between runs) is met by construction once the query
+path is deleted: no code remains that could make one.
 
-**Constraints**: constitution v3.2.0 — ids before calls (unchanged; this pass writes no id); one
-explicit settlement (not in play; this increment settles no message); bounded reason codes and
-bounded metric labels; `runId` on every line of a scheduled run (Principle VII), which both new
-classes take through `RunCorrelation` — the releaser **adopts** the run's ambient correlation because
-it is called from inside the run and is part of it, and the sweep **opens** its own because it is a
-unit of work in its own right; no PII; no throwable this service did not write attached to a line;
-Flyway additive and forward-only; no AI attribution; TDD red-run convention.
+**Constraints**: constitution v3.2.0 — ids before calls (the pass mints none); bounded reason codes
+and bounded metric labels; `runId` on every line of a scheduled run (Principle VII), which the
+releaser gets by **adopting** the run's ambient correlation and the sweep by **opening** its own; no
+PII; no throwable this service did not write attached to a line; Flyway additive and forward-only; no
+AI attribution; TDD red-run convention, including for deletion.
 
-**Scale/Scope**: five user stories, sixteen functional requirements, eight success criteria. Out of
-scope per the spec: the event path, the notification leg, supersession, the register document, the
-intake half, the 07:00 report's own logic, the cutover lever, historical-row migration, and any REST
-surface.
+**Scale/Scope**: five user stories, twenty functional requirements, ten success criteria.
 
 ### Configuration (this increment)
 
 | Property | Before | After | Note |
 |---|---|---|---|
-| `courtregister.generation.grace-period` | `10m` | **renamed** `courtregister.generation.stale-after`, default `30m` | How long a batch may be in flight before the next run gives up on it. `PropertiesValidator`'s positive-value refusal is kept verbatim under the new key name (FR-010). The old key is **removed, not aliased**: a deployment that still sets it would otherwise read as configured while the value went nowhere, and nothing is deployed yet, so there is nobody to break. |
-| `courtregister.generation.completion` | `event` \| `poll-only` | **removed** | `poll-only` named "learn outcomes from the query API", which no longer exists (FR-013). `PublicEventsConfig` subscribes whenever the generation half is enabled; `PropertiesValidator`'s existing "generation enabled requires the broker configuration" rule drops its `completion == event` conjunct and applies unconditionally. `GenerationProperties.COMPLETION_EVENT` / `COMPLETION_POLL_ONLY` and the record component go with it. |
-| `courtregister.report.batch-generated-within` | unset, resolved to `generation.grace-period` | own `@DefaultValue("10m")` | Clarification 5. `PropertiesValidator.resolvedBatchGeneratedWithin` and the case that refuses an unset limit because the *generation* value was zero both go; the ordinary positive-value refusal under the report's own key stays. `application.yaml`'s long comment at the `courtregister.report` block explaining the borrowing is replaced by the key itself with its own comment. |
-| `courtregister.generation.batch-age-refresh` | — | **new**, `10m` | `BatchAgeSweep`'s fixed delay, read as a placeholder by `@Scheduled(fixedDelayString = ...)` **and** bound on `GenerationProperties`, exactly as `courtregister.intake.gauge-refresh` is written twice for the same reason: a placeholder cannot see a record's `@DefaultValue`. `10m` keeps the readings as current as the retired timer made them (SC-006). Refused at start-up if not positive. |
+| `courtregister.generation.grace-period` | `10m` | **renamed** `courtregister.generation.stale-after`, default `30m` | How long a batch the **schedule** made may be in flight before the next run gives up on it. The positive-value refusal is kept verbatim under the new key. Removed, not aliased: there is no `${...}` placeholder for the old key in this repository, so nothing outside can be relying on one |
+| `courtregister.generation.completion` | `event` \| `poll-only` | **removed** | `poll-only` would mean "learn no outcome and re-render nightly for ever". `PublicEventsConfig` subscribes whenever generation is enabled; `PropertiesValidator`'s broker rule drops its conjunct and applies unconditionally |
+| `courtregister.report.batch-generated-within` | unset, resolved from `generation.grace-period` | own `@DefaultValue("10m")` | The two now answer different questions. `resolvedBatchGeneratedWithin` and the "a zero grace period makes the unset limit refuse" case go |
+| `courtregister.generation.batch-age-refresh` | — | **new**, `10m` | `BatchAgeSweep`'s fixed delay, written twice (placeholder + `@DefaultValue`) for the reason `courtregister.intake.gauge-refresh` is. Refused if not positive |
+| *(no new key for the manual grace)* | — | derived | The manual cutoff is `max(staleAfter, lockAtMostFor)`, both of which are already settings and already validated. A third key would be a third thing to get wrong and a second answer to "how long may a run take" |
 
-Three `application.yaml` comment sites move with the rename: the intake block's line 92 explanation
-of what it does *not* borrow, the notification block's line 336 contrast with "the reconciler's
-grace-period above", and the report block's line 500 paragraph about resolving the rendering limit.
-None of the three is a value; all three are wording that would otherwise describe machinery that no
-longer exists (FR-016).
+Three `application.yaml` comment sites move with the rename (the intake block's "a value borrowed
+from …grace-period", the notification block's "rather than the reconciler's grace-period above", and
+the report block's paragraph about resolving the rendering limit), plus the `completion` block, which
+is deleted.
 
 ## Constitution Check
 
-*GATE: evaluated against constitution v3.2.0 (2026-09-15). Re-check after Phase 1 design; record any
-verdict that moves.*
+*GATE: evaluated against constitution v3.2.0 (2026-09-15). Re-checked after the design reviews; one
+verdict's evidence changed and no verdict moved.*
 
-| # | Principle | Verdict for this increment |
+| # | Principle | Verdict |
 |---|---|---|
-| I | Defect-Fix-First with Characterised Legacy | **PASS.** Neither oracle had a reconciler, a query or a stale-release pass: the function app is the intake half's oracle and never saw a batch, and progression's leg had **no render timeout at all**, so a batch whose event was lost sat in `GENERATED`-less limbo there too. Removing the timeout moves *towards* the oracle, not away from it. **No `doc/DEFECT-FIXES.md` row is added, and no row's claim changes.** One row is touched in one cell: `P2`'s pinning-test list names `GenerationReconcilerTest.a_batch_nothing_can_be_learned_about_should_be_failed_generation_timed_out` for the half of its promise that covers "neither event arrived", and that test is removed with the class. The cell is re-pointed at `StaleBatchReleaserTest.a_batch_still_generating_past_the_minimum_age_should_be_failed_and_released`, which holds the same promise afterwards — a render nobody reported reaches an explicit recorded failure instead of silence — and the row's narrative gains one dated sentence saying the mechanism changed in 004. `RegisteredDefectFixes` and `DifferentialAuditTest` stay green; the differential audit is over the **intake** half and this increment touches none of it. |
-| II | Test-Driven Development | **PASS.** Every task in the Phase-2 list is a red/green pair or a documented exception kind. The red-run convention applies unchanged: a test task lands its compile-safe seams so the recorded red run is a failing assertion. **A subtractive increment needs the convention stated for deletion**, and this plan states it: a task that removes behaviour lands, *first*, the test that asserts the behaviour is gone (no bean of that type on the context, no such method on the port, no request to that path, no such key bound), watches it fail against the code that still has it, and only then deletes. "The suite still compiles" is not a red run, and a deletion whose only evidence is a green suite is a deletion nobody tested. |
-| III | Message-Contract First | **PASS.** **No contract changes.** The inbound `distribution-command.schema.json`, the register document schemas, the file-service changesets, the notificationnotify body and the App Configuration flag are all untouched. systemdocgenerator's `generate-document` command and its two public events are untouched; this service simply **stops calling** its query endpoint, which is the service exercising less of somebody else's contract and is not a cross-team event. The `CourtRegisterService` flag gains no new reader: the pass is inside the run and behind the same single gate read (FR-005). |
-| IV | Canonical JSON In, Typed Models Out | **PASS.** `DocumentStatus` — the one type that modelled somebody else's JSON answer — is deleted. Nothing else in this increment parses anything. The new reason is a bounded enum constant and the released count is an `int`. |
-| V | SOLID with Ports and Adapters | **PASS, and the port surface shrinks.** `DocumentRenderer` goes from two methods to one, which is the port finally naming one capability: "ask for a document". The estate's port count is unchanged at fourteen; no port is added. `StaleBatchReleaser` holds a repository, the store, the metrics, a `Duration` and a `Clock` — no driver, no broker client, no HTTP client — and `BatchAgeSweep` holds a repository, the metrics and a clock and no lock, which is exactly what the design rules already permit `IntakeAgeSweep`. The one duration each takes arrives as a `Duration` rather than as the whole `GenerationProperties`, for the reason the retired class already gave. `RegisterGenerationJob`'s constructor swaps one collaborator for another and its arity does not grow. |
-| VI | Explicit Failure — Nothing Is Ever Swallowed | **PASS.** The pass catches nothing it does not classify. A batch that cannot be failed is logged by class at WARN and the pass moves to the next — the same "every batch is its own attempt" rule the retired class carried, and for the same reason: the read returns oldest first, so a refusal that ended the pass would cost the court centres that have waited longest. A read that fails outright is not absorbed: it leaves the pass, the run reports what it had done and rethrows, which is the run's existing behaviour for a store that goes away. `BatchAgeSweep` takes the design rules' **one absorbed refusal** clause verbatim, as `IntakeAgeSweep` does: a reading that cannot be taken keeps the gauge's last value, is counted, is said at WARN by class, and does not cancel the fixed delay — it is telemetry, and telemetry may not cost a Youth Offending Team its e-mail. Nothing is retried on either path, and a released batch is not re-requested: it is re-rendered because its registers are assemblable again. |
-| VII | Privacy in Telemetry | **PASS.** Every new line names a batch by id, a count, and a bounded reason. No court centre id, no register date, no address and no defendant datum reaches a line or a label. The new metric label value `NOT_COMPLETED_BY_NEXT_RUN` is drawn from the closed enumeration the batches counter already labels by. `runId` is on every line: the releaser adopts the run's ambient correlation (it is part of that run) and the sweep opens one of its own (it is not). No throwable this service did not write is attached anywhere; a caught failure is named by class. `TelemetryPrivacyTest`'s `GenerationLegs` drive covers `StaleBatchReleaser` and `BatchAgeSweep` in place of `GenerationReconciler`. |
-| VIII | Estate Conventions | **PASS.** Gradle, no Maven; PMD and Checkstyle over main and test; the JaCoCo ratchet stays at **0.88 line / 0.85 branch** and is **not** loosened — a subtractive increment that removed covered code and left the ratchet where it was is the one shape in which coverage can silently fall, so the gate is re-run and quoted, not adjusted. Package root unchanged; Conventional Commits with no AI attribution; branch `004-release-stale-batches` merging to `main` the way 002 and 003 did. |
-
-**Post-design re-check (after Phase 1)**: no verdict moved. The one thing Phase 1 sharpened is
-Principle I's evidence: the P2 cell edit is the only `doc/DEFECT-FIXES.md` change in the increment,
-it is named in a task of its own, and the task lands it in the same commit as the test it points at.
+| I | Defect-Fix-First with Characterised Legacy | **PASS.** Neither oracle had a reconciler, a query or a stale-release pass; progression's leg had **no render timeout at all**, so removing the timeout moves towards the oracle. **No row is added and no row's claim changes.** One cell moves: `P2`'s pinning-test list names `GenerationReconcilerTest.a_batch_nothing_can_be_learned_about_should_be_failed_generation_timed_out`, deleted with its class, and is re-pointed at `StaleBatchReleaserTest.a_batch_still_generating_past_the_minimum_age_should_be_failed_and_released`, which holds the same promise — a render nobody reported reaches an explicit recorded failure instead of silence. The differential audit is over the **intake** half and is untouched. |
+| II | Test-Driven Development | **PASS.** Every task is a red/green pair or a documented `[A]`. **Deletion has a red run too**: a removal task lands first the test that asserts the behaviour is *gone* — no bean of that type, no such method on the port, no request to that path, no such key bound, no such annotation — watches it fail, and only then deletes. "The suite still compiles" is not a red run. **[review]** T030's late-outcome case is now a genuine pair rather than a characterisation, because the counter it asserts does not exist yet. |
+| III | Message-Contract First | **PASS.** No contract changes. systemdocgenerator's command and its two public events are untouched; the service stops *calling* its query endpoint, which is exercising less of somebody else's contract. The flag gains no new reader: the pass is inside the run, behind the same single gate read (FR-005, FR-018). |
+| IV | Canonical JSON In, Typed Models Out | **PASS.** `DocumentStatus` — the one type modelling somebody else's JSON answer — is deleted. The pass parses nothing; its inputs are two instants and its output is a list of typed records. |
+| V | SOLID with Ports and Adapters | **PASS, and the port surface shrinks.** `DocumentRenderer` goes from two methods to one. `RegisterStore` gains one method and the estate's port count is unchanged at fourteen. `StaleBatchReleaser` holds the store, the metrics, two `Duration`s and a `Clock`; `BatchAgeSweep` holds a repository, the metrics and a clock and no lock. Neither holds a driver, a broker client or an HTTP client. **[review]** Putting the fence in the store rather than in the pass is the ports rule doing its job: the atomicity is a property of the statement, and the statement belongs where the statements are. |
+| VI | Explicit Failure — Nothing Is Ever Swallowed | **PASS.** Nothing is caught to continue. A batch that ceased to be stale is a row the statement did not match — a number, not a swallowed error. A store that cannot be reached leaves the pass, the run reports what it had done and rethrows, which is the run's existing behaviour. `BatchAgeSweep` takes the design rules' **one absorbed refusal** clause verbatim, as `IntakeAgeSweep` does: the reading is kept at its last value, counted, said at WARN by class, and the delay is not cancelled. **[review]** And the increment *removes* a swallow: the refused-transition drop in `DocumentOutcomeSinkImpl` is logged and counted nowhere today, which is a drop that moves no counter — the exact thing the design rules forbid. |
+| VII | Privacy in Telemetry | **PASS.** Every new line names a batch by id, a count and a bounded code. The new reason and the new ignored reason are closed-enumeration label values. `runId` on every line. `TelemetryPrivacyTest`'s drive covers both new classes. |
+| VIII | Estate Conventions | **PASS.** Gradle; PMD and Checkstyle; the JaCoCo ratchet stays at **0.88 line / 0.85 branch** and is not loosened — a subtractive increment is the one shape in which coverage falls unnoticed, so the gate is re-run and quoted. Conventional Commits, no AI attribution. |
 
 ## Project Structure
 
@@ -153,115 +184,122 @@ it is named in a task of its own, and the task lands it in the same commit as th
 
 ```text
 specs/004-release-stale-batches/
-├── spec.md
-├── plan.md              # This file
-├── research.md          # The six decisions, with what was rejected and why
-├── data-model.md        # V6, the new reason, the two retired values, the state machine after
-├── quickstart.md        # The local walkthrough that proves the release and the re-batch
-├── contracts/
-│   └── README.md        # Nothing vendored and nothing changed; what stops being called
-├── checklists/
-│   └── requirements.md
-└── tasks.md             # Phase-ordered TDD task list (/speckit-tasks)
+├── spec.md          plan.md          research.md       data-model.md
+├── quickstart.md    contracts/README.md                checklists/requirements.md
+└── tasks.md
 ```
 
-### Source Code — additions, changes and deletions
+### Source Code — the full inventory
+
+**New**
 
 ```text
-src/main/java/uk/gov/hmcts/cp/courtregister/
-├── application/
-│   ├── DocumentRenderer.java              # CHANGED: query() removed; one method left
-│   └── (DocumentOutcomeSink, DocumentOutcomeSinkImpl unchanged in behaviour; javadoc
-│        loses its "the reconciler fetches the ones that did not" half)
-├── batch/
-│   ├── GenerationReconciler.java          # DELETED
-│   ├── StaleBatchReleaser.java            # NEW: the pass
-│   ├── BatchAgeSweep.java                 # NEW: the three readings, lockless, own fixed delay
-│   └── RegisterGenerationJob.java         # CHANGED: releaser first, no end-of-run chase,
-│                                          #          released= on the line
-├── adapter/
-│   ├── systemdocgenerator/
-│   │   └── SystemDocGeneratorClient.java  # CHANGED: query() and its answer parsing removed
-│   └── stub/
-│       └── StubDocumentRenderer.java      # CHANGED: query() removed
-├── domain/
-│   ├── DocumentStatus.java                # DELETED
-│   ├── BatchFailureReason.java            # CHANGED: + NOT_COMPLETED_BY_NEXT_RUN,
-│   │                                      #          GENERATION_TIMED_OUT marked retired
-│   ├── CompletedBy.java                   # CHANGED: RECONCILER marked retired
-│   └── RunReport.java                     # CHANGED: reconciled -> released
-├── persistence/
-│   ├── JdbcRegisterStore.java             # CHANGED: new reason joins RELEASING_REASONS;
-│   │                                      #          markFailed refuses a retired value
-│   └── RegisterBatchRepository.java       # UNCHANGED (its valueOf reads are why the two
-│                                          #            retired values stay in the enums)
-├── config/
-│   ├── GenerationProperties.java          # CHANGED: gracePeriod -> staleAfter (30m),
-│   │                                      #          + batchAgeRefresh (10m), - completion
-│   ├── GenerationConfig.java              # CHANGED: reconciler bean -> releaser + sweep beans
-│   ├── SchedulingConfig.java              # CHANGED: job's collaborator swap; scheduler constant
-│   │                                      #          and the single-threaded bean unchanged
-│   ├── PublicEventsConfig.java            # CHANGED: subscribes on generation.enabled alone
-│   ├── PropertiesValidator.java           # CHANGED: rename, completion rule, un-borrowing,
-│   │                                      #          new refresh refusal
-│   ├── GenerationMetrics.java             # CHANGED: reconciled -> released counter
-│   ├── BatchSweepConfig.java              # NEW: the sweep's own TaskScheduler bean and its
-│   │                                      #      BATCH_SWEEP_SCHEDULER constant, in the shape
-│   │                                      #      IntakeSweepConfig already uses
-│   └── ReportProperties.java              # CHANGED: batchGeneratedWithin gains its own default
-└── resources/
-    ├── application.yaml                   # CHANGED: the four sites above
-    └── db/migration/
-        └── V6__batch_failure_reason_not_completed.sql   # NEW, additive
+batch/StaleBatchReleaser.java          the pass
+batch/BatchAgeSweep.java               the three readings, lockless, own fixed delay
+config/BatchSweepConfig.java           the sweep's TaskScheduler bean + BATCH_SWEEP_SCHEDULER
+resources/db/migration/V6__stale_batch_release.sql
 ```
 
-Tests mirror the same list; the file-by-file test matrix is below and the task list names each one.
+**Deleted**
+
+```text
+batch/GenerationReconciler.java        the class, its timer, its lock, its cadence
+domain/DocumentStatus.java             the query's answer
+(and, from other files) DocumentRenderer.query, SystemDocGeneratorClient.query + parsing,
+StubDocumentRenderer.query, GenerationProperties.completion + its two constants,
+GenerationMetrics.GENERATION_RECONCILED + reconciled(), BatchFailureReason.GENERATION_TIMED_OUT,
+CompletedBy.RECONCILER, PropertiesValidator.resolvedBatchGeneratedWithin,
+docker/wiremock's GET document/{id} mapping
+```
+
+**Changed — application and domain**
+
+```text
+application/RegisterStore.java         + failAndReleaseStale(scheduledCutoff, manualCutoff)
+application/DocumentRenderer.java      one method; javadoc loses "two conversations"
+application/DocumentOutcomeSink.java   javadoc loses "the reconciler fetches the ones that did not"
+application/DocumentOutcomeSinkImpl.java  the refused transition is counted [review]
+application/RegisterNotifierService.java  javadoc ~541/566 mention the reconciler
+application/NotificationDisposition.java, NotificationSummary.java   javadoc only
+domain/BatchFailureReason.java         + NOT_COMPLETED_BY_NEXT_RUN, - GENERATION_TIMED_OUT,
+                                       isGeneratorAttributed narrows to GENERATION_FAILED
+domain/CompletedBy.java                - RECONCILER (one constant left, and it stays a type)
+domain/BatchStatus.java, RegisterBatch.java   javadoc naming the reconciler
+domain/RunReport.java                  reconciled -> releasedBatches + releasedRegisters
+domain/ExceptionKind.java              + BATCH_RELEASED [review]
+```
+
+**Changed — batch, persistence, config, resources**
+
+```text
+batch/RegisterGenerationJob.java       releaser first; no end-of-run chase; two released numbers
+batch/RunCorrelation.java              the nesting javadoc names the run and the sweep, not the
+                                       reconciler; the ambient-adoption branch stays live because
+                                       the releaser calls under() from inside the run
+persistence/JdbcRegisterStore.java     failAndReleaseStale; NOT_COMPLETED_BY_NEXT_RUN joins
+                                       RELEASING_REASONS; attributionOf is called with null
+persistence/RegisterBatchRepository.java  generatingSince/pendingSince/generatedSince keep their
+                                       javadoc's claims but lose "the reconciler asks"; the
+                                       PENDING-with-no-payload gap it documents is now covered
+application/ExceptionReportService.java   a FAILED batch under the new reason is BATCH_RELEASED;
+                                       check nameOf(dead) and the "four stages" text for
+                                       exhaustive switches [review]
+config/GenerationProperties.java       staleAfter (30m), batchAgeRefresh (10m), - completion
+config/GenerationConfig.java           reconciler bean -> releaser + sweep
+config/SchedulingConfig.java           job wiring; the scheduler bean and constant unchanged
+config/SchedulingInfrastructureConfig.java, config/CliModeConfig.java, config/ProcessedLogConfig.java,
+config/CourtRegisterProperties.java, config/PublicEventsConfig.java,
+config/PublicEventsHealthIndicator.java, config/PropertiesValidator.java,
+config/GenerationMetrics.java, config/ReportProperties.java
+adapter/publicevents/DocumentEventListener.java   comments only
+resources/application.yaml             the four sites
+docker/wiremock/README.md              loses the query line
+```
+
+**Documentation** (FR-016): `.claude/rules/design_rules.md`, `README.md`,
+`.claude/agents/{spec-validator,software-engineer,qa,code-reviewer}.md`,
+`specs/002-consolidate-progression-leg/quickstart.md`,
+`specs/003-exception-report/quickstart.md`, `doc/DEFECT-FIXES.md` (the P2 cell only).
 
 ## Design Decisions (summary; full rationale in research.md)
 
-1. **The pass is a class, not a method on the job.** `RegisterGenerationJob` already holds the flag
-   gate, the store, the assembler, the service and the metrics; a sixth responsibility inside it
-   would be untestable without the whole run. The releaser is one object with one method returning a
-   count, which is what the run needs from it.
-2. **The release is the failing statement, not a second call** (clarification 1). The new reason
-   joins `JdbcRegisterStore.RELEASING_REASONS`, so `markFailed` carries `releaseRows = true` and the
-   batch and its rows move in one statement, under the supersession order the two existing releasing
-   reasons already use.
-3. **PENDING and GENERATING are one rule, not two.** The retired pass distinguished them because the
-   query answered differently about each. With no query there is nothing to distinguish: both mean
-   "this did not complete before the next run", and one reason says so. This also removes the
-   `RENDER_REQUEST_FAILED`-for-an-unknown-payload ending, which was a verdict derived from a query's
-   silence.
-4. **`GENERATED` is never touched.** It holds a document somebody is owed e-mails about; the retired
-   pass reported it and settled nothing, and the sweep keeps exactly that (FR-002, US2.4).
-5. **The gauges survive the timer** (FR-011). Split out rather than left in the pass, because a pass
-   that runs once a night cannot carry a reading and the run's own lock has no business being held
-   for telemetry.
-6. **The retired vocabulary stays readable and is refused on the write path** (clarification 3).
-   Enforced at `JdbcRegisterStore.markFailed`, which every write goes through, and asserted by a
-   `RegisterStoreIT` case rather than by a comment.
+1. **The pass is a class, not a method on the job** — one object, one method, a count back.
+2. **The release is one fenced statement in the store [review]** — the predicate is the fence, a
+   lost race is zero rows, and there is no read-then-write to be refused.
+3. **PENDING and GENERATING are one rule** — with no query there is nothing to tell them apart, and
+   the rule covers the PENDING batch with no payload id that the retired reads never saw (FR-020).
+4. **`GENERATED` is never touched by the pass** — it holds a document somebody is owed e-mails
+   about; the sweep names it and settles nothing.
+5. **The gauges survive the timer** — split out, lockless, per pod, aggregated with `max()`.
+6. **The retired vocabulary is removed, not kept [review, revised]** — with its one migration caveat.
+7. **An operator's batch gets the longer grace [review]** — derived from two existing settings.
+8. **A released batch is informational at 07:00 [review]** — its registers went out the same night.
 
 ## Test Matrix
 
 | Area | Suite | Kind | What it holds |
 |---|---|---|---|
-| The pass | `batch/StaleBatchReleaserTest` (new) | U | FR-001/002/003: a GENERATING batch past the age is failed `NOT_COMPLETED_BY_NEXT_RUN` with a null attribution and released; a PENDING one likewise; a batch at exactly the age is stale (US2.3); one under the age is untouched (US2.1); a GENERATED batch is untouched at any age (US2.4); the count returned is batches; one batch that refuses leaves the rest attempted (US1.4); the cutoff is read from the injected clock at the moment of the pass. **P2's re-pointed pinning test lives here.** |
-| The readings | `batch/BatchAgeSweepTest` (new) | U | FR-011: the three gauges over a `SimpleMeterRegistry`, zero where there is none, the WARN-and-count for the parked batches, the absorbed read refusal that keeps the last value and does not cancel the delay, the fixed-delay attribute read as the new key's placeholder, and no lock annotation on the method (a reflection case, because an annotation nobody asserts is one a later edit adds). |
-| The run | `batch/RegisterGenerationJobTest` (extended) | U | FR-001 ordering (the releaser is called after the gate and **before** `activeUnbatched`, asserted with an `InOrder`); FR-005 (a skipped run calls it not at all); FR-009 (`released=` on the line, zero when none, and no `reconciled=` anywhere in it); US1.3 (released registers reach the assembler in the same run); a releaser that throws still produces a line and rethrows. |
-| The late outcome | `application/DocumentOutcomeSinkTest` (extended) | U | FR-008/US3: `document-available` and `generation-failed` for a batch FAILED under the new reason each move nothing, notify nobody, and count under `LATE_ACCEPTANCE_IGNORED` / `LATE_FAILURE_IGNORED`. |
-| The store | `persistence/RegisterStoreIT` (extended) | IT | The new reason releases its rows in the same statement as the mark; supersession decides where a re-share exists (US1.5); `markFailed` refuses `GENERATION_TIMED_OUT` and refuses a `CompletedBy.RECONCILER` attribution (FR-012); a row already carrying either still reads back. |
-| The schema | `persistence/SchemaMigrationV2IT` (extended) | IT | V6 admits the new reason, still admits the two retired values, and the shape constraint still refuses an attribution on it. |
-| The enums | `domain/BatchFailureReasonTest`, `domain/BatchStateTest` (extended) | U | Seven reasons, the new one not generator-attributed and marked releasing; the retired set is exactly `{GENERATION_TIMED_OUT}`; the schema's vocabulary and the enum agree in both directions. |
-| The port | `adapter/systemdocgenerator/SystemDocGeneratorClientTest`, `adapter/stub/StubGenerationAdaptersTest` (both reduced) | U/W | FR-006: the client offers one method; WireMock records **no** request to `document/{id}`; the stub has no query to be asked. |
-| The wiring | `config/GenerationWiringContextTest`, `config/CliModeConfigTest`, `config/ReportSchedulingConfigTest` (extended) | U | No `GenerationReconciler` bean on any context; a `StaleBatchReleaser` and a `BatchAgeSweep` where the generation half is on and neither on a command JVM; the generation half carries one `@SchedulerLock` and one cron; `PublicEventsConfig` subscribes on `generation.enabled` alone (FR-013). |
-| The settings | `config/ConfigurationValidationTest`, `config/ReportPropertiesTest` (extended) | U | FR-010: `stale-after` defaults to `30m`, a zero or negative one refuses naming the key; `batch-age-refresh` defaults to `10m` and refuses non-positive; `batch-generated-within` defaults to `10m` **without** reading the generation half (the old resolution case is deleted, not re-pointed); `completion` is no longer a bound key and a context that sets it is not thereby configured. |
-| End to end | `e2e/GenerationFailureEndToEndIT` (extended) | IT | SC-001 and SC-003 in one case: a batch left GENERATING overnight is released, its registers are re-batched, rendered and notified **once**, and the original batch's late `document-available` moves nothing. |
-| Privacy | `config/TelemetryPrivacyTest` (extended) | U | The two new classes on the `GenerationLegs` drive; no identifier but a batch id, no throwable, no free text. |
+| The pass | `batch/StaleBatchReleaserTest` (new) | U | FR-001/002/003/017/020: both cutoffs computed from the clock and the settings; the manual cutoff is the longer of the two; the two numbers returned; one line per batch naming it by id; nothing else read. **P2's re-pointed pinning test lives here.** |
+| The statement | `persistence/RegisterStoreIT` (extended) | IT | The predicate: PENDING by `assembled_at`, GENERATING by `requested_at`, GENERATED never, `system_generated = false` on the longer cutoff, PENDING with a null `payload_file_id` included (FR-020); the mark and the release in one transaction; supersession against a later re-share; `attributionOf` called with `null`; a batch that no longer matches yields zero rows and no error. |
+| Atomicity | `persistence/StaleReleaseConcurrencyIT` (new) | IT | **SC-009 [review]**: the pass raced against `markRequested` and against `markGenerated`, both winner orders, repeated — no register ever stamped to a terminal batch, exactly one live batch per key, exactly one notification aggregate. |
+| The run | `batch/RegisterGenerationJobTest` (extended) | U | The `InOrder` gate → releaser → `activeUnbatched`; a skipped run releases nothing (FR-005/FR-018); `released_batches=` and `released_registers=` on the line, zero when none, `reconciled=` nowhere; a releaser that throws still writes a line and rethrows; **a batch that stops being stale does not stop the run** (FR-003a). |
+| The drop | `application/DocumentOutcomeSinkTest` (extended) | U | **FR-008 / SC-010 [review]**: `document-available` and `generation-failed` for a `NOT_COMPLETED_BY_NEXT_RUN` batch each move nothing, notify nobody, and **move the ignored counter under `terminal-batch`**; a redelivery is counted under the same reason and never as an unknown correlation. |
+| The schema | `persistence/SchemaMigrationV2IT` (extended) | IT | V6 admits the new reason, refuses the retired reason and the retired attribution, and refuses an attribution on the new reason; the enum and the constraint agree in **both** directions for all seven values. |
+| The enums | `domain/BatchFailureReasonTest`, `domain/BatchStateTest` (extended) | U | Six reasons after the swap, the new one releasing and unattributed; `isGeneratorAttributed()` true for `GENERATION_FAILED` alone; `CompletedBy` has one constant. |
+| The report | `application/ExceptionReportServiceTest` (extended), `batch/cli/ReportExceptionsCliTest` (extended) | U | **FR-019 [review]**: a released batch is `BATCH_RELEASED` and not `BATCH_FAILED`; the switch over kinds stays exhaustive; the CSV, the table and the log event all carry the new kind. |
+| The port | `application/DocumentRendererTest` (new, reflection), `adapter/systemdocgenerator/SystemDocGeneratorClientTest`, `adapter/stub/StubGenerationAdaptersTest` | U/W | FR-006: one method on the port; **no** request to `document/{id}` over a whole generation. |
+| The readings | `batch/BatchAgeSweepTest` (new) | U | FR-011: the three gauges, zero where there is none, the parked-batch WARN that settles nothing, the absorbed read refusal, the fixed-delay placeholder, its own scheduler, and **no** `@SchedulerLock`. |
+| The wiring | `config/GenerationWiringContextTest`, `CliModeConfigTest`, `ReportSchedulingConfigTest`, `PublicEventsHealthIndicatorTest` (all extended) | U | No reconciler bean anywhere; a releaser and a sweep where the generation half is on and neither on a command JVM; one lock, one cron, four schedulers; subscription on `generation.enabled` alone. |
+| The settings | `config/ConfigurationValidationTest`, `config/ReportPropertiesTest` (extended) | U | FR-010/FR-014: `stale-after` 30m and its refusal; `batch-age-refresh` 10m and its refusal; `batch-generated-within` 10m without reading the generation half; `completion` unbound. |
+| End to end | `e2e/GenerationFailureEndToEndIT` (extended), `e2e/GenerationEndToEndIT` (follows) | IT | SC-001 and SC-003 in one case: a batch left GENERATING overnight is released, re-batched, rendered and notified **once**, and its own late `document-available` moves nothing and is counted. |
+| Privacy | `config/TelemetryPrivacyTest` (extended) | U | Both new classes on the `GenerationLegs` drive; no identifier but a batch id; no throwable. |
 
 ## Complexity Tracking
 
 | Item | Why it is here | Why the simpler thing was rejected |
 |---|---|---|
-| `BatchAgeSweep`, a new class in a subtractive increment | Three continuous readings would otherwise be taken once a night | Leaving them in the pass makes them a daily sample; deleting them is an unasked-for observability regression; folding them into `IntakeAgeSweep` puts generation-half readings on the intake half's sweep, which runs where the generation half is off |
-| Keeping two enum constants nothing produces | `RegisterBatchRepository` reads both columns through `valueOf`, and the 07:00 report reads FAILED batches | Removing them needs a forward-only migration that narrows a CHECK constraint and still leaves old rows unreadable; the cost lands on the one read support depends on |
-| Removing `courtregister.generation.completion` rather than pinning it to one value | `poll-only` would mean "learn no outcome and re-render every night" | A setting with one legal value is a trap that reads as a choice |
+| A new store method rather than reusing `markFailed` per batch | Atomicity and the fence are the correctness of the feature | A loop of `markFailed` strands registers on a crash and lets one refused transition end the night |
+| `BatchAgeSweep`, a new class in a subtractive increment | Three gauges would otherwise freeze at whatever the last run saw, and a Micrometer gauge never decays | Leaving them in the pass makes them a daily sample under the run's lock; folding them into `IntakeAgeSweep` puts generation readings on a sweep that runs where generation is off |
+| `ExceptionKind.BATCH_RELEASED` | A released batch's registers went out the same night | Reporting it as `BATCH_FAILED` sends support after something already put right, every morning after any lost outcome |
+| Removing `courtregister.generation.completion` rather than pinning it | `poll-only` would re-render everything nightly for ever | A setting with one legal value reads as a choice and is not one |
+| Two released numbers rather than one | A batch is a document and an e-mail; a register is a hearing. The run line already keeps both accounts | One number answers only one of the two questions a night raises |

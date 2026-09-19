@@ -63,15 +63,16 @@ the section named beside it.
   a batch's registers as part of failing it. Two statements leave a window in which the batch is
   FAILED and its registers are still stamped, and a run that stopped in that window would strand them
   exactly as the behaviour this increment removes did. *(FR-003, Assumptions.)*
-- Q: Does the run line's released count count batches or registers? → A: **Batches.** It replaces a
-  count of batches and is read beside counts of batches; how many registers came back is already
-  answerable from the assembly counts on the same line. *(FR-009, Assumptions.)*
+- Q: Does the run line's released count count batches or registers? → A: **Both, as two numbers.**
+  A batch is one document and one e-mail; a register is one hearing's youth defendants, and the run
+  line already keeps both accounts of a night because neither answers the other's question. The
+  released registers are re-batched by the same run and are therefore *also* counted in that night's
+  row totals: the released numbers are a diagnostic beside the night's accounts, not a third sum to
+  add to them. *(FR-009, Assumptions.)*
 - Q: Are the retired timeout reason and the retired completion mechanism removed from the bounded
-  vocabularies, or kept? → A: **Kept as readable history, refused on the write path.** Rows already
-  written carry them and every read of such a row must keep working — the read that would otherwise
-  fail is the 07:00 report's, over the failed batches support most needs to see. Removing them would
-  cost a forward-only migration to narrow the schema and would buy two fewer unproduced values.
-  "Retired" is therefore enforced where writes happen. *(FR-012, Edge Cases, Assumptions.)*
+  vocabularies, or kept? → A: **Removed** — from the enums and from the schema's bounded lists, in
+  the same forward migration that admits the new reason. *(Revised under design review; see the
+  second session below.)*
 - Q: What becomes of the deployment shape that learned outcomes only from the query? → A: **Removed
   outright**, rather than left as a setting with one legal value. After this change it would mean
   "learn no outcome, fail every batch at the next run, render every day twice" — strictly worse than
@@ -83,6 +84,55 @@ the section named beside it.
   questions — "when should support be told a render is late" and "when does a run give up and
   re-batch" — and following the renamed setting would silently move the report's threshold from ten
   minutes to thirty as a side effect of this increment. *(FR-014, Assumptions.)*
+
+### Session 2026-09-19 (design review)
+
+Two independent reviews of the design above found four things the first pass had wrong or missing and
+revised one of its answers. Each is a decision taken by the reviewers and the coordinator, recorded
+here in the same form.
+
+- Q: Is the fail-and-release safe against a crash or a race? → A: **No, as first specified, and it
+  must be one fenced statement.** Today `markFailed` releases rows only for the two reasons in
+  `RELEASING_REASONS`, and `releaseFailed` is a separate operation preceded by its own status read; a
+  crash between a mark and a release leaves registers stamped to a terminal batch and invisible to
+  `activeUnbatched`, whose predicate is `batch_id IS NULL` — a **lost register**, which is the exact
+  failure this increment exists to end. The pass therefore asks the store for **one operation**,
+  `failAndReleaseStale`, whose single statement selects, fails and releases in one transaction and is
+  **fenced on the cutoff predicate itself**: a batch that stopped being stale between any two moments
+  simply does not match, and a lost race is a zero-row result rather than an exception.
+  *(FR-003, FR-017.)*
+- Q: What happens when the pass and the outcome sink race at 18:00? → A: **Both orders are safe, and
+  neither may end the run.** Sink first: the batch is GENERATED, the pass's predicate no longer
+  matches it, nothing happens. Pass first: the sink's mark is refused by the state machine, the
+  listener rethrows, the broker redelivers, and the sink then reads a FAILED batch and drops the
+  outcome — self-healing. Running the pass as a read-then-mark loop would instead let a refused mark
+  throw out of the run and lose the whole night's generation, which is why the fenced statement is a
+  correctness requirement and not a tidiness preference. *(FR-003, Edge Cases.)*
+- Q: Is a late outcome for an already-ended batch really *counted* today? → A: **No — it is logged at
+  WARN and counted nowhere.** The public-events ignored counter fires for a foreign source, an
+  unknown correlation, a payload mismatch and three envelope faults, but not for an outcome the state
+  machine refuses; the `late-acceptance-ignored` and `late-failure-ignored` labels belong to the
+  *notifications* counter and are a different thing entirely. The design rules' "every drop is
+  counted under a bounded reason" is therefore not true of this drop. This increment makes it true
+  with a new bounded reason, because the drop is now the guarantee that stops a double e-mail.
+  *(FR-008.)*
+- Q: May the pass touch a batch an operator asked for by hand? → A: **Not until it has had the full
+  requesting deadline.** A manual generation holds no run lock and is allowed sixty minutes to ask
+  for its renders; one that started at 17:25 would have a batch older than thirty minutes at 18:00,
+  and failing it would orphan a render the manual run is still making and throw its own
+  `markRequested` out. A batch the schedule did not make is therefore stale only after the longer of
+  the minimum age and the run's own lock duration. *(FR-017.)*
+- Q: Should a released batch appear in the 07:00 report as a failure? → A: **No — as its own
+  informational kind.** Its registers were re-rendered the same night, so reporting it beside the
+  batches that genuinely failed would send support after something that has already been put right.
+  *(FR-019.)*
+- Q (revised): the retired timeout reason and the retired completion mechanism. → A: **Removed, not
+  kept.** Nothing is deployed, so no row that anyone must be able to read carries either; keeping two
+  values nothing writes would leave a vocabulary that describes a mechanism that no longer exists.
+  They go from the enums and from the schema's bounded lists in the same forward migration that
+  admits the new reason. The one operational consequence is recorded in Assumptions: that migration
+  refuses to apply to a store that still holds such a row, so a local or test database that does is
+  cleaned or recreated. *(FR-012, Assumptions.)*
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -156,6 +206,13 @@ still stamped, and the assembler passed its court centre day over as it does tod
 4. **Given** a batch in GENERATED that has a document but has not been notified, **When** the run
    starts, **Then** it is not touched by this pass at any age: it holds a document somebody is owed
    e-mails about, and failing it would throw that document away.
+5. **Given** a batch an operator asked for by hand at 17:25, whose renders are still being requested
+   when the schedule fires at 18:00, **When** the run starts, **Then** it is not stale — an
+   operator's batch is given the longer of the minimum age and the run's own lock duration — so the
+   manual run's renders are not orphaned and its own record of having made them is not refused.
+6. **Given** a batch that turns GENERATED in the instant between the run starting and the release
+   being written, **When** the release is written, **Then** it does not match and is not changed, the
+   run counts it as a batch it did not release, and the night goes on to assemble.
 
 ---
 
@@ -247,15 +304,28 @@ with zero and with a negative value and confirm each refusal names the setting.
 
 ### Edge Cases
 
-- **A batch that is stale and whose outcome arrives during the run.** The release and the outcome race.
-  Whichever reaches the batch first wins, because a batch state change is a compare-and-set: either
-  the outcome lands and the batch is GENERATED (and the release finds nothing to fail), or the release
-  lands and the outcome is a late one for a FAILED batch, which moves nothing and is counted. There is
-  no third result and no lost update.
-- **The release cannot be written.** The pass runs before assembly, inside the run, under the run's own
-  lock. A batch that cannot be failed leaves the batches behind it to be failed anyway; a pass that
-  cannot read at all fails the run the way any other unreadable store does — reported on the run line
-  and rethrown, never logged and continued.
+- **A batch that is stale and whose outcome arrives during the run.** Both orders are safe and
+  neither may cost the night. *Outcome first*: the batch is GENERATED, so the pass's own staleness
+  predicate no longer matches it and nothing is written for it — no read of a state that has since
+  moved, and therefore no refused write. *Pass first*: the outcome's mark is refused by the state
+  machine, the listener rethrows, the broker redelivers, and the sink then reads a FAILED batch and
+  drops the outcome under its bounded reason. The second is self-healing, and the redelivery is
+  counted under the late-outcome reason rather than as an unknown correlation.
+- **The release cannot be written.** A batch that ceased to be stale is a batch the operation did not
+  change, which is a number and not an error. A store that cannot be reached at all fails the run the
+  way any other unreachable store does — reported on the run line and rethrown, never logged and
+  continued. What must never happen is one batch's refusal ending a night: the whole reason the
+  operation is fenced rather than looped is that a refused mark in a loop would throw out of the run
+  and nothing would be assembled that night.
+- **A batch an operator asked for by hand while the run is starting.** A manual generation holds no
+  run lock and has the whole requesting deadline to ask for its renders. Its batch is therefore given
+  the longer grace, so the schedule cannot fail a render an operator is still making.
+- **A batch left PENDING with no payload id at all.** The retired reads never saw it and nothing else
+  in the flow revisited it, so its court centre day was deferred at every run for ever. The pass sees
+  it, because staleness is state and age and not progress.
+- **A night the flag says the legacy is live.** Nothing is released, and in-flight batches stay in
+  flight until the flag returns. Accepted, and stated as an accepted cost rather than designed
+  around.
 - **A run started by hand from the operations surface.** The pass belongs to the scheduled run's
   sequence. Whether the on-demand generation command runs it too is answered in the Assumptions
   below, because it decides whether an operator regenerating one court centre can disturb another's
@@ -288,6 +358,13 @@ with zero and with a negative value and confirm each refusal names the setting.
   existing reason, meaning "this batch had not completed by the time the next run began". It MUST
   name no completion mechanism, because nobody outside this service reported anything about it, and
   it MUST be one of the reasons that release a batch's registers.
+- **FR-003a**: The failure and the release MUST be **one atomic operation, fenced on the staleness
+  predicate itself**. No sequence of a read, then a mark, then a release is acceptable: a crash or a
+  concurrent outcome between any two of those leaves registers stamped to a terminal batch, where no
+  later run can see them. A batch that ceased to be stale between the operation being asked for and
+  the row being written MUST simply not be changed, and that MUST be reported as a batch the pass did
+  not release rather than as an error. **No single batch's outcome may end the run**: whatever
+  happens to one batch, the run goes on to assemble.
 - **FR-004**: A batch in flight for less than the minimum age MUST be left exactly as it is, and the
   existing rule that defers a court centre day whose batch is in flight MUST continue to apply to it
   unchanged.
@@ -298,22 +375,30 @@ with zero and with a negative value and confirm each refusal names the setting.
   requests the run itself makes.
 - **FR-007**: The service MUST NOT carry a scheduled reconciliation, nor a lock for one. After this
   change the generation half carries exactly one schedule: the nightly run.
-- **FR-008**: An outcome that arrives for a batch this service has already failed MUST move nothing,
-  MUST send no e-mail, and MUST be counted under a bounded reason — including for the new reason, and
-  including for an outcome that arrives after the registers have been released and re-batched.
-- **FR-009**: The run report MUST state how many batches the run released, in place of the count of
-  outcomes it used to fetch, and MUST state zero rather than nothing where it released none. The
-  released count MUST be a count of batches, matching the count it replaces.
+- **FR-008**: An outcome that arrives for a batch this service has already ended MUST move nothing,
+  MUST send no e-mail, and MUST be **counted under a bounded reason** — including for the new reason,
+  and including for an outcome that arrives after the registers have been released and re-batched.
+  Today that drop is logged and counted nowhere; this increment adds the bounded reason, because the
+  drop is what stops a Youth Offending Team being told twice and "it is in the log index" is not an
+  alerting surface. A redelivery of such an outcome MUST be counted under that same reason and never
+  as an unknown correlation.
+- **FR-009**: The run report MUST state how many **batches** the run released and how many
+  **registers** came back with them, in place of the count of outcomes it used to fetch, and MUST
+  state zero rather than nothing where it released none. The two released numbers are a diagnostic
+  beside the night's accounts and are deliberately **not** a third sum: the registers they count are
+  re-batched by the same run and are therefore already inside that run's row totals.
 - **FR-010**: The minimum age MUST be a configuration setting with a documented default of thirty
   minutes, and start-up MUST be refused, naming the setting, for a zero or negative value.
 - **FR-011**: The readings that say how long the oldest batch awaiting a render, the oldest batch that
   never reached the renderer and the oldest batch holding an unnotified document have been waiting MUST
   continue to be refreshed between nightly runs, on a configurable interval, in every instance that is
   not a command, and MUST settle nothing and hold no lock.
-- **FR-012**: Values that rows already written may carry but nothing will write again — the retired
-  timeout reason and the retired completion mechanism — MUST remain readable. Every existing read MUST
-  keep working over a row that carries them, and the write path MUST refuse to produce either of them
-  again, so that "retired" is enforced where writes happen rather than asserted in a comment.
+- **FR-012**: The bounded vocabularies MUST be left describing only mechanisms that exist. The
+  timeout reason and the completion mechanism that named the retired pass MUST be removed from the
+  enums **and** from the schema's bounded lists in the same forward migration that admits the new
+  reason, so that no vocabulary outlives the thing it names. Nothing is deployed, so no row that
+  anyone must be able to read carries either; a store that does hold one is cleaned before the
+  migration, which is the one operational consequence and is recorded as such.
 - **FR-013**: The deployment shape that learned outcomes only by the query MUST be removed rather than
   left to mean "learn no outcome at all". A deployment with the generation half enabled MUST learn its
   outcomes from the public-event topic, and MUST be refused at start-up if it is not configured to.
@@ -328,18 +413,38 @@ with zero and with a negative value and confirm each refusal names the setting.
   machine, the rule about what the retired pass was allowed to invent, the consumed-contracts table,
   the README's account of the generation half, and the agent scope paragraphs — MUST be updated in the
   same increment, so that no document in this repository describes a query that no longer exists.
+- **FR-017**: A batch an operator asked for by hand MUST be given the whole of the requesting
+  deadline before the pass may touch it: it is stale only after the **longer** of the minimum age and
+  the nightly run's own lock duration. A manual generation holds no run lock and may legitimately
+  still be asking for renders when the schedule fires; failing its batch would orphan a render it is
+  making and refuse its own record of having made it.
+- **FR-018**: On a night the cutover flag says the legacy is live, the pass MUST NOT run, and batches
+  left in flight from an earlier night MUST stay in flight. This is accepted rather than worked
+  around: a service that may not generate may not decide that a batch it would not be allowed to
+  re-render has failed. The 07:00 report's late-batch entry is the signal in the meantime, and the
+  first night the flag is ON again releases them.
+- **FR-019**: The 07:00 exception report MUST report a batch released by this pass under a kind of
+  its own, informational, and **not** among the batches that failed. Its registers were re-rendered
+  the same night, so reporting it as a failure sends support after something already put right.
+- **FR-020**: The pass MUST cover the batch the retired pass could not: one left PENDING with **no**
+  payload id at all, which the retired reads excluded and which therefore sat in flight for ever,
+  deferring its court centre day at every subsequent run. Staleness is decided by state and age, not
+  by how far a batch got.
 
 ### Key Entities *(include if data involved)*
 
 - **Stale batch**: A batch in PENDING or GENERATING whose in-flight stamp is at least the minimum age
-  old, as read at the moment the run starts.
-- **Minimum age**: How long a batch may be in flight before a run gives up on it. One setting,
-  thirty minutes by default.
-- **Release**: Failing a stale batch under the new bounded reason and giving its registers back in the
-  same act, so the batch row remains the audit of what happened and the registers become assemblable.
-- **Released count**: How many batches one run released, carried on the run report and counted.
-- **Historical value**: A bounded value that rows already written may carry and that nothing writes any
-  more — the retired timeout reason and the retired completion mechanism.
+  old — or, where the batch was asked for by hand rather than by the schedule, at least the longer of
+  the minimum age and the run's own lock duration old.
+- **Minimum age**: How long a batch the schedule made may be in flight before a run gives up on it.
+  One setting, thirty minutes by default.
+- **Release**: Failing a stale batch under the new bounded reason and giving its registers back, as
+  one atomic operation fenced on the staleness rule, so the batch row remains the audit of what
+  happened and the registers become assemblable.
+- **Released counts**: How many batches one run released and how many registers came back with them,
+  carried on the run report as two numbers and counted.
+- **Ignored outcome**: An outcome the flow acknowledges and does not apply, carrying a bounded reason
+  that says which kind of not-applied it was.
 
 ## Success Criteria *(mandatory)*
 
@@ -364,13 +469,24 @@ with zero and with a negative value and confirm each refusal names the setting.
 - **SC-008**: No document in this repository refers to a systemdocgenerator query, a grace period or a
   scheduled reconciliation after this increment, and the full quality gates — including the coverage
   ratchet and the differential and consolidation audits — are green.
+- **SC-009**: **No register is ever stranded by the pass.** Over a concurrency test that races the
+  release against both a render acceptance and a document arrival, in both orders and repeatedly,
+  every register ends either stamped to exactly one live batch or active and unbatched — never
+  stamped to a terminal batch — and exactly one notification aggregate exists per court centre and
+  register date.
+- **SC-010**: Every outcome the flow drops moves a counter with a bounded reason, verified by
+  delivering a `document-available` and a `generation-failed` for a released batch and reading the
+  counter before and after. "It is in the log index" is not an alerting surface, and this is the one
+  drop the guarantee against a double e-mail rests on.
 
 ## Out of Scope (this increment)
 
 - Any change to what a batch does once its outcome **is** learned: the event path, the notification
   leg, the supersession rule and the register document are untouched.
-- Any change to the intake half, to the 07:00 exception report's own logic, or to the cutover lever.
-  The report keeps its own late-batch threshold and remains gated by the flag nowhere.
+- Any change to the intake half or to the cutover lever. The 07:00 exception report is touched in
+  exactly two places and no others: it gains the informational kind of FR-019, and its late-batch
+  threshold stops borrowing the renamed setting and keeps its present value. Its schedule, its
+  window, its sinks and its other four kinds are untouched, and it remains gated by the flag nowhere.
 - Any retry of a released batch's render inside the same run beyond the ordinary assembly the release
   makes possible. A released batch is re-rendered because its registers are assemblable again, not
   because anything re-requests the old batch.
@@ -384,8 +500,11 @@ with zero and with a negative value and confirm each refusal names the setting.
 - **The Confluence design document** (*Court Register Service*, CRA space) sections describing the
   grace-period reconciler and the query API: the design owner's own write-up.
 - **The Gliffy diagram**: the dashed service-to-systemdocgenerator query arrow and its step label.
-- **STE and environment values**: the renamed setting's environment variable on the deployment
-  branches, and the removal of the retired completion-mode variable where one is set.
+- **STE and environment values**: *checked, and probably empty.* Both keys are literals in
+  `application.yaml` with no `${...}` placeholder, so this repository defines no environment variable
+  for either. The only thing to do outside is to confirm that no deployment branch sets a raw
+  `courtregister.generation.grace-period` or `courtregister.generation.completion` override; if none
+  does — which is what the absence of a placeholder suggests — there is nothing to change.
 - Nothing in this increment requires a change by another team: no consumed contract changes, and a
   contract this service simply stops calling is not a contract change.
 
@@ -398,23 +517,29 @@ with zero and with a negative value and confirm each refusal names the setting.
 - **The age is measured from the stamp each state already carries**: from when the render was
   requested for a GENERATING batch, and from when the batch was assembled for a PENDING one. Both are
   columns the store already keeps and the retired pass already read.
-- **The release is one statement, not two.** The new reason joins the reasons that release a batch's
-  registers as part of failing it, rather than the run failing the batch and then asking for a
-  separate release. Two statements leave a window in which a batch is FAILED and its registers are
-  still stamped, and a run that stopped in that window would have stranded them exactly as the old
-  behaviour did.
-- **`released` counts batches.** It replaces a count of batches and is read beside counts of batches;
-  how many registers came back is already answerable from the assembly counts on the same line.
+- **The release is one fenced operation, not a loop of two statements.** The new reason joins the
+  reasons that release a batch's registers as part of failing it, and the whole pass is a single
+  statement whose own predicate is the staleness rule. Two statements leave a window in which a batch
+  is FAILED and its registers are still stamped — invisible to every later run, because unbatched
+  means `batch_id IS NULL` — and a loop leaves a refused mark able to throw out of the run.
+- **`released` is two numbers, batches and registers.** Neither answers the other's question, and the
+  run line already keeps both accounts of a night. They are a diagnostic beside those accounts and
+  not a third sum: the registers counted are re-batched by the same run and are already inside its
+  row totals.
 - **The on-demand generation command does not run the pass.** An operator regenerating one court centre
   must not, as a side effect, give up on another court centre's in-flight batch. The pass belongs to
   the scheduled run. If an operator needs a stale batch released, the existing per-batch release the
   operations surface already offers is the supported way, and it is unchanged.
-- **The retired timeout reason and the retired completion mechanism are kept as readable history and
-  refused on the write path.** Nothing is deployed yet, so no production row carries either, but the
-  local and test corpora do and the schema admits them; removing them from the vocabulary would make
-  a read of such a row fail, and the read that would fail is the 07:00 report's. Keeping them readable
-  costs two unproduced values; removing them costs a forward-only migration and a report that cannot
-  read its own history. The schema's bounded lists are widened for the new reason and are not narrowed.
+- **The retired timeout reason and the retired completion mechanism are removed outright**, from the
+  enums and from the schema's bounded lists, in the same forward migration that admits the new
+  reason. Nothing is deployed, so no row anyone must be able to read carries either. **The one
+  operational consequence**: a CHECK constraint cannot be narrowed on a table that still holds a
+  violating row, so the migration refuses to apply to any store — a developer's local volume, a
+  seeded container, a replayed SIT snapshot — that still holds a batch failed under the timeout
+  reason or completed by the retired mechanism. Such a store is cleaned or recreated before the
+  migration runs, and the quickstart says so. This is cheap now and stops being cheap the first
+  evening the service runs in an environment somebody cares about, which is the reason the decision
+  is taken in this increment rather than deferred.
 - **The escape hatch that learned outcomes only by the query is removed outright** rather than left as
   a setting with one legal value. After this change it would mean "learn no outcome, fail every batch
   at the next run, and render every day twice" — strictly worse than refusing to start. A deployment

@@ -30,3 +30,6 @@ provenance, media types, ACLs and verification history for all of them.
 **One local artefact changes and it is not a contract**: the WireMock mapping for
 `GET document/{id}` in `docker/wiremock/` is deleted, because a stub for a call nothing makes would
 let a regression pass unnoticed. `docker/wiremock/README.md` loses its line about it.
+`docker/sdg-echo/sdg-echo.py` is **not** affected: it watches WireMock's request journal and
+publishes `document-available` onto the topic, and implements no query endpoint. (Checked, because
+one design review listed it.)

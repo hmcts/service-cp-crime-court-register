@@ -17,15 +17,17 @@
 ## Requirement Completeness
 
 - [x] No [NEEDS CLARIFICATION] markers remain - the five open points found while writing the spec
-      (the release mechanism, what `released` counts, the fate of the retired vocabulary, the fate
-      of the query-only deployment shape, and where the report's rendering limit gets its value)
-      were each answered under `/speckit-clarify` and recorded in Assumptions
+      were answered under `/speckit-clarify`, and six more were answered under design review (the
+      atomicity of the release, the 18:00 race, whether the late-outcome drop is really counted, the
+      operator's batch spanning 18:00, the 07:00 report's kind, and the reversal of the
+      retired-vocabulary answer). All eleven are in the two Clarifications sessions and in Assumptions
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic
 - [x] All acceptance scenarios are defined
-- [x] Edge cases are identified - including the release/outcome race, the late outcome for a
-      released batch, and the rows that carry values nothing will write again
+- [x] Edge cases are identified - including the release/outcome race in **both** winner orders, the
+      late outcome for a released batch, the operator's batch spanning 18:00, the PENDING batch with
+      no payload id, and the flag-OFF night
 - [x] Scope is clearly bounded - with a separate "outside this repository" list for the design
       document, the diagram and the environment values
 - [x] Dependencies and assumptions identified
@@ -49,3 +51,13 @@
   discoveries for the plan to make: the query-only completion mode cannot survive the query
   (FR-013), and the three in-flight age readings must not go with the timer that took them
   (FR-011).
+- **Re-validated 2026-09-19 after two independent design reviews.** Twelve findings applied; the
+  substantive ones: the fail-and-release becomes one fenced store statement, because a read-then-mark
+  pass strands registers on a crash and lets one refused transition end a whole night's generation
+  (FR-003a, SC-009); the "late outcome is counted" guarantee was **not true today** and is made true
+  with a new bounded reason (FR-008, SC-010); an operator's batch spanning 18:00 gets the longer
+  grace so its render is not orphaned (FR-017); a released batch is informational at 07:00 rather
+  than a failure (FR-019); the pass closes the gap the retired reads left for a PENDING batch with no
+  payload id (FR-020); and the retired-vocabulary answer is reversed to removal, with its one
+  migration caveat recorded (FR-012). One review claim did not check out and is recorded as checked:
+  `docker/sdg-echo/sdg-echo.py` does not implement the query endpoint.
