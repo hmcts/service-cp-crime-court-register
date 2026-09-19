@@ -130,6 +130,16 @@ class ConfigurationValidationTest {
      */
     private static final String HTTP_AUDIT_ENABLED = "audit.http.enabled=true";
 
+    /**
+     * The authorisation half of the same rule, and the fifth key the base runner carries for it.
+     *
+     * <p>{@code cp-auth-rules-filter}'s auto-configuration is conditional on this key being the
+     * literal {@code true} with no {@code matchIfMissing}, so an absent key is a pod that
+     * registers no authorisation filter at all - condition (a) of Principle III undone exactly as
+     * the four keys above would undo condition (b).
+     */
+    private static final String AUTHZ_ENABLED = "authz.http.enabled=true";
+
     private static final String OPENAPI_SPEC = "audit.http.openapi-rest-spec=openapi.yaml";
 
     private static final String AUDIT_HOSTS = "cp.audit.hosts=artemis-audit.internal";
@@ -145,8 +155,8 @@ class ConfigurationValidationTest {
                     .withUserConfiguration(PropertiesTestConfiguration.class)
                     .withPropertyValues(PAYLOAD_IDENTITY_PROPERTY, PROGRESSION_ENDPOINT_PROPERTY,
                             PROGRESSION_IDENTITY_PROPERTY, REFDATA_ENDPOINT_PROPERTY,
-                            REFDATA_IDENTITY_PROPERTY, HTTP_AUDIT_ENABLED, OPENAPI_SPEC,
-                            AUDIT_HOSTS, AUDIT_PORT);
+                            REFDATA_IDENTITY_PROPERTY, AUTHZ_ENABLED, HTTP_AUDIT_ENABLED,
+                            OPENAPI_SPEC, AUDIT_HOSTS, AUDIT_PORT);
 
     /**
      * A deployment with the downstream half switched on and every setting it requires supplied.
@@ -2678,22 +2688,22 @@ class ConfigurationValidationTest {
                 runner.withPropertyValues(NAMESPACE_PROPERTY);
 
         /**
-         * A deployed pod carrying <strong>only</strong> the audit settings named.
+         * A deployed pod carrying <strong>only</strong> the library settings named.
          *
-         * <p>The base runner carries all four and {@code withPropertyValues} can only add to
+         * <p>The base runner carries all five and {@code withPropertyValues} can only add to
          * them, so a case about a key being <em>absent</em> - as opposed to blank, which is a
          * value - has to be built from the same parts without it.
          *
-         * @param auditSettings the audit settings this pod is configured with
+         * @param librarySettings the authorisation and audit settings this pod is configured with
          * @return the runner
          */
-        private ApplicationContextRunner deployedCarrying(final String... auditSettings) {
+        private ApplicationContextRunner deployedCarrying(final String... librarySettings) {
             return new ApplicationContextRunner()
                     .withUserConfiguration(PropertiesTestConfiguration.class)
                     .withPropertyValues(PAYLOAD_IDENTITY_PROPERTY, PROGRESSION_ENDPOINT_PROPERTY,
                             PROGRESSION_IDENTITY_PROPERTY, REFDATA_ENDPOINT_PROPERTY,
                             REFDATA_IDENTITY_PROPERTY, NAMESPACE_PROPERTY)
-                    .withPropertyValues(auditSettings);
+                    .withPropertyValues(librarySettings);
         }
 
         @Test
@@ -2802,7 +2812,8 @@ class ConfigurationValidationTest {
          */
         @Test
         void an_absent_audit_port_refuses_a_deployed_pod() {
-            deployedCarrying(HTTP_AUDIT_ENABLED, OPENAPI_SPEC, AUDIT_HOSTS).run(context -> {
+            deployedCarrying(AUTHZ_ENABLED, HTTP_AUDIT_ENABLED, OPENAPI_SPEC, AUDIT_HOSTS)
+                    .run(context -> {
                 assertThat(context)
                         .as("a key nobody set is a transport with nowhere to connect to")
                         .hasFailed();
@@ -2842,7 +2853,7 @@ class ConfigurationValidationTest {
          */
         @Test
         void an_absent_http_audit_switch_refuses_a_deployed_pod() {
-            deployedCarrying(OPENAPI_SPEC, AUDIT_HOSTS, AUDIT_PORT)
+            deployedCarrying(AUTHZ_ENABLED, OPENAPI_SPEC, AUDIT_HOSTS, AUDIT_PORT)
                     .run(context -> {
                         assertThat(context)
                                 .as("a key nobody set is a filter nobody registered, and the pod"
@@ -2887,6 +2898,57 @@ class ConfigurationValidationTest {
                         .hasFailed();
                 assertThat(context.getStartupFailure())
                         .hasMessageContaining("audit.http.enabled")
+                        .hasMessageContaining("courtregister.operations.enabled");
+            });
+        }
+
+        /**
+         * Condition (a) of Principle III, and the symmetric half of every refusal above.
+         *
+         * <p>FR-045 closed one trap and left its twin open: a deployed pod is refused when it
+         * would serve the endpoints unaudited, and was started when it would serve them to
+         * <em>anybody</em>. {@code AuthzAutoConfiguration} is conditional on
+         * {@code authz.http.enabled} being the literal {@code true}, so with the key off, absent
+         * or spelled the way Spring would relax into true, no authorisation filter is registered
+         * and every {@code /operations/**} endpoint answers a caller with no identity at all.
+         */
+        @Test
+        void operations_enabled_with_no_authorisation_filter_refuses_to_start() {
+            deployed.withPropertyValues("authz.http.enabled=false").run(context -> {
+                assertThat(context)
+                        .as("an endpoint reachable by anyone is worse than the kubectl exec it"
+                                + " replaced, which at least needed exec rights on the namespace")
+                        .hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("authz.http.enabled")
+                        .hasMessageContaining("courtregister.operations.enabled");
+            });
+        }
+
+        @Test
+        void an_absent_authorisation_switch_refuses_a_deployed_pod() {
+            deployedCarrying(HTTP_AUDIT_ENABLED, OPENAPI_SPEC, AUDIT_HOSTS, AUDIT_PORT)
+                    .run(context -> {
+                        assertThat(context)
+                                .as("the filter's own condition carries no matchIfMissing, so a"
+                                        + " key nobody set is a filter nobody registered")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("authz.http.enabled")
+                                .hasMessageContaining("courtregister.operations.enabled");
+                    });
+        }
+
+        @Test
+        void an_authorisation_switch_the_filter_would_not_read_as_true_refuses_to_start() {
+            deployed.withPropertyValues("authz.http.enabled=yes").run(context -> {
+                assertThat(context)
+                        .as("read as true by Spring's conversion and as false by the library's own"
+                                + " condition, which is the reading that decides whether anything"
+                                + " authorises the call")
+                        .hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("authz.http.enabled")
                         .hasMessageContaining("courtregister.operations.enabled");
             });
         }
@@ -2955,8 +3017,8 @@ class ConfigurationValidationTest {
         @Test
         void a_deployed_pod_with_the_operations_api_switched_off_should_start_unaudited() {
             deployed.withPropertyValues("courtregister.operations.enabled=false",
-                    "audit.http.enabled=false", "cp.audit.enabled=false", "cp.audit.hosts=",
-                    "cp.audit.port=0")
+                    "authz.http.enabled=false", "audit.http.enabled=false",
+                    "cp.audit.enabled=false", "cp.audit.hosts=", "cp.audit.port=0")
                     .run(context -> assertThat(context)
                     .as("nothing is served, so there is nothing to audit: the refusal is about"
                             + " endpoints being reachable, not about the settings existing")
@@ -2965,8 +3027,9 @@ class ConfigurationValidationTest {
 
         @Test
         void a_local_pod_serving_the_operations_api_unaudited_should_start() {
-            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, "audit.http.enabled=false",
-                    "cp.audit.enabled=false", "cp.audit.hosts=", "cp.audit.port=0")
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, "authz.http.enabled=false",
+                    "audit.http.enabled=false", "cp.audit.enabled=false", "cp.audit.hosts=",
+                    "cp.audit.port=0")
                     .run(context -> assertThat(context)
                     .as("quickstart.md's local convenience, stated as a test: a laptop has no"
                             + " audit broker and no usersgroups, and the endpoints are reachable"
