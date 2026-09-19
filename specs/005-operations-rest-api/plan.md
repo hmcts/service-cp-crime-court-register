@@ -192,8 +192,9 @@ and `RegisterRecord` are reused as they are. No existing port's signature change
 | `application/RegisterRegenerationServiceTest` | Mockito | the CLI's cases, re-pointed: narrowing, withholding (`key-in-flight`, `outside-the-bound`), the tally, the deadline |
 | `application/OperationsRunLauncherTest` | Mockito | the lock is **taken**; a lock it cannot take records the refusal and does nothing; the run id is minted before the submit |
 | `application/OnDemandExceptionReportServiceTest` | Mockito | the window forms (instant, ISO duration, `<n>d/h/m/s`), the e-mail refusals, the sink selection, "not every sink took it" |
-| `config/OperationsPropertiesTest` | `ApplicationContextRunner` | the defaults; the refusals — operations on with audit off, audit on with no spec key, `cp.audit` with no hosts, a non-positive `supersede-max-age` |
-| `config/AuditComponentScanTest` | `@SpringBootTest` | the exclusion of `uk.gov.hmcts.cp.filter.audit` holds — without it the context does not start (R9) |
+| `config/OperationsPropertiesTest` | `ApplicationContextRunner` | the defaults and the overrides |
+| `config/ConfigurationValidationTest.OperationsRefusals` | `ApplicationContextRunner` | where the refusals live, beside every other startup rule: the operations API on with authorisation or audit off, absent, or spelled in a way the owning library would not read as `true`; a transport naming no broker or no port; audit on with no spec key; a non-positive `supersede-max-age`; a negative lock wait; and the two "should start" counterparts that pin the deployed/local discriminator |
+| `config/AuditComponentScanTest` | `ApplicationContextRunner` over `Application` (test profile) | the exclusion of `uk.gov.hmcts.cp.filter.audit` holds — without it the context does not start (R9) |
 | `config/PublicEventsFactoryTest` | context | the listener container's connection factory is the public-event one, not the audit one (R8) |
 | `api/OperationsAuthzIT` | full context + WireMock | **the real filter**: in the group → served; not in the group → 403; no `CJSCPPUID` → 401; identity service 500 → 403; a forged `CPP-ACTION` → still refused; `/actuator/health` → 200 |
 | `api/OperationsAuditIT` | full context, publisher seam | an audit event per request and per response; it carries the action, the outcome and the caller; it carries **no** request or response body |

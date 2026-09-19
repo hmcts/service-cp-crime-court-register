@@ -186,7 +186,13 @@ refusal in this repository is.
       same round: the two literal-`true` refusals, `an_absent_http_audit_switch_refuses_a_deployed_
       pod`, and `a_deployed_pod_with_the_operations_api_switched_off_should_start_unaudited` —
       which is the half of the guard nothing pinned, because the only cases that switch the
-      operations API off carry no namespace.)
+      operations API off carry no namespace. The two literal-`true` refusals are a red/green pair
+      of their own; `an_absent_http_audit_switch_refuses_a_deployed_pod`,
+      `a_deployed_pod_with_the_operations_api_switched_off_should_start_unaudited` and the
+      transport case about a laptop are **[A] characterisation** - they recorded a green run only,
+      because the production code they pin has its red in T004/T005 and a mutation red for them
+      would have had to be manufactured. They are pins against a later edit, not evidence of this
+      one.)
       (Gate round 2 added five more, all in `ConfigurationValidationTest`. Two are red-then-green
       against a rule that was wrong: `an_audit_transport_whose_hosts_are_all_blank_refuses_to_
       start` (`cp.audit.hosts=,` binds to two blank strings, which the starter's own
@@ -611,6 +617,19 @@ the **real** authorisation filter refuses the people it should.
       (`503 AUDIT_UNAVAILABLE`); the response event is published after it and a failure there is
       logged at ERROR and counted, because there is nothing left to refuse. That second case is the
       residual recorded in Complexity Tracking and is the one an outbox would close.
+      ⚠ **Two JMS beans that now point at the audit broker, carried here from gate round 1.** The
+      audit starter's `auditConnectionFactory` is `@Primary` and its `auditJmsTemplate` is a
+      `JmsTemplate`, so Boot's default `jmsListenerContainerFactory` resolves against the audit
+      connection and no estate `JmsTemplate` is auto-configured at all. It is dormant today:
+      `config/PublicEventsConfig` names its factory by bean name (T007), the only `@JmsListener` in
+      `src/main` is `DocumentEventListener`'s and it names
+      `PublicEventsConfig.LISTENER_CONTAINER_FACTORY`, no class injects an unqualified
+      `JmsTemplate`, and `management.health.jms.enabled` is false. **This phase closes it**, in the
+      file that is open anyway: either define the default listener factory and template against
+      `jmsConnectionFactory` in `PublicEventsConfig`, or add the reflection sweep that refuses any
+      `@JmsListener` in `uk.gov.hmcts.cp` which does not name `LISTENER_CONTAINER_FACTORY`. The
+      invariant is currently true and pinned by nothing, which is how a listener written next year
+      attaches to the audit broker with every test green.
 - [ ] **T046** [US2] `api/OperationsAuthzIT` (new) — **the real filter, wired as deployed**, with
       usersgroups stubbed at the HTTP boundary by WireMock and
       `@DynamicPropertySource` over `authz.http.identity-url-template` (the

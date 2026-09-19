@@ -67,13 +67,19 @@ courtregister:
   # key this profile does set is the embedded switch below, and it is there to keep the promise the
   # header makes rather than to configure a connection.
 
-# The audit starter's own switch, off and off UNCONDITIONALLY - the same reasoning
+# The audit starter's own switch, off in this profile - the same reasoning
 # `courtregister.generation.enabled` above is written as a literal for. `application.yaml` reads
-# CP_AUDIT_ENABLED, and a developer who exported it would otherwise have every context-load test in
-# this profile build an Artemis connection factory for an audit broker that is not there: the
-# library's auto-configuration validates `cp.audit.hosts` and `cp.audit.port` while constructing it,
-# and does so whether or not HTTP auditing is on. This profile promises no broker, and this is one
-# of the two brokers it has to keep that promise about.
+# CP_AUDIT_ENABLED, and without this line every context-load test in this profile would inherit
+# whatever that placeholder resolved to and build an Artemis connection factory for an audit broker
+# that is not there: the library's auto-configuration validates `cp.audit.hosts` and `cp.audit.port`
+# while constructing it, and does so whether or not HTTP auditing is on.
+#
+# What this line does is replace that placeholder's default, and no more. An exported
+# CP_AUDIT_ENABLED reaches Spring as a system-environment property source, which out-ranks every
+# config-data file including this one, so a developer who exported it as `true` would still switch
+# the transport on under this profile. This profile promises no broker; keeping that promise
+# against an exported variable is not something a yaml file can do, and the comment used to say it
+# was.
 cp:
   audit:
     enabled: false
