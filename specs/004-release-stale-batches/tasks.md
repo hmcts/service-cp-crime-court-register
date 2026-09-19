@@ -263,13 +263,31 @@ each of the four below is a blocking prerequisite for every user story.
       other four are this service's own verdict" becomes five, "could not ask for, could not hear
       about, or stopped waiting for". Neither sentence is a rule anything reads; the method's
       expression is untouched and `CompletedBy` is not opened.)
-- [ ] T006 `src/main/resources/db/migration/V6__admit_stale_release_reason.sql` — make T005 green.
+- [x] T006 `src/main/resources/db/migration/V6__admit_stale_release_reason.sql` — make T005 green.
       One statement: `register_batch_failure_reason_chk` is replaced by the same list plus
       `NOT_COMPLETED_BY_NEXT_RUN`, the two retired values still in it. The two attribution
       constraints are **not** touched: the new reason is not generator-attributed, so it falls in
       `register_batch_completed_by_shape_chk`'s third arm's `false = false` case with no edit.
       Additive and forward-only; `V2` is not edited; no column, table or index is added; and because
       it only widens, it applies to any store in any state.
+      (red before the migration, `SchemaMigrationV2IT` over Testcontainers Postgres: 78 tests,
+      3 failures, 0 errors, every one an assertion. `v6_admits_not_completed_by_next_run` and
+      `the_new_reason_refuses_an_attribution` each on "Expecting code not to raise a throwable but
+      caught … violates check constraint \"register_batch_failure_reason_chk\"" — the second on its
+      precondition row, so the refusal it goes on to make is about the attribution alone; and
+      `failure_reason_check_should_name_exactly_the_bounded_reasons`, which reads the live
+      constraint against the enumeration and went red the moment T004 landed the constant, on
+      "Expecting actual: \"CHECK (((failure_reason IS NULL) OR (failure_reason = ANY (ARRAY[… six
+      …]))))\" to contain … NOT_COMPLETED_BY_NEXT_RUN". `v6_still_admits_the_retired_timeout_reason`
+      and `v6_still_admits_the_retired_attribution` were green before and are green after, which is
+      their whole claim: this migration takes nothing away.
+      green: `SchemaMigrationV2IT`, `BatchStateTest` and `BatchFailureReasonTest` together,
+      129 tests, 0 failures, 0 errors — so the two directions of the vocabulary cross-check close on
+      the same commit, `the_failure_reasons_should_be_exactly_the_seven_the_schema_enumerates`
+      against the migration text and
+      `failure_reason_check_should_name_exactly_the_bounded_reasons` against the constraint Postgres
+      actually holds. No deviations: one dropped constraint, one added, the same list plus the new
+      value, and neither attribution constraint opened.)
 
 **Phase close**: `flock … ./gradlew build` green; review gate.
 
