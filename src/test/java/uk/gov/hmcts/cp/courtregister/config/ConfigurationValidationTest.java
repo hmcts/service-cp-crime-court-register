@@ -2704,6 +2704,43 @@ class ConfigurationValidationTest {
         }
 
         /**
+         * Spring's own boolean conversion is wider than the two libraries' conditions.
+         *
+         * <p>{@code StringToBooleanConverter} accepts {@code yes}, {@code on} and {@code 1} as
+         * true; {@code @ConditionalOnProperty(havingValue = "true")} - which is what gates
+         * {@code cp-audit-filter-springboot}'s auto-configuration class and its filter and parser
+         * beans - matches the literal string alone. A deployment that writes {@code yes} therefore
+         * satisfies a validator that reads it through Spring and leaves the library switched off:
+         * the exact pod this refusal exists to stop, started by the refusal itself.
+         */
+        @Test
+        void a_transport_switch_the_audit_library_would_not_read_as_true_refuses_to_start() {
+            deployed.withPropertyValues("cp.audit.enabled=yes").run(context -> {
+                assertThat(context)
+                        .as("the library's own condition matches the literal 'true', so 'yes'"
+                                + " leaves no AuditService on the context while reading as"
+                                + " switched on to anything that asks Spring to convert it")
+                        .hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("cp.audit.enabled")
+                        .hasMessageContaining("courtregister.operations.enabled");
+            });
+        }
+
+        @Test
+        void an_http_audit_switch_the_filter_would_not_read_as_true_refuses_to_start() {
+            deployed.withPropertyValues("audit.http.enabled=on").run(context -> {
+                assertThat(context)
+                        .as("and the same of the HTTP half's own switch, which gates the filter"
+                                + " and the parser by the same literal comparison")
+                        .hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("audit.http.enabled")
+                        .hasMessageContaining("courtregister.operations.enabled");
+            });
+        }
+
+        /**
          * The audit filter finds the OpenAPI document by a <strong>suffix</strong> glob,
          * {@code classpath*:**}{@code /*<value>}. Unset, it globs for {@code *null}, finds nothing
          * and throws during the refresh - naming neither the setting nor the service. Refused here
