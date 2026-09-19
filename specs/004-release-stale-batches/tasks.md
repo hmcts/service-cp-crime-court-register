@@ -82,16 +82,38 @@ enumeration (`failure_reason_check_should_name_exactly_the_bounded_reasons`,
 enum that still holds the retired constants cannot both be green. T007 travels with them because its
 observation is about V6 applying.
 
-Two resequencings are possible and the choice is the design owner's, because the second one moves what
-`data-model.md` says:
+**Re-raised at the review gate on 2026-09-19, and re-escalated with one new finding that settles the
+choice below.** Option 1 is **not viable**. Phase 2's `T009` writes `NOT_COMPLETED_BY_NEXT_RUN`
+through `failAndReleaseStale` and adds it to `RELEASING_REASONS`, and `T008` asserts that write over
+Testcontainers Postgres with V1-V6 applied — so the **admission** of the new reason, the enum
+constant and the widened CHECK alike, must land no later than Phase 2. The **removals** cannot land
+before Phase 5, because `T022` and `T025` delete the only writers of the two retired constants.
+FR-012 and `data-model.md` require the admission and the removals to be *the same forward migration*.
+Those three sentences do not fit together in any ordering of the phases. It is a cycle, not a
+sequencing preference, and the only way out of it changes what FR-012 says — which is the design
+owner's sentence to change and not this tree's.
 
-1. **Move T003-T006 (and T007) to sit after T022 and T025**, leaving Phase 1 as the settings alone.
-   Nothing in `data-model.md` or the spec changes; the vocabulary and the migration land in the same
-   phase as the deletion that frees them, which is where the coupling actually is.
+Two resequencings were possible; one of them no longer is:
+
+1. ~~**Move T003-T006 (and T007) to sit after T022 and T025**, leaving Phase 1 as the settings
+   alone.~~ **Ruled out 2026-09-19**: it puts the admission three phases *after* the first write of
+   the reason it admits, so Phase 2 fails on the missing enum constant before it ever reaches the
+   constraint.
 2. **Split each removal across two migrations**: Phase 1 adds `NOT_COMPLETED_BY_NEXT_RUN` and a V6
-   that admits it, Phase 5 removes the two retired constants and narrows the three constraints in a
-   V7. This contradicts FR-012 and `data-model.md`, both of which say the admission and the removals
-   are *the same forward migration*, so it needs the design owner's word before it is taken.
+   that admits it **beside** the two retired values; Phase 5 removes the two retired constants and
+   narrows all three constraints in a V7. This contradicts FR-012 and `data-model.md`, both of which
+   say the admission and the removals are *the same forward migration*, so it needs the design
+   owner's word before it is taken. It is now the **only** coherent ordering, and the state the
+   increment reaches at the end of Phase 5 is exactly the one `data-model.md` describes; what changes
+   is FR-012's "in the same forward migration" clause and the single-migration heading over
+   `data-model.md`'s SQL.
+
+**What unblocks Phase 1 is one sentence from the design owner** — either taking option 2, with the
+FR-012 wording it needs, or naming a third. Until then Phase 1 is the settings alone, T001-T002 are
+green, and **T003-T007 stay unticked on purpose**: an unticked task is the honest record of a phase
+that cannot be finished yet, and ticking one by writing `EVENT` into `completed_by` where the
+reconciler's query is what learned the outcome would put a false claim in the one column that exists
+to say which mechanism learned it.
 
 **One thing to know before Phase 1 runs anywhere**: T006's migration narrows two CHECK constraints,
 and Postgres refuses to add a constraint to a table holding a violating row. Any local volume,
@@ -155,7 +177,7 @@ each of the four below is a blocking prerequisite for every user story.
       `an_unset_batch_generated_within_resolves_to_the_generation_grace_period` is deleted with
       `resolvedBatchGeneratedWithin` and `an_explicit_batch_generated_within_is_honoured` keeps its
       claim without naming the generation half.)
-- [ ] T003 [P] `domain/BatchFailureReasonTest` (extend) and `domain/BatchStateTest` (extend) — the
+- [ ] T003 **BLOCKED** (the note above Phase 1) [P] `domain/BatchFailureReasonTest` (extend) and `domain/BatchStateTest` (extend) — the
       swapped vocabulary. `the_six_reasons_are_the_bounded_set`;
       `not_completed_by_next_run_is_not_generator_attributed`;
       `not_completed_by_next_run_releases_its_rows`;
@@ -164,14 +186,14 @@ each of the four below is a blocking prerequisite for every user story.
       the schema-vocabulary case extended so the enum and
       `register_batch_failure_reason_chk` are held to each other in **both** directions. Red: the new
       constant does not exist and the two retired ones still do.
-- [ ] T005 [P] `persistence/SchemaMigrationV2IT` (extend) — what V6 must make true.
+- [ ] T005 **BLOCKED** (the note above Phase 1) [P] `persistence/SchemaMigrationV2IT` (extend) — what V6 must make true.
       `v6_admits_not_completed_by_next_run` (a FAILED batch under the new reason with a null
       attribution succeeds); `v6_refuses_the_retired_timeout_reason` and
       `v6_refuses_the_retired_attribution` (deletion reds against the current schema);
       `the_new_reason_refuses_an_attribution`, which
       `register_batch_completed_by_shape_chk` must still enforce after its narrowing. Red: the first
       three fail against V1–V5.
-- [ ] T007 `docker/`, `specs/004-release-stale-batches/quickstart.md` — **[A]** the local stack's
+- [ ] T007 **BLOCKED** (the note above Phase 1) `docker/`, `specs/004-release-stale-batches/quickstart.md` — **[A]** the local stack's
       clean-store step. Record that `docker compose down -v` is required before V6 on any volume
       holding a pre-004 row, and confirm on a real local volume that the migration refuses without it
       and applies with it. No pair: this is an observation about Postgres, not a behaviour this
@@ -206,13 +228,13 @@ each of the four below is a blocking prerequisite for every user story.
       `PropertiesValidator.validateReport` loses its `GenerationProperties` parameter, which nothing
       in it read any more, and `CourtRegisterProperties`'s javadoc reference to the grace period is
       re-pointed.)
-- [ ] T004 `domain/BatchFailureReason.java`, `domain/CompletedBy.java` — make T003 green. Add
+- [ ] T004 **BLOCKED** (the note above Phase 1) `domain/BatchFailureReason.java`, `domain/CompletedBy.java` — make T003 green. Add
       `NOT_COMPLETED_BY_NEXT_RUN` with the javadoc data-model.md gives it; remove
       `GENERATION_TIMED_OUT` and `CompletedBy.RECONCILER`; narrow `isGeneratorAttributed()` to
       `GENERATION_FAILED`. `CompletedBy` stays a type with one constant, and its javadoc says why: it
       is an argument carried through the outcome sink into the store's marks, and a second mechanism
       is exactly the kind of thing that comes back.
-- [ ] T006 `src/main/resources/db/migration/V6__stale_batch_release.sql` — make T005 green. The three
+- [ ] T006 **BLOCKED** (the note above Phase 1) `src/main/resources/db/migration/V6__stale_batch_release.sql` — make T005 green. The three
       constraint rewrites of data-model.md, in that order. Additive and forward-only; `V2` is not
       edited; no column, table or index is added.
 
