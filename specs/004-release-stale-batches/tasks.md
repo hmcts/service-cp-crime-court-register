@@ -142,7 +142,7 @@ each of the four below is a blocking prerequisite for every user story.
       `an_unset_batch_generated_within_resolves_to_the_generation_grace_period` is deleted with
       `resolvedBatchGeneratedWithin` and `an_explicit_batch_generated_within_is_honoured` keeps its
       claim without naming the generation half.)
-- [ ] T003 [P] `domain/BatchFailureReasonTest` (extend) and `domain/BatchStateTest` (extend) — the
+- [x] T003 [P] `domain/BatchFailureReasonTest` (extend) and `domain/BatchStateTest` (extend) — the
       vocabulary **gains** the new reason; nothing is taken away here (the removals are T047/T048,
       after the reconciler that writes the retired values is gone).
       `the_seven_reasons_are_the_bounded_set`;
@@ -152,7 +152,40 @@ each of the four below is a blocking prerequisite for every user story.
       **both** directions over all seven values — which is the assertion that makes T006 and T048
       each provably complete, and the one the implementer correctly said could not be green against
       a half-done vocabulary. Red: the new constant does not exist (seam: the constant).
-- [ ] T005 [P] `persistence/SchemaMigrationV2IT` (extend) — what V6 must make true, and what it
+      (red with T005 on the seam tree: 128 tests, 8 failures, 0 errors, every one an assertion.
+      `the_seven_reasons_are_the_bounded_set` and
+      `the_failure_reasons_should_be_exactly_the_seven_the_schema_enumerates` each on "Expecting
+      actual: [… six reasons …] to contain exactly in any order: [… seven …]";
+      `not_completed_by_next_run_is_not_generator_attributed` on "Expecting Optional to contain a
+      value but it was empty"; `not_completed_by_next_run_releases_its_rows` on "Expecting actual:
+      [PAYLOAD_STORE_UNAVAILABLE, ASSEMBLY_FAILED] to contain exactly in any order" the three;
+      `the_attribution_table_should_classify_every_reason_and_no_others` and its new twin
+      `the_release_table_should_classify_every_reason_and_no_others` on the same shortfall from the
+      other side.
+      **The seam is the constant's name, not the constant.** A test that named
+      `BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN` could not compile before T004, and the
+      convention forbids a compile error as a red run — so both tables are keyed by the constant's
+      *name*, which is what reaches `register_batch.failure_reason`, a metric label and the run
+      report anyway, and a reason can therefore be specified here before it exists. `reasonNamed`
+      looks the constant up in `values()`, so its absence is a failing assertion about the
+      vocabulary.
+      Three deviations, all additive. First, `BatchFailureReasonTest.ATTRIBUTION` is re-keyed from
+      the constant to its name for the reason above, and gains `RELEASES_ROWS` beside it —
+      data-model.md's "releases rows" column, held to `values()` in both directions and cross-checked
+      against `isGeneratorAttributed()` by `an_attributed_reason_should_never_release_its_rows`, an
+      ending somebody else reported having nothing to give back. `JdbcRegisterStore.RELEASING_REASONS`
+      is private and is Phase 2's to change, so the table is the classification's home until
+      `RegisterStoreIT` observes the release over a real batch at T008.
+      Second, `the_failure_reasons_should_be_exactly_the_six_the_schema_enumerates` is renamed for
+      the seventh value and now **reads the migrations** rather than carrying a hand-transcribed
+      copy of the constraint: `schemaFailureReasons()` concatenates `db/migration/V*.sql` in version
+      order, takes the last definition of `register_batch_failure_reason_chk` and extracts its `IN`
+      list. A hand-written list agrees with whatever it was typed from and cannot make T006 provably
+      complete; the constraint's own text can. The case is therefore red from the constant landing
+      until V6 lands.
+      Third, `BatchStateTest` gains four private helpers and the imports they need; nothing in the
+      state machine or the flag-decision nests is touched.)
+- [x] T005 [P] `persistence/SchemaMigrationV2IT` (extend) — what V6 must make true, and what it
       must leave alone. `v6_admits_not_completed_by_next_run` (a FAILED batch under the new reason
       with a null attribution succeeds); `the_new_reason_refuses_an_attribution`, which
       `register_batch_completed_by_shape_chk` must enforce for it exactly as it does for the four
@@ -160,6 +193,19 @@ each of the four below is a blocking prerequisite for every user story.
       `v6_still_admits_the_retired_attribution`, which pin that this migration **widens only** — a
       narrowing here would refuse on a row the reconciler is still writing until Phase 5. Red: the
       first two fail against V1–V5.
+      (red with T003 on the seam tree, in the same 128-test run: `v6_admits_not_completed_by_next_run`
+      on "Expecting code not to raise a throwable but caught … violates check constraint
+      \"register_batch_failure_reason_chk\"", and `the_new_reason_refuses_an_attribution` on the same
+      refusal of its precondition row. The last two are green against V1–V5 and are meant to be:
+      they assert what V6 must **not** change, so a green before and a green after is the whole
+      claim, and a red on either would mean the retired vocabulary had already gone.
+      One deviation, and it is what the task predicted only half of. Written as a bare refusal,
+      `the_new_reason_refuses_an_attribution` **passed** against V1–V5: the attributed row violates
+      the vocabulary constraint *and* the shape constraint, Postgres reported the shape one, and the
+      assertion matched. A case that passes against the code it is written to change proves nothing,
+      so the admitted row was made its explicit precondition — the reason is admitted, therefore the
+      refusal that follows is about the attribution alone — which is both the truer statement and a
+      real red.)
 - [~] T007 **Moved to Phase 5 (T050)** — the local stack's clean-store step. Nothing in Phase 1
       needs it: `V6` widens only and refuses on no existing row, so there is no volume to clean
       before it. The observation belongs to `V7`, which is the migration that narrows, and it travels

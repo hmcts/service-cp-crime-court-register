@@ -838,6 +838,69 @@ class SchemaMigrationV2IT {
                     .hasMessageContaining("register_batch_failure_reason_chk");
         }
 
+        /**
+         * V6's whole effect, asked of the database rather than read off the file.
+         *
+         * <p>The stale-batch pass writes this reason with no attribution: nothing outside this
+         * service reported anything, the run simply stopped waiting. Until V6 the column's
+         * constraint enumerated six values and this row is refused by it - which is the batch the
+         * pass could not fail, on the night it was trying to give a court centre's registers back.
+         */
+        @Test
+        void v6_admits_not_completed_by_next_run() {
+            assertThatCode(() -> inRolledBackTransaction(
+                    insertFailedBatch("NOT_COMPLETED_BY_NEXT_RUN", null)))
+                    .doesNotThrowAnyException();
+        }
+
+        /**
+         * And the half V6 deliberately leaves to the constraint that is already right.
+         *
+         * <p>{@code register_batch_completed_by_shape_chk} is untouched by the migration: the new
+         * reason is not generator-attributed, so it falls in the third arm's {@code false = false}
+         * case and an attribution on it is refused with no edit at all. Asserted rather than
+         * reasoned about, because "no edit was needed" and "no edit was made" are the same diff.
+         *
+         * <p>The admitted row comes first and is the case's precondition rather than a repetition
+         * of the one above: a reason the vocabulary does not admit is refused whatever it carries,
+         * and Postgres names whichever violated constraint it reached, so a refusal on its own
+         * would prove nothing about the attribution at all.
+         */
+        @Test
+        void the_new_reason_refuses_an_attribution() {
+            assertThatCode(() -> inRolledBackTransaction(
+                    insertFailedBatch("NOT_COMPLETED_BY_NEXT_RUN", null)))
+                    .as("the reason is admitted, so what follows is about the attribution alone")
+                    .doesNotThrowAnyException();
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    insertFailedBatch("NOT_COMPLETED_BY_NEXT_RUN", "EVENT")))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("register_batch_completed_by_shape_chk");
+        }
+
+        /**
+         * V6 widens and narrows nothing, and these two cases are what says so.
+         *
+         * <p>The reconciler is still the writer of GENERATION_TIMED_OUT and RECONCILER while this
+         * migration is live: it is not deleted until the phase after next. A V6 that tidied the
+         * retired values away in the same breath would refuse the rows the running service is still
+         * producing, and would refuse to apply at all to any store already holding one. The
+         * narrowing is V7's, after the writer is gone.
+         */
+        @Test
+        void v6_still_admits_the_retired_timeout_reason() {
+            assertThatCode(() -> inRolledBackTransaction(
+                    insertFailedBatch("GENERATION_TIMED_OUT", "RECONCILER")))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        void v6_still_admits_the_retired_attribution() {
+            assertThatCode(() -> inRolledBackTransaction(
+                    insertBatchNaming("GENERATED", "RECONCILER")))
+                    .doesNotThrowAnyException();
+        }
+
         @Test
         void completed_by_check_should_name_exactly_the_two_completion_mechanisms()
                 throws SQLException {

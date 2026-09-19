@@ -3,14 +3,23 @@ package uk.gov.hmcts.cp.courtregister.domain;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.lang.reflect.RecordComponent;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -57,6 +66,79 @@ class BatchStateTest {
         drawn.put(BatchStatus.NOTIFIED_NOBODY, EnumSet.noneOf(BatchStatus.class));
         drawn.put(BatchStatus.FAILED, EnumSet.noneOf(BatchStatus.class));
         return drawn;
+    }
+
+    /** The committed migrations, read as text because a CHECK constraint is text. */
+    private static final Path MIGRATIONS = Path.of("src", "main", "resources", "db", "migration");
+
+    /** Where the failure vocabulary is enumerated for the database, as last rewritten. */
+    private static final Pattern FAILURE_REASON_CHECK =
+            Pattern.compile("register_batch_failure_reason_chk\\s+CHECK");
+
+    /** One quoted code inside an {@code IN} list. */
+    private static final Pattern QUOTED_CODE = Pattern.compile("'([A-Z_]+)'");
+
+    /**
+     * The values {@code register_batch_failure_reason_chk} admits once every committed migration
+     * has been applied - that is, the list the <em>last</em> migration to define it enumerates.
+     *
+     * <p>Read from the migration text rather than from a running database so that the vocabulary
+     * and its constraint can be held to each other in a unit test, which is where a constant is
+     * added. {@code SchemaMigrationV2IT} asks the same question of Postgres, which is the only
+     * party that can answer what a row may actually carry.
+     *
+     * @return the codes the constraint enumerates, in the order it enumerates them
+     * @throws IOException if the migrations cannot be read
+     */
+    private static List<String> schemaFailureReasons() throws IOException {
+        final String migrations = migrationsInVersionOrder();
+        final Matcher definitions = FAILURE_REASON_CHECK.matcher(migrations);
+        int definition = -1;
+        while (definitions.find()) {
+            definition = definitions.end();
+        }
+        assertThat(definition)
+                .as("no migration defines register_batch_failure_reason_chk")
+                .isNotNegative();
+
+        final int list = migrations.indexOf("IN (", definition);
+        assertThat(list)
+                .as("the constraint does not enumerate its values with an IN list")
+                .isNotNegative();
+        final String enumerated = migrations.substring(list, migrations.indexOf(')', list));
+        final Matcher codes = QUOTED_CODE.matcher(enumerated);
+
+        final List<String> admitted = new ArrayList<>();
+        while (codes.find()) {
+            admitted.add(codes.group(1));
+        }
+        return admitted;
+    }
+
+    /** Every migration's text, concatenated in the order Flyway applies them. */
+    private static String migrationsInVersionOrder() throws IOException {
+        try (Stream<Path> migrations = Files.list(MIGRATIONS)) {
+            return migrations
+                    .filter(migration -> migration.getFileName().toString().endsWith(".sql"))
+                    .sorted(Comparator.comparingInt(BatchStateTest::versionOf))
+                    .map(BatchStateTest::textOf)
+                    .collect(Collectors.joining("\n"));
+        }
+    }
+
+    /** The numeric version of {@code V<n>__<description>.sql}. */
+    private static int versionOf(final Path migration) {
+        final String name = migration.getFileName().toString();
+        return Integer.parseInt(name.substring(1, name.indexOf("__")));
+    }
+
+    /** One migration's text; an unreadable migration is a failure to report, not one to absorb. */
+    private static String textOf(final Path migration) {
+        try {
+            return Files.readString(migration);
+        } catch (IOException unreadable) {
+            throw new UncheckedIOException("cannot read " + migration.getFileName(), unreadable);
+        }
     }
 
     /** The unreadable answer once per bounded cause, which is every unreadable answer there is. */
@@ -250,13 +332,24 @@ class BatchStateTest {
         }
 
         /**
-         * Six reasons, each a different investigation. The renderer's own {@code reason} is not one
-         * of them: it is another system's text about a document whose every defendant is a child,
-         * and it is kept in {@code sdg_reason} where the batches counter cannot label a series with
-         * it.
+         * Seven reasons, each a different investigation. The renderer's own {@code reason} is not
+         * one of them: it is another system's text about a document whose every defendant is a
+         * child, and it is kept in {@code sdg_reason} where the batches counter cannot label a
+         * series with it.
+         *
+         * <p><strong>The enumeration and {@code register_batch_failure_reason_chk} are held to each
+         * other, in both directions.</strong> A constant the constraint does not admit is a batch
+         * the store cannot write at the moment it is trying to record a failure; a value the
+         * constraint admits and the enumeration does not is a row {@code valueOf} throws on when the
+         * 07:00 report reads it. Both halves are the same statement made in two places, and the
+         * hand-transcribed list this case used to carry could agree with neither - so the
+         * constraint's own text is read, from the migrations as they stand, rather than copied. That
+         * is what makes a migration that widens the vocabulary provably complete here, and it is why
+         * this case goes red between the constant landing and its migration landing.
          */
         @Test
-        void the_failure_reasons_should_be_exactly_the_six_the_schema_enumerates() {
+        void the_failure_reasons_should_be_exactly_the_seven_the_schema_enumerates()
+                throws IOException {
             assertThat(BatchFailureReason.values())
                     .extracting(Enum::name)
                     .containsExactlyInAnyOrder(
@@ -265,7 +358,15 @@ class BatchStateTest {
                             "RENDER_REQUEST_REJECTED",
                             "GENERATION_FAILED",
                             "GENERATION_TIMED_OUT",
-                            "ASSEMBLY_FAILED");
+                            "ASSEMBLY_FAILED",
+                            "NOT_COMPLETED_BY_NEXT_RUN");
+            assertThat(schemaFailureReasons())
+                    .as("the values register_batch_failure_reason_chk admits after every committed "
+                            + "migration, against the constants that reach that column")
+                    .containsExactlyInAnyOrder(
+                            Arrays.stream(BatchFailureReason.values())
+                                    .map(Enum::name)
+                                    .toArray(String[]::new));
         }
 
         /**
