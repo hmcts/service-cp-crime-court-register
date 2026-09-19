@@ -7,10 +7,12 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 /**
  * The settings the operations API is served under.
  *
- * <p>Bound from the {@code courtregister.operations} keys. Defaults live here as well as in
- * {@code application.yaml} for the reason 001's, 002's and 003's do: the values are visible to the
- * code that depends on them, and a missing configuration file cannot silently change what an
- * operator is allowed to do.
+ * <p>Bound from the {@code courtregister.operations} keys. The defaults live <strong>here</strong>,
+ * and they are the whole of them: {@code application.yaml} carries no {@code courtregister.operations}
+ * block, and gains one only when the task that adds the {@code audit.http.*} settings does. They are
+ * stated on the record rather than only in a file for the reason 001's, 002's and 003's are: the
+ * values are visible to the code that depends on them, and a missing configuration file cannot
+ * silently change what an operator is allowed to do.
  *
  * <p><strong>{@link #enabled} is deployment shape and not a cutover lever</strong> (FR-044). It
  * decides whether the seven endpoints are served, and nothing else; the one lever that decides

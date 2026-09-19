@@ -511,7 +511,10 @@ the **real** authorisation filter refuses the people it should.
       them, plus the `audit.http.*` settings block: `enabled: ${HTTP_AUDIT_ENABLED:false}`,
       `openapi-rest-spec: openapi.yaml` (a **suffix** glob — it must match a file on the classpath
       or start-up fails), `include-payload-body: false` **explicitly** (the library default is
-      `true` and would publish every response body). Green: T042.
+      `true` and would publish every response body), **and the `courtregister.operations` block**:
+      `enabled: ${COURTREGISTER_OPERATIONS_ENABLED:true}`, `supersede-max-age: 30d`,
+      `lock-wait: 0s` — the record's defaults restated in the file the way every other block of this
+      service's own settings is, so a deployment can see and override them. Green: T042.
 - [ ] **T044** [P] [US1] `api/OperationsAuditFactsTest` (new) — the payload carries the action, the
       outcome (status family + bounded reason), `flagOverride` on the regeneration endpoint, the run
       id, and the superseded count on the supersede endpoint; and it carries **no** request or
