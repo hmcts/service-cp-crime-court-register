@@ -101,10 +101,24 @@ This repository carries no design narrative of its own. What it does carry:
   merging, which nothing in this repository can assert — alongside the legacy-repo items C18a, C28
   and C34, the producer-repo item C18b and the SIT→STE replay gate.
 
-This service exposes **no REST API**. The only HTTP surface is Spring Boot Actuator. Operational
-actions (regenerate a date, resend a batch's failed notifications, list batches, review rows recorded
-while the flag was off, pull the exception report for a window) are a CLI baked into the image and
-run with `kubectl exec`.
+This service exposes **no business REST API**: no hearing is submitted to it over HTTP, no register
+is read out of it, no batch is created by a caller. Its HTTP surface is Spring Boot Actuator and,
+since increment 005, the **operations API** under `/operations/**` — the named operator actions
+(read the cutover flag, list a date's batches, review rows recorded while the flag was off,
+regenerate a date, resend a batch's failed notifications, supersede what was recorded before an
+instant, pull the exception report for a window) that replaced the CLI the image used to carry.
+
+Every one of those endpoints is behind two estate starters: `cp-auth-rules-filter`, which evaluates
+drools rules in `src/main/resources/acl/operations-rules.drl` against the caller's usersgroups
+membership (identity from the `CJSCPPUID` header; **"Second Line Support" only**, on every
+endpoint), and `cp-audit-filter-springboot`, which publishes every request and response as an audit
+event to the audit context. They are described in `src/main/resources/openapi.yaml`, which this
+repository owns and versions. Nothing an endpoint answers carries defendant detail, an exception
+message or a value the caller supplied: bounded codes, counts and identifiers only.
+
+**Deployment gate:** because the CLI is removed, a pod is only operable once the ingress route for
+`/operations/**`, the usersgroups path for the identity client and the Artemis audit connection are
+in place in the infrastructure repositories.
 
 ## Prerequisites
 

@@ -42,7 +42,14 @@ private RedisHearingPayloadAdapter adapter;
   success value from a catch block. Catch only to classify and rethrow, or to map to a persisted
   `FAILED` state that is then explicitly dead-lettered
 - The message listener is the only place that converts an exception into a settlement decision
-- No `@ControllerAdvice`, no `ProblemDetail` — there is no HTTP request surface to map errors onto
+- `@ControllerAdvice` and `ProblemDetail` are permitted **for the operations API only** (the `api/`
+  package, `/operations/**`), which is the one HTTP request surface there is to map errors onto.
+  The advice maps a refusal to 409 (or 400 for an argument that will not read) and a failure to 500,
+  each carrying the bounded `reason` the CLI command printed — never exception text, never a
+  fragment of a store's or a far end's words, and never a value the caller supplied. Nowhere else:
+  the message listeners and the scheduled jobs convert an exception into a settlement or a persisted
+  state, not into a response, and an advice reachable from them would be a swallowed exception with
+  a status code on it
 
 ## Messaging
 
@@ -93,6 +100,9 @@ private RedisHearingPayloadAdapter adapter;
 | Port (interface) | capability noun    | `HearingPayloadSource`, `RegisterSubmissionClient` |
 | Adapter          | `*Adapter`         | `RedisHearingPayloadAdapter`, `StubRegisterSubmissionAdapter` |
 | Message listener | `*MessageListener` | `CourtRegisterMessageListener` |
+| Operations controller | `*Controller` | `BatchesController`, `FlagController` |
+| Request record (API) | `*Request`     | `GenerateRegisterRequest` |
+| Response record (API)| `*Response`    | `BatchListingResponse` |
 | Repository       | `*Repository`      | `ProcessedRequestRepository`     |
 | Entity           | domain noun        | `ProcessedRequest`               |
 | Record (in)      | `*Command`         | `DistributionCommand`            |
@@ -110,6 +120,11 @@ private RedisHearingPayloadAdapter adapter;
 - Testcontainers for integration tests (suffix `*IT`): `servicebus-emulator` for the consumer,
   Postgres for the processed-log
 - WireMock for external HTTP stubs (use `dynamicPort()`), asserting exact CPP vendor media types
+- **Operations API**: `@WebMvcTest` slice tests per controller, with the application service mocked
+  and the identity client stubbed — one case that the caller without "Second Line Support" is
+  refused, one that the caller with it is served, and one per refusal the endpoint can answer with.
+  A contract test asserts the controllers against `src/main/resources/openapi.yaml`. No test asserts
+  a response body that carries a value the request supplied
 - **Golden-parity tests**: Jest fixtures copied byte-identical into `src/test/resources/fixtures/`;
   one JUnit twin per Jest case; comparison field-order-insensitive, array-order-sensitive,
   BigDecimal-tolerant; registered deviations asserted explicitly

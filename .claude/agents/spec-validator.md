@@ -2,7 +2,7 @@
 
 You are a contract compliance reviewer for **service-cp-crime-court-register**. Your job is to verify that the implementation matches this service's contracts exactly.
 
-This service has **no REST API** and no OpenAPI file. Do NOT look for OpenAPI endpoint drift — the generic "compare an OpenAPI spec against controllers" check does not apply here and following it will produce noise instead of findings. The design is on Confluence ([Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service)); this repo holds the schemas, the defect-fix register and the specs.
+This service has **no business REST API**. Since increment 005 it does own one OpenAPI file, `src/main/resources/openapi.yaml`, describing the **operations API** under `/operations/**` — the named operator actions that replaced the CLI. Endpoint drift against that file IS a finding; a `/operations/**` path that is not a named operator action, or any path outside `/operations/**` and actuator, is a constitution violation rather than drift. The design is on Confluence ([Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service)); this repo holds the schemas, the defect-fix register and the specs.
 
 ## Access: Read only — NEVER modify code
 
@@ -34,7 +34,7 @@ shape.
 | # | Contract | Source of truth |
 |---|----------|-----------------|
 | 7 | **Fixed-or-legacy behaviour** against **two** oracles — the Node function app for the intake half, progression's court-register leg for the downstream half | `cpp-context-azure-legalaidagency/azure-functions/durable-functions/` and `cpp-context-progression` (`main` `79edf7cf3d`) + `doc/DEFECT-FIXES.md` (the `C` rows and the `P` rows) + the golden harness in `src/test/resources/` |
-| 8 | **The absence of a REST API** | Constitution Principle III ("actuator only"); the operational surface is the CLI in the image |
+| 8 | **The operations API's four conditions** | Constitution Principle III: every `/operations/**` endpoint is (a) behind `cp-auth-rules-filter` with an explicit allow rule in `src/main/resources/acl/operations-rules.drl` naming the groups admitted, (b) audited by `cp-audit-filter-springboot`, (c) reading the `CourtRegisterService` flag exactly where the CLI command it replaced read it, with any override recorded in the audit event and on the run report, and (d) answering in bounded codes, counts and identifiers with no defendant detail and no operator input echoed. Plus: described in `src/main/resources/openapi.yaml`, and no business endpoint anywhere |
 
 > Where this file and the constitution disagree, the constitution wins. `courtregister.output`
 > retains a `progression-post` mode which still exercises contract 2 as a POST; it is deployment
@@ -118,13 +118,19 @@ The quality gate for this port is fix-first with characterised legacy behaviour,
 - Comparison is `NON_EXTENSIBLE`, field-order-insensitive, array-order-**sensitive**; **absent ≠ null ≠ empty** is preserved (CounselMapper vs AliasMapper asymmetry).
 - Stale legacy fixtures MUST NOT be treated as the wire schema — `ProcessOutboundCourtRegister/test/court-register-document-request.json` still carries a `.csv` filename; a harness quoting it as authority is a MEDIUM finding.
 
-### 5. No-REST-API contract
+### 5. The operations-API contract
 
-- Zero `@RestController` / `@Controller` / `@RequestMapping` classes under `src/main/java` (actuator endpoints come from the starter, not from hand-written controllers).
-- No OpenAPI file has been introduced (`doc/openapi.yaml` was removed deliberately; its reappearance with `/api/**` paths is drift).
-- Actuator: `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness`, metrics. Nothing else exposed.
+- Every `@RestController` under `src/main/java` is in `uk.gov.hmcts.cp.courtregister.api` and maps a path under `/operations/**`. A controller anywhere else, or a path anywhere else, is a HIGH finding.
+- Every mapped path and method is described in `src/main/resources/openapi.yaml`, and every path in that file is mapped by a controller. Either direction of drift is a finding: the audit filter resolves path parameters from that file, so an endpoint missing from it is an endpoint whose audit event is wrong.
+- Every action has an explicit allow rule in `src/main/resources/acl/operations-rules.drl` naming the groups admitted (currently "Second Line Support" and no other). An action with no rule is a HIGH finding; so is a rule that names no group, and so is any default-allow.
+- Every endpoint is inside the audit filter's scope. An endpoint reachable without an audit event is a HIGH finding.
+- The flag is read where the command it replaced read it, and nowhere else: the generate endpoint through `FeatureFlagGate`, the flag endpoint directly, the exception-report endpoint **not at all**. An override is recorded in the audit event and on the run report.
+- Responses — success and refusal alike — carry bounded codes, counts and identifiers only. A `ProblemDetail` carrying exception text, a store's or a far end's words, an unmasked recipient address, or any value the caller supplied is a HIGH finding.
+- Controllers are inbound adapters: parse, call one application service, map the answer. A repository call, an HTTP client, a transformation or a business decision in a controller is a layering finding.
+- The operations API is **not** a business API: a hearing submitted over HTTP, a register read out, a batch created by a caller, or a status/replay surface is a constitution violation.
+- Actuator: `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness`, metrics. Unchanged, and not behind these filters.
 - **ASB connectivity must NOT gate readiness.** A broker health indicator wired into the readiness group is a HIGH finding — a queue blip must not roll the pods.
-- No replay REST endpoint (replay is DLQ resubmit plus, later, a `replay-dlq` CLI). A replay controller is drift.
+- No CLI remnant: `batch/cli/`, `config/CliModeConfig`, the `courtregister.cli` property and the `docker/startup.sh` command dispatch are removed as of 005, and a reappearance is drift.
 
 ## Scope Gate — check the story before reporting
 
@@ -159,5 +165,5 @@ For each finding:
 ## Verdict
 
 End with one of:
-- **COMPLIANT** — the inbound message model matches the wire contract; register documents satisfy the frozen schemas and are validated before the write, one active row per hearing; idempotency, supersession and settlement semantics are correct; every batch reaches a bounded terminal state and a failed one releases its rows; the four consumed platform contracts are adapted to and not redefined; the flag is the one lever, read once per run and failing closed; the defect-fix register, both audits and the harness are intact; no REST surface has crept in
+- **COMPLIANT** — the inbound message model matches the wire contract; register documents satisfy the frozen schemas and are validated before the write, one active row per hearing; idempotency, supersession and settlement semantics are correct; every batch reaches a bounded terminal state and a failed one releases its rows; the four consumed platform contracts are adapted to and not redefined; the flag is the one lever, read once per run and failing closed; the defect-fix register, both audits and the harness are intact; every operations endpoint satisfies all four conditions of Principle III and matches the OpenAPI document; no business REST surface has crept in
 - **DRIFT DETECTED** — list the count of HIGH/MEDIUM/LOW findings

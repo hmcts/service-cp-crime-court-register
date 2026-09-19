@@ -6,20 +6,28 @@ Every non-trivial code change MUST follow this cycle:
 Contract → Failing test → Write → Code Review (agent) → QA (agent) → Contract Validate (agent) → Fix → Ship
 ```
 
-- **Contract:** this service has **no OpenAPI spec**. Its contracts are:
+- **Contract:** this service has three contracts:
   1. the **inbound ASB message schema** — the JSON schema under `src/main/resources/contracts/`
-     (semantics documented on the Confluence design page), and
-  2. the **outbound `add-court-register` command** — owned by `cpp-context-progression`
-     (`progression_command_api.raml` + the `courtRegisterDocument/*` schemas frozen at
-     `criminal-court-public-model` 17.103.13, `additionalProperties: false`), consumed here, never
-     redefined here.
+     (semantics documented on the Confluence design page);
+  2. the **register document** — the `courtRegisterDocument/*` schemas frozen at
+     `criminal-court-public-model` 17.103.13, `additionalProperties: false`, vendored under
+     `src/main/resources/contracts/progression/` and enforced at the write into the register store
+     (in 001 these were progression's `add-court-register` command; progression no longer receives
+     it, and the schemas stay frozen); and
+  3. the **operations API** — `src/main/resources/openapi.yaml`, owned here since increment 005 and
+     versioned with the repo. It describes every `/operations/**` endpoint, its body, its success
+     shape and every bounded `reason` it refuses under; a contract test asserts the controllers
+     against it, and `cp-audit-filter-springboot` reads it at runtime to resolve path parameters, so
+     an endpoint missing from it is an endpoint whose audit event is wrong.
 
-  Update the contract documentation BEFORE writing code that changes either shape. A change to the
-  outbound body is a change to somebody else's contract: raise it with Progression first, never
-  widen it locally. A defect fix that changes an outbound component's shape is a cross-team event
-  (constitution Principle III).
+  Update the contract documentation BEFORE writing code that changes any of the three shapes. A
+  change to the register document is a change to somebody else's frozen contract: never widen it
+  locally. A defect fix that changes a register-document component's shape is a cross-team event
+  (constitution Principle III). A new `/operations/**` path that is not a named operator action is a
+  **constitution amendment**, not a spec.
 - **Contract Validate:** run the `spec-validator` agent to check the code against the message
-  contract and the contract and defect-fix gates (below) — not against an OpenAPI file.
+  contract, the frozen register schemas, the OpenAPI document, and the contract and defect-fix gates
+  (below).
 
 Loop repeats until ALL agents return PASS / COMPLIANT.
 
@@ -30,6 +38,8 @@ Loop repeats until ALL agents return PASS / COMPLIANT.
 | New / modified Java class                       | Markdown / docs only           |
 | New / modified test class or golden fixture     | Whitespace / import only       |
 | Message-contract or schema change               | CLAUDE.md and rule updates     |
+| New / modified `/operations/**` endpoint        |                                |
+| `openapi.yaml` or `acl/*.drl` change            |                                |
 | Flyway migration                                | README changes                 |
 | ASB consumer / settlement configuration         |                                |
 | Dockerfile changes                              |                                |
@@ -73,6 +83,11 @@ A change ships only when all applicable gates are green:
 6. **No-swallowed-exception gate.** No empty catch, no catch-and-continue, no success returned from
    a catch block. Reviewers reject on sight.
 7. **No-PII gate.** No defendant PII (names, addresses, DOB, ASN, URN) at `info` level or above.
+8. **Operations-API gate.** Every `/operations/**` endpoint satisfies all four conditions of
+   constitution Principle III — authorised by an explicit drools allow rule, audited, reading the
+   flag exactly where the command it replaced read it (override recorded in the audit event and on
+   the run report), and answering in bounded codes with no operator input echoed. An endpoint with
+   no rule, no OpenAPI entry, or a `ProblemDetail` carrying exception text fails the gate.
 
 ## Agent Definitions
 
@@ -105,10 +120,18 @@ A change ships only when all applicable gates are green:
 
 ### spec-validator (Read only)
 - Spawned as sub-agent with Read-only tools
-- **There is no OpenAPI spec to validate against.** Instead it checks:
+- Checks:
   - the inbound message record and its validation against the JSON schema under `src/main/resources/contracts/`
-  - the outbound `add-court-register` body against the vendored progression-owned schemas (no extra fields —
-    the command is `additionalProperties: false`)
+  - the register document against the vendored frozen schemas (no extra fields —
+    `additionalProperties: false`)
+  - **the operations API against its four conditions** (constitution Principle III), in place of the
+    old "absence of REST" check: every `/operations/**` endpoint is described in
+    `src/main/resources/openapi.yaml` and matches its controller; every action has an explicit allow
+    rule in `src/main/resources/acl/operations-rules.drl` naming the groups admitted, and no action
+    is reachable without one; every endpoint is inside the audit filter's scope; the flag is read at
+    exactly the point the CLI command it replaced read it and an override is recorded in the audit
+    event and on the run report; and every response — success and refusal alike — carries bounded
+    codes, counts and identifiers only, with no operator input echoed back
   - settlement discipline: one explicit settlement on every listener path
   - state-machine completeness: every terminal path persists a status before settling
   - golden fixtures present and referenced; the defect-fix register consistent with the assertions (every row's pinning test exists and passes)

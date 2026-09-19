@@ -45,9 +45,9 @@ You are a senior Spring Boot developer on the Crime Common Platform (MOJ/HMCTS),
 - **The register document's contract is frozen** (`additionalProperties: false`, `criminal-court-public-model` 17.103.13) — never add a field to it. It is validated and then **written into this service's own store**, superseding any earlier register for the hearing at the write; the `progression-post` mode that still POSTs it keeps the 001 rules (media type `application/vnd.progression.add-court-register+json`, `CJSCPPUID`, **202 and nothing else is success**, retry on connect/IO/5xx/429/408 with bounded `Retry-After`).
 - **Four consumed platform contracts** — systemdocgenerator `generate-document` + its two public events, notificationnotify `send-email-notification`, the file-service table schema (write-only, changesets 001–006), and the `CourtRegisterService` App Configuration flag. Adapt to them; never redefine one, never add a field, never migrate the file service here.
 - **One cutover lever.** The flag is read once per run, uncached, and fails closed. Never add a second switch — not a Helm value, not a static-data patch, not an endpoint — that decides which implementation is live. `courtregister.output` and `courtregister.generation.enabled` are deployment shape, not levers.
-- **`public.event` is a shared topic on a shared durable subscription every replica attaches to.** Acknowledge and drop what is not ours (never nack), count every drop under a bounded reason, and never let a CLI JVM subscribe.
+- **`public.event` is a shared topic on a shared durable subscription every replica attaches to.** Acknowledge and drop what is not ours (never nack), count every drop under a bounded reason, and never bring up a second subscription for an operations call.
 - **A path that drops something moves a counter.** "It is in the log index" is not an alerting surface, and a bounded reason on a counter is what a dashboard can show.
-- **No REST API.** Actuator only. Do not add controllers, do not introduce an OpenAPI file, do not build a replay endpoint — operational actions are the CLI baked into the image.
+- **No business REST API.** The operations API under `/operations/**` is the named operator actions that replaced the CLI, and nothing else: no hearing submitted over HTTP, no register read out, no batch created by a caller, no replay endpoint. Every endpoint is (a) behind `cp-auth-rules-filter` with an explicit allow rule naming the groups, (b) audited by `cp-audit-filter-springboot`, (c) reading the `CourtRegisterService` flag exactly where the CLI command it replaced read it — with any override recorded in the audit event and on the run report — and (d) answering in bounded codes, counts and identifiers with no defendant detail and no caller input echoed. Controllers live in `uk.gov.hmcts.cp.courtregister.api`, are inbound adapters (parse, call one application service, map the answer), and every one of them is described in `src/main/resources/openapi.yaml`. A new path needs a constitution amendment, not a spec.
 - **ASB health must never gate readiness** — keep broker indicators out of the readiness health group.
 - No hardcoded queue names, URLs, ports or secrets — typed `@ConfigurationProperties`.
 
@@ -89,7 +89,7 @@ Note `-Werror` is on for `JavaCompile` — warnings are build failures. After si
 - [ ] Ids written down before the call that will be answered against them
 - [ ] Every drop or absorbed refusal moves a bounded counter
 - [ ] No second cutover lever introduced
-- [ ] No REST controller added
+- [ ] No business REST endpoint added; every operations endpoint has its OpenAPI entry, its allow rule, its audit coverage and a bounded-code response
 - [ ] No AI attribution anywhere
 
 ## Workflow

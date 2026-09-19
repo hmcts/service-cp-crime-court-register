@@ -36,14 +36,24 @@ Jira: none — this work carries no ticket; it lands on plain `main`
 | **Design (authoritative)** | Confluence — [Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service) (CRA space). This repo carries **no** design narrative; do not create `doc/*_DESIGN.md`, `SOLUTION_BRIEF.md`, `API_CONTRACTS.md` or `CHANGELOG.md` here |
 | Defect-fix register | `doc/DEFECT-FIXES.md` |
 | Constitution | `.specify/memory/constitution.md` |
-| Specifications | `specs/001-court-register-port/` (complete), `specs/002-consolidate-progression-leg/` (complete), `specs/003-exception-report/` (complete) |
+| Specifications | `specs/001-court-register-port/` (complete), `specs/002-consolidate-progression-leg/` (complete), `specs/003-exception-report/` (complete), `specs/005-operations-rest-api/` (current) |
+| Operations API (owned) | `src/main/resources/openapi.yaml`; authorisation rules `src/main/resources/acl/operations-rules.drl` |
 | Inbound message schema | `src/main/resources/contracts/distribution-command.schema.json` |
 | Register contract (frozen) | `src/main/resources/contracts/progression/` (+ `PROVENANCE.md`) |
 
 ## Message-Contract Rule
-This service exposes NO REST API (actuator only). Its contracts are:
+This service exposes **no business REST API**: nothing about intake, recording, batching, rendering
+or notification is reachable over HTTP. Its HTTP surface is actuator plus the **operations API**
+under `/operations/**` — the named operator actions that replaced the CLI in increment 005, each
+behind `cp-auth-rules-filter` ("Second Line Support" only, identity from the `CJSCPPUID` header) and
+`cp-audit-filter-springboot`, and each described in `src/main/resources/openapi.yaml`. Its contracts
+are:
 - **Inbound**: the `courtregister.requests` queue message (`distribution-command.schema.json`,
   `additionalProperties: false`), agreed with `cpp-context-results` (the publisher).
+- **Operations API**: `src/main/resources/openapi.yaml`, owned here and versioned with the repo; a
+  contract test asserts the controllers against it, and `cp-audit-filter-springboot` reads it at
+  runtime to resolve path parameters. Adding a path that is not a named operator action needs a
+  constitution amendment (Principle III).
 - **Register document**: the `courtRegisterDocument/*` schemas frozen at
   `criminal-court-public-model` 17.103.13 and vendored under `src/main/resources/contracts/progression/`,
   enforced at the write into the register store. Progression no longer receives it.
@@ -54,7 +64,8 @@ This service exposes NO REST API (actuator only). Its contracts are:
   pinned to changesets 001–006); the App Configuration flag `CourtRegisterService`.
 
 Contract changes are cross-team events. The spec-validator agent checks contract compliance, the
-defect-fix register, and the absence of REST after implementation.
+defect-fix register, and the operations API's four conditions (authorised, audited, flag-gated where
+the command it replaced was, and answering in bounded codes) after implementation.
 
 ## Fix-First Rule
 The legacy pipeline (the function app for the intake half, progression's leg for the downstream
@@ -66,9 +77,12 @@ constitution Principle I.
 ## Cutover Rule
 One lever: the App Configuration flag `CourtRegisterService`. Never add a second switch (Helm value,
 static-data patch, endpoint) that decides which implementation is live. The nightly job reads the
-flag once per run with no cache and does nothing when it is off or unreadable; the regeneration CLI
-refuses without `--ignore-flag`. Never run generation with notification enabled against production
-data outside cutover.
+flag once per run with no cache and does nothing when it is off or unreadable; `POST
+/operations/batches/generate` reads the same flag at the same point and refuses `FLAG_OFF` unless
+the body carries `ignoreFlag: true`, with the override recorded in the audit event and on the run
+report. An operations endpoint that lets a person do what a CLI command did is not a second lever;
+an endpoint that decided which implementation is live would be. Never run generation with
+notification enabled against production data outside cutover.
 
 ## Deployment
 - **CI/CD**: GitHub Actions → **ADO Pipeline 460** → images to **`crmdvrepo01.azurecr.io`** →
@@ -107,8 +121,8 @@ data outside cutover.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/003-exception-report/plan.md` (with `research.md`, `data-model.md`,
+`specs/005-operations-rest-api/plan.md` (with `research.md`, `data-model.md`,
 `quickstart.md` and `contracts/` alongside it); the completed increments are
-`specs/001-court-register-port/` and
-`specs/002-consolidate-progression-leg/`.
+`specs/001-court-register-port/`, `specs/002-consolidate-progression-leg/` and
+`specs/003-exception-report/`.
 <!-- SPECKIT END -->

@@ -1,7 +1,97 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 3.1.0 → 3.2.0
+Version change: 3.2.0 → 4.0.0
+Bump rationale: MAJOR - Principle III is redefined (2026-09-19, design owner).
+                The principle read "This service has **no business REST API**"
+                and closed with "The only HTTP this service exposes is Spring
+                Boot Actuator. There is no OpenAPI file, and adding a business
+                endpoint requires a constitution amendment, not just a spec.
+                Operational actions are a CLI in the image." That last sentence
+                is what increment 005 invalidates: the six operations commands
+                become seven REST endpoints under `/operations/**` and the CLI
+                is removed from the image altogether.
+
+                What is kept is the part that was load-bearing. There is still
+                **no business REST API**: nothing about intake, recording,
+                batching, rendering or notification is reachable over HTTP, and
+                the register flow stays message-driven end to end. What is
+                added is a narrow, named exception for an **operations API**,
+                and it is an exception with four conditions rather than a
+                permission: every endpoint MUST be behind
+                `cp-auth-rules-filter` with an explicit allow rule naming the
+                groups admitted, MUST be audited by
+                `cp-audit-filter-springboot`, MUST read the
+                `CourtRegisterService` flag exactly where the CLI command it
+                replaces read it (with any override recorded in the audit event
+                and on the run report), and MUST answer under Principle VII -
+                bounded codes, counts and identifiers only, no defendant
+                detail, no operator input echoed back.
+
+                Why it is MAJOR rather than MINOR: an endpoint was previously
+                forbidden and is now permitted, the CLI the principle named as
+                the operational surface ceases to exist, and the repo gains an
+                OpenAPI document as a **third contract it owns** - three
+                statements of existing practice that a reader of 3.2.0 would
+                get wrong. The rationale is the estate's: this is the shape
+                every other CPP Spring Boot service has (the reference
+                implementation is `service-cp-crime-hearing-results-validator`),
+                and the two estate starters give the authentication and the
+                audit trail that `kubectl exec` never could - an exec'd command
+                runs as the pod, leaves no audit event, and is available to
+                anyone with exec rights on the namespace rather than to a named
+                user group.
+
+                Callers: the usersgroups group "Second Line Support" only, on
+                every endpoint, identity taken from the `CJSCPPUID` header.
+
+Modified sections (this amendment): Principle III - the opening sentence, a new
+"The operations API" clause with its four conditions, the OpenAPI document added
+to the owned contracts, and the closing "only HTTP ... is Actuator / operations
+are a CLI" bullet replaced; the "One lever" bullet refined (an operations
+endpoint that lets a person do what a CLI command did is not a second lever, and
+no endpoint may decide which implementation is live); Technology Stack & Deployment
+"HTTP surface" bullet rewritten; the Increments list gains 005. Principles I, II,
+IV-VIII unchanged in substance - Principle VII is not amended but is now cited by
+Principle III's condition (d), which adds no obligation it did not already carry.
+
+Templates / guidance reviewed:
+  - .specify/templates/plan-template.md      ✅ compatible - the Constitution
+      Check block is filled per feature; 005's plan gates on III as redefined.
+  - .specify/templates/spec-template.md      ✅ compatible - behaviour is still
+      expressed as message in, record/command out; the operations API is
+      expressed as operator actions with their refusals, not as a business flow.
+  - .specify/templates/tasks-template.md     ✅ compatible - no change.
+  - .specify/templates/checklist-template.md ✅ compatible - no change.
+  - CLAUDE.md                                ✅ updated in this commit - the
+      Message-Contract Rule names the operations API and its OpenAPI document,
+      the Cutover Rule loses the "regeneration CLI" sentence, the Key
+      Documentation and Setup pointers name specs/005.
+  - .claude/rules/design_rules.md            ✅ updated in this commit - the
+      opening paragraph, the `api/` inbound adapter in the package structure,
+      the Cutover Rule's wording about endpoints, and "Out of Scope - Any REST
+      API" replaced by the four conditions.
+  - .claude/rules/workflow.md                ✅ updated in this commit - the
+      contract section gains the OpenAPI file as the third owned contract and
+      the spec-validator checks the operations API against the four conditions
+      instead of "the absence of REST".
+  - .claude/rules/technical-rules.md         ✅ updated in this commit -
+      `@ControllerAdvice` and `ProblemDetail` permitted for the operations API
+      only, and nowhere else.
+  - .claude/agents/software-engineer.md      ✅ updated in this commit.
+  - .claude/agents/code-reviewer.md          ✅ updated in this commit.
+  - .claude/agents/spec-validator.md         ✅ updated in this commit - gate 8
+      is now "the operations API's four conditions" rather than "the absence of
+      a REST API".
+  - .claude/agents/qa.md                     ✅ updated in this commit - MockMvc
+      slice tests are required for the operations API rather than forbidden.
+  - README.md                                ✅ updated in this commit - the
+      "exposes no REST API" paragraph.
+  - doc/DEFECT-FIXES.md                      ✅ deliberately untouched: replacing
+      an operational surface is not a deviation from a legacy oracle, and
+      neither the function app nor progression's leg had one.
+
+Previous amendment (3.1.0 → 3.2.0):
 Bump rationale: MINOR - increment 003 adds an obligation without changing a
                 principle's wording (2026-09-15). Two things this service must
                 now do that it did not have to before:
@@ -28,10 +118,10 @@ Bump rationale: MINOR - increment 003 adds an obligation without changing a
                 No principle's wording changes. Principles I to VIII stand
                 exactly as amended at 3.1.0.
 
-Modified sections (this amendment): the Increments list only - 003
+Modified sections (at 3.2.0): the Increments list only - 003
 "exception-report" added, 002 moved from "current" to "complete".
 
-Templates / guidance reviewed:
+Templates / guidance reviewed (at 3.2.0):
   - .claude/rules/design_rules.md   ✅ updated in the same increment (T074): the
       07:00 leg and the sweep in the two-legs diagram, the fourteen ports, the
       two new permitted repository readers, and the statement that the report is
@@ -283,6 +373,16 @@ Modified principles (this amendment):
     DEFECT-FIXES.md with polarity flipped.
 
 History:
+  - 4.0.0 (2026-09-19) Principle III redefined: the "no REST at all, operations
+    are a CLI" clause becomes "no *business* REST API, and an operations API
+    only under four conditions - authorised, audited, flag-gated where the
+    command it replaces was, and answering under Principle VII". The OpenAPI
+    document joins the contracts this service owns; the CLI is removed by
+    increment 005.
+  - 3.2.0 (2026-09-15) Increment 003's obligations: the report's output is
+    structured events, and `runId` covers a third scheduled run.
+  - 3.1.0 (2026-09-10) Principle VII's correlation rule made satisfiable for a
+    scheduled run, which gains a `runId` of its own.
   - 2.0.3 (2026-09-01) Principle VIII static-analysis reality sync: PMD pinned
     and both PMD tasks in `check` (test sources on their own ruleset),
     `checkstyleTest` enabled with a suppressions file, coverage report ordered
@@ -447,7 +547,14 @@ second one protects the register — in both senses.
 
 ### III. Message-Contract First (NON-NEGOTIABLE)
 
-This service has **no business REST API**. Its contracts are:
+This service has **no business REST API**. The register flow is message-driven
+end to end, and nothing about intake, recording, batching, rendering or
+notification is exposed over HTTP: no hearing is submitted to it, no register is
+read out of it, no batch is created by a caller. What HTTP this service serves
+is Spring Boot Actuator and the **operations API** defined below, which does
+what an operator could already do and nothing else.
+
+Its contracts are:
 
 - **Inbound** — the message on `courtregister.requests`:
   `{ source, requestId, hearingId, hearingDay, sharedTime, eventType,
@@ -462,6 +569,15 @@ This service has **no business REST API**. Its contracts are:
   and what any future consumer of the store will read. Changing it is a
   contract change under this principle even though no other context now
   receives it.
+- **The operations API** — `src/main/resources/openapi.yaml`, the third
+  contract this service **owns** and versions with the repo. It describes every
+  `/operations/**` endpoint, its request body, its success shape and every
+  bounded `reason` it can refuse under. It is a contract in the full sense of
+  this principle: a contract test asserts the controllers against it, and it is
+  read at runtime by `cp-audit-filter-springboot` to resolve path parameters, so
+  an endpoint missing from it is an endpoint whose audit event is wrong. It is
+  **not** a business API (see the clause below), and adding a path that is not a
+  named operator action to it is the amendment this principle exists to require.
 - **Consumed platform contracts** — owned elsewhere, adapted to here, never
   redefined here:
   - systemdocgenerator `systemdocgenerator.generate-document` (REST command,
@@ -498,15 +614,57 @@ Rules:
   ever be introduced that decides, independently of the
   `CourtRegisterService` flag, whether this service or the legacy generates
   registers. Every failure to read the flag MUST leave the legacy in charge.
-- The only HTTP this service exposes is Spring Boot Actuator. There is no
-  OpenAPI file, and adding a business endpoint requires a constitution
-  amendment, not just a spec. Operational actions are a CLI in the image.
+  An operations endpoint that merely lets a person do, over HTTP and under
+  their own name, what a `kubectl exec` command already did is **not** a second
+  lever: it reads the same flag, at the same point, and refuses the same way.
+  An endpoint that switched which implementation is live, or that could run the
+  generation leg without the flag having been read at all, **is** one and is
+  forbidden.
+- **The operations API.** Exactly one HTTP surface besides Actuator is
+  permitted: the named operator actions under `/operations/**` that replace the
+  operations CLI, one endpoint per action, adding no capability the CLI did not
+  have. It is permitted only while **every** endpoint satisfies all four of:
+  - **(a) Authorised.** Behind `cp-auth-rules-filter`, with an explicit allow
+    rule in `src/main/resources/acl/` naming the caller groups admitted —
+    currently the usersgroups group "Second Line Support" and no other, with
+    identity taken from the `CJSCPPUID` header. There is no default-allow: an
+    action with no rule is refused, and a rule that names no group is a bug.
+  - **(b) Audited.** Behind `cp-audit-filter-springboot`, so every request and
+    every response is published as an audit event to the audit context. An
+    endpoint that is reachable without an audit event is worse than the
+    `kubectl exec` it replaced, which at least left a cluster audit record.
+  - **(c) Flag-gated where its command was.** An endpoint reads the
+    `CourtRegisterService` flag at exactly the point the CLI command it
+    replaces read it — no earlier, no later, and nowhere the command did not.
+    An override (`ignoreFlag`) is an operator decision and MUST be recorded in
+    the audit event **and** on the run report, exactly as the command printed
+    and counted it. An endpoint that quietly bypasses the flag is a second
+    lever under the bullet above.
+  - **(d) Telemetry-clean.** Every response — success and refusal alike —
+    carries bounded codes, counts and identifiers only, under Principle VII. No
+    defendant detail at all, recipient addresses masked as the CLI masked them,
+    no exception text, no fragment of a store's or a far end's own words, and
+    **no operator input echoed back**: a refusal names the argument, never the
+    value that was typed.
+
+  A new endpoint that is not one of those actions, or an existing one that
+  stops satisfying (a)–(d), requires a constitution amendment and not just a
+  spec. Actuator is unchanged and is not part of this surface.
 
 **Rationale**: the queue message, the register document and the platform
-commands are the whole external surface. Treating them with the discipline
+commands are the whole *business* surface. Treating them with the discipline
 other services give an OpenAPI spec is what keeps a redeploy on any side from
 silently dropping registers — and treating the flag as a contract is what
 keeps the rollback to a single action.
+
+The operations API is the estate's answer to a narrower question: who may
+regenerate a date, and can anybody tell afterwards that they did. A command
+reached by `kubectl exec` runs as the pod, is available to anyone with exec
+rights on the namespace, and leaves no record naming a person. The same action
+behind `cp-auth-rules-filter` and `cp-audit-filter-springboot` is available to a
+named group and leaves an audit event for every call — which is why the
+surface is permitted at all, and why the four conditions are the permission
+rather than a recommendation attached to it.
 
 ### IV. Canonical JSON In, Typed Models Out (NON-NEGOTIABLE)
 
@@ -765,10 +923,19 @@ them read it the same way they read everything else.
 - **Feature flag**: `com.azure:azure-data-appconfiguration` + workload
   identity (`App Configuration Data Reader`), key
   `.appconfig.featureflag/CourtRegisterService`, label = stack, 2 s timeout.
-- **HTTP surface**: Spring Boot Actuator only — health, readiness/liveness,
-  metrics. No business endpoints (Principle III). Operations are a CLI in the
-  image: `generate-register`, `notify-register`, `list-batches`,
-  `supersede-before`, `check-flag`, run with `kubectl exec`.
+- **HTTP surface**: Spring Boot Actuator — health, readiness/liveness,
+  metrics — **and** the operations API under `/operations/**`. No business
+  endpoints (Principle III). Since increment 005 the seven operator actions are
+  endpoints rather than commands in the image: read the flag, list a date's
+  batches, list what was recorded while the flag was off, regenerate a date,
+  re-notify a batch, supersede what was recorded before an instant, and pull
+  the exception report. Every one of them is behind `cp-auth-rules-filter`
+  (drools rules under `src/main/resources/acl/`, identity from `CJSCPPUID`,
+  "Second Line Support" only) and `cp-audit-filter-springboot` (every request
+  and response published to the audit context), and is described in
+  `src/main/resources/openapi.yaml`. The CLI (`batch/cli/`, the
+  `courtregister.cli` property and the `docker/startup.sh` dispatch) is
+  **removed**: the image starts the application, full stop.
 - **Test stack**: JUnit Jupiter 6 (the Boot 4.1 test starter) + Mockito
   (unit); golden-file/fixture tests for the ported transformation;
   **Testcontainers** — Service Bus emulator and PostgreSQL — for integration
@@ -829,6 +996,23 @@ them read it the same way they read everything else.
   built, and a new capability is not a deviation from one (Principle I). The
   e-mail output ships switched off in every environment until the
   notificationnotify team provides the template it is sent under.
+- **005 "operations-rest-api" — current.** The six operations commands become
+  seven `/operations/**` endpoints and the CLI is removed. The REST layer is an
+  inbound adapter in `uk.gov.hmcts.cp.courtregister.api` that calls the same
+  application services the CLI classes called, moving no logic and adding no
+  capability: the same arguments, the same refusals, the same output fields as
+  JSON, and the CLI's three exit codes mapped onto status codes (0 → 2xx;
+  refused → 409, or 400 for an argument that will not read; failed → 500), each
+  refusal carrying the bounded `reason` the command printed. Authorisation and
+  audit come from the estate starters under Principle III(a) and (b), the
+  OpenAPI document joins the owned contracts, and `POST
+  /operations/batches/generate` refuses `SCHEDULE_RUNNING` while the 18:00 run
+  holds its lock — a rule the CLI left to a runbook and the API has to check,
+  because an endpoint is reachable by more people than an exec was. **This
+  increment must not be deployed to STE before the ingress route for
+  `/operations/**`, the usersgroups path for the identity client and the
+  Artemis audit connection land in the infrastructure repositories**: the CLI
+  is gone, so a pod deployed without them has no operational surface at all.
 
 ## Development Workflow & Quality Gates
 
@@ -906,4 +1090,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 3.2.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-15
+**Version**: 4.0.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-19
