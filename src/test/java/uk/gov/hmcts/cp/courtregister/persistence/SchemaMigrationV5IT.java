@@ -33,9 +33,10 @@ import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
  * serves are the handful in one state, so a total index on the timestamp would be the size of the
  * table and would be scanned past every terminal row in it.
  *
- * <p>The suite migrates a database of its own to V4, takes the schema down, migrates it the rest of
- * the way and takes it down again - the arrangement {@link SchemaMigrationV4IT} explains: against
- * the shared, already-migrated container "V5 changed nothing" is unobservable.
+ * <p>The suite migrates a database of its own to V4, takes the schema down, migrates it as far as
+ * V5 and takes it down again - the arrangement {@link SchemaMigrationV4IT} explains: against the
+ * shared, already-migrated container "V5 changed nothing" is unobservable, and against the head it
+ * would be a claim about every migration that has landed since.
  *
  * <p>Whether the reads the indexes exist for actually reach them is
  * {@code RegisterBatchReportReadsIT}'s and {@code RegisterNotificationReportReadsIT}'s, over
@@ -85,7 +86,12 @@ class SchemaMigrationV5IT {
         constraintsBefore = constraints();
         indexesBefore = indexes();
 
-        flyway().load().migrate();
+        // Targeted at V5 and not at the head, for the reason SchemaMigrationV4IT gives at the same
+        // line: this suite's claim is what ONE migration did, so a migration that lands after it
+        // must not be counted as part of it. Left at the head it was right only while V5 was the
+        // last migration, and V6 turned "V5 added five indexes and changed no constraint" into a
+        // failure about a constraint V6 widened.
+        flyway().target("5").load().migrate();
         tablesAfter = tables();
         columnsAfter = columns();
         constraintsAfter = constraints();

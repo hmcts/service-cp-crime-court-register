@@ -286,8 +286,17 @@ each of the four below is a blocking prerequisite for every user story.
       the same commit, `the_failure_reasons_should_be_exactly_the_seven_the_schema_enumerates`
       against the migration text and
       `failure_reason_check_should_name_exactly_the_bounded_reasons` against the constraint Postgres
-      actually holds. No deviations: one dropped constraint, one added, the same list plus the new
-      value, and neither attribution constraint opened.)
+      actually holds. The migration itself has no deviations: one dropped constraint, one added, the
+      same list plus the new value, and neither attribution constraint opened.
+      One file beyond it had to move, and the full build is what found it.
+      `persistence/SchemaMigrationV5IT` snapshots the schema at V4 and again after
+      `flyway().load().migrate()` — the **head**, not V5 — and then asserts that the difference is
+      five indexes and no constraint. That was right only while V5 was the last migration; with V6
+      applied the suite was making a claim about every migration since V4 and failed on the
+      constraint V6 widened. It is pinned to `target("5")`, which is what `SchemaMigrationV4IT`
+      already does at the same line and for the same stated reason, and the only alternative — to
+      stop asserting that a migration changed nothing else — would give up the suite's whole
+      subject. No assertion is relaxed and the V6 cases are untouched.)
 
 **Phase close**: `flock … ./gradlew build` green; review gate.
 
