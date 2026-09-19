@@ -217,6 +217,9 @@ public class PropertiesValidator implements InitializingBean {
     /** The audit transport's hosts are a list wherever they come from, so they are bound as one. */
     private static final Bindable<List<String>> HOST_LIST = Bindable.listOf(String.class);
 
+    /** What the audit transport's port has to read as before it is worth parsing. */
+    private static final Pattern PORT_NUMBER = Pattern.compile("\\d{1,5}");
+
     /** Spring's own key, not this service's: the broker the completion events arrive on. */
     private static final String BROKER_URL = "spring.artemis.broker-url";
 
@@ -417,16 +420,39 @@ public class PropertiesValidator implements InitializingBean {
             throw new IllegalStateException(unaudited(AUDIT_TRANSPORT_ENABLED)
                     + " is not true, so the audit starter contributes no publisher at all");
         }
-        if (Binder.get(environment).bind(AUDIT_HOSTS, HOST_LIST).orElse(List.of()).isEmpty()) {
+        final List<String> hosts = Binder.get(environment).bind(AUDIT_HOSTS, HOST_LIST)
+                .orElse(List.of());
+        if (hosts.isEmpty() || hosts.stream().anyMatch(host -> !hasText(host))) {
             throw new IllegalStateException(unaudited(AUDIT_HOSTS)
                     + " names no broker, and the audit filter swallows every publishing failure -"
                     + " so the events would be lost in silence rather than refused");
         }
-        final int port = environment.getProperty(AUDIT_PORT, Integer.class, 0);
-        if (port <= 0) {
-            throw new IllegalStateException(unaudited(AUDIT_PORT) + " (" + port
-                    + ") must be the port the audit broker listens on");
+        if (!namesAPort(environment.getProperty(AUDIT_PORT))) {
+            throw new IllegalStateException(unaudited(AUDIT_PORT)
+                    + " must be the port the audit broker listens on");
         }
+    }
+
+    /**
+     * Whether the audit transport's port setting reads as a port at all.
+     *
+     * <p>Read as text and parsed here rather than asked of the environment as an {@code Integer},
+     * because a conversion failure is raised by Spring during the refresh and names neither the
+     * setting, nor the endpoints it would leave unaudited, nor the operations switch that made
+     * the pair unsafe - and it quotes the offending value back. FR-045 requires the refusal to
+     * name the offending setting, so the reading is this service's own.
+     *
+     * <p>A blank element in the host list is refused by the same argument as an empty list: the
+     * audit starter's own {@code validateProps} checks {@code hosts.isEmpty()} and
+     * {@code port > 0} and nothing else, so a list of blanks passes it and is turned into
+     * connectors pointed at no host at all.
+     *
+     * @param value the raw value of {@code cp.audit.port}, or null where it is unset
+     * @return whether it is a positive whole number
+     */
+    private static boolean namesAPort(final String value) {
+        final String port = value == null ? "" : value.trim();
+        return PORT_NUMBER.matcher(port).matches() && Integer.parseInt(port) > 0;
     }
 
     /**
