@@ -80,7 +80,7 @@ start-up refusal that the amendment's condition (b) requires. Three of research'
 context-will-not-start traps and all three are closed here. Phase 1's wiring tasks carry the
 mechanical exemption and record verification evidence; T004/T005 and T006/T007 are ordinary pairs.
 
-- [ ] **T002** [US1] `config/AuditComponentScanTest` (new) — **the context starts, and holds no
+- [x] **T002** [US1] `config/AuditComponentScanTest` (new) — **the context starts, and holds no
       component-scanned audit bean**. `@SpringBootTest` over the application's own configuration
       with the operations and audit switches off, asserting the context starts and that no bean of
       type `uk.gov.hmcts.cp.filter.audit.parser.OpenApiSpecificationParser` was created by scanning.
@@ -88,6 +88,17 @@ mechanical exemption and record verification evidence; T004/T005 and T006/T007 a
       Red: passes today (there is no such dependency), and **fails the moment T003 adds it**, which
       is the point: the task order is test-then-dependency so the failure is observed rather than
       predicted. Record both runs.
+      (run on this commit's tree: `./gradlew test --tests '...AuditComponentScanTest'` - 3 tests,
+      0 failures, all three PASSED, the predicted green-today. The context refreshed in 2.064s on
+      the `test` profile with `cp.audit.enabled=false`, `audit.http.enabled=false`,
+      `authz.http.enabled=false` and `courtregister.operations.enabled=false`; nothing on the
+      classpath is in `uk.gov.hmcts.cp.filter.audit`, so `auditStarterBeans()` is empty for the
+      only reason it can be today. The second of the three runs - the one that fails - is recorded
+      against T003, which is where the dependency arrives. Deviation from the task text, additive:
+      the assertion is written over the whole `uk.gov.hmcts.cp.filter.audit` package rather than
+      over `OpenApiSpecificationParser` alone, and by **class name** rather than by type, because a
+      `.class` literal would not compile in the state this suite is deliberately written in. The
+      named parser keeps a case of its own.)
 - [ ] **T003** [US1] **Add the dependencies and close the component-scan clash.**
       `gradle/libs.versions.toml`: `cp-auth-rules-filter = "1.0.7"`,
       `cp-audit-filter-springboot = "1.0.5"`, plus the `uk.gov.hmcts.cp:` module lines;
