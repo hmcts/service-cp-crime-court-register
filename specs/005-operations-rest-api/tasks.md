@@ -202,11 +202,32 @@ mechanical exemption and record verification evidence; T004/T005 and T006/T007 a
       `validateOperations` is four private helpers under one package-private entry point, in the
       style the class's other rule families are written in; the static `validate(...)` is
       byte-for-byte what it was, which is what keeps 004's rename a clean rebase.)
-- [ ] **T006** [P] [US1] `config/PublicEventsFactoryTest` (new) — **the listener container is built
+- [x] **T006** [P] [US1] `config/PublicEventsFactoryTest` (new) — **the listener container is built
       on the public-event connection factory, not the audit one** (research R8: the audit starter's
       `auditConnectionFactory` and `auditJmsTemplate` are `@Primary`, and `PublicEventsConfig`
       currently injects `ConnectionFactory` by type). A context case that asserts the container
       factory's connection factory is the Boot-provided one. Red: it is the audit library's.
+      (red: 2 tests, 1 failure, an assertion - *"Expected not same: ActiveMQConnectionFactory
+      [serverLocator=... host=artemis-audit-invalid ...]"*. Exactly R8: the container the committed
+      configuration builds is handed the **audit** broker's factory, because `@Primary` wins a
+      by-type injection. The second case passes and is the premise: both factories are on the
+      context and they are two objects.
+      Written over the **real** auto-configurations - Boot's `ArtemisAutoConfiguration` and the
+      library's own `ArtemisAuditAutoConfiguration` - rather than over hand-made stand-ins, because
+      the `@Primary` that causes the fault lives in the library and a fake of it would be a test
+      asserting against its own fixture.
+      **A finding the task did not anticipate, and the one that decides T007's mechanism.** A first
+      draft resolved Boot's factory by type, `getBean(ActiveMQConnectionFactory.class)`, and got
+      the **audit** one - so the premise case failed too, reading as though Boot's Artemis
+      auto-configuration had backed off under its `@ConditionalOnMissingBean(ConnectionFactory)`.
+      It had not. Probing a real application context showed two beans:
+      `jmsConnectionFactory -> CachingConnectionFactory (primary=false)` and
+      `auditConnectionFactory -> ActiveMQConnectionFactory (primary=true)`. Boot's is behind a
+      caching wrapper, so it is not of the type the audit one is, and **the only stable way to name
+      it is its bean name**: both of Boot's Artemis configurations register under
+      `jmsConnectionFactory`, while the type behind that name is
+      `spring.jms.cache.enabled`'s choice. Asking by type is how a test - or a configuration class -
+      ends up holding the audit one and saying nothing about it.)
 - [ ] **T007** [US1] `config/PublicEventsConfig` — take the connection factory **by name** rather
       than by type, so the injection says which one it means and cannot be won by somebody else's
       `@Primary`. This is the only change 005 makes to a production class outside `api/`,
