@@ -23,6 +23,8 @@ export const meta = {
 //   contract         coordination contract: files this tree may / may not touch (optional)
 //   notes            anything else the implementer must know (optional)
 //   reviewerBuilds   true lets reviewers run Gradle after the results hold (default false)
+//   resume           true when a previous run of this range was interrupted: the tree may be past
+//                    baseCommit and dirty; the implementer inspects and carries on (default false)
 // ---------------------------------------------------------------------------------------------
 
 const a = args || {}
@@ -79,6 +81,7 @@ const WORK = {
   properties: {
     head_before: { type: 'string' },
     tree_clean_before: { type: 'boolean' },
+    base_is_ancestor: { type: 'boolean' },
     commits: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, subject: { type: 'string' } }, required: ['sha', 'subject'] } },
     tasks_done: { type: 'array', items: { type: 'string' } },
     build_command: { type: 'string' },
@@ -104,9 +107,17 @@ You are the implementer for one phase of this repository. Read ${a.tree}/.claude
 first and obey it, then read ${a.specDir}/spec.md, plan.md, tasks.md (and research.md, data-model.md,
 quickstart.md, contracts/ where present).
 
-BEFORE ANYTHING: in ${a.tree} run git rev-parse HEAD and git status --porcelain. HEAD must be ${a.baseCommit}
-and the tree must be clean. If either is false, do NOT implement: return head_before, tree_clean_before=false
-(or the wrong sha), empty commits and an open_point explaining what you found.
+BEFORE ANYTHING: in ${a.tree} run git rev-parse HEAD, git status --porcelain and
+git merge-base --is-ancestor ${a.baseCommit} HEAD (report its truth as base_is_ancestor).
+${a.resume ? `RESUME MODE: a previous implementer of this same range was interrupted. HEAD may be past ${a.baseCommit} and
+the tree may be dirty. Do not discard anything blindly: read git log --oneline ${RANGE}, git status --porcelain and
+git diff, and the ticks and recorded red/green runs in ${a.specDir}/tasks.md, to establish which tasks are committed,
+which are half-done in the working tree, and which are untouched. Finish the half-done work if it is sound and
+belongs to a task whose red test is already committed (then commit it as that task's green step); otherwise
+revert it and say so in open_points. Then continue with the untouched tasks. base_is_ancestor must be true; if it
+is not, do NOT implement: return empty commits and an open_point.`
+: `HEAD must be ${a.baseCommit} and the tree must be clean. If either is false, do NOT implement: return head_before,
+tree_clean_before=false (or the wrong sha), empty commits and an open_point explaining what you found.`}
 
 Implement EXACTLY these tasks, in this order, and nothing else: ${TASKS.join(', ')}.
 For every task pair (test task, implementation task): land the compile-safe seams, write the failing test,
@@ -117,13 +128,18 @@ completes it.
 When the range is done run the full build: ${BUILD}
 It must exit 0 (suite, Checkstyle, PMD, JaCoCo gate). If it does not, fix it before returning, still test-first.
 ${RULES}
-Return: head_before and tree_clean_before; the commits you made (sha + subject, oldest first); the task ids
-completed; the exact build command you ran, its exit code and a two-line summary (tests run / failed,
+Return: head_before, tree_clean_before and base_is_ancestor; the commits you made (sha + subject, oldest first); the task ids
+completed (in resume mode, include the range's tasks that were already committed before you started); the exact build command you ran, its exit code and a two-line summary (tests run / failed,
 coverage line+branch); git status --porcelain after your last commit; open_points for anything unsettled.
 `, { label: `implement ${first}-${last}`, phase: 'Implement', model: 'opus', agentType: 'general-purpose', schema: WORK })
 
 if (!implemented) throw new Error('phase-gate: the implementer returned nothing')
-if (!implemented.tree_clean_before || !String(implemented.head_before).startsWith(String(a.baseCommit).slice(0, 7))) {
+if (a.resume) {
+  if (implemented.base_is_ancestor !== true) {
+    throw new Error(`phase-gate (resume): ${a.baseCommit} is not an ancestor of HEAD ${implemented.head_before}; ${(implemented.open_points || []).join(' | ')}`)
+  }
+  log(`resumed from HEAD ${String(implemented.head_before).slice(0, 7)} (tree ${implemented.tree_clean_before ? 'clean' : 'dirty'} at start)`)
+} else if (!implemented.tree_clean_before || !String(implemented.head_before).startsWith(String(a.baseCommit).slice(0, 7))) {
   throw new Error(`phase-gate: tree not at base or not clean (head_before=${implemented.head_before}, clean=${implemented.tree_clean_before}); ${(implemented.open_points || []).join(' | ')}`)
 }
 const commits = [...implemented.commits]
