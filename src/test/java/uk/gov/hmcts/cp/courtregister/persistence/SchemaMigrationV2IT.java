@@ -895,9 +895,10 @@ class SchemaMigrationV2IT {
          * And the half V6 deliberately leaves to the constraint that is already right.
          *
          * <p>{@code register_batch_completed_by_shape_chk} is untouched by the migration: the new
-         * reason is not generator-attributed, so it falls in the third arm's {@code false = false}
-         * case and an attribution on it is refused with no edit at all. Asserted rather than
-         * reasoned about, because "no edit was needed" and "no edit was made" are the same diff.
+         * reason is not generator-attributed, so an unattributed row under it satisfies the third
+         * arm as {@code false = false} and an attributed one is refused by that same arm as
+         * {@code false = true}, with no edit at all. Asserted rather than reasoned about, because
+         * "no edit was needed" and "no edit was made" are the same diff.
          *
          * <p>The admitted row comes first and is the case's precondition rather than a repetition
          * of the one above: a reason the vocabulary does not admit is refused whatever it carries,

@@ -16,7 +16,8 @@
 --
 -- The two attribution constraints are deliberately NOT touched. The new reason is not
 -- generator-attributed, so an attributed row under it lands in register_batch_completed_by_shape_chk's
--- third arm as `true = false` and is refused with no edit at all; SchemaMigrationV2IT asserts that
+-- third arm as `false = true` - the reason is not in that arm's attributed list, and an attribution
+-- is nevertheless present - and is refused with no edit at all; SchemaMigrationV2IT asserts that
 -- refusal rather than reasoning about it, because "no edit was needed" and "no edit was made" are
 -- the same diff. Additive and forward-only: V2 is not edited, and no column, table or index is added.
 
