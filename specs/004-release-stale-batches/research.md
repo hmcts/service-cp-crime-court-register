@@ -53,7 +53,9 @@ a catch block being wide enough — which is exactly the kind of claim the wide 
 ## D3 — The retired vocabulary is removed **[reversed by review]**
 
 **Decision**: `BatchFailureReason.GENERATION_TIMED_OUT` and `CompletedBy.RECONCILER` are removed from
-the enums and from the schema's bounded lists in `V6`.
+the enums and from the schema's bounded lists. *(In `V7`, not `V6` — see **D12**, which splits the
+migration for a sequencing reason implementation found. The decision to remove them is this one; when
+it lands is that one.)*
 
 **What the first pass got wrong**: it kept both as "readable history", on the grounds that
 `RegisterBatchRepository` deserialises both columns with `valueOf` and the 07:00 report reads FAILED
@@ -63,7 +65,7 @@ two values that nothing writes would leave the vocabulary describing a mechanism
 and a vocabulary is the one place in this service where that is never allowed.
 
 **The cost, stated rather than discovered**: a CHECK constraint cannot be narrowed on a table holding
-a violating row, so `V6` refuses to apply to a local volume, a seeded container or a replayed SIT
+a violating row, so `V7` refuses to apply to a local volume, a seeded container or a replayed SIT
 snapshot that still holds one. Those are cleaned or recreated; `quickstart.md` says so. This is the
 cheapest this decision will ever be.
 
@@ -205,6 +207,48 @@ day at every subsequent run, with nothing in the flow that would ever revisit it
 the new rule closes it for free, which is worth saying out loud and pinning rather than discovering.
 
 ---
+
+## D12 — The admission and the removals take two migrations **[found in implementation]**
+
+**Decision**: `V6__admit_stale_release_reason.sql` widens the failure-reason vocabulary by
+`NOT_COMPLETED_BY_NEXT_RUN` and removes nothing; `V7__retire_reconciler_vocabulary.sql`, landing
+immediately after the reconciler and its query leg are deleted, removes `GENERATION_TIMED_OUT` and
+`CompletedBy.RECONCILER` from the enums and narrows all three CHECK constraints.
+
+**What D3 got wrong**: not the destination, only the claim that one migration could reach it. D3 and
+FR-012 both said the admission and the removals were *the same forward migration*. Implementation
+showed that those cannot both be satisfied:
+
+- `GenerationReconciler` is the **only** writer of both retired values — its silence ending is built
+  from `GENERATION_TIMED_OUT` and `CompletedBy.RECONCILER`, and it passes `RECONCILER` into the
+  store's two marks. It is deleted three phases after the vocabulary work was scheduled. Removing the
+  constants earlier either fails to compile or forces its marks to claim `EVENT`, which would write
+  into `completed_by` — the one column that exists to say which mechanism learned an outcome — a
+  claim that is false.
+- The **admission** cannot wait for that deletion, because the first write of the new reason comes
+  earlier: the store operation is built and exercised against Testcontainers Postgres well before
+  the reconciler goes.
+- `SchemaMigrationV2IT` holds the CHECK constraints against the enums in both directions, so a
+  narrowed constraint and an enum that still has the constants cannot both be green.
+
+Three true sentences with no ordering that satisfies all of them: a cycle, not a sequencing
+preference. The way out is to stop requiring one migration. Splitting changes no behaviour and no end
+state — after `V7` the schema and the enums are exactly what D3 described — only the order and
+FR-012's wording.
+
+**It also improves the operational story.** The caveat that a narrowing migration refuses on a
+pre-004 row now attaches to `V7` alone. `V6` widens only, so it applies to any store in any state,
+and the phase that lands it needs no clean-volume step at all.
+
+**Rejected**: moving the whole vocabulary block to after the deletions (ruled out — it would put the
+admission after the first write of the reason it admits); re-pointing the reconciler's marks at
+`EVENT` for the two phases in between (a false claim in the audit column, to save one migration);
+keeping both retired values for ever (D3's superseded answer, and it leaves the vocabulary naming a
+mechanism that does not exist).
+
+**Credit where it is due**: this was found by the Phase 1 implementer, which declined the tasks twice
+with evidence rather than ticking them. An unticked task is the honest record of a phase that cannot
+be finished yet.
 
 ## Facts established while researching (not decisions)
 

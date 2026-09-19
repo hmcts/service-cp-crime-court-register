@@ -61,3 +61,11 @@
   payload id (FR-020); and the retired-vocabulary answer is reversed to removal, with its one
   migration caveat recorded (FR-012). One review claim did not check out and is recorded as checked:
   `docker/sdg-echo/sdg-echo.py` does not implement the query endpoint.
+- **Re-validated 2026-09-19 after the Phase 1 implementation.** One item moved: FR-012 said the
+  admission of the new reason and the removal of the retired vocabulary were the same forward
+  migration, and they cannot be — the retired pass is the only writer of the retired values and is
+  deleted long after the new reason is first written. FR-012 now asks for two migrations, the spec
+  carries a third Clarifications session recording why, and `data-model.md` gives both. The end state
+  is unchanged. The checklist item this tested was "requirements are testable and unambiguous": the
+  requirement was unambiguous and testable and simply could not be satisfied, which is the kind of
+  thing only an implementer holding the compiler finds.

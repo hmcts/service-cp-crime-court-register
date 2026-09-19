@@ -6,13 +6,43 @@
 No table is added, no column is added, no column is dropped and no row is migrated. Three CHECK
 constraints are rewritten, one bounded statement is added to the store, and two vocabularies change.
 
-## The migration
+## The migrations — two, and why
 
-`src/main/resources/db/migration/V6__stale_batch_release.sql` — additive and forward-only. `V2` is
-applied and is never edited; its constraints are replaced by new ones in this migration.
+The admission and the removals **cannot share a migration**. `GenerationReconciler` is the only
+writer of `BatchFailureReason.GENERATION_TIMED_OUT` and `CompletedBy.RECONCILER`, and it is not
+deleted until the removal phase; while it exists the schema must go on admitting both. But the first
+write of `NOT_COMPLETED_BY_NEXT_RUN` comes earlier than that deletion, so its admission cannot wait
+for it. One migration therefore widens, and a second narrows once the writer is gone. Both are
+additive and forward-only in the Flyway sense; `V2` is never edited.
+
+### `V6__admit_stale_release_reason.sql` — widens only
+
+Lands with the vocabulary's new constant, before anything writes it.
 
 ```sql
--- 1. The failure vocabulary: one value in, one value out.
+ALTER TABLE register_batch DROP CONSTRAINT register_batch_failure_reason_chk;
+ALTER TABLE register_batch ADD CONSTRAINT register_batch_failure_reason_chk
+    CHECK (failure_reason IS NULL
+        OR failure_reason IN ('PAYLOAD_STORE_UNAVAILABLE', 'RENDER_REQUEST_FAILED',
+                              'RENDER_REQUEST_REJECTED', 'GENERATION_FAILED',
+                              'GENERATION_TIMED_OUT', 'ASSEMBLY_FAILED',
+                              'NOT_COMPLETED_BY_NEXT_RUN'));
+```
+
+- The two retired values are **still in the list**. The reconciler is still writing them at this
+  point in the increment, and a migration that refused them would break the running service.
+- `register_batch_completed_by_chk` and `register_batch_completed_by_shape_chk` are **not touched**.
+  The new reason is not generator-attributed, so it lands in the shape constraint's third arm's
+  `false = false` case with no edit, and `attributionOf` is called with `null` for it.
+- **It refuses on nothing.** A constraint that only widens admits every row the old one did, so this
+  migration applies to any store in any state. There is no clean-the-volume step before it.
+
+### `V7__retire_reconciler_vocabulary.sql` — narrows, once the writer is gone
+
+Lands immediately after the reconciler and its query leg are deleted.
+
+```sql
+-- 1. The failure vocabulary: the reason nothing produces any more.
 ALTER TABLE register_batch DROP CONSTRAINT register_batch_failure_reason_chk;
 ALTER TABLE register_batch ADD CONSTRAINT register_batch_failure_reason_chk
     CHECK (failure_reason IS NULL
@@ -37,17 +67,24 @@ ALTER TABLE register_batch ADD CONSTRAINT register_batch_completed_by_shape_chk
                      = (completed_by IS NOT NULL))));
 ```
 
-**The one operational caveat, and it is the reason this is a decision and not a tidy-up.** A CHECK
-constraint cannot be added to a table that already holds a violating row. Statements 1 and 2
-therefore **refuse to apply** to any store still holding a batch failed `GENERATION_TIMED_OUT` or
-completed by `RECONCILER`. Nothing is deployed, so no environment anybody depends on holds one; a
-developer's local volume, a seeded container or a replayed SIT snapshot may, and is cleaned or
-recreated before the migration runs. `quickstart.md` says so. Doing this now costs a `docker compose
-down -v`; doing it after the first real evening costs a data migration.
+**The one operational caveat belongs to V7 alone, and it is the reason this is a decision and not a
+tidy-up.** A CHECK constraint cannot be added to a table that already holds a violating row.
+Statements 1 and 2 therefore **refuse to apply** to any store still holding a batch failed
+`GENERATION_TIMED_OUT` or completed by `RECONCILER`. Nothing is deployed, so no environment anybody
+depends on holds one; a developer's local volume, a seeded container or a replayed SIT snapshot may,
+and is cleaned or recreated before V7 runs. `quickstart.md` says so. Doing this now costs a
+`docker compose down -v`; doing it after the first real evening costs a data migration.
 
-**`NOT_COMPLETED_BY_NEXT_RUN` needs no change to statement 3** beyond the narrowing: it is not
-generator-attributed, so it falls in the third arm's `false = false` case exactly as the four other
-unattributed reasons do, and `attributionOf` is called with `null` for it.
+### Where each one sits
+
+| | Admits `NOT_COMPLETED_BY_NEXT_RUN` | Holds the retired values | Refuses on an existing row |
+|---|---|---|---|
+| after `V5` (today) | no | yes | — |
+| after `V6` | **yes** | yes | no |
+| after `V7` | yes | **no** | yes, if one is present |
+
+The end state — the third row — is the one this document described before the split, and is
+unchanged by it.
 
 ## The store operation
 

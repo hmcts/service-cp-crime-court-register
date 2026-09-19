@@ -9,10 +9,11 @@ sets up. Only the differences are written out.
 
 ## Local dependencies
 
-**Start from a clean store.** `V6` narrows two CHECK constraints, and Postgres refuses to add a
+**Start from a clean store.** `V7` narrows two CHECK constraints, and Postgres refuses to add a
 constraint to a table that already holds a violating row — so a volume carrying a batch failed
 `GENERATION_TIMED_OUT` or completed by `RECONCILER` (anything a pre-004 local run produced) makes the
-migration fail at start-up. Either delete those rows or start clean:
+migration fail at start-up. `V6`, which only widens, refuses on nothing and needs none of this.
+Either delete those rows or start clean:
 
 ```bash
 docker compose down -v

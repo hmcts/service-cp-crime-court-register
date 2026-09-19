@@ -71,8 +71,9 @@ the section named beside it.
   add to them. *(FR-009, Assumptions.)*
 - Q: Are the retired timeout reason and the retired completion mechanism removed from the bounded
   vocabularies, or kept? → A: **Removed** — from the enums and from the schema's bounded lists, in
-  the same forward migration that admits the new reason. *(Revised under design review; see the
-  second session below.)*
+  a forward migration of their own. *(Revised twice: by design review, and again on 2026-09-19 when
+  implementation found that the admission and the removal cannot share one migration — see the third
+  session below.)*
 - Q: What becomes of the deployment shape that learned outcomes only from the query? → A: **Removed
   outright**, rather than left as a setting with one legal value. After this change it would mean
   "learn no outcome, fail every batch at the next run, render every day twice" — strictly worse than
@@ -129,10 +130,26 @@ here in the same form.
 - Q (revised): the retired timeout reason and the retired completion mechanism. → A: **Removed, not
   kept.** Nothing is deployed, so no row that anyone must be able to read carries either; keeping two
   values nothing writes would leave a vocabulary that describes a mechanism that no longer exists.
-  They go from the enums and from the schema's bounded lists in the same forward migration that
-  admits the new reason. The one operational consequence is recorded in Assumptions: that migration
-  refuses to apply to a store that still holds such a row, so a local or test database that does is
-  cleaned or recreated. *(FR-012, Assumptions.)*
+  They go from the enums and from the schema's bounded lists — in a **second** forward migration,
+  for the sequencing reason the third session below records. The one operational consequence is in
+  Assumptions: that migration refuses to apply to a store that still holds such a row, so a local or
+  test database that does is cleaned or recreated. *(FR-012, Assumptions.)*
+
+### Session 2026-09-19 (implementation)
+
+One decision point that only implementation could find. The Phase 1 implementer declined the
+vocabulary tasks twice, with evidence, and was right to.
+
+- Q: Can the new reason be admitted and the retired values removed in one forward migration? → A:
+  **No — it is a cycle, and it takes two migrations.** The retired pass is the **only** writer of
+  both retired values, and it is not deleted until late in the increment; removing them earlier
+  would either fail to compile or force a live write to claim that a different mechanism learned an
+  outcome, which is a false claim in the one column that exists to say which mechanism did. Yet the
+  first write of the **new** reason comes before that deletion, so its admission cannot wait. One
+  migration therefore admits and widens only, refusing on nothing; a second narrows the three
+  constraints and removes the two constants, immediately after the pass that wrote them is gone. The
+  behaviour and the end state are unchanged — only the sequencing, and the sentence in FR-012 that
+  said "the same forward migration". *(FR-012, Assumptions.)*
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -395,10 +412,15 @@ with zero and with a negative value and confirm each refusal names the setting.
   not a command, and MUST settle nothing and hold no lock.
 - **FR-012**: The bounded vocabularies MUST be left describing only mechanisms that exist. The
   timeout reason and the completion mechanism that named the retired pass MUST be removed from the
-  enums **and** from the schema's bounded lists in the same forward migration that admits the new
-  reason, so that no vocabulary outlives the thing it names. Nothing is deployed, so no row that
-  anyone must be able to read carries either; a store that does hold one is cleaned before the
-  migration, which is the one operational consequence and is recorded as such.
+  enums **and** from the schema's bounded lists, so that no vocabulary outlives the thing it names.
+  **This MUST happen in a second forward migration, after the retired pass itself is deleted, and
+  not in the migration that admits the new reason.** The reason is not a preference: the retired
+  pass is the only writer of both values, so while it still exists the schema must go on admitting
+  them, and the new reason must be admitted before that — the first write of it comes earlier than
+  the deletion. One migration therefore admits and widens only; a second narrows once the writer is
+  gone. Nothing is deployed, so no row anyone must be able to read carries either value; a store that
+  does hold one is cleaned before the **second** migration, which is the one operational consequence
+  and is recorded as such.
 - **FR-013**: The deployment shape that learned outcomes only by the query MUST be removed rather than
   left to mean "learn no outcome at all". A deployment with the generation half enabled MUST learn its
   outcomes from the public-event topic, and MUST be refused at start-up if it is not configured to.
@@ -531,12 +553,13 @@ with zero and with a negative value and confirm each refusal names the setting.
   the scheduled run. If an operator needs a stale batch released, the existing per-batch release the
   operations surface already offers is the supported way, and it is unchanged.
 - **The retired timeout reason and the retired completion mechanism are removed outright**, from the
-  enums and from the schema's bounded lists, in the same forward migration that admits the new
-  reason. Nothing is deployed, so no row anyone must be able to read carries either. **The one
-  operational consequence**: a CHECK constraint cannot be narrowed on a table that still holds a
-  violating row, so the migration refuses to apply to any store — a developer's local volume, a
-  seeded container, a replayed SIT snapshot — that still holds a batch failed under the timeout
-  reason or completed by the retired mechanism. Such a store is cleaned or recreated before the
+  enums and from the schema's bounded lists — in a **second** forward migration, after the pass that
+  writes them is deleted. Nothing is deployed, so no row anyone must be able to read carries either.
+  **The one operational consequence**: a CHECK constraint cannot be narrowed on a table that still holds a
+  violating row, so the **second** migration refuses to apply to any store — a developer's local
+  volume, a seeded container, a replayed SIT snapshot — that still holds a batch failed under the
+  timeout reason or completed by the retired mechanism. (The first migration only widens, and
+  refuses on nothing.) Such a store is cleaned or recreated before the
   migration runs, and the quickstart says so. This is cheap now and stops being cheap the first
   evening the service runs in an environment somebody cares about, which is the reason the decision
   is taken in this increment rather than deferred.

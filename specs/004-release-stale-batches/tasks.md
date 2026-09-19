@@ -63,63 +63,28 @@ builds at once — **and a review gate in a new session**, whose findings land a
 then an implementation commit before the next phase starts. **Never two committing agents at once in
 this tree.**
 
-**T003-T007 are blocked on Phase 5 and did not land with T001-T002** (found 2026-09-19 while
-implementing this phase; the range is otherwise untouched and the tree is green at T002).
-`GenerationReconciler` is the only writer of the two constants T004 removes: line 159 builds its
-silence ending from `BatchFailureReason.GENERATION_TIMED_OUT` and `CompletedBy.RECONCILER`, and lines
-414 and 422 pass `CompletedBy.RECONCILER` into the store's two marks. The class is not deleted until
-**T022**, three phases later, so T004 cannot compile in Phase 1, and there is no honest substitute -
-the reconciler *is* the mechanism `RECONCILER` names, and re-pointing its silence at
-`NOT_COMPLETED_BY_NEXT_RUN` or its two marks at `EVENT` would write into `completed_by` a claim that
-is false. The collateral in the suite is the same shape and about sixty-five references
-(`GenerationReconcilerTest` 34, `RegisterStoreIT` 15, `RegisterBatchRepositoryIT` 5,
-`DocumentOutcomeSinkTest` 4, `SchemaMigrationV2IT` 4, and five single uses), all of it rewritten in
-Phase 1 and deleted in Phase 5.
+**Decided 2026-09-19: two migrations, not one.** The Phase 1 implementer found a genuine cycle and
+declined T003-T007 twice with evidence, which was the right call. `GenerationReconciler` is the only
+writer of `BatchFailureReason.GENERATION_TIMED_OUT` and `CompletedBy.RECONCILER` (lines ~159, ~414,
+~422) and is not deleted until **T022**/**T025**, so the constants cannot go in Phase 1 without
+re-pointing a live write at `EVENT` and putting a false claim in the one column that exists to say
+which mechanism learned an outcome. Meanwhile Phase 2's `T009` writes `NOT_COMPLETED_BY_NEXT_RUN`
+over Testcontainers Postgres, so the **admission** must land no later than Phase 2. The original
+FR-012 asked for the admission and the removals in *one* forward migration, and those three
+sentences do not fit together in any ordering.
 
-T005 and T006 travel with them, because `SchemaMigrationV2IT` asserts the constraint against the
-enumeration (`failure_reason_check_should_name_exactly_the_bounded_reasons`,
-`completed_by_check_should_name_exactly_the_two_completion_mechanisms`): V6's narrowed lists and an
-enum that still holds the retired constants cannot both be green. T007 travels with them because its
-observation is about V6 applying.
+The design owner's answer splits the migration and changes no behaviour:
 
-**Re-raised at the review gate on 2026-09-19, and re-escalated with one new finding that settles the
-choice below.** Option 1 is **not viable**. Phase 2's `T009` writes `NOT_COMPLETED_BY_NEXT_RUN`
-through `failAndReleaseStale` and adds it to `RELEASING_REASONS`, and `T008` asserts that write over
-Testcontainers Postgres with V1-V6 applied — so the **admission** of the new reason, the enum
-constant and the widened CHECK alike, must land no later than Phase 2. The **removals** cannot land
-before Phase 5, because `T022` and `T025` delete the only writers of the two retired constants.
-FR-012 and `data-model.md` require the admission and the removals to be *the same forward migration*.
-Those three sentences do not fit together in any ordering of the phases. It is a cycle, not a
-sequencing preference, and the only way out of it changes what FR-012 says — which is the design
-owner's sentence to change and not this tree's.
+- **`V6__admit_stale_release_reason.sql` (Phase 1, T006)** — admits `NOT_COMPLETED_BY_NEXT_RUN`
+  **beside** the two retired values. It removes nothing, narrows nothing, and therefore refuses on no
+  existing row.
+- **`V7__retire_reconciler_vocabulary.sql` (Phase 5, T049)** — lands immediately after the reconciler
+  and its query leg are deleted, removes the two retired constants from the enums and narrows all
+  three CHECK constraints. **This** is the migration that refuses on a pre-004 row, so the
+  `docker compose down -v` note and the local-stack observation travel to Phase 5 with it.
 
-Two resequencings were possible; one of them no longer is:
-
-1. ~~**Move T003-T006 (and T007) to sit after T022 and T025**, leaving Phase 1 as the settings
-   alone.~~ **Ruled out 2026-09-19**: it puts the admission three phases *after* the first write of
-   the reason it admits, so Phase 2 fails on the missing enum constant before it ever reaches the
-   constraint.
-2. **Split each removal across two migrations**: Phase 1 adds `NOT_COMPLETED_BY_NEXT_RUN` and a V6
-   that admits it **beside** the two retired values; Phase 5 removes the two retired constants and
-   narrows all three constraints in a V7. This contradicts FR-012 and `data-model.md`, both of which
-   say the admission and the removals are *the same forward migration*, so it needs the design
-   owner's word before it is taken. It is now the **only** coherent ordering, and the state the
-   increment reaches at the end of Phase 5 is exactly the one `data-model.md` describes; what changes
-   is FR-012's "in the same forward migration" clause and the single-migration heading over
-   `data-model.md`'s SQL.
-
-**What unblocks Phase 1 is one sentence from the design owner** — either taking option 2, with the
-FR-012 wording it needs, or naming a third. Until then Phase 1 is the settings alone, T001-T002 are
-green, and **T003-T007 stay unticked on purpose**: an unticked task is the honest record of a phase
-that cannot be finished yet, and ticking one by writing `EVENT` into `completed_by` where the
-reconciler's query is what learned the outcome would put a false claim in the one column that exists
-to say which mechanism learned it.
-
-**One thing to know before Phase 1 runs anywhere**: T006's migration narrows two CHECK constraints,
-and Postgres refuses to add a constraint to a table holding a violating row. Any local volume,
-container or snapshot still holding a batch failed `GENERATION_TIMED_OUT` or completed by
-`RECONCILER` must be cleaned or recreated (`docker compose down -v`) before the migration runs. The
-Testcontainers suites start clean and are unaffected.
+The state the increment reaches at the end of Phase 5 is exactly the one `data-model.md` describes.
+What changed is the sequencing and FR-012's wording, not the destination.
 
 ## Format: `[ID] [P?] [A?] [US#] Description`
 
@@ -177,27 +142,28 @@ each of the four below is a blocking prerequisite for every user story.
       `an_unset_batch_generated_within_resolves_to_the_generation_grace_period` is deleted with
       `resolvedBatchGeneratedWithin` and `an_explicit_batch_generated_within_is_honoured` keeps its
       claim without naming the generation half.)
-- [ ] T003 **BLOCKED** (the note above Phase 1) [P] `domain/BatchFailureReasonTest` (extend) and `domain/BatchStateTest` (extend) — the
-      swapped vocabulary. `the_six_reasons_are_the_bounded_set`;
+- [ ] T003 [P] `domain/BatchFailureReasonTest` (extend) and `domain/BatchStateTest` (extend) — the
+      vocabulary **gains** the new reason; nothing is taken away here (the removals are T047/T048,
+      after the reconciler that writes the retired values is gone).
+      `the_seven_reasons_are_the_bounded_set`;
       `not_completed_by_next_run_is_not_generator_attributed`;
-      `not_completed_by_next_run_releases_its_rows`;
-      `generation_timed_out_is_no_longer_a_reason` and `completed_by_has_one_constant`, both of which
-      are **deletion reds** — they fail against an enum that still has them; and in `BatchStateTest`,
-      the schema-vocabulary case extended so the enum and
-      `register_batch_failure_reason_chk` are held to each other in **both** directions. Red: the new
-      constant does not exist and the two retired ones still do.
-- [ ] T005 **BLOCKED** (the note above Phase 1) [P] `persistence/SchemaMigrationV2IT` (extend) — what V6 must make true.
-      `v6_admits_not_completed_by_next_run` (a FAILED batch under the new reason with a null
-      attribution succeeds); `v6_refuses_the_retired_timeout_reason` and
-      `v6_refuses_the_retired_attribution` (deletion reds against the current schema);
-      `the_new_reason_refuses_an_attribution`, which
-      `register_batch_completed_by_shape_chk` must still enforce after its narrowing. Red: the first
-      three fail against V1–V5.
-- [ ] T007 **BLOCKED** (the note above Phase 1) `docker/`, `specs/004-release-stale-batches/quickstart.md` — **[A]** the local stack's
-      clean-store step. Record that `docker compose down -v` is required before V6 on any volume
-      holding a pre-004 row, and confirm on a real local volume that the migration refuses without it
-      and applies with it. No pair: this is an observation about Postgres, not a behaviour this
-      repository implements.
+      `not_completed_by_next_run_releases_its_rows`; and in `BatchStateTest`, the schema-vocabulary
+      case extended so the enum and `register_batch_failure_reason_chk` are held to each other in
+      **both** directions over all seven values — which is the assertion that makes T006 and T048
+      each provably complete, and the one the implementer correctly said could not be green against
+      a half-done vocabulary. Red: the new constant does not exist (seam: the constant).
+- [ ] T005 [P] `persistence/SchemaMigrationV2IT` (extend) — what V6 must make true, and what it
+      must leave alone. `v6_admits_not_completed_by_next_run` (a FAILED batch under the new reason
+      with a null attribution succeeds); `the_new_reason_refuses_an_attribution`, which
+      `register_batch_completed_by_shape_chk` must enforce for it exactly as it does for the four
+      other unattributed reasons; `v6_still_admits_the_retired_timeout_reason` and
+      `v6_still_admits_the_retired_attribution`, which pin that this migration **widens only** — a
+      narrowing here would refuse on a row the reconciler is still writing until Phase 5. Red: the
+      first two fail against V1–V5.
+- [~] T007 **Moved to Phase 5 (T050)** — the local stack's clean-store step. Nothing in Phase 1
+      needs it: `V6` widens only and refuses on no existing row, so there is no volume to clean
+      before it. The observation belongs to `V7`, which is the migration that narrows, and it travels
+      there with it. The id is kept and left here as the pointer; nothing is renumbered.
 
 ### Implementation
 
@@ -228,15 +194,18 @@ each of the four below is a blocking prerequisite for every user story.
       `PropertiesValidator.validateReport` loses its `GenerationProperties` parameter, which nothing
       in it read any more, and `CourtRegisterProperties`'s javadoc reference to the grace period is
       re-pointed.)
-- [ ] T004 **BLOCKED** (the note above Phase 1) `domain/BatchFailureReason.java`, `domain/CompletedBy.java` — make T003 green. Add
-      `NOT_COMPLETED_BY_NEXT_RUN` with the javadoc data-model.md gives it; remove
-      `GENERATION_TIMED_OUT` and `CompletedBy.RECONCILER`; narrow `isGeneratorAttributed()` to
-      `GENERATION_FAILED`. `CompletedBy` stays a type with one constant, and its javadoc says why: it
-      is an argument carried through the outcome sink into the store's marks, and a second mechanism
-      is exactly the kind of thing that comes back.
-- [ ] T006 **BLOCKED** (the note above Phase 1) `src/main/resources/db/migration/V6__stale_batch_release.sql` — make T005 green. The three
-      constraint rewrites of data-model.md, in that order. Additive and forward-only; `V2` is not
-      edited; no column, table or index is added.
+- [ ] T004 `domain/BatchFailureReason.java` — make T003 green. Add `NOT_COMPLETED_BY_NEXT_RUN`
+      with the javadoc data-model.md gives it: this service's own verdict, releasing, and naming no
+      completion mechanism. `isGeneratorAttributed()` is **unchanged** here — it already answers
+      `false` for a reason it does not name, and narrowing it is T048's, once the mechanism it names
+      no longer exists. `CompletedBy` is not touched in this phase.
+- [ ] T006 `src/main/resources/db/migration/V6__admit_stale_release_reason.sql` — make T005 green.
+      One statement: `register_batch_failure_reason_chk` is replaced by the same list plus
+      `NOT_COMPLETED_BY_NEXT_RUN`, the two retired values still in it. The two attribution
+      constraints are **not** touched: the new reason is not generator-attributed, so it falls in
+      `register_batch_completed_by_shape_chk`'s third arm's `false = false` case with no edit.
+      Additive and forward-only; `V2` is not edited; no column, table or index is added; and because
+      it only widens, it applies to any store in any state.
 
 **Phase close**: `flock … ./gradlew build` green; review gate.
 
@@ -392,10 +361,17 @@ the reconciler is dead code with a timer still on it, which the next phase remov
 
 ---
 
-## Phase 5: User Story 4 — the removal
+## Phase 5: User Story 4 — the removal, then the vocabulary retirement
 
 **Goal**: the reconciler, its timer, its lock, the query path and the deployment mode that depended
-on it are gone from the source, the wiring, the stubs and the local stack.
+on it are gone from the source, the wiring, the stubs and the local stack — and, once the last writer
+of the two retired values has gone with them, the vocabulary they named is retired too (T047-T050,
+the other half of the migration split).
+
+**This is the longest phase and it has an internal boundary.** T021-T027 remove the mechanisms;
+T047-T050 remove the words for them; T028 closes the phase by characterising the finished suite. The
+boundary is not a preference: until T022 and T025 land, `GenerationReconciler` writes both retired
+values on every pass.
 
 ### Tests first ⚠️
 
@@ -442,6 +418,40 @@ on it are gone from the source, the wiring, the stubs and the local stack.
 - [ ] T027 [US4] `config/PublicEventsConfig.java`, `config/PropertiesValidator.java` — make T026
       green. Subscribe on `generation.enabled` alone; the broker rule loses its conjunct;
       `PublicEventsConfig`'s javadoc drops the `poll-only` sentence.
+### The vocabulary retirement — after the deletions above, and only after them
+
+These four are the other half of the migration split (see "Decided" above Phase 1). They land
+**after T022 and T025**, because until those two commits `GenerationReconciler` is still the writer
+of both retired values and removing them would either fail to compile or force a false `completed_by`
+claim. T028 runs after them, not before, so the suite it characterises is the finished one.
+
+- [ ] T047 [US4] `domain/BatchFailureReasonTest` and `domain/BatchStateTest` (both extend) — the
+      **deletion reds**. `the_seven_reasons_are_the_bounded_set` becomes
+      `the_six_reasons_are_the_bounded_set`; `generation_timed_out_is_no_longer_a_reason`;
+      `completed_by_has_one_constant`; `only_generation_failed_is_generator_attributed`; and the
+      both-directions schema-vocabulary case of T003 re-run against the narrowed lists, which is
+      what makes the retirement provably complete rather than merely started. Red: the enums still
+      hold both constants. (Nothing here is new behaviour — these assertions were T003's in the
+      pre-split list and have simply moved to where they can be true.)
+- [ ] T048 [US4] `domain/BatchFailureReason.java`, `domain/CompletedBy.java` — make T047 green.
+      Remove `GENERATION_TIMED_OUT`; narrow `isGeneratorAttributed()` to `GENERATION_FAILED`; remove
+      `CompletedBy.RECONCILER`. `CompletedBy` stays a type with one constant, and its javadoc says
+      why: it is an argument carried through the outcome sink into the store's marks, and a second
+      mechanism is exactly the kind of thing that comes back.
+- [ ] T049 [US4] `persistence/SchemaMigrationV2IT` (extend) and
+      `src/main/resources/db/migration/V7__retire_reconciler_vocabulary.sql` — the narrowing, as a
+      pair in one commit because the IT's red *is* the migration's absence. The test:
+      `v7_refuses_the_retired_timeout_reason` and `v7_refuses_the_retired_attribution`; and
+      `v7_refuses_to_apply_to_a_store_holding_a_retired_row`, which seeds a violating row on a fresh
+      container and asserts the migration fails rather than silently dropping it — the one behaviour
+      an operator has to know about, and therefore the one worth a test rather than a sentence. The
+      migration: the three constraint rewrites `data-model.md` gives under V7, in that order.
+- [ ] T050 [A] [US4] `docker/`, `specs/004-release-stale-batches/quickstart.md` — **[A]**, and this
+      is T007 arriving where it belongs. Record that `docker compose down -v` is required before
+      **V7** on any volume holding a pre-004 row, and confirm on a real local volume that the
+      migration refuses without it and applies with it. No pair: it is an observation about Postgres,
+      not a behaviour this repository implements.
+
 - [ ] T028 [A] [US4] `adapter/stub/StubGenerationAdaptersTest`, `e2e/GenerationEndToEndIT`,
       `e2e/GenerationFailureEndToEndIT`, `config/GenerationMetricsTest`,
       `persistence/RegisterBatchRepositoryIT`, `persistence/RegisterBatchReportReadsIT`,
@@ -629,7 +639,7 @@ Phase 3  (T011-T014)  the pass and its cutoffs            [US1, US2]
 Phase 4  (T015-T020)  the run calls it, and says so       [US1, US2, US4]
    │   the reconciler's last caller goes here; only then is it dead code
    ▼
-Phase 5  (T021-T028)  the removal                          [US4]
+Phase 5  (T021-T028, T047-T050)  the removal, then the vocabulary retirement   [US4]
    │   the sweep replaces readings the removal took
    ▼
 Phase 6  (T029-T032)  the readings survive                 [FR-011]
@@ -645,7 +655,9 @@ Phase 9  (T041-T046)  documents, the P2 cell, the gates
 
 **Hard orderings inside phases**: T001→T002, T003→T004, T005→T006 (pairs); T008→T009→T010;
 T011→T012→T013→T014 (T013's red depends on T012 being minimal); T015→T016, T017→T018, T019→T020;
-T021→T022, T024→T025, T026→T027, and T028 after all three deletions; T029→T030→T031→T032;
+T021→T022, T024→T025, T026→T027; then T047→T048 and T049 and T050, all of them after T022 and T025;
+T028 after every one of those, so the suite it characterises is the finished one;
+T029→T030→T031→T032;
 T033→T034, T035→T036; T039→T040.
 
 **Cross-phase**: T045 depends on T011 (the test it names must exist) and T022 (the test it replaces
@@ -692,7 +704,8 @@ given and goes on looking live.
 ## Notes
 
 - **The `[A]` tasks are verification, not exemption.** T007 records an observation about Postgres;
-  T028 characterises a deletion whose behaviour three other tasks assert; T037, T038 and T046 verify
+  T028 characterises a deletion whose behaviour three other tasks assert; T050 records what V7 does
+  to a store that still holds a pre-004 row; T037, T038 and T046 verify
   assembled behaviour. None is a licence to skip a pair that could have been formed.
 - **Nothing in this increment touches the intake half**, the register document, the inbound message,
   supersession's rules, the notification leg or the cutover lever. The 07:00 report is touched in

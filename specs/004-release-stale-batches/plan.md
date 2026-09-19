@@ -67,8 +67,11 @@ The run report's `reconciled` becomes **two** numbers, `released_batches` and `r
 → `30m`), and `courtregister.report.batch-generated-within` stops resolving from it and takes its own
 `@DefaultValue("10m")`.
 
-One additive migration, `V6__stale_batch_release.sql`, widens the failure-reason vocabulary by the
-new value and narrows it and the two attribution constraints by the retired ones.
+**Two** additive migrations, because the admission and the removals cannot share one:
+`V6__admit_stale_release_reason.sql` widens the failure-reason vocabulary by the new value and
+refuses on nothing, and `V7__retire_reconciler_vocabulary.sql` — landing immediately after the
+reconciler is deleted, since until then it is the only writer of the retired values — narrows all
+three constraints. See data-model.md.
 
 Nothing about the register document, the inbound message, the file service, notificationnotify or the
 App Configuration flag changes. One consumed contract stops being *called* — systemdocgenerator's
@@ -81,7 +84,7 @@ design reviews of the same day (spec Clarifications, second session).
 
 | # | Finding | Effect on this plan |
 |---|---|---|
-| 1 | `failure_reason` is CHECK-constrained to six values in `V2`; the new reason would be rejected by Postgres | `V6` migration, and `SchemaMigrationV2IT` extended to hold the enum and the constraint to each other in both directions |
+| 1 | `failure_reason` is CHECK-constrained to six values in `V2`; the new reason would be rejected by Postgres | `V6` **and** `V7` (the split found in implementation, below), and `SchemaMigrationV2IT` extended to hold the enum and the constraint to each other in both directions after each |
 | 2 | `markFailed` + `releaseFailed` is two operations with a read between them; a crash or a race strands registers on a terminal batch | The whole pass becomes one fenced statement, `failAndReleaseStale`; concurrent `*IT`s in both race orders; SC-009 |
 | 3 | The refused-transition drop is logged, not counted | New bounded reason `terminal-batch` on `courtregister_public_events_ignored_total`; FR-008, SC-010 |
 | 4 | The retirement's blast radius is wider than the three classes named | Full file inventory below, including the three gauges, the counter, `RunReport`, `RunCorrelation`'s nesting javadoc and sixteen suites |
@@ -109,11 +112,13 @@ deleted. `sdg-echo.py` is untouched.
 its own); `@Scheduled` loses a trigger and gains one; `RestClient` loses a call. Micrometer,
 `JdbcClient` and Jackson are untouched.
 
-**Storage**: PostgreSQL 16. One additive, forward-only migration, `V6__stale_batch_release.sql`,
-which rewrites three CHECK constraints and adds no column, no table and no index:
-`register_batch_failure_reason_chk` (+ the new reason, − the retired one),
-`register_batch_completed_by_chk` (− `RECONCILER`) and `register_batch_completed_by_shape_chk`
-(its attributed list narrows to `GENERATION_FAILED` alone). The new statement,
+**Storage**: PostgreSQL 16. **Two** additive, forward-only migrations, adding no column, no table
+and no index. `V6__admit_stale_release_reason.sql` widens `register_batch_failure_reason_chk` by the
+new reason, leaves the two attribution constraints alone, and refuses on nothing.
+`V7__retire_reconciler_vocabulary.sql`, after the reconciler is deleted, narrows all three:
+`register_batch_failure_reason_chk` (− `GENERATION_TIMED_OUT`), `register_batch_completed_by_chk`
+(− `RECONCILER`) and `register_batch_completed_by_shape_chk` (its attributed list to
+`GENERATION_FAILED` alone). V7 is the one that refuses on a pre-004 row. The new statement,
 `failAndReleaseStale`, adds no index either: it filters on `status` and the two stamps, which the
 existing in-flight reads already filter on.
 
@@ -197,7 +202,8 @@ specs/004-release-stale-batches/
 batch/StaleBatchReleaser.java          the pass
 batch/BatchAgeSweep.java               the three readings, lockless, own fixed delay
 config/BatchSweepConfig.java           the sweep's TaskScheduler bean + BATCH_SWEEP_SCHEDULER
-resources/db/migration/V6__stale_batch_release.sql
+resources/db/migration/V6__admit_stale_release_reason.sql   (Phase 1: widens only)
+resources/db/migration/V7__retire_reconciler_vocabulary.sql (Phase 5: narrows, after the deletions)
 ```
 
 **Deleted**
@@ -284,7 +290,7 @@ docker/wiremock/README.md              loses the query line
 | Atomicity | `persistence/StaleReleaseConcurrencyIT` (new) | IT | **SC-009 [review]**: the pass raced against `markRequested` and against `markGenerated`, both winner orders, repeated — no register ever stamped to a terminal batch, exactly one live batch per key, exactly one notification aggregate. |
 | The run | `batch/RegisterGenerationJobTest` (extended) | U | The `InOrder` gate → releaser → `activeUnbatched`; a skipped run releases nothing (FR-005/FR-018); `released_batches=` and `released_registers=` on the line, zero when none, `reconciled=` nowhere; a releaser that throws still writes a line and rethrows; **a batch that stops being stale does not stop the run** (FR-003a). |
 | The drop | `application/DocumentOutcomeSinkTest` (extended) | U | **FR-008 / SC-010 [review]**: `document-available` and `generation-failed` for a `NOT_COMPLETED_BY_NEXT_RUN` batch each move nothing, notify nobody, and **move the ignored counter under `terminal-batch`**; a redelivery is counted under the same reason and never as an unknown correlation. |
-| The schema | `persistence/SchemaMigrationV2IT` (extended) | IT | V6 admits the new reason, refuses the retired reason and the retired attribution, and refuses an attribution on the new reason; the enum and the constraint agree in **both** directions for all seven values. |
+| The schema | `persistence/SchemaMigrationV2IT` (extended) | IT | After **V6**: the new reason is admitted, still refuses an attribution, and the two retired values are still admitted (the widening widens only). After **V7**: both retired values are refused, and V7 refuses to apply at all to a store holding one. The enum and the constraint agree in **both** directions after each migration. |
 | The enums | `domain/BatchFailureReasonTest`, `domain/BatchStateTest` (extended) | U | Six reasons after the swap, the new one releasing and unattributed; `isGeneratorAttributed()` true for `GENERATION_FAILED` alone; `CompletedBy` has one constant. |
 | The report | `application/ExceptionReportServiceTest` (extended), `batch/cli/ReportExceptionsCliTest` (extended) | U | **FR-019 [review]**: a released batch is `BATCH_RELEASED` and not `BATCH_FAILED`; the switch over kinds stays exhaustive; the CSV, the table and the log event all carry the new kind. |
 | The port | `application/DocumentRendererTest` (new, reflection), `adapter/systemdocgenerator/SystemDocGeneratorClientTest`, `adapter/stub/StubGenerationAdaptersTest` | U/W | FR-006: one method on the port; **no** request to `document/{id}` over a whole generation. |
