@@ -228,8 +228,13 @@ releaser and sweep that replace it**, `application/DocumentRenderer`, `adapter/s
 **Shared, by agreement**:
 
 - `config/PropertiesValidator` — 004 renames the generation grace period; 005 adds the
-  audit-required refusal. Different methods, one file: expect a textual conflict on the rebase and
-  resolve it by keeping both.
+  authorisation- and audit-required refusals. Different methods, one file: expect a textual
+  conflict on the rebase and resolve it by keeping both. 005's edit is **not** confined to one
+  added method, and the rebase should know it: the constructor gains a parameter, the class gains
+  two fields, one pattern constant and six private helpers, `afterPropertiesSet` gains a call and
+  `@EnableConfigurationProperties` an entry. What the agreement was protecting is intact — the
+  static `validate(...)` is byte-identical to the base — so the resolution is to keep both sides of
+  the constructor and annotation hunks rather than to take either whole.
 - `.claude/rules/design_rules.md` — 004 edits the flow diagram and the batch state machine; 005
   edits the opening paragraph, the package structure, the Cutover Rule's wording about endpoints,
   the topic section's retired CLI-JVM rule, the out-of-scope list and the new "The operations API"
