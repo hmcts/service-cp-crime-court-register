@@ -43,7 +43,7 @@ import org.springframework.stereotype.Component;
 // the packaged application starts no context at all ("No qualifying bean of type
 // CourtRegisterProperties"), which the container smoke finds and no JUnit suite does.
 @EnableConfigurationProperties({CourtRegisterProperties.class, GenerationProperties.class,
-    FeatureFlagProperties.class, ReportProperties.class})
+    FeatureFlagProperties.class, ReportProperties.class, OperationsProperties.class})
 public class PropertiesValidator implements InitializingBean {
 
     /**
@@ -280,6 +280,18 @@ public class PropertiesValidator implements InitializingBean {
 
     private final ReportProperties report;
 
+    /** The operations API's own settings, whose refusals are {@link #validateOperations}'s alone. */
+    private final OperationsProperties operations;
+
+    /**
+     * The resolved environment, kept because two of the operations refusals are about settings this
+     * service does not own and therefore does not bind: {@code audit.http.*} belongs to
+     * {@code cp-audit-filter-springboot} and {@code cp.audit.*} to its transport. Re-declaring
+     * either under a {@code courtregister.} key would give a deployment two places to set one
+     * thing, which is the same argument {@link #brokerUrl} below is read from here for.
+     */
+    private final Environment environment;
+
     /**
      * The broker the completion events arrive on, read from the environment rather than bound.
      *
@@ -297,23 +309,48 @@ public class PropertiesValidator implements InitializingBean {
      * @param generation  the downstream half's settings
      * @param feature     where the one lever is read from
      * @param report      the morning exception report's settings
-     * @param environment the resolved environment, for Spring's own broker key
+     * @param operations  the operations API's settings
+     * @param environment the resolved environment, for Spring's own broker key and for the two
+     *                    audit libraries' keys
      */
     public PropertiesValidator(final CourtRegisterProperties properties,
                                final GenerationProperties generation,
                                final FeatureFlagProperties feature,
                                final ReportProperties report,
+                               final OperationsProperties operations,
                                final Environment environment) {
         this.properties = properties;
         this.generation = generation;
         this.feature = feature;
         this.report = report;
+        this.operations = operations;
+        this.environment = environment;
         this.brokerUrl = environment.getProperty(BROKER_URL);
     }
 
     @Override
     public void afterPropertiesSet() {
         validate(properties, generation, feature, report, brokerUrl);
+        validateOperations(operations, properties, environment);
+    }
+
+    /**
+     * The operations API's refusals, kept in one method of their own.
+     *
+     * <p>Deliberately not folded into the static {@code validate} above, and deliberately reading
+     * its own inputs: increment 004 is changing this class at the same time, and a rule set that
+     * arrives as one added method rather than as a reshaped signature is one a rebase can keep
+     * both halves of.
+     *
+     * @param operations  the operations API's settings
+     * @param properties  the bound settings, for the deployed/local discriminator alone
+     * @param environment the resolved environment, for the two audit libraries' own keys
+     * @throws IllegalStateException if any rule is broken
+     */
+    /* default */ static void validateOperations(final OperationsProperties operations,
+                                                 final CourtRegisterProperties properties,
+                                                 final Environment environment) {
+        // T005 writes the five refusals here.
     }
 
     /**

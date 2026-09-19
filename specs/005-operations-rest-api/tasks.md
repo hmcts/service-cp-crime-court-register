@@ -140,7 +140,7 @@ mechanical exemption and record verification evidence; T004/T005 and T006/T007 a
       starters go in a new `gradle/libs.versions.toml` as the task says, which is not a breach of
       `build.gradle`'s "keep every dependency here" comment - that comment is about the
       `apply from:` files, which dependabot cannot read, and a version catalogue is one it can.)
-- [ ] **T004** [P] [US1] `config/OperationsPropertiesTest` (new) and `config/ConfigurationValidationTest`
+- [x] **T004** [P] [US1] `config/OperationsPropertiesTest` (new) and `config/ConfigurationValidationTest`
       (extend) — **the defaults and the refusals**. Defaults off an `ApplicationContextRunner`:
       `courtregister.operations.enabled=true`, `supersede-max-age=30d`, `lock-wait=0s`. Refusals,
       each asserting the message **names the offending setting**:
@@ -153,6 +153,32 @@ mechanical exemption and record verification evidence; T004/T005 and T006/T007 a
       `PropertiesValidator` gains a package-private `validateOperations(...)` that returns without
       looking. Red: the defaults case reads `null` where `30d` was expected; every refusal case on
       "Expecting <Started application> to have failed but context started successfully".
+      (red: 166 tests, 6 failures, 0 errors, every one an assertion. The five refusals all on
+      *"Expecting <Started application [...]> to have failed but context started successfully"*,
+      the predicted red. The defaults case on **`Expecting value to be true but was false`**
+      rather than on `30d`/null - `enabled` is read before `supersedeMaxAge` and AssertJ stops the
+      case at its first failure, exactly as 003's T001 recorded of its own defaults case; an
+      undefaulted `boolean` binds to `false` where an undefaulted `Duration` binds to `null`, so
+      the prediction was right about the cause and wrong about which line reports it.
+      **Three deviations, all recorded rather than argued after the fact.**
+      (1) The five refusals live in `ConfigurationValidationTest` and the two binding cases in the
+      new `OperationsPropertiesTest`, which is how both files named by the task are touched without
+      either restating the other - 003's T001 split the same way for the same reason.
+      (2) The two audit refusals are **deployed-environment rules**, drawn on the
+      `courtregister.servicebus.namespace` discriminator `StubReachability` and `OutboundValidation`
+      already draw deployment on. `quickstart.md`'s "Local" section is the source: *"Locally
+      `authz.http.enabled` and `cp.audit.enabled` are off ... a deployed pod refuses to start with
+      the operations API enabled and HTTP audit off."* Unconditional refusals would have made
+      `./gradlew bootRun`, `docker compose up` and the container smoke refuse the moment T005
+      landed, and would have forced `courtregister.operations.enabled: false` into
+      `application.yaml` in flat contradiction of FR-044's documented default. Two counterpart
+      "should start" cases pin both halves of the discriminator. The two value rules
+      (`supersede-max-age`, `lock-wait`) are unconditional: an unusable value is unusable anywhere.
+      (3) `validateOperations(operations, properties, environment)` reads its own inputs rather
+      than taking seven values, and is called from `afterPropertiesSet` rather than from the static
+      `validate(...)` - so the existing static's signature is untouched and 004's rename of the
+      generation grace period meets an added method rather than a reshaped class. The constructor
+      gains one parameter and the class two fields.)
 - [ ] **T005** [US1] `config/OperationsProperties` and `config/PropertiesValidator` — the record
       bound at `@ConfigurationProperties(prefix = "courtregister.operations")` with its
       `@DefaultValue`s, following `GenerationProperties`' style, and the five refusals of T004

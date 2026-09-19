@@ -113,6 +113,23 @@ class ConfigurationValidationTest {
     private static final String TEMPLATE_PROPERTY =
             "courtregister.email.templates.cr_standard=" + TEMPLATE_ID;
 
+    /**
+     * The audit path a deployed pod serving the operations API needs (increment 005, FR-045).
+     *
+     * <p>Four keys that belong to two libraries rather than to this service: the HTTP half's own
+     * switch, the OpenAPI document it resolves path parameters from, and the transport the events
+     * are published over. Carried together by every case in {@code OperationsRefusals} that is
+     * about something else, each of which blanks exactly one of them - which is how a refusal is
+     * attributed to the setting that is missing rather than to whichever is checked first.
+     */
+    private static final String HTTP_AUDIT_ENABLED = "audit.http.enabled=true";
+
+    private static final String OPENAPI_SPEC = "audit.http.openapi-rest-spec=openapi.yaml";
+
+    private static final String AUDIT_HOSTS = "cp.audit.hosts=artemis-audit.internal";
+
+    private static final String AUDIT_PORT = "cp.audit.port=61616";
+
     /** The broker the event-driven completion listens on; Spring's own key, not this service's. */
     private static final String BROKER_URL_PROPERTY =
             "spring.artemis.broker-url=tcp://artemis.internal:61616";
@@ -138,7 +155,7 @@ class ConfigurationValidationTest {
 
     @Configuration(proxyBeanMethods = false)
     @EnableConfigurationProperties({CourtRegisterProperties.class, GenerationProperties.class,
-        FeatureFlagProperties.class, ReportProperties.class})
+        FeatureFlagProperties.class, ReportProperties.class, OperationsProperties.class})
     @Import(PropertiesValidator.class)
     static class PropertiesTestConfiguration {
     }
@@ -2601,6 +2618,144 @@ class ConfigurationValidationTest {
                         assertThat(context.getStartupFailure())
                                 .hasMessageContaining(GRACE_PERIOD);
                     });
+        }
+    }
+
+    /**
+     * The operations API's refusals (increment 005, FR-045).
+     *
+     * <p>Two of them are about settings this service does not own - {@code audit.http.*} is
+     * {@code cp-audit-filter-springboot}'s and {@code cp.audit.*} is its transport's - and they are
+     * here because the thing being refused is ours: endpoints that would be served without an audit
+     * event, which condition (b) of constitution Principle III forbids. The library will also fail
+     * to start on some of these, later and with a worse message; refusing first is what names the
+     * setting.
+     *
+     * <p><strong>They are deployed-environment rules</strong>, drawn on the same discriminator
+     * {@code StubReachability} and {@code OutboundValidation} above already draw deployment on: a
+     * namespace means workload identity, which means a deployed pod. A laptop has no audit broker,
+     * and `quickstart.md` states the local convenience explicitly - locally the filters are off, no
+     * identity header is needed, and nothing is published - while saying in the same breath that a
+     * deployed pod refuses to start with the operations API enabled and HTTP audit off. The two
+     * value rules below are not conditioned on anything: a non-positive age bound and a negative
+     * lock wait are unusable wherever they are set.
+     */
+    @Nested
+    @DisplayName("the operations API is never served unaudited where it is deployed")
+    class OperationsRefusals {
+
+        /** Everything a deployed pod serving the operations API needs, minus whichever case blanks one. */
+        private final ApplicationContextRunner deployed = runner.withPropertyValues(
+                NAMESPACE_PROPERTY, HTTP_AUDIT_ENABLED, OPENAPI_SPEC, AUDIT_HOSTS, AUDIT_PORT);
+
+        @Test
+        void operations_enabled_with_http_audit_disabled_refuses_to_start() {
+            deployed.withPropertyValues("audit.http.enabled=false").run(context -> {
+                assertThat(context)
+                        .as("an endpoint reachable without an audit event is worse than the"
+                                + " kubectl exec it replaced, which at least left a cluster audit"
+                                + " record")
+                        .hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("audit.http.enabled")
+                        .hasMessageContaining("courtregister.operations.enabled");
+            });
+        }
+
+        @Test
+        void operations_enabled_with_an_unconfigured_audit_transport_refuses_to_start() {
+            deployed.withPropertyValues("cp.audit.hosts=").run(context -> {
+                assertThat(context)
+                        .as("the HTTP half being on buys nothing without a broker to publish to:"
+                                + " the library swallows its own publishing failures, so an"
+                                + " unconfigured transport is an unaudited endpoint that says so"
+                                + " nowhere but the log")
+                        .hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("cp.audit.hosts")
+                        .hasMessageContaining("courtregister.operations.enabled");
+            });
+
+            deployed.withPropertyValues("cp.audit.enabled=false").run(context -> {
+                assertThat(context)
+                        .as("and the library's own master switch is the sharpest form of it:"
+                                + " with it off there is no AuditService on the context at all")
+                        .hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("cp.audit.enabled")
+                        .hasMessageContaining("courtregister.operations.enabled");
+            });
+
+            deployed.withPropertyValues("cp.audit.port=0").run(context -> {
+                assertThat(context)
+                        .as("and a port nothing listens on is the same thing said in numbers")
+                        .hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("cp.audit.port")
+                        .hasMessageContaining("courtregister.operations.enabled");
+            });
+        }
+
+        /**
+         * The audit filter finds the OpenAPI document by a <strong>suffix</strong> glob,
+         * {@code classpath*:**}{@code /*<value>}. Unset, it globs for {@code *null}, finds nothing
+         * and throws during the refresh - naming neither the setting nor the service. Refused here
+         * instead, and refused wherever HTTP audit is on rather than only where it is deployed,
+         * because the trap is the library's and applies to any context that switches it on.
+         */
+        @Test
+        void http_audit_enabled_with_no_openapi_spec_key_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, HTTP_AUDIT_ENABLED)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("audit.http.openapi-rest-spec")
+                                .hasMessageContaining("audit.http.enabled");
+                    });
+        }
+
+        @Test
+        void a_zero_supersede_max_age_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.operations.supersede-max-age=0s").run(context -> {
+                        assertThat(context)
+                                .as("a bound of zero admits no instant at all, so the endpoint"
+                                        + " refuses every call it is given and says the argument"
+                                        + " was too old - which is a configuration error wearing a"
+                                        + " refusal's clothes")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.operations.supersede-max-age");
+                    });
+        }
+
+        @Test
+        void a_negative_lock_wait_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.operations.lock-wait=-1s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.operations.lock-wait");
+                    });
+        }
+
+        @Test
+        void a_deployed_pod_with_the_whole_audit_path_configured_should_start() {
+            deployed.run(context -> assertThat(context)
+                    .as("the counterpart every refusal above needs: with the HTTP half on, a"
+                            + " document for it to read and a transport to publish through, a"
+                            + " deployed pod serving the operations API starts")
+                    .hasNotFailed());
+        }
+
+        @Test
+        void a_local_pod_serving_the_operations_api_unaudited_should_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY).run(context -> assertThat(context)
+                    .as("quickstart.md's local convenience, stated as a test: a laptop has no"
+                            + " audit broker and no usersgroups, and the endpoints are reachable"
+                            + " there with the filters off. The discriminator is the credential"
+                            + " source, exactly as it is for the stub and the C29 validator")
+                    .hasNotFailed());
         }
     }
 }
