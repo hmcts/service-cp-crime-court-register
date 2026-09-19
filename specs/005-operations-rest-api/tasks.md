@@ -99,6 +99,27 @@ mechanical exemption and record verification evidence; T004/T005 and T006/T007 a
       over `OpenApiSpecificationParser` alone, and by **class name** rather than by type, because a
       `.class` literal would not compile in the state this suite is deliberately written in. The
       named parser keeps a case of its own.)
+      **Re-recorded at gate round 1, and the reason is worth keeping.** The red quoted against T003
+      below was a context *bootstrap* failure - the suite was `@SpringBootTest`, so a refusal to
+      refresh reached JUnit as an initialisation error before any assertion ran, and this repository
+      does not accept that as a red (constitution Principle II; the "mechanical exemption" claimed
+      for this pair was wider than the constitution's, which covers a purely mechanical refactor).
+      The suite is now written over an `ApplicationContextRunner` with
+      `ConfigDataApplicationContextInitializer` - the same `Application` class, the same `test`
+      profile, the same four switches - so a failed refresh is an object to assert on. With the
+      exclusion taken back out of `Application`, the red is three **AssertionErrors**: *"Expecting
+      <Unstarted application context ...> to have not failed: but context failed to start:
+      UnsatisfiedDependencyException: Error creating bean with name 'openApiSpecificationParser'
+      defined in URL [jar:...cp-audit-filter-springboot-1.0.5.jar!/.../OpenApiSpecificationParser
+      .class]"*. Put back, 3 tests, 0 failures.
+      One thing the runner needs that `@SpringBootTest` supplied: Boot's `TypeExcludeFilter` is a
+      **delegating** filter, and the beans it delegates to are registered by the test bootstrapper,
+      not by the runner - so without one, scanning `uk.gov.hmcts.cp` finds every other suite's
+      nested `@Configuration` and the context dies on a duplicate `objectMapper`, which is the
+      collision `Application`'s javadoc already describes arriving from the other direction. The
+      suite registers that missing bean itself, excluding by the directory the class was read from
+      (`/classes/java/test/`) rather than by a naming convention, so a support class not named after
+      a suite is excluded like the suites are. It says nothing about the audit package.)
 - [x] **T003** [US1] **Add the dependencies and close the component-scan clash.**
       `gradle/libs.versions.toml`: `cp-auth-rules-filter = "1.0.7"`,
       `cp-audit-filter-springboot = "1.0.5"`, plus the `uk.gov.hmcts.cp:` module lines;
