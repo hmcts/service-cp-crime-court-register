@@ -382,6 +382,13 @@ the same application services the CLI called:
 - **`@ControllerAdvice` and `ProblemDetail` are permitted here and nowhere else.** The message
   listeners and the jobs still convert an exception into a settlement or a persisted state, never
   into a response.
+- **Both filters are enforced at start-up, wherever the service is deployed.** A pod that sets
+  `courtregister.servicebus.namespace` refuses to start with the operations API enabled and either
+  `authz.http.enabled` or the audit path off, naming the setting (FR-053, FR-045) — so "behind the
+  two filters" is a refusal rather than a hope. The local loop is the one exemption, recorded in
+  constitution 4.1.0 and nowhere else: a laptop has no usersgroups and no audit broker, and the
+  endpoints are served there with both filters off. A deployed environment that wants them
+  unguarded switches them off with `courtregister.operations.enabled`.
 - **Actuator is not part of this surface** and is not behind these filters.
 
 ## Idempotency and Supersession

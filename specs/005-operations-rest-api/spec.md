@@ -70,10 +70,24 @@ same action as an independently callable HTTP mutation makes this service give u
 registers irrespective of which implementation is live, which is a second lever however carefully it
 is authorised. See FR-021 and assumption 11.
 
+**Second amendment — 4.0.0 → 4.1.0 (2026-09-20), proposal.** Conditions (a) and (b) were written
+as obligations on "every endpoint" with no environment named, and FR-045 and FR-053 enforce them as
+start-up refusals on a **deployed** pod only — so the spec was granting itself an exemption from a
+condition stated in the constitution, which the Governance section does not permit. **Proposal**:
+state in Principle III where (a) and (b) are enforced — a start-up refusal naming the offending
+setting wherever `courtregister.servicebus.namespace` is set — and record the local loop as the one
+exemption, at the constitution. **Version**: MINOR (4.1.0): the scope of a NON-NEGOTIABLE condition
+is materially narrowed *and* a new obligation arrives with it (the refusals themselves), but no
+endpoint that was forbidden becomes permitted and no deployed environment may do anything it could
+not do before. The reason the exemption is recorded rather than removed is FR-045's, unchanged:
+both filters are estate libraries needing an estate to talk to, a laptop has neither, and FR-044
+serves the endpoints by default.
+
 **Governance step 3** — re-running `/speckit-analyze` against every in-flight feature spec and
 updating or waiving each conflict — is task **T001** of this increment. It covers this spec and the
 concurrently in-flight `specs/004-release-stale-batches`, which is read but never edited from this
-branch; conflicts found there are recorded for the orchestrator, not fixed here.
+branch; conflicts found there are recorded for the orchestrator, not fixed here. It was run once
+for 4.0.0 and again for 4.1.0; both records are in T001's entry in `tasks.md`.
 
 ## User Scenarios & Testing *(mandatory)*
 
