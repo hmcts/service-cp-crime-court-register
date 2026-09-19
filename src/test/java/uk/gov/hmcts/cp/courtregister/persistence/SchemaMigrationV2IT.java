@@ -21,6 +21,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.configuration.FluentConfiguration;
 import org.junit.jupiter.api.BeforeAll;
@@ -83,6 +85,9 @@ class SchemaMigrationV2IT {
     /** The batch states that carry an attribution, because each of them is reached by one. */
     private static final List<String> COMPLETED_STATUSES =
             List.of("GENERATED", "NOTIFIED", "PARTIALLY_NOTIFIED", "NOTIFIED_NOBODY");
+
+    /** One quoted code inside a live check constraint's admitted list. */
+    private static final Pattern QUOTED_CODE = Pattern.compile("'([A-Z_]+)'");
 
     @BeforeAll
     static void migrate() {
@@ -215,6 +220,21 @@ class SchemaMigrationV2IT {
      */
     private static String[] vocabularyOf(final Class<? extends Enum<?>> bounded) {
         return Arrays.stream(bounded.getEnumConstants()).map(Enum::name).toArray(String[]::new);
+    }
+
+    /**
+     * The codes one live {@code IN} or {@code ARRAY} list admits, taken out of its own text.
+     *
+     * <p>Postgres normalises {@code IN ('A', 'B')} to {@code = ANY (ARRAY['A'::text, 'B'::text])},
+     * so the codes are read off with the same pattern whichever way the migration spelled them.
+     */
+    private static List<String> admittedCodesOf(final String definition) {
+        final Matcher codes = QUOTED_CODE.matcher(definition);
+        final List<String> admitted = new ArrayList<>();
+        while (codes.find()) {
+            admitted.add(codes.group(1));
+        }
+        return admitted;
     }
 
     /**
@@ -817,11 +837,29 @@ class SchemaMigrationV2IT {
                     .hasMessageContaining("register_batch_status_chk");
         }
 
+        /**
+         * The vocabulary and the constraint, held to each other in <strong>both</strong>
+         * directions against the constraint Postgres is actually holding.
+         *
+         * <p>"Exactly" is the whole point, and {@code contains} does not say it: it proves every
+         * constant reaches the database and would say nothing about a seventh code the column
+         * admits and no constant names - a row support can find in the table, a label a dashboard
+         * can show, and nothing in this repository that explains either. The codes are therefore
+         * taken out of the live definition and compared as a set.
+         *
+         * <p>Not a duplicate of {@code BatchStateTest}'s comparison, which reads the migration
+         * <em>files</em>: this one reads the database those files were supposed to produce, so a
+         * constraint a migration never applied, or one something else changed, is caught here and
+         * only here. It is also the direction {@code V7} needs, being the migration that narrows.
+         */
         @Test
         void failure_reason_check_should_name_exactly_the_bounded_reasons() throws SQLException {
-            assertThat(constraintsOf(BATCH_TABLE).get("register_batch_failure_reason_chk"))
-                    .isNotNull()
-                    .contains(vocabularyOf(BatchFailureReason.class));
+            final String definition =
+                    constraintsOf(BATCH_TABLE).get("register_batch_failure_reason_chk");
+
+            assertThat(definition).isNotNull();
+            assertThat(admittedCodesOf(definition))
+                    .containsExactlyInAnyOrder(vocabularyOf(BatchFailureReason.class));
         }
 
         @Test
