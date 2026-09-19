@@ -18,11 +18,16 @@ observed result rather than a red run. No implementation task follows one.
 
 ### Approved TDD exceptions
 
-**None in advance.** Two task kinds are exempt by the constitution's mechanical exemption and say so
-where they appear: the dependency/wiring tasks of Phase 1 (which record verification evidence) and
-the deletion tasks of Phase 10 (a deletion has no red run — its evidence is that the suite the
-deleted code was proven by is gone with it and the build is green). Everything else is a pair. If a
-pair cannot be formed, the exception is written into **this section** with the design owner's dated
+**None in advance.** The constitution's exemption is narrow — "pure mechanical refactors (rename,
+move, extract with no behaviour change), formatting, and comment-only edits" — and this increment
+claims it for **one** task kind only: the deletion tasks of Phase 10, where a deletion has no red
+run and its evidence is that the suite the deleted code was proven by is gone with it and the build
+is green.
+**It is not claimed for Phase 1's dependency and wiring tasks.** An earlier draft of this file did,
+and a gate reviewer was right that adding a dependency, an exclude filter and a settings block is
+not a mechanical refactor. T002/T003 is an ordinary red/green pair whose red is a failing assertion
+(see the entry against T002), as T004/T005 and T006/T007 are. Everything else is a pair. If a pair
+cannot be formed, the exception is written into **this section** with the design owner's dated
 approval **before** the commit lands — never argued for afterwards in a commit body.
 
 ### Two standing rules for this increment
@@ -77,11 +82,14 @@ proposal) is in `spec.md`; step 2 (the bump) is commit `d73ef50`; step 3 is this
 
 **Purpose**: get the dependencies onto the classpath **without the context failing**, and make every
 start-up refusal that the amendment's condition (b) requires. Three of research's findings are
-context-will-not-start traps and all three are closed here. Phase 1's wiring tasks carry the
-mechanical exemption and record verification evidence; T004/T005 and T006/T007 are ordinary pairs.
+context-will-not-start traps and all three are closed here. All three pairs are ordinary red/green
+pairs: T002/T003's red is an assertion about a context that would not refresh, not the refusal
+itself (see T002), and T004/T005 and T006/T007 are refusals asserted the way every other startup
+refusal in this repository is.
 
 - [x] **T002** [US1] `config/AuditComponentScanTest` (new) — **the context starts, and holds no
-      component-scanned audit bean**. `@SpringBootTest` over the application's own configuration
+      component-scanned audit bean**. An `ApplicationContextRunner` over the application's own
+      configuration
       with the operations and audit switches off, asserting the context starts and that no bean of
       type `uk.gov.hmcts.cp.filter.audit.parser.OpenApiSpecificationParser` was created by scanning.
       Seam: none — the assertion is about the context that already exists.
