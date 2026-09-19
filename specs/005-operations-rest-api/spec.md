@@ -533,10 +533,25 @@ command printed.
   exactly what the CLI answered on such a pod, rather than a `404` that reads as a mistyped URL or a
   `500` about a missing bean. The endpoints that do not need them — the flag, the recorded-while-off
   listing, supersede and the exception report — MUST be served normally.
-- **FR-045**: Start-up MUST **refuse** when the operations API is enabled and HTTP audit is not: the
-  audit switch off, or its transport unconfigured, means endpoints that would be served unaudited,
-  which condition (b) of Principle III forbids. The refusal MUST name the offending setting, as
-  every other refusal in `config/PropertiesValidator` does.
+- **FR-045**: Start-up MUST **refuse**, **on a deployed pod**, when the operations API is enabled
+  and HTTP audit is not: the audit switch off, the library's own master switch off, or its transport
+  naming no broker or no port, each means endpoints that would be served unaudited, which condition
+  (b) of Principle III forbids. The refusal MUST name the offending setting, as every other refusal
+  in `config/PropertiesValidator` does.
+  **"Deployed" is the discriminator this service already draws deployment on** — a
+  `courtregister.servicebus.namespace`, which means workload identity, which means a pod — and it is
+  the same one that switches on the stub-reachability and outbound-validation refusals. It is part
+  of the requirement rather than an implementation liberty: a laptop has no audit broker and no
+  usersgroups, `quickstart.md`'s "Local" section documents the endpoints being reachable there with
+  both filters off, and FR-044's default of `true` means an unconditional reading of this rule would
+  stop `bootRun`, `docker compose up` and the container smoke until
+  `courtregister.operations.enabled: false` were committed into `application.yaml` — which FR-044
+  forbids. A deployment that wants the endpoints unaudited has exactly one supported way to have
+  them: switch them off.
+  Because a boolean here is read by two libraries whose own conditions match the **literal** string
+  `true`, the refusal MUST read `audit.http.enabled` and `cp.audit.enabled` the same way, and MUST
+  refuse a value such as `yes` or `on` that Spring would relax into `true` while the libraries
+  would not.
 - **FR-046**: The audit event for an operations call MUST carry **bounded fields** — the action, the
   outcome, and for a regeneration whether the flag was overridden — and MUST NOT carry a raw request
   or response body. The generic filter cannot infer any of that from a body, so the fields are
@@ -681,7 +696,10 @@ change is readable.
 9. **Audit is enforced at start-up, not left to a default.** `audit.http.enabled` defaults false,
    and condition (b) of Principle III says every endpoint is audited. So the operations API has its
    own deployment switch, `courtregister.operations.enabled` (default true), and start-up refuses
-   when it is on and HTTP audit is off or its transport unconfigured (FR-045).
+   when it is on and HTTP audit is off or its transport unconfigured (FR-045) — **on a deployed
+   pod**, on the namespace discriminator FR-045 states, because the alternative is a rule that stops
+   the local loop `quickstart.md` documents and forces `courtregister.operations.enabled: false`
+   into `application.yaml` against FR-044.
 10. **Nothing about the exception report's window or sinks changes.** The endpoint computes the same
     window the command computed, from the same schedule, and asks the same sinks.
 11. **Supersede is subordinated to the flag, bounded, and reversible-by-preview.** *Confirmed by the
