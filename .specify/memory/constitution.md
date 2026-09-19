@@ -1,7 +1,59 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 3.2.0 → 4.0.0
+Version change: 4.0.0 → 4.1.0
+Bump rationale: MINOR - conditions (a) and (b) of Principle III's operations
+                API gain the environment they are enforced in, and a named
+                local exemption (2026-09-20). 4.0.0 wrote both as obligations
+                on "every endpoint" with no scope, and increment 005's FR-045
+                and FR-053 enforce them as start-up refusals on a **deployed**
+                pod only - on the `courtregister.servicebus.namespace`
+                discriminator this service already draws deployment on - while
+                the local loop documented in the increment's quickstart serves
+                the endpoints with both filters off.
+
+                A review found the gap the right way round: a spec may not
+                grant itself an exemption from a condition stated here, so
+                either the code drops the discriminator or the constitution
+                records the exemption. It records it, because the two filters
+                are estate libraries that need an estate to talk to -
+                usersgroups for the caller's groups and an Artemis audit broker
+                for the events - and neither exists on a laptop, while
+                FR-044 serves the endpoints by default so an unconditional
+                reading would stop `bootRun`, `docker compose up` and the
+                container smoke until the endpoints were switched off in the
+                committed `application.yaml`, which FR-044 forbids.
+
+                MINOR rather than PATCH: the scope of a NON-NEGOTIABLE
+                condition is materially narrowed, which a reader of 4.0.0 would
+                get wrong, and a new obligation is added with it - the two
+                conditions are now enforced *as start-up refusals* wherever the
+                service is deployed rather than left to a library default.
+                MINOR rather than MAJOR: no endpoint that was forbidden becomes
+                permitted, and no deployed environment may do anything it could
+                not do before - on a deployed pod the conditions are stricter
+                than 4.0.0 left them, not weaker.
+
+Proposed in: specs/005-operations-rest-api/spec.md, FR-045 and FR-053, and
+assumption 9. Pinned by `ConfigurationValidationTest.OperationsRefusals`, whose
+two "should start" counterparts are the exemption itself.
+
+Modified sections (this amendment): Principle III - conditions (a) and (b) each
+gain the sentence saying where they are enforced, and a new paragraph after the
+four conditions names the discriminator, the refusals and the one supported way
+to have the endpoints unguarded. Nothing else changes; Principles I, II, IV-VIII
+untouched.
+
+Templates / guidance reviewed:
+  - .claude/rules/design_rules.md            ✅ "The operations API" section is
+      unchanged in substance and remains true: the filters are how the surface
+      is permitted, and the local loop is not a deployed environment.
+  - CLAUDE.md, .claude/rules/{workflow,technical-rules}.md,
+    .claude/agents/*.md                      ✅ compatible - none of them
+      states the conditions' environment, so none of them is now wrong.
+  - .specify/templates/*                     ✅ compatible - no change.
+
+Previous amendment (3.2.0 → 4.0.0):
 Bump rationale: MAJOR - Principle III is redefined (2026-09-19, design owner).
                 The principle read "This service has **no business REST API**"
                 and closed with "The only HTTP this service exposes is Spring
@@ -396,6 +448,11 @@ Modified principles (this amendment):
     DEFECT-FIXES.md with polarity flipped.
 
 History:
+  - 4.1.0 (2026-09-20) Principle III's conditions (a) and (b) gain the
+    environment they are enforced in - a start-up refusal wherever the service
+    is deployed, on the `courtregister.servicebus.namespace` discriminator -
+    and the local loop is recorded as the one exemption, at the constitution
+    rather than in a spec.
   - 4.0.0 (2026-09-19) Principle III redefined: the "no REST at all, operations
     are a CLI" clause becomes "no *business* REST API, and an operations API
     only under four conditions - authorised, audited, flag-gated where the
@@ -652,10 +709,14 @@ Rules:
     currently the usersgroups group "Second Line Support" and no other, with
     identity taken from the `CJSCPPUID` header. There is no default-allow: an
     action with no rule is refused, and a rule that names no group is a bug.
+    Enforced where the service is deployed, as a start-up refusal — see
+    "Where (a) and (b) are enforced" below.
   - **(b) Audited.** Behind `cp-audit-filter-springboot`, so every request and
     every response is published as an audit event to the audit context. An
     endpoint that is reachable without an audit event is worse than the
     `kubectl exec` it replaced, which at least left a cluster audit record.
+    Enforced where the service is deployed, as a start-up refusal — see
+    "Where (a) and (b) are enforced" below.
   - **(c) Flag-gated at least as strictly as its command was.** An endpoint
     reads the `CourtRegisterService` flag where the CLI command it replaces
     read it, and MUST NOT read it more permissively or omit the read the
@@ -674,6 +735,26 @@ Rules:
     no exception text, no fragment of a store's or a far end's own words, and
     **no operator input echoed back**: a refusal names the argument, never the
     value that was typed.
+
+  **Where (a) and (b) are enforced** (amended 2026-09-20). Both are obligations
+  on every **deployed** environment, and both are enforced there as start-up
+  refusals rather than left to a library default: a pod that sets
+  `courtregister.servicebus.namespace` — the discriminator this service already
+  draws deployment on, because a namespace means workload identity — MUST
+  refuse to start with the operations API enabled and either filter off, naming
+  the setting that is off. A deployed environment that wants the endpoints
+  unguarded has exactly one supported way to have them: switch the endpoints
+  off. Conditions (c) and (d) are unconditional, because they are this
+  service's own code rather than a library it has to be given.
+
+  The **local loop is the one exemption**, and it is stated here rather than in
+  a spec because a spec may not grant itself one: `cp-auth-rules-filter` needs
+  usersgroups to resolve a caller's groups and `cp-audit-filter-springboot`
+  needs an Artemis audit broker to publish to, and a laptop has neither. On a
+  developer machine or in CI — no namespace, a local credential source — the
+  endpoints are served with both filters off, reaching only a local store.
+  That, and nothing wider, is what the exemption covers; it is not available
+  to any environment a register could reach an operator from.
 
   A new endpoint that is not one of those actions, or an existing one that
   stops satisfying (a)–(d), requires a constitution amendment and not just a
@@ -1119,4 +1200,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 4.0.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-19
+**Version**: 4.1.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-20
