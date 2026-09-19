@@ -409,13 +409,13 @@ public class PropertiesValidator implements InitializingBean {
         if (!operations.enabled() || !hasText(properties.servicebus().namespace())) {
             return;
         }
-        if (!environment.getProperty(HTTP_AUDIT_ENABLED, Boolean.class, Boolean.FALSE)) {
+        if (!switchedOnAsTheLibraryReadsIt(environment, HTTP_AUDIT_ENABLED, false)) {
             throw new IllegalStateException(unaudited(HTTP_AUDIT_ENABLED)
-                    + " is false, so every call would be served publishing nothing");
+                    + " is not true, so every call would be served publishing nothing");
         }
-        if (!environment.getProperty(AUDIT_TRANSPORT_ENABLED, Boolean.class, Boolean.TRUE)) {
+        if (!switchedOnAsTheLibraryReadsIt(environment, AUDIT_TRANSPORT_ENABLED, true)) {
             throw new IllegalStateException(unaudited(AUDIT_TRANSPORT_ENABLED)
-                    + " is false, so the audit starter contributes no publisher at all");
+                    + " is not true, so the audit starter contributes no publisher at all");
         }
         if (Binder.get(environment).bind(AUDIT_HOSTS, HOST_LIST).orElse(List.of()).isEmpty()) {
             throw new IllegalStateException(unaudited(AUDIT_HOSTS)
@@ -427,6 +427,36 @@ public class PropertiesValidator implements InitializingBean {
             throw new IllegalStateException(unaudited(AUDIT_PORT) + " (" + port
                     + ") must be the port the audit broker listens on");
         }
+    }
+
+    /**
+     * Reads one of the two audit switches the way the library that owns it reads it: as the
+     * <strong>literal</strong> string {@code true}.
+     *
+     * <p>Not a fussy distinction. {@code cp.audit.enabled} gates
+     * {@code ArtemisAuditAutoConfiguration} and {@code audit.http.enabled} gates its filter, its
+     * parser and its path-parameter service, and all four conditions are
+     * {@code @ConditionalOnProperty(havingValue = "true")}, which compares the raw value with
+     * {@code equalsIgnoreCase} and matches nothing else. Spring's own conversion is wider: asked
+     * for a {@code Boolean}, it reads {@code yes}, {@code on} and {@code 1} as true as well. A
+     * deployment that writes {@code yes} would therefore satisfy a refusal that converts, and leave
+     * the library switched off - a pod serving every {@code /operations/**} endpoint unaudited,
+     * started by the very rule that exists to stop it.
+     *
+     * <p>The two defaults are the libraries' own, and they differ: the HTTP half's conditions carry
+     * no {@code matchIfMissing}, so an absent key is off, while the transport's class-level
+     * condition carries {@code matchIfMissing = true}, so an absent key is on.
+     *
+     * @param environment the resolved environment
+     * @param key         the setting to read
+     * @param whenUnset   what the owning library's own condition does when the key is absent
+     * @return whether the library would consider the switch on
+     */
+    private static boolean switchedOnAsTheLibraryReadsIt(final Environment environment,
+                                                         final String key,
+                                                         final boolean whenUnset) {
+        final String value = environment.getProperty(key);
+        return value == null ? whenUnset : "true".equalsIgnoreCase(value);
     }
 
     /**
@@ -450,7 +480,7 @@ public class PropertiesValidator implements InitializingBean {
      * library's and belongs to any context that turns it on.
      */
     private static void validateTheAuditFilterHasADocumentToRead(final Environment environment) {
-        if (environment.getProperty(HTTP_AUDIT_ENABLED, Boolean.class, Boolean.FALSE)
+        if (switchedOnAsTheLibraryReadsIt(environment, HTTP_AUDIT_ENABLED, false)
                 && !hasText(environment.getProperty(OPENAPI_REST_SPEC))) {
             throw new IllegalStateException(OPENAPI_REST_SPEC + MUST_BE_SET_WHEN
                     + HTTP_AUDIT_ENABLED + " is true: the filter globs the classpath for a suffix"
