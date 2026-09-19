@@ -49,6 +49,41 @@ pinning test that this increment removes, and that row's pinning-test cell is re
 that holds the same promise afterwards — an amendment to a cell, not a new row and not a change to
 what P2 claims. The differential audit is unaffected in both directions.
 
+## Clarifications
+
+### Session 2026-09-19
+
+Five decision points were found by the ambiguity scan. Each was answered from the design owner's
+decision of 2026-09-19 and from what the existing code makes possible; where the decision left
+genuine latitude, the option that changes the least behaviour was taken. Each answer is applied in
+the section named beside it.
+
+- Q: Is a stale batch released by failing it and then asking for a separate release, or by a failure
+  that releases in the same act? → A: **The same act.** The new reason joins the reasons that release
+  a batch's registers as part of failing it. Two statements leave a window in which the batch is
+  FAILED and its registers are still stamped, and a run that stopped in that window would strand them
+  exactly as the behaviour this increment removes did. *(FR-003, Assumptions.)*
+- Q: Does the run line's released count count batches or registers? → A: **Batches.** It replaces a
+  count of batches and is read beside counts of batches; how many registers came back is already
+  answerable from the assembly counts on the same line. *(FR-009, Assumptions.)*
+- Q: Are the retired timeout reason and the retired completion mechanism removed from the bounded
+  vocabularies, or kept? → A: **Kept as readable history, refused on the write path.** Rows already
+  written carry them and every read of such a row must keep working — the read that would otherwise
+  fail is the 07:00 report's, over the failed batches support most needs to see. Removing them would
+  cost a forward-only migration to narrow the schema and would buy two fewer unproduced values.
+  "Retired" is therefore enforced where writes happen. *(FR-012, Edge Cases, Assumptions.)*
+- Q: What becomes of the deployment shape that learned outcomes only from the query? → A: **Removed
+  outright**, rather than left as a setting with one legal value. After this change it would mean
+  "learn no outcome, fail every batch at the next run, render every day twice" — strictly worse than
+  refusing to start. A deployment with the generation half enabled must be configured for the
+  public-event topic, which is what every deployment of this service is configured for today.
+  *(FR-013, Edge Cases, Assumptions.)*
+- Q: Does the 07:00 report's rendering limit follow the renamed setting, or get a value of its own?
+  → A: **Its own value, keeping today's ten minutes.** The two durations now answer different
+  questions — "when should support be told a render is late" and "when does a run give up and
+  re-batch" — and following the renamed setting would silently move the report's threshold from ten
+  minutes to thirty as a side effect of this increment. *(FR-014, Assumptions.)*
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - A night's registers are never stranded by a render nobody heard about (Priority: P1)
