@@ -244,6 +244,16 @@ releaser and sweep that replace it**, `application/DocumentRenderer`, `adapter/s
   that constructs it is `batch/RegisterGenerationJob`, which is 004's. **005 adds the trigger
   through a factory that leaves the existing call site as it is**, or the task goes back to the
   orchestrator; it does not edit the job.
+- `domain/RunReportTest` — **both, and it exists in neither tree today**, which is how a
+  file-level ledger loses a file: 004's T017 names it "(extend)" and 005's T036 names it "(new)",
+  so whichever lands second either conflicts with the other's suite or replaces it. **Creation is
+  004's**: its assertions are about the line's own format string, which is what 004 rewrites.
+  005's T036 therefore **extends** the rebased suite rather than creating it, and if 005 reaches
+  T036 before 004 has landed, it creates the file and 004's assertions are merged into it on the
+  rebase. Either way both assertion sets survive: `the_run_line_carries_both_released_numbers`,
+  `a_run_that_released_nothing_says_zero` and `the_run_line_carries_no_reconciled_anywhere` are
+  004's and are kept whole, and the trigger cases are added beside them. A whole-line assertion
+  from either side is re-read against the merged line rather than deleted.
 - `config/ConfigurationValidationTest` — **both**, and it was missing from the first draft of this
   ledger. 004 extends it with `stale-after`, `batch-age-refresh` and `batch-generated-within` and
   removes the `completion` cases; 005 added the four audit keys to the suite's **base runner** and a

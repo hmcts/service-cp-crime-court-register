@@ -512,9 +512,13 @@ departure is forced — research R16 has the reasoning.
       `409 flag-off`; `409 flag-unreadable`; a date-wide regeneration with the flag ON accepted.
       Red: the override cases.
 - [ ] **T035** [US3] `api/BatchesController#generate` and its request/response records. Green: T034.
-- [ ] **T036** [P] [US3] `domain/RunReportTest` (**new** — there is no such suite today; the line is
-      asserted only inside `batch/RegisterGenerationJobTest`, which is 004's and must not be
-      touched) — **the operator run says it was one**. The run line carries `trigger=operator` for a
+- [ ] **T036** [P] [US3] `domain/RunReportTest` (**new here, extended after the rebase if 004
+      landed it first** — there is no such suite in either tree today, the line is asserted only
+      inside `batch/RegisterGenerationJobTest`, which is 004's and must not be touched, and 004's
+      own T017 names this file "(extend)". Creation is **004's** by the plan's coordination
+      ledger, because its cases are about the format string 004 rewrites; this task adds the
+      trigger cases beside them and keeps every released-batch assertion whole) — **the operator
+      run says it was one**. The run line carries `trigger=operator` for a
       regeneration launched over HTTP and the scheduler's own value otherwise, and
       `reason=overridden` where the flag was overridden — the same field `FeatureFlagGate` already
       counts and logs, which is **kept**, not replaced.
