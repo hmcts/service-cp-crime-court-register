@@ -149,7 +149,9 @@ function incomplete(work) {
   const out = []
   if (work.build_exit_code !== 0) out.push(synthetic('BLOCKER', `the build exited ${work.build_exit_code}: ${work.build_summary}`, 'make the full build exit 0, test-first'))
   if (!work.commits.length) out.push(synthetic('BLOCKER', 'no commits were made', 'implement the range and commit it'))
-  const missing = TASKS.filter(t => !work.tasks_done.includes(t))
+  // implementers sometimes return "T004 - what it did" rather than the bare id: count any id they name
+  const done = new Set((work.tasks_done || []).flatMap(x => String(x).match(/T\d{3}/g) || []))
+  const missing = TASKS.filter(t => !done.has(t))
   if (missing.length) out.push(synthetic('BLOCKER', `tasks not completed: ${missing.join(', ')}`, 'complete every task in the range'))
   if (String(work.git_status_after || '').trim()) out.push(synthetic('HIGH', 'the tree was left dirty after the last commit', 'commit or remove the leftover files; never leave stray files'))
   return out
