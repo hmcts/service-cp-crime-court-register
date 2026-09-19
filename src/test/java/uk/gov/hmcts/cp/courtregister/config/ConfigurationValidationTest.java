@@ -118,9 +118,15 @@ class ConfigurationValidationTest {
      *
      * <p>Four keys that belong to two libraries rather than to this service: the HTTP half's own
      * switch, the OpenAPI document it resolves path parameters from, and the transport the events
-     * are published over. Carried together by every case in {@code OperationsRefusals} that is
-     * about something else, each of which blanks exactly one of them - which is how a refusal is
-     * attributed to the setting that is missing rather than to whichever is checked first.
+     * are published over.
+     *
+     * <p><strong>Carried by the base runner, and therefore by every case in this suite</strong>,
+     * for the reason the payload, progression and reference-data identities above are: the
+     * operations API is served by default (FR-044), so every case that sets a namespace is a case
+     * about a deployed pod serving it, and a deployed pod serving it unaudited is refused. Each
+     * case in {@code OperationsRefusals} blanks exactly one of the four, which is how a refusal is
+     * attributed to the setting that is missing rather than to whichever is checked first. No other
+     * rule in this class reads any of them.
      */
     private static final String HTTP_AUDIT_ENABLED = "audit.http.enabled=true";
 
@@ -139,7 +145,8 @@ class ConfigurationValidationTest {
                     .withUserConfiguration(PropertiesTestConfiguration.class)
                     .withPropertyValues(PAYLOAD_IDENTITY_PROPERTY, PROGRESSION_ENDPOINT_PROPERTY,
                             PROGRESSION_IDENTITY_PROPERTY, REFDATA_ENDPOINT_PROPERTY,
-                            REFDATA_IDENTITY_PROPERTY);
+                            REFDATA_IDENTITY_PROPERTY, HTTP_AUDIT_ENABLED, OPENAPI_SPEC,
+                            AUDIT_HOSTS, AUDIT_PORT);
 
     /**
      * A deployment with the downstream half switched on and every setting it requires supplied.
@@ -2644,9 +2651,9 @@ class ConfigurationValidationTest {
     @DisplayName("the operations API is never served unaudited where it is deployed")
     class OperationsRefusals {
 
-        /** Everything a deployed pod serving the operations API needs, minus whichever case blanks one. */
-        private final ApplicationContextRunner deployed = runner.withPropertyValues(
-                NAMESPACE_PROPERTY, HTTP_AUDIT_ENABLED, OPENAPI_SPEC, AUDIT_HOSTS, AUDIT_PORT);
+        /** A deployed pod, with the audit path the base runner already carries for it. */
+        private final ApplicationContextRunner deployed =
+                runner.withPropertyValues(NAMESPACE_PROPERTY);
 
         @Test
         void operations_enabled_with_http_audit_disabled_refuses_to_start() {
@@ -2705,7 +2712,7 @@ class ConfigurationValidationTest {
          */
         @Test
         void http_audit_enabled_with_no_openapi_spec_key_refuses_to_start() {
-            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, HTTP_AUDIT_ENABLED)
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, "audit.http.openapi-rest-spec=")
                     .run(context -> {
                         assertThat(context).hasFailed();
                         assertThat(context.getStartupFailure())
@@ -2750,7 +2757,9 @@ class ConfigurationValidationTest {
 
         @Test
         void a_local_pod_serving_the_operations_api_unaudited_should_start() {
-            runner.withPropertyValues(CONNECTION_STRING_PROPERTY).run(context -> assertThat(context)
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, "audit.http.enabled=false",
+                    "cp.audit.enabled=false", "cp.audit.hosts=", "cp.audit.port=0")
+                    .run(context -> assertThat(context)
                     .as("quickstart.md's local convenience, stated as a test: a laptop has no"
                             + " audit broker and no usersgroups, and the endpoints are reachable"
                             + " there with the filters off. The discriminator is the credential"

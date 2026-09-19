@@ -179,12 +179,29 @@ mechanical exemption and record verification evidence; T004/T005 and T006/T007 a
       `validate(...)` - so the existing static's signature is untouched and 004's rename of the
       generation grace period meets an added method rather than a reshaped class. The constructor
       gains one parameter and the class two fields.)
-- [ ] **T005** [US1] `config/OperationsProperties` and `config/PropertiesValidator` — the record
+- [x] **T005** [US1] `config/OperationsProperties` and `config/PropertiesValidator` — the record
       bound at `@ConfigurationProperties(prefix = "courtregister.operations")` with its
       `@DefaultValue`s, following `GenerationProperties`' style, and the five refusals of T004
       written as the validator's existing helpers write generation's. **`PropertiesValidator` is
       shared with 004** (which renames the generation grace period): add a method, do not reshape
       the class. Green: T004's cases.
+      (green: `OperationsPropertiesTest` + `ConfigurationValidationTest`, 166 tests, 0 failures;
+      with `ReportPropertiesTest`, `TestProfileContextTest` and `AuditComponentScanTest` beside
+      them, 177 passed. Checkstyle and PMD clean on main and test.
+      **One thing the red run did not show, and the reason this entry is worth reading.** With the
+      refusals written, five *pre-existing* cases failed - `a_namespace_alone_should_start`,
+      `a_blank_connection_string_should_count_as_unset`, `every_setting_should_be_overridable`,
+      `live_mode_on_the_deployed_credential_source_should_start` and
+      `leaving_it_on_where_the_service_is_deployed_should_start`. Every one of them sets a
+      namespace, and the operations API is served by default (FR-044), so every one of them became
+      a deployed pod serving `/operations/**` unaudited. That is the rule working rather than the
+      rule being wrong: the four audit settings joined the suite's **base runner**, beside the
+      payload, progression and reference-data identities carried there for exactly the same reason,
+      and each `OperationsRefusals` case blanks exactly one of them. No pre-existing assertion was
+      changed, weakened or deleted.
+      `validateOperations` is four private helpers under one package-private entry point, in the
+      style the class's other rule families are written in; the static `validate(...)` is
+      byte-for-byte what it was, which is what keeps 004's rename a clean rebase.)
 - [ ] **T006** [P] [US1] `config/PublicEventsFactoryTest` (new) — **the listener container is built
       on the public-event connection factory, not the audit one** (research R8: the audit starter's
       `auditConnectionFactory` and `auditJmsTemplate` are `@Primary`, and `PublicEventsConfig`

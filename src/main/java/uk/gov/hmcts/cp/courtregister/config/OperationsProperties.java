@@ -2,6 +2,7 @@ package uk.gov.hmcts.cp.courtregister.config;
 
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
  * The settings the operations API is served under.
@@ -35,7 +36,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "courtregister.operations")
 public record OperationsProperties(
-        boolean enabled,
-        Duration supersedeMaxAge,
-        Duration lockWait) {
+        @DefaultValue("true") boolean enabled,
+        @DefaultValue("30d") Duration supersedeMaxAge,
+        @DefaultValue("0s") Duration lockWait) {
 }

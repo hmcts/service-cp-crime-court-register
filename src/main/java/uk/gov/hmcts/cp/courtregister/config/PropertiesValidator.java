@@ -3,12 +3,15 @@ package uk.gov.hmcts.cp.courtregister.config;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Duration;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.core.env.Environment;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Component;
@@ -190,6 +193,30 @@ public class PropertiesValidator implements InitializingBean {
     /** The hour the report's schedule is a wall-clock requirement in, for the zone refusal. */
     private static final String REPORT_HOUR = "07:00";
 
+    /** The operations API's own settings, by the name each one is spelled with in a refusal. */
+    private static final String OPERATIONS = "courtregister.operations";
+    private static final String OPERATIONS_ENABLED = OPERATIONS + ".enabled";
+    private static final String SUPERSEDE_MAX_AGE = OPERATIONS + ".supersede-max-age";
+    private static final String LOCK_WAIT = OPERATIONS + ".lock-wait";
+
+    /**
+     * The two audit libraries' own keys, read from the environment rather than bound.
+     *
+     * <p>{@code audit.http.*} belongs to {@code cp-audit-filter-springboot} and {@code cp.audit.*}
+     * to its Artemis transport. Re-declaring either under a {@code courtregister.} key would give a
+     * deployment two places to set one thing - the same argument {@link #BROKER_URL} is read from
+     * the environment for. The rules still have to be able to see them, because an operations
+     * endpoint served with any of them unset is an endpoint nobody can tell was called.
+     */
+    private static final String HTTP_AUDIT_ENABLED = "audit.http.enabled";
+    private static final String OPENAPI_REST_SPEC = "audit.http.openapi-rest-spec";
+    private static final String AUDIT_TRANSPORT_ENABLED = "cp.audit.enabled";
+    private static final String AUDIT_HOSTS = "cp.audit.hosts";
+    private static final String AUDIT_PORT = "cp.audit.port";
+
+    /** The audit transport's hosts are a list wherever they come from, so they are bound as one. */
+    private static final Bindable<List<String>> HOST_LIST = Bindable.listOf(String.class);
+
     /** Spring's own key, not this service's: the broker the completion events arrive on. */
     private static final String BROKER_URL = "spring.artemis.broker-url";
 
@@ -350,7 +377,113 @@ public class PropertiesValidator implements InitializingBean {
     /* default */ static void validateOperations(final OperationsProperties operations,
                                                  final CourtRegisterProperties properties,
                                                  final Environment environment) {
-        // T005 writes the five refusals here.
+        validateTheOperationsApiIsNeverServedUnauditedWhereItIsDeployed(operations, properties,
+                environment);
+        validateTheAuditFilterHasADocumentToRead(environment);
+        validateTheSupersedeBoundAdmitsSomething(operations);
+        validateTheLockAttemptIsSomethingAThreadCanMake(operations);
+    }
+
+    /**
+     * Condition (b) of constitution Principle III, made a startup refusal (FR-045).
+     *
+     * <p>An endpoint reachable without an audit event is worse than the {@code kubectl exec} it
+     * replaced, which at least left a cluster audit record. Three things have to hold for a call to
+     * be audited and none of them announces its absence at runtime: the HTTP half has to be
+     * switched on, the library's own master switch has to be on so that there is an
+     * {@code AuditService} on the context at all, and the transport has to name a broker and a port
+     * - because the filter <strong>swallows its own publishing failures</strong>, so a transport
+     * pointed at nothing produces a service that serves every endpoint and says so nowhere but the
+     * log.
+     *
+     * <p><strong>A deployed-environment rule</strong>, on the discriminator
+     * {@link #validateTheStubIsNotDeployed} already draws deployment on: a namespace means workload
+     * identity, which means a deployed pod. A laptop has no audit broker and no usersgroups, and
+     * the local loop serves the endpoints with both filters off deliberately - which is a local
+     * convenience and is not how any deployed environment is configured.
+     */
+    private static void validateTheOperationsApiIsNeverServedUnauditedWhereItIsDeployed(
+            final OperationsProperties operations, final CourtRegisterProperties properties,
+            final Environment environment) {
+
+        if (!operations.enabled() || !hasText(properties.servicebus().namespace())) {
+            return;
+        }
+        if (!environment.getProperty(HTTP_AUDIT_ENABLED, Boolean.class, Boolean.FALSE)) {
+            throw new IllegalStateException(unaudited(HTTP_AUDIT_ENABLED)
+                    + " is false, so every call would be served publishing nothing");
+        }
+        if (!environment.getProperty(AUDIT_TRANSPORT_ENABLED, Boolean.class, Boolean.TRUE)) {
+            throw new IllegalStateException(unaudited(AUDIT_TRANSPORT_ENABLED)
+                    + " is false, so the audit starter contributes no publisher at all");
+        }
+        if (Binder.get(environment).bind(AUDIT_HOSTS, HOST_LIST).orElse(List.of()).isEmpty()) {
+            throw new IllegalStateException(unaudited(AUDIT_HOSTS)
+                    + " names no broker, and the audit filter swallows every publishing failure -"
+                    + " so the events would be lost in silence rather than refused");
+        }
+        final int port = environment.getProperty(AUDIT_PORT, Integer.class, 0);
+        if (port <= 0) {
+            throw new IllegalStateException(unaudited(AUDIT_PORT) + " (" + port
+                    + ") must be the port the audit broker listens on");
+        }
+    }
+
+    /**
+     * The opening of every refusal above, so the endpoints and the setting are named in one place.
+     *
+     * @param setting the audit setting this refusal is about
+     * @return the sentence both halves of the refusal are built from
+     */
+    private static String unaudited(final String setting) {
+        return OPERATIONS_ENABLED + " is true on a deployed pod (" + NAMESPACE + " is set), so"
+                + " every /operations/** endpoint must be audited — but " + setting;
+    }
+
+    /**
+     * The audit filter finds its OpenAPI document by a <strong>suffix</strong> glob,
+     * {@code classpath*:} + {@code **}{@code /*} + the value of {@code audit.http.openapi-rest-spec}.
+     *
+     * <p>Unset, that globs for {@code *null}, matches nothing, and the library throws during the
+     * refresh naming neither the setting nor this service. Refused here instead, and refused
+     * wherever the HTTP half is switched on rather than only where it is deployed: the trap is the
+     * library's and belongs to any context that turns it on.
+     */
+    private static void validateTheAuditFilterHasADocumentToRead(final Environment environment) {
+        if (environment.getProperty(HTTP_AUDIT_ENABLED, Boolean.class, Boolean.FALSE)
+                && !hasText(environment.getProperty(OPENAPI_REST_SPEC))) {
+            throw new IllegalStateException(OPENAPI_REST_SPEC + MUST_BE_SET_WHEN
+                    + HTTP_AUDIT_ENABLED + " is true: the filter globs the classpath for a suffix"
+                    + " match and an unset value globs for *null, which matches nothing and fails"
+                    + " the refresh without naming either this service or the key");
+        }
+    }
+
+    /**
+     * A supersede bound of zero admits no instant at all.
+     *
+     * <p>Every call would be refused as too old, which is a configuration error wearing a refusal's
+     * clothes: the operator reads "the instant you gave is older than the bound" and goes looking
+     * at their own argument. Unconditional, because an unusable bound is unusable wherever it is
+     * set.
+     */
+    private static void validateTheSupersedeBoundAdmitsSomething(
+            final OperationsProperties operations) {
+        requirePositive(operations.supersedeMaxAge(), SUPERSEDE_MAX_AGE);
+    }
+
+    /**
+     * Zero is the non-blocking attempt at the nightly lock, and is the default; a positive value is
+     * a bounded wait. A negative one is neither, and would reach {@code LockConfiguration} as a
+     * duration no lock can be asked for.
+     */
+    private static void validateTheLockAttemptIsSomethingAThreadCanMake(
+            final OperationsProperties operations) {
+        if (operations.lockWait().isNegative()) {
+            throw new IllegalStateException(LOCK_WAIT + " (" + operations.lockWait()
+                    + ") must not be negative — zero is the non-blocking attempt at the"
+                    + " register-generation lock, and anything positive is a bounded wait for it");
+        }
     }
 
     /**
