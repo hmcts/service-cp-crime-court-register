@@ -149,6 +149,38 @@ class AuditComponentScanTest {
     }
 
     /**
+     * The other half of the claim, and the one no case made.
+     *
+     * <p>{@link Application}'s javadoc says the exclusion removes the duplicates the scan would
+     * make <em>and nothing else</em> - but every case above runs with the transport switched off,
+     * so an over-broad regex that also swallowed the starter's {@code @AutoConfiguration} class
+     * would have left all three green. This is the context that tells them apart: the transport
+     * on, pointed at a host that does not resolve, and the auto-configuration's own bean present
+     * anyway. {@code @AutoConfiguration} classes are registered from {@code
+     * AutoConfiguration.imports} rather than found by the scan, which is why a scan filter cannot
+     * reach them - and why this passes.
+     *
+     * <p>The host is unresolvable on purpose: the factory is constructed at refresh and does not
+     * connect, so the bean is there to assert on without the suite needing a broker.
+     */
+    @Test
+    @DisplayName("does not take the starter's auto-configuration with it")
+    void the_audit_transport_should_still_be_auto_configured_where_it_is_switched_on() {
+        runner.withPropertyValues("cp.audit.enabled=true",
+                        "cp.audit.hosts=artemis-audit.invalid",
+                        "cp.audit.port=61616")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context)
+                            .as("the exclusion is a component-scan filter, and an "
+                                    + "@AutoConfiguration class is not component-scanned: with "
+                                    + "cp.audit.enabled=true the starter contributes its "
+                                    + "connection factory exactly as it would in a deployed pod")
+                            .hasBean("auditConnectionFactory");
+                });
+    }
+
+    /**
      * The class names of every bean on this context that belongs to the audit starter.
      *
      * <p>Types are resolved without initialising a {@code FactoryBean}, so asking the question
