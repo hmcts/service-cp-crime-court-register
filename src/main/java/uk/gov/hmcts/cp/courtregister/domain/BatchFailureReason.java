@@ -9,9 +9,10 @@ package uk.gov.hmcts.cp.courtregister.domain;
  * available to support and is never logged at INFO, because it is another system's text about a
  * document whose every defendant is a child (constitution Principle VII).
  *
- * <p>The six are six different investigations. Two of them say no payload was ever stored to render
- * from, two say the renderer refused to start, and two say it started and did not finish - and only
- * the first pair leaves the batch's rows RECORDED for the next run to re-assemble.
+ * <p>The seven are seven different investigations. Two of them say no payload was ever stored to
+ * render from, two say the renderer refused to start, two say it started and did not finish, and
+ * one says this service stopped waiting for it - and only the first pair and the last leave the
+ * batch's rows RECORDED for the next run to re-assemble.
  *
  * <p><strong>What none of them says is whether the render request left this service.</strong>
  * {@link #RENDER_REQUEST_FAILED} is the ending of a request that was made and answered nothing
@@ -42,7 +43,23 @@ public enum BatchFailureReason {
     GENERATION_TIMED_OUT,
 
     /** The batch could not be assembled into a payload at all (defect fix P5). */
-    ASSEMBLY_FAILED;
+    ASSEMBLY_FAILED,
+
+    /**
+     * The next scheduled run began and the batch was still waiting for its render.
+     *
+     * <p>This service's own verdict, and the only one of the seven that is about the passage of
+     * time rather than about something that happened: the batch had been in flight longer than
+     * {@code courtregister.generation.stale-after}, so the run stopped waiting for it, failed it
+     * and gave its registers back to be re-assembled tonight.
+     *
+     * <p>It names no completion mechanism, because none was involved - no event arrived and nothing
+     * was asked. It says nothing about whether systemdocgenerator ever received the request either,
+     * and deliberately so: that is not a question this service can ask, and the ending is the same
+     * either way. A register that is late is recoverable; a register stranded in a batch nothing
+     * will finish is not, and this reason is how the second is turned into the first.
+     */
+    NOT_COMPLETED_BY_NEXT_RUN;
 
     /**
      * Whether this ending was reported by a completion mechanism outside this service.
@@ -53,9 +70,9 @@ public enum BatchFailureReason {
      * mechanism that did - which is what {@code register_batch.completed_by} holds and what the
      * {@code reconciled} metric counts.
      *
-     * <p>The other four are this service's own verdict about a render it could not ask for or could
-     * not hear about, and naming a mechanism on one of them would credit a decision nobody outside
-     * this service made.
+     * <p>The other five are this service's own verdict about a render it could not ask for, could
+     * not hear about, or stopped waiting for, and naming a mechanism on one of them would credit a
+     * decision nobody outside this service made.
      *
      * <p>Stated here once, and asked here by everything that enforces it: {@code JdbcRegisterStore}
      * refuses a mark whose attribution disagrees with its reason, and

@@ -240,11 +240,29 @@ each of the four below is a blocking prerequisite for every user story.
       `PropertiesValidator.validateReport` loses its `GenerationProperties` parameter, which nothing
       in it read any more, and `CourtRegisterProperties`'s javadoc reference to the grace period is
       re-pointed.)
-- [ ] T004 `domain/BatchFailureReason.java` — make T003 green. Add `NOT_COMPLETED_BY_NEXT_RUN`
+- [x] T004 `domain/BatchFailureReason.java` — make T003 green. Add `NOT_COMPLETED_BY_NEXT_RUN`
       with the javadoc data-model.md gives it: this service's own verdict, releasing, and naming no
       completion mechanism. `isGeneratorAttributed()` is **unchanged** here — it already answers
       `false` for a reason it does not name, and narrowing it is T048's, once the mechanism it names
       no longer exists. `CompletedBy` is not touched in this phase.
+      (red re-run before the change, `BatchFailureReasonTest` and `BatchStateTest`: 50 tests,
+      6 failures, 0 errors, every one an assertion — `not_completed_by_next_run_is_not_generator_attributed`
+      on "Expecting Optional to contain a value but it was empty", the two table cases and the two
+      bounded-set cases on the missing seventh name.
+      green: 51 tests, 1 failure, 0 errors. `BatchFailureReasonTest` is 14 of 14, so every claim
+      the enumeration can answer on its own is green. The one remaining failure is
+      `the_failure_reasons_should_be_exactly_the_seven_the_schema_enumerates`, and it is the red
+      T003 predicted for exactly this window: its **first** assertion — the enumeration holds the
+      seven — now passes, and it fails on its **second**, "the values
+      register_batch_failure_reason_chk admits after every committed migration", because V6 has not
+      landed. The constant landing before its migration is the half-done vocabulary that case exists
+      to refuse, and it goes green at T006. `checkstyleMain` and `pmdMain` green.
+      Two deviations, both prose and both forced by the seventh constant. The type javadoc's "the
+      six are six different investigations" becomes seven and names the new grouping, since only the
+      first pair *and the last* leave their rows RECORDED; and `isGeneratorAttributed()`'s "the
+      other four are this service's own verdict" becomes five, "could not ask for, could not hear
+      about, or stopped waiting for". Neither sentence is a rule anything reads; the method's
+      expression is untouched and `CompletedBy` is not opened.)
 - [ ] T006 `src/main/resources/db/migration/V6__admit_stale_release_reason.sql` — make T005 green.
       One statement: `register_batch_failure_reason_chk` is replaced by the same list plus
       `NOT_COMPLETED_BY_NEXT_RUN`, the two retired values still in it. The two attribution
