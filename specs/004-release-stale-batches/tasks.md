@@ -63,6 +63,36 @@ builds at once — **and a review gate in a new session**, whose findings land a
 then an implementation commit before the next phase starts. **Never two committing agents at once in
 this tree.**
 
+**T003-T007 are blocked on Phase 5 and did not land with T001-T002** (found 2026-09-19 while
+implementing this phase; the range is otherwise untouched and the tree is green at T002).
+`GenerationReconciler` is the only writer of the two constants T004 removes: line 159 builds its
+silence ending from `BatchFailureReason.GENERATION_TIMED_OUT` and `CompletedBy.RECONCILER`, and lines
+414 and 422 pass `CompletedBy.RECONCILER` into the store's two marks. The class is not deleted until
+**T022**, three phases later, so T004 cannot compile in Phase 1, and there is no honest substitute -
+the reconciler *is* the mechanism `RECONCILER` names, and re-pointing its silence at
+`NOT_COMPLETED_BY_NEXT_RUN` or its two marks at `EVENT` would write into `completed_by` a claim that
+is false. The collateral in the suite is the same shape and about sixty-five references
+(`GenerationReconcilerTest` 34, `RegisterStoreIT` 15, `RegisterBatchRepositoryIT` 5,
+`DocumentOutcomeSinkTest` 4, `SchemaMigrationV2IT` 4, and five single uses), all of it rewritten in
+Phase 1 and deleted in Phase 5.
+
+T005 and T006 travel with them, because `SchemaMigrationV2IT` asserts the constraint against the
+enumeration (`failure_reason_check_should_name_exactly_the_bounded_reasons`,
+`completed_by_check_should_name_exactly_the_two_completion_mechanisms`): V6's narrowed lists and an
+enum that still holds the retired constants cannot both be green. T007 travels with them because its
+observation is about V6 applying.
+
+Two resequencings are possible and the choice is the design owner's, because the second one moves what
+`data-model.md` says:
+
+1. **Move T003-T006 (and T007) to sit after T022 and T025**, leaving Phase 1 as the settings alone.
+   Nothing in `data-model.md` or the spec changes; the vocabulary and the migration land in the same
+   phase as the deletion that frees them, which is where the coupling actually is.
+2. **Split each removal across two migrations**: Phase 1 adds `NOT_COMPLETED_BY_NEXT_RUN` and a V6
+   that admits it, Phase 5 removes the two retired constants and narrows the three constraints in a
+   V7. This contradicts FR-012 and `data-model.md`, both of which say the admission and the removals
+   are *the same forward migration*, so it needs the design owner's word before it is taken.
+
 **One thing to know before Phase 1 runs anywhere**: T006's migration narrows two CHECK constraints,
 and Postgres refuses to add a constraint to a table holding a violating row. Any local volume,
 container or snapshot still holding a batch failed `GENERATION_TIMED_OUT` or completed by
@@ -90,7 +120,7 @@ each of the four below is a blocking prerequisite for every user story.
 
 ### Tests first ⚠️
 
-- [ ] T001 [P] `config/ConfigurationValidationTest` (extend) and `config/ReportPropertiesTest`
+- [x] T001 [P] `config/ConfigurationValidationTest` (extend) and `config/ReportPropertiesTest`
       (extend) — the renamed setting, the new one, the removed one and the un-borrowed one.
       `stale_after_defaults_to_thirty_minutes`; `a_zero_stale_after_refuses_to_start` and
       `a_negative_stale_after_refuses_to_start`, each asserting the message names
@@ -104,6 +134,27 @@ each of the four below is a blocking prerequisite for every user story.
       07:00 report's threshold. Delete `a_zero_grace_period_makes_the_unset_rendering_limit_refuse`,
       whose subject no longer exists. Red: the keys do not exist and the resolution still reads the
       generation half.
+      (red on the seam tree: 166 tests, 7 failures, 0 errors, every one an assertion.
+      `stale_after_defaults_to_thirty_minutes` on "expected: 30M but was: 10M";
+      `batch_age_refresh_defaults_to_ten_minutes` on "expected: 10M but was: null";
+      `a_zero_stale_after_refuses_to_start`, `a_negative_stale_after_refuses_to_start` and
+      `a_non_positive_batch_age_refresh_refuses_to_start` each on "Expecting
+      <Started application [...]> to have failed but context started successfully";
+      `batch_generated_within_defaults_to_ten_minutes_without_reading_the_generation_half` and
+      `report_defaults_are_the_documented_ones` on "expected: 10M but was: 1M".
+      The seams are the record components themselves, since a configuration default has no other
+      seam: `staleAfter` and `batchAgeRefresh` landed on `GenerationProperties` carrying the old
+      ten minutes and no default at all, and `ReportProperties.batchGeneratedWithin` landed
+      carrying one minute, so every red is an assertion on a value rather than a missing accessor.
+      Two deviations, both forced and both additive. First, `the_completion_setting_is_no_longer_bound`
+      and the broker rule's own cases live in a renamed nested class,
+      `GenerationOutcomeAndDurations`, because the class they were in was named after the setting
+      that goes; `poll_only_completion_without_a_broker_should_start` is deleted with its subject and
+      `event_completion_with_generation_disabled_should_start` is renamed
+      `a_disabled_generation_without_a_broker_should_start`. Second,
+      `an_unset_batch_generated_within_resolves_to_the_generation_grace_period` is deleted with
+      `resolvedBatchGeneratedWithin` and `an_explicit_batch_generated_within_is_honoured` keeps its
+      claim without naming the generation half.)
 - [ ] T003 [P] `domain/BatchFailureReasonTest` (extend) and `domain/BatchStateTest` (extend) — the
       swapped vocabulary. `the_six_reasons_are_the_bounded_set`;
       `not_completed_by_next_run_is_not_generator_attributed`;
@@ -128,7 +179,7 @@ each of the four below is a blocking prerequisite for every user story.
 
 ### Implementation
 
-- [ ] T002 `config/GenerationProperties.java`, `config/PropertiesValidator.java`,
+- [x] T002 `config/GenerationProperties.java`, `config/PropertiesValidator.java`,
       `config/ReportProperties.java`, `src/main/resources/application.yaml` — make T001 green.
       `gracePeriod` → `staleAfter` with `@DefaultValue("30m")`; add `batchAgeRefresh`
       `@DefaultValue("10m")`; remove the `completion` component and its two constants and its
@@ -142,6 +193,19 @@ each of the four below is a blocking prerequisite for every user story.
       from …grace-period", the notification block's "rather than the reconciler's grace-period
       above", and the report block's paragraph about resolving the rendering limit, replaced by the
       key itself).
+      (green: `ConfigurationValidationTest` and `ReportPropertiesTest`, 166 tests, 0 failures,
+      0 errors. Four files beyond the four this task names had to move with the removal, because the
+      component and the key they read no longer exist: `config/PublicEventsConfig` (the subscription
+      autostarts on `generation.enabled()` rather than on the completion mechanism — FR-013's end
+      state, reached here because there is nothing else left to read),
+      `config/ProcessedLogConfig` (the report's rendering limit is now `report.batchGeneratedWithin()`
+      rather than the deleted resolution), `config/GenerationConfig` and `batch/GenerationReconciler`
+      (the transitional reconciler's `@Scheduled` placeholder is re-pointed at
+      `${courtregister.generation.stale-after}`, so its cadence is thirty minutes until T022 deletes
+      it, and `GenerationReconcilerTest`'s placeholder assertion follows).
+      `PropertiesValidator.validateReport` loses its `GenerationProperties` parameter, which nothing
+      in it read any more, and `CourtRegisterProperties`'s javadoc reference to the grace period is
+      re-pointed.)
 - [ ] T004 `domain/BatchFailureReason.java`, `domain/CompletedBy.java` — make T003 green. Add
       `NOT_COMPLETED_BY_NEXT_RUN` with the javadoc data-model.md gives it; remove
       `GENERATION_TIMED_OUT` and `CompletedBy.RECONCILER`; narrow `isGeneratorAttributed()` to

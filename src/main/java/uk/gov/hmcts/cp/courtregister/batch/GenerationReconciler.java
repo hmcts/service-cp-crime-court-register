@@ -31,7 +31,7 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * <p>A batch whose {@code document-available} or {@code generation-failed} never arrived would
  * otherwise sit in GENERATING for ever: the broker is the only thing that was going to say what
  * happened, and a subscription that missed the event says nothing a second time. So a batch still
- * GENERATING past {@code courtregister.generation.grace-period} is asked about exactly once, through
+ * GENERATING past {@code courtregister.generation.stale-after} is asked about exactly once, through
  * systemdocgenerator's query API, and the answer is applied through the same
  * {@link uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink} the listener uses, naming
  * RECONCILER rather than EVENT so the row records which mechanism learned it.
@@ -144,7 +144,7 @@ public class GenerationReconciler {
      * is configured under means a deployment that lengthens the grace lengthens the interval with
      * it, rather than leaving a batch overdue for nine minutes out of every ten.
      */
-    private static final String GRACE_PERIOD = "${courtregister.generation.grace-period}";
+    private static final String GRACE_PERIOD = "${courtregister.generation.stale-after}";
 
     /**
      * What a batch systemdocgenerator answered about without a verdict is ended as.

@@ -37,7 +37,7 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
  * for the second the outcome arrived in. That hand-back is only worth anything if the message is
  * still the broker's to offer again: a {@code DefaultMessageListenerContainer} left at the default
  * {@code AUTO_ACKNOWLEDGE} acknowledges before it invokes the listener, so the exception would reach
- * a container with nothing left to roll back and the outcome would be lost until the grace-period
+ * a container with nothing left to roll back and the outcome would be lost until the next
  * reconciler noticed it ten minutes later. Boot's own
  * {@code DefaultJmsListenerContainerFactoryConfigurer} sets this for precisely that reason and is
  * not used here, so it is set here instead
@@ -117,7 +117,9 @@ public class PublicEventsConfig {
      *                          container caches a connection of its own rather than sharing one
      * @param jms               Spring's own JMS settings: the topic domain and the durable flag.
      *                          {@code spring.jms.client-id} is deliberately not read - see above
-     * @param generation        the downstream half's settings, for the completion mechanism
+     * @param generation        the downstream half's settings: the subscription exists where the
+     *                          generation half does, because it is the only way a batch learns what
+     *                          became of its render
      * @return the factory: durable, shared and topic-scoped
      */
     @Bean(LISTENER_CONTAINER_FACTORY)
@@ -140,8 +142,7 @@ public class PublicEventsConfig {
         // something to hand back to.
         factory.setSessionTransacted(true);
         factory.setErrorHandler(PublicEventsConfig::notApplied);
-        factory.setAutoStartup(
-                GenerationProperties.COMPLETION_EVENT.equals(generation.completion()));
+        factory.setAutoStartup(generation.enabled());
         return factory;
     }
 

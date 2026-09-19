@@ -176,19 +176,18 @@ public class ProcessedLogConfig {
      * halves of the processed log, the batches, the notifications and the register store, over one
      * client and one clock.
      *
-     * <p>The two thresholds it is given are the report's own settings; the third is resolved,
-     * because {@code batch-generated-within} is deliberately undefaulted and falls back to the
-     * generation half's grace period - one answer to "how long is too long for a render", not two
-     * that can disagree ({@link PropertiesValidator#resolvedBatchGeneratedWithin}). The generation
-     * schedule is handed in because it is what "the last scheduled run left this register behind"
-     * means, and the report has no business guessing it.
+     * <p>All three thresholds it is given are the report's own settings. {@code batch-generated-within}
+     * borrowed the generation half's grace period until 004 retired it; the two answer different
+     * questions now, so the report states its own. The generation schedule is handed in because it is
+     * what "the last scheduled run left this register behind" means, and the report has no business
+     * guessing it.
      *
      * @param requests      the request half of the processed log
      * @param batches       the {@code register_batch} table
      * @param notifications the {@code register_notification} table
      * @param registers     the recorded registers, through the store's own port
      * @param report        the report's own settings, for the three limits
-     * @param generation    the downstream half's settings, for the schedule and the fallback limit
+     * @param generation    the downstream half's settings, for the schedule the window opens on
      * @param metrics       where the five kinds and each delivery are counted
      * @param clock         the one clock the snapshot and the three cut-offs are taken from
      * @return the report
@@ -201,8 +200,7 @@ public class ProcessedLogConfig {
             final ProcessingMetrics metrics, final Clock clock) {
 
         return new ExceptionReportService(requests, batches, notifications, registers,
-                report.requestTerminalWithin(),
-                PropertiesValidator.resolvedBatchGeneratedWithin(report, generation),
+                report.requestTerminalWithin(), report.batchGeneratedWithin(),
                 report.notifiedWithin(), report.maxEntries(), generation.cron(), generation.zone(),
                 metrics, clock);
     }

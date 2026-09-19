@@ -135,7 +135,8 @@ class RegisterGenerationJobTest {
 
     private static final Duration RUN_DEADLINE = Duration.ofMinutes(60);
     private static final Duration LOCK_AT_MOST_FOR = Duration.ofMinutes(70);
-    private static final Duration GRACE_PERIOD = Duration.ofMinutes(10);
+    private static final Duration STALE_AFTER = Duration.ofMinutes(30);
+    private static final Duration BATCH_AGE_REFRESH = Duration.ofMinutes(10);
 
     /** 18:00 in Europe/London on a Thursday in August, which is 17:00 UTC. */
     private static final Instant SIX_PM = Instant.parse("2026-08-20T17:00:00Z");
@@ -279,7 +280,7 @@ class RegisterGenerationJobTest {
      */
     private static GenerationProperties settings() {
         return new GenerationProperties(true, COURT_CRON, COURTS_ZONE, false, RUN_DEADLINE,
-                LOCK_AT_MOST_FOR, GRACE_PERIOD, GenerationProperties.COMPLETION_EVENT,
+                LOCK_AT_MOST_FOR, STALE_AFTER, BATCH_AGE_REFRESH,
                 SourceMode.LIVE, SourceMode.LIVE, SourceMode.LIVE, SourceMode.LIVE);
     }
 

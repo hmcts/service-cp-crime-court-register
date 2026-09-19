@@ -87,7 +87,7 @@ class ReportSchedulingConfigTest {
     private static final String[] THE_SCHEDULES = {
         "courtregister.generation.cron=0 0 18 * * MON-FRI",
         "courtregister.generation.zone=Europe/London",
-        "courtregister.generation.grace-period=10m",
+        "courtregister.generation.stale-after=30m",
         "courtregister.generation.lock-at-most-for=70m",
         "courtregister.report.cron=0 0 7 * * MON-FRI",
         "courtregister.report.zone=Europe/London",

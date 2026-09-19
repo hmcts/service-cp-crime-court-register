@@ -839,9 +839,9 @@ class GenerationReconcilerTest {
                             + "generate is no net on the nights the flag says it may not")
                     .isNotNull();
             softly.assertThat(schedule == null ? null : schedule.fixedDelayString())
-                    .as("a cadence of the grace period, so a batch is asked about within one "
-                            + "grace period of becoming overdue instead of within one day")
-                    .isEqualTo("${courtregister.generation.grace-period}");
+                    .as("a cadence of the staleness threshold, so a batch is asked about within "
+                            + "one threshold of becoming overdue instead of within one day")
+                    .isEqualTo("${courtregister.generation.stale-after}");
             softly.assertThat(lock)
                     .as("two replicas asking systemdocgenerator about one batch would apply one "
                             + "outcome twice, and the second application is refused rather than "

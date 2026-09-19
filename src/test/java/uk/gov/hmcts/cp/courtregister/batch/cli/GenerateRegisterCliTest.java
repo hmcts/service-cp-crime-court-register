@@ -215,8 +215,8 @@ class GenerateRegisterCliTest {
      */
     private static GenerationProperties settings() {
         return new GenerationProperties(true, "0 0 18 * * MON-FRI", "Europe/London", false,
-                RUN_DEADLINE, Duration.ofMinutes(70), Duration.ofMinutes(10),
-                GenerationProperties.COMPLETION_EVENT, SourceMode.LIVE, SourceMode.LIVE,
+                RUN_DEADLINE, Duration.ofMinutes(70), Duration.ofMinutes(30),
+                Duration.ofMinutes(10), SourceMode.LIVE, SourceMode.LIVE,
                 SourceMode.LIVE, SourceMode.LIVE);
     }
 

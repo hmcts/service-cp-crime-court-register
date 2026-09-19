@@ -1753,42 +1753,132 @@ class ConfigurationValidationTest {
     }
 
     /**
-     * How a batch learns what became of its render.
+     * How a batch learns what became of its render, and how long a run waits before it stops.
      *
-     * <p>{@code event} is the platform pattern and the default: systemdocgenerator publishes the
-     * outcome and this service hears it on a durable subscription. It cannot hear anything without a
-     * broker to subscribe to, and a run that never learns an outcome is a batch that stays
-     * GENERATING until the reconciler times it out - every batch, every night, silently.
-     * {@code poll-only} is the escape hatch for an environment without broker access and asks for no
-     * broker at all.
+     * <p>There is one way an outcome arrives: systemdocgenerator publishes it and this service hears
+     * it on a durable subscription. It cannot hear anything without a broker to subscribe to, and a
+     * run that never learns an outcome is a batch that stays GENERATING until the next run gives up
+     * on it - every batch, every night, silently. So the rule applies whenever the generation half is
+     * enabled, and no setting can excuse it: the escape hatch that learned outcomes by asking the
+     * query API went with the query, because after 004 it would mean "learn no outcome, fail every
+     * batch at the next run, and render every day twice" - strictly worse than refusing to start.
+     *
+     * <p>The two durations beside it are the ones 004 introduces. {@code stale-after} is how long a
+     * batch the schedule made may be awaiting its render before the next run gives up on it and
+     * releases its registers, and it is destructive: it fails a batch and re-renders a day, so a
+     * non-positive value would fail every batch the first run could see. {@code batch-age-refresh} is
+     * how often the batch-age readings are taken between runs, and a non-positive one is a fixed
+     * delay Spring cannot schedule.
      */
     @Nested
-    @DisplayName("event-driven completion needs a broker to hear the outcome from")
-    class CompletionMechanism {
+    @DisplayName("the generation half's outcome, and the durations that bound the wait for it")
+    class GenerationOutcomeAndDurations {
+
+        private static final String STALE_AFTER = "courtregister.generation.stale-after";
+
+        private static final String BATCH_AGE_REFRESH = "courtregister.generation.batch-age-refresh";
 
         @Test
-        void event_completion_without_a_broker_should_fail_startup() {
+        void generation_without_a_broker_should_fail_startup() {
             generating.withPropertyValues("spring.artemis.broker-url=").run(context -> {
                 assertThat(context).hasFailed();
                 assertThat(context.getStartupFailure())
                         .hasMessageContaining("spring.artemis.broker-url")
-                        .hasMessageContaining("courtregister.generation.completion");
+                        .hasMessageContaining("courtregister.generation.enabled");
             });
-        }
-
-        @Test
-        void poll_only_completion_without_a_broker_should_start() {
-            generating.withPropertyValues("spring.artemis.broker-url=",
-                    "courtregister.generation.completion=poll-only")
-                    .run(context -> assertThat(context).hasNotFailed());
         }
 
         /** The listener is part of the downstream half, so a disabled one subscribes to nothing. */
         @Test
-        void event_completion_with_generation_disabled_should_start() {
-            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
-                    "courtregister.generation.completion=event")
+        void a_disabled_generation_without_a_broker_should_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY)
                     .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /**
+         * The retired escape hatch, asserted as gone rather than as unused.
+         *
+         * <p>A value nothing binds is ignored by Spring in silence, so "it no longer works" is not
+         * something a deployment could discover for itself. Both halves are stated: the record has no
+         * such component, and a context that sets the old value still refuses to start without a
+         * broker - which is exactly what the value used to excuse.
+         */
+        @Test
+        void the_completion_setting_is_no_longer_bound() {
+            assertThat(GenerationProperties.class.getRecordComponents())
+                    .extracting(java.lang.reflect.RecordComponent::getName)
+                    .as("removed outright rather than left as a setting with one legal value")
+                    .doesNotContain("completion");
+
+            generating.withPropertyValues("spring.artemis.broker-url=",
+                    "courtregister.generation.completion=poll-only").run(context -> {
+                        assertThat(context)
+                                .as("and the value that used to buy a deployment its way out of"
+                                        + " needing a broker now buys nothing at all")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("spring.artemis.broker-url");
+                    });
+        }
+
+        @Test
+        void stale_after_defaults_to_thirty_minutes() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY).run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context.getBean(GenerationProperties.class).staleAfter())
+                        .as("comfortably longer than a render of this size takes and comfortably"
+                                + " shorter than the gap between runs")
+                        .isEqualTo(Duration.ofMinutes(30));
+            });
+        }
+
+        @Test
+        void a_zero_stale_after_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, STALE_AFTER + "=0s")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure()).hasMessageContaining(STALE_AFTER);
+                    });
+        }
+
+        @Test
+        void a_negative_stale_after_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, STALE_AFTER + "=-1m")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure()).hasMessageContaining(STALE_AFTER);
+                    });
+        }
+
+        @Test
+        void batch_age_refresh_defaults_to_ten_minutes() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY).run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context.getBean(GenerationProperties.class).batchAgeRefresh())
+                        .as("the cadence the retired timer took the readings on, kept, so the"
+                                + " removal does not cost three continuous measurements")
+                        .isEqualTo(Duration.ofMinutes(10));
+            });
+        }
+
+        @Test
+        void a_non_positive_batch_age_refresh_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, BATCH_AGE_REFRESH + "=0s")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(BATCH_AGE_REFRESH);
+                    });
+
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, BATCH_AGE_REFRESH + "=-30s")
+                    .run(context -> {
+                        assertThat(context)
+                                .as("and a negative one the same way, because a fixed delay that"
+                                        + " never elapses is a reading nobody ever takes again")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining(BATCH_AGE_REFRESH);
+                    });
         }
     }
 
@@ -2233,9 +2323,6 @@ class ConfigurationValidationTest {
         /** The words only the unacknowledged branch says, so the two cannot be confused. */
         private static final String MUST_BE_EUROPE_LONDON = "must be Europe/London";
 
-        /** The grace period the unset rendering limit resolves from, by its own key. */
-        private static final String GRACE_PERIOD = "courtregister.generation.grace-period";
-
         @Test
         void a_negative_request_threshold_refuses_to_start() {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
@@ -2247,9 +2334,9 @@ class ConfigurationValidationTest {
         }
 
         /**
-         * An explicitly set zero is refused; only an <em>unset</em> value resolves. "Unset" and
-         * "zero" are different things an operator can mean, and a zero silently read as the grace
-         * period is a rendering limit nobody chose.
+         * A zero rendering limit reports every batch in the estate as late on its first morning, so
+         * it is refused under the report's own key - which, since 004, is the only key it can come
+         * from.
          */
         @Test
         void a_zero_batch_generated_within_refuses_to_start() {
@@ -2584,23 +2671,6 @@ class ConfigurationValidationTest {
                     .run(context -> assertThat(context)
                             .as("and of neither half on a pod that sends nothing at all")
                             .hasNotFailed());
-        }
-
-        /**
-         * The rendering limit is the one duration with no default of its own: unset, it <em>is</em>
-         * the generation half's grace period. A zero there is therefore a zero here, and a
-         * rendering limit of zero reports every batch in the estate as late on its first morning -
-         * so the resolved value is held to being positive too, and the refusal names the key the
-         * value really came from rather than the key that was left unset.
-         */
-        @Test
-        void a_zero_grace_period_makes_the_unset_rendering_limit_refuse() {
-            runner.withPropertyValues(CONNECTION_STRING_PROPERTY, REPORT + ".enabled=true",
-                    GRACE_PERIOD + "=0s").run(context -> {
-                        assertThat(context).hasFailed();
-                        assertThat(context.getStartupFailure())
-                                .hasMessageContaining(GRACE_PERIOD);
-                    });
         }
     }
 }

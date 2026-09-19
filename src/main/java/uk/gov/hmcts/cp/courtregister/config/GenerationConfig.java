@@ -187,7 +187,7 @@ public class GenerationConfig {
             final RegisterStore store, final GenerationMetrics metrics,
             final GenerationProperties properties, final Clock clock) {
         return new GenerationReconciler(batches, renderer, sink, store, metrics,
-                properties.gracePeriod(), clock);
+                properties.staleAfter(), clock);
     }
 
     /**

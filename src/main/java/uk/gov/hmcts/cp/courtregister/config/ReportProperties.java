@@ -25,9 +25,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * falls in the gap.
  *
  * <p>Every refusal this record's values can earn lives in {@link PropertiesValidator}, because each
- * of them is a relationship - between a duration and the fixed run budget, between the e-mail switch
- * and the two settings it makes required, or between an unset threshold and the generation half's
- * grace period.
+ * of them is a relationship - between a duration and the fixed run budget, or between the e-mail
+ * switch and the two settings it makes required.
  *
  * @param enabled                  master switch for the 07:00 job and its own scheduler
  * @param cron                     the schedule, in Spring's six-field dialect
@@ -42,8 +41,11 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param notifiedWithin           how long a batch may stay GENERATED without being notified before
  *                                 it is reported late
  * @param batchGeneratedWithin     how long a batch may stay PENDING or GENERATING before it is
- *                                 reported late; <strong>unset by design</strong>, and resolved
- *                                 from the generation half's grace period
+ *                                 reported late. Its own value since 004: it borrowed the
+ *                                 generation half's grace period until that setting became
+ *                                 {@code stale-after} and lengthened, and the two answer different
+ *                                 questions - when support should be told a render is late, and
+ *                                 when a run gives up on a batch and re-batches its registers
  * @param maxEntries               how many of the two <strong>late</strong> kinds one report may
  *                                 carry. Over it the oldest are kept and the rest are counted as
  *                                 dropped; the three failure kinds are never capped, because a
@@ -62,7 +64,7 @@ public record ReportProperties(
         @DefaultValue("15m") Duration lockAtMostFor,
         @DefaultValue("30m") Duration requestTerminalWithin,
         @DefaultValue("15m") Duration notifiedWithin,
-        Duration batchGeneratedWithin,
+        @DefaultValue("10m") Duration batchGeneratedWithin,
         @DefaultValue("5000") int maxEntries,
         @DefaultValue Email email) {
 

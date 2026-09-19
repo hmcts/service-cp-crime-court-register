@@ -710,8 +710,8 @@ class TelemetryPrivacyTest {
          */
         private static GenerationProperties generationSettings() {
             return new GenerationProperties(true, "0 0 18 * * MON-FRI", "Europe/London", false,
-                    Duration.ofMinutes(60), Duration.ofMinutes(70), Duration.ofMinutes(10),
-                    GenerationProperties.COMPLETION_EVENT,
+                    Duration.ofMinutes(60), Duration.ofMinutes(70), Duration.ofMinutes(30),
+                    Duration.ofMinutes(10),
                     GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE,
                     GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE);
         }

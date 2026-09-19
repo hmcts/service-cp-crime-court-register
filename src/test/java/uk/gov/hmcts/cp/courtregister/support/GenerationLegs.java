@@ -279,6 +279,11 @@ public final class GenerationLegs implements AutoCloseable {
 
     private static final Duration READ_TIMEOUT = Duration.ofSeconds(2);
 
+    private static final Duration STALE_AFTER = Duration.ofMinutes(30);
+
+    private static final Duration BATCH_AGE_REFRESH = Duration.ofMinutes(10);
+
+    /** The interval the transitional reconciler still sweeps on. */
     private static final Duration GRACE_PERIOD = Duration.ofMinutes(10);
 
     private static final ObjectMapper MAPPER = JacksonConfig.contractObjectMapper();
@@ -1401,8 +1406,8 @@ public final class GenerationLegs implements AutoCloseable {
     private static GenerationProperties settings() {
         return new GenerationProperties(true, GENERATION_CRON, GenerationProperties.COURTS_ZONE,
                 false,
-                RUN_DEADLINE, RUN_DEADLINE.plusMinutes(10), GRACE_PERIOD,
-                GenerationProperties.COMPLETION_EVENT,
+                RUN_DEADLINE, RUN_DEADLINE.plusMinutes(10), STALE_AFTER,
+                BATCH_AGE_REFRESH,
                 GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE,
                 GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE);
     }
