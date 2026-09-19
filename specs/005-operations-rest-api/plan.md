@@ -82,11 +82,12 @@ and ~20 removed
 | III — message-contract first | The reason for the amendment. All four conditions are requirements (FR-005–FR-009, FR-010–FR-013, FR-024–FR-027) and gate 8 of `workflow.md`. `openapi.yaml` joins the owned contracts with a contract test in both directions |
 | IV — canonical JSON in, typed out | Unaffected: the hearing payload does not come near this surface. The API's own requests and responses are typed records, as everything this service *produces* is |
 | V — ports and adapters | The controllers are inbound adapters. No controller holds a repository, an HTTP client or a decision; the three command classes that held orchestration give it to application services |
-| VI — nothing swallowed | Every refusal is an explicit status with a bounded reason. The one place this is at risk is the audit starter, which swallows its own publishing failures — that is its behaviour, it is named in research R10 and the plan's risks, and it is not extended to anything of ours |
+| VI — nothing swallowed | Every refusal is an explicit status with a bounded reason. The one place this is at risk is the audit starter, whose `AuditService.postMessageToArtemis` catches every `Exception`, logs it and returns — so an operations call could succeed with no audit event, which condition (b) of Principle III also forbids. **Not accepted as the library's behaviour**: the starter registers that bean `@ConditionalOnMissingBean` (research R10), so T045 supplies `api/OperationsAuditService` in its place and it does not swallow. What remains after that is one case and is in Complexity Tracking below |
 | VII — privacy in telemetry | FR-025, FR-026, FR-038, FR-046. Audit bodies off; the `CJSCPPUID` out of every log line; the privacy sweep extended to controller responses and `ProblemDetail` |
 | VIII — estate conventions | Gradle, the pinned analysis set, Conventional Commits, no AI attribution, package root `uk.gov.hmcts.cp.courtregister` |
 
-No entry in Complexity Tracking: nothing here asks for an exception to a principle. The amendment
+One entry in Complexity Tracking, below — a residual of the audit library that Principle VI and
+Principle III(b) both reach. Nothing else here asks for an exception to a principle: the amendment
 **is** the exception, taken at the constitution rather than in a plan.
 
 ## Project Structure
@@ -215,10 +216,13 @@ the new `application/` services listed above, `src/main/resources/openapi.yaml`,
 operations section, `specs/002-consolidate-progression-leg/quickstart.md`'s CLI examples,
 `scripts/container-smoke.sh`, `logback-cli.xml`.
 
-**005 must NOT touch** — `batch/RegisterGenerationJob`, `batch/GenerationReconciler`,
-`application/DocumentRenderer`, `adapter/systemdocgenerator/*`, the `courtregister.generation.*`
-block of `application.yaml`, README's generation section, or `design_rules.md`'s flow diagram and
-batch state machine. Those are 004's.
+**005 must NOT touch** — `batch/RegisterGenerationJob`, `batch/GenerationReconciler` **or the
+releaser and sweep that replace it**, `application/DocumentRenderer`, `adapter/systemdocgenerator/*`,
+`adapter/stub/StubDocumentRenderer`, `domain/DocumentStatus`, `domain/BatchFailureReason`,
+`domain/CompletedBy`, `config/GenerationProperties`, `config/GenerationMetrics`,
+`config/SchedulingConfig`, `db/migration/V6*`, the `courtregister.generation.*` and
+`courtregister.report.*` blocks of `application.yaml`, README's generation section, or
+`design_rules.md`'s flow diagram and batch state machine. Those are 004's.
 
 **Shared, by agreement**:
 
@@ -240,6 +244,43 @@ batch state machine. Those are 004's.
   that constructs it is `batch/RegisterGenerationJob`, which is 004's. **005 adds the trigger
   through a factory that leaves the existing call site as it is**, or the task goes back to the
   orchestrator; it does not edit the job.
+- `config/ConfigurationValidationTest` — **both**, and it was missing from the first draft of this
+  ledger. 004 extends it with `stale-after`, `batch-age-refresh` and `batch-generated-within` and
+  removes the `completion` cases; 005 added the four audit keys to the suite's **base runner** and a
+  nested `OperationsRefusals` class. The base-runner change is the one to watch on the rebase: it is
+  a property list every case in the file inherits, so a conflict there must be resolved by keeping
+  both sides' entries rather than by taking either list whole.
+- `src/main/resources/application.yaml` — **both**. 004 touches four sites in the
+  `courtregister.generation.*` block (the rename and its comments); 005 adds the `cp.audit.*` key
+  and will add the `authz.*`, `audit.http.*` and `courtregister.operations.*` blocks, and deletes
+  `courtregister.cli`. Different blocks of one file.
+- `config/CliModeConfig` and `config/CliModeConfigTest` — 004 **edits** them (the releaser and the
+  sweep are wired off a command JVM); 005 **deletes** them with the CLI. The rebase resolution is
+  the deletion, and 004's edit is discarded *with the file* — but only after the check below.
+- `application/ExceptionReportService`, `batch/cli/ReportExceptionsCliTest` and
+  `application/ExceptionReportServiceTest` — **004's semantic handoff to 005, and the one a
+  file-level ledger hides.** 004's FR-019 adds a report kind: a batch failed under its new
+  stale-release reason is reported as `BATCH_RELEASED` rather than `BATCH_FAILED`, in the CSV, the
+  table and the log event alike. 005 ports `report-exceptions` to an endpoint and deletes the CLI
+  class and its test. **The port must carry 004's behaviour**: before `batch/cli/` is deleted
+  (Phase 7), the endpoint's tests must assert the `BATCH_RELEASED` kind that
+  `ReportExceptionsCliTest` asserted, or 004's new behaviour is deleted along with the class that
+  proved it. Deleting a test is not the same as replacing it.
+- `config/TelemetryPrivacyTest` — **both**. 004 puts its releaser and sweep on the `GenerationLegs`
+  drive; 005 puts the controllers and the `ProblemDetail` bodies on the sweep. Additive on both
+  sides.
+- `README.md`, `specs/002-consolidate-progression-leg/quickstart.md` and
+  `specs/003-exception-report/quickstart.md` — **both** (004's FR-016 documentation list). 004
+  rewrites the reconciler sentences; 005 rewrites the CLI examples. Different paragraphs.
+- `.claude/agents/{spec-validator,software-engineer,qa,code-reviewer}.md` and
+  `.claude/rules/design_rules.md` — **both**, for the same reason and with the same resolution: 004
+  replaces the reconciler wording, 005 replaces the CLI wording.
+- `config/GenerationProperties` — 004's alone, but it **breaks two of 005's test files on the
+  rebase**: it deletes `completion` and its two constants, and `config/PublicEventsFactoryTest`
+  (005's, new) sets `courtregister.generation.completion=event` while the pre-existing
+  `config/PublicEventsConfigTest` constructs `GenerationProperties` positionally with
+  `COMPLETION_EVENT`. One line each, test-only, and expected.
+
 - **004 owes 005 one behaviour** — and **discharges it**: its pre-batching pass must not fail an
   operator-initiated batch that spans 18:00. 004's FR-017 states it as "the longer of the minimum
   age and the nightly run's own lock duration", which is at least the run deadline plus the margin
@@ -260,10 +301,14 @@ batch state machine. Those are 004's.
 2. **The `@Primary` JMS hijack** (R8). Worst case: the public-event listener silently attaches to
    the audit broker and every document outcome is lost. Mitigated by a context test naming the
    factory, and by taking the connection factory by name.
-3. **The audit starter swallows its own failures.** A call that cannot be audited proceeds and says
-   so only in a log line. Principle III(b) asks that every endpoint be audited; what we can enforce
-   is that the audit path is *configured and engaged*, which FR-045 makes a start-up refusal.
-   The residual risk — a broker outage during a call — is the library's, is named here, and is not
+3. **The audit starter swallows its own failures.** `AuditService.postMessageToArtemis` catches
+   every `Exception`, logs it and returns (verified in the 1.0.5 bytecode), so a call that cannot be
+   audited would proceed and say so only in a log line. Two things answer it: FR-045 makes the audit
+   path being *configured and engaged* a start-up refusal, and **T045 replaces the bean** — the
+   starter registers it `@ConditionalOnMissingBean` — with one that refuses the call
+   (`503 AUDIT_UNAVAILABLE`) when the request event cannot be published, before the action runs.
+   The residual is the **response** event, which is published after work that cannot be undone; it
+   is logged at ERROR and counted, it is the single entry in Complexity Tracking, and it is not
    hidden behind a claim we cannot make.
 4. **Widened reach.** The population that can regenerate and supersede goes from holders of cluster
    RBAC on this namespace to the estate-wide "Second Line Support" group — decided by the design
@@ -278,5 +323,10 @@ batch state machine. Those are 004's.
 
 ## Complexity Tracking
 
-None. No principle is deviated from; the one that had to change was changed at the constitution,
-under its own amendment procedure, and is proposed in the spec.
+One entry. The principle that had to *change* was changed at the constitution, under its own
+amendment procedure; this is the one place a principle is not fully met and the shortfall is
+recorded rather than argued away.
+
+| Violation | Why Needed | Simpler Alternative Rejected Because |
+|---|---|---|
+| **Principle VI (nothing swallowed) and Principle III(b) (every endpoint audited), for the audit **response** event alone.** `cp-audit-filter-springboot`'s `AuditService.postMessageToArtemis` catches every `Exception`, logs it and returns — verified in the 1.0.5 bytecode, not inferred from the README — so a broker outage would let an operations call succeed while publishing nothing. T045 replaces that bean (the starter registers it `@ConditionalOnMissingBean`) with one that does not swallow, and publishes the **request** event before the action so a failure there refuses the call `503 AUDIT_UNAVAILABLE`. What is left is the **response** event: the action has already happened, so a publish failure there cannot be refused. It is logged at ERROR with the action and the run id and moves a bounded counter — it is not silent, but the audit trail for that one call is incomplete, and no status code can say so to a caller whose work is done. | Condition (b) is a requirement on an endpoint being *reachable* unaudited, which the start-up refusal (FR-045) and the fail-closed request event together close. The response event records the outcome of work already done; making it a precondition of that work is not possible, and making the work conditional on it would mean a broker outage stopping every operator action during exactly the incident an operator is trying to end. | **A durable outbox** — write the response event into this service's own store and publish it from a sweep — would close it completely, and is rejected **for this increment** on scope: it is a table, a migration, a publisher and a retry policy for one event per operator call, on a surface that carries no defendant detail and whose actions are already recorded in `processed_request`, `register_batch` and the run report. **Retrying inline** was rejected because it holds the caller's connection open on the one path where the answer is already known. The outbox stays the named way to close this, and it is a story of its own, not a task smuggled into this one. **This entry needs the design owner's dated sign-off before Phase 8 lands** (T044/T045); until then the shortfall is recorded, not approved. |
