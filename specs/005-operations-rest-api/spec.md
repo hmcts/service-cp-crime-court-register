@@ -552,6 +552,17 @@ command printed.
   `true`, the refusal MUST read `audit.http.enabled` and `cp.audit.enabled` the same way, and MUST
   refuse a value such as `yes` or `on` that Spring would relax into `true` while the libraries
   would not.
+- **FR-053**: Start-up MUST **refuse**, on the same deployed pod and by the same reading, when the
+  operations API is enabled and `authz.http.enabled` is not the literal `true`. This is FR-045's
+  sibling and closes condition **(a)** of Principle III as FR-045 closes condition (b):
+  `AuthzAutoConfiguration` in `cp-auth-rules-filter` is
+  `@ConditionalOnProperty(prefix = "authz.http", name = "enabled", havingValue = "true")` with no
+  `matchIfMissing`, so the key off, absent, or spelled in one of the ways Spring relaxes into true
+  leaves a pod that registers **no authorisation filter at all** and answers every
+  `/operations/**` call from a caller carrying no identity. The refusal MUST name
+  `authz.http.enabled`. The discriminator, the literal-`true` reading and the one supported way to
+  have the endpoints unguarded — switch them off — are FR-045's, unchanged.
+
 - **FR-046**: The audit event for an operations call MUST carry **bounded fields** — the action, the
   outcome, and for a regeneration whether the flag was overridden — and MUST NOT carry a raw request
   or response body. The generic filter cannot infer any of that from a body, so the fields are
@@ -693,13 +704,15 @@ change is readable.
    `ProblemDetail`. What the audit event needs is the action, the outcome, whether the flag was
    overridden and (for supersede) the count, and the generic filter can infer none of that from a
    body; those are supplied through the starter's own seam. An earlier draft left bodies on.
-9. **Audit is enforced at start-up, not left to a default.** `audit.http.enabled` defaults false,
+9. **Authorisation and audit are enforced at start-up, not left to a default.** `audit.http.enabled` defaults false,
    and condition (b) of Principle III says every endpoint is audited. So the operations API has its
    own deployment switch, `courtregister.operations.enabled` (default true), and start-up refuses
    when it is on and HTTP audit is off or its transport unconfigured (FR-045) — **on a deployed
    pod**, on the namespace discriminator FR-045 states, because the alternative is a rule that stops
    the local loop `quickstart.md` documents and forces `courtregister.operations.enabled: false`
-   into `application.yaml` against FR-044.
+   into `application.yaml` against FR-044. The authorisation half is refused by the same rule and
+   on the same discriminator (FR-053): `authz.http.enabled` defaults false too, and a pod that
+   serves the endpoints to anybody is the same failure as one that serves them to nobody's record.
 10. **Nothing about the exception report's window or sinks changes.** The endpoint computes the same
     window the command computed, from the same schedule, and asks the same sinks.
 11. **Supersede is subordinated to the flag, bounded, and reversible-by-preview.** *Confirmed by the

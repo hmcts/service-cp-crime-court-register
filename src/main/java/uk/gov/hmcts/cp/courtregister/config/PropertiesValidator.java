@@ -208,6 +208,8 @@ public class PropertiesValidator implements InitializingBean {
      * the environment for. The rules still have to be able to see them, because an operations
      * endpoint served with any of them unset is an endpoint nobody can tell was called.
      */
+    private static final String AUTHZ_ENABLED = "authz.http.enabled";
+
     private static final String HTTP_AUDIT_ENABLED = "audit.http.enabled";
     private static final String OPENAPI_REST_SPEC = "audit.http.openapi-rest-spec";
     private static final String AUDIT_TRANSPORT_ENABLED = "cp.audit.enabled";
@@ -380,11 +382,47 @@ public class PropertiesValidator implements InitializingBean {
     /* default */ static void validateOperations(final OperationsProperties operations,
                                                  final CourtRegisterProperties properties,
                                                  final Environment environment) {
+        validateTheOperationsApiIsNeverServedUnauthorisedWhereItIsDeployed(operations, properties,
+                environment);
         validateTheOperationsApiIsNeverServedUnauditedWhereItIsDeployed(operations, properties,
                 environment);
         validateTheAuditFilterHasADocumentToRead(environment);
         validateTheSupersedeBoundAdmitsSomething(operations);
         validateTheLockAttemptIsSomethingAThreadCanMake(operations);
+    }
+
+    /**
+     * Condition (a) of constitution Principle III, made a startup refusal (FR-053).
+     *
+     * <p>The symmetric half of the rule below, and the one FR-045 left open. An endpoint served
+     * to a caller with no identity is worse than the {@code kubectl exec} it replaced, which at
+     * least needed exec rights on the namespace. {@code AuthzAutoConfiguration} in
+     * {@code cp-auth-rules-filter} is conditional on {@code authz.http.enabled} being the literal
+     * {@code true} with no {@code matchIfMissing}, so the key off, absent or spelled {@code yes}
+     * leaves a pod that registers no authorisation filter and admits everybody - and, like the
+     * audit half, announces that nowhere at runtime.
+     *
+     * <p><strong>A deployed-environment rule</strong>, on the same discriminator and for the same
+     * reason as the audit half: a laptop has no usersgroups to resolve a caller's groups through,
+     * and the local loop {@code quickstart.md} documents serves the endpoints with both filters
+     * off deliberately.
+     *
+     * @param operations  the operations API's settings
+     * @param properties  the bound settings, for the deployed/local discriminator alone
+     * @param environment the resolved environment, for the auth library's own key
+     */
+    private static void validateTheOperationsApiIsNeverServedUnauthorisedWhereItIsDeployed(
+            final OperationsProperties operations, final CourtRegisterProperties properties,
+            final Environment environment) {
+
+        if (!operations.enabled() || !hasText(properties.servicebus().namespace())) {
+            return;
+        }
+        if (!switchedOnAsTheLibraryReadsIt(environment, AUTHZ_ENABLED, false)) {
+            throw new IllegalStateException(unauthorised(AUTHZ_ENABLED)
+                    + " is not true, so cp-auth-rules-filter registers no filter at all and every"
+                    + " endpoint would answer a caller carrying no identity");
+        }
     }
 
     /**
@@ -492,8 +530,29 @@ public class PropertiesValidator implements InitializingBean {
      * @return the sentence both halves of the refusal are built from
      */
     private static String unaudited(final String setting) {
+        return servedOnADeployedPod("audited", setting);
+    }
+
+    /**
+     * The same opening for the authorisation half.
+     *
+     * @param setting the authorisation setting this refusal is about
+     * @return the sentence the refusal is built from
+     */
+    private static String unauthorised(final String setting) {
+        return servedOnADeployedPod("authorised", setting);
+    }
+
+    /**
+     * What both refusals say before they name their setting.
+     *
+     * @param obligation what every endpoint must be
+     * @param setting    the setting that is stopping it from being that
+     * @return the sentence the refusal is built from
+     */
+    private static String servedOnADeployedPod(final String obligation, final String setting) {
         return OPERATIONS_ENABLED + " is true on a deployed pod (" + NAMESPACE + " is set), so"
-                + " every /operations/** endpoint must be audited — but " + setting;
+                + " every /operations/** endpoint must be " + obligation + " — but " + setting;
     }
 
     /**

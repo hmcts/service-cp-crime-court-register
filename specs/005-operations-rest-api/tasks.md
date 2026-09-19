@@ -187,6 +187,20 @@ refusal in this repository is.
       pod`, and `a_deployed_pod_with_the_operations_api_switched_off_should_start_unaudited` —
       which is the half of the guard nothing pinned, because the only cases that switch the
       operations API off carry no namespace.)
+      (Gate round 2 added five more, all in `ConfigurationValidationTest`. Two are red-then-green
+      against a rule that was wrong: `an_audit_transport_whose_hosts_are_all_blank_refuses_to_
+      start` (`cp.audit.hosts=,` binds to two blank strings, which the starter's own
+      `validateProps` accepts as readily as the rule did) and
+      `an_audit_port_that_is_not_a_number_refuses_to_start` (the port was converted by the
+      environment, so the refresh failed with a message naming neither the setting nor the
+      endpoints). Three are red-then-green against a rule that was **missing** — FR-053, the
+      authorisation half of the same refusal: `operations_enabled_with_no_authorisation_filter_
+      refuses_to_start`, `an_absent_authorisation_switch_refuses_a_deployed_pod` and
+      `an_authorisation_switch_the_filter_would_not_read_as_true_refuses_to_start`. Two more are
+      **characterisation and say so in their javadoc**:
+      `an_audit_transport_whose_only_host_is_blank_refuses_to_start` and
+      `an_absent_audit_port_refuses_a_deployed_pod` were green when they were written.
+      `authz.http.enabled=true` joined the base runner for the reason the four audit keys did.)
       Seams: `config/OperationsProperties` declared with its components and **no** `@DefaultValue`s;
       `PropertiesValidator` gains a package-private `validateOperations(...)` that returns without
       looking. Red: the defaults case reads `null` where `30d` was expected; every refusal case on
@@ -239,7 +253,17 @@ refusal in this repository is.
       changed, weakened or deleted.
       `validateOperations` is four private helpers under one package-private entry point, in the
       style the class's other rule families are written in; the static `validate(...)` is
-      byte-for-byte what it was, which is what keeps 004's rename a clean rebase.)
+      byte-for-byte what it was, which is what keeps 004's rename a clean rebase.
+      **Gate round 2 added a fifth helper and corrected two lines of a sixth.**
+      `validateTheOperationsApiIsNeverServedUnauthorisedWhereItIsDeployed` is FR-053 — the
+      authorisation half condition (a) of Principle III asks for, refused on the same
+      discriminator and by the same literal-`true` reading, which a code review found open while
+      its audit twin was closed. It lands here rather than with T013 because it is a rule about a
+      pod, not about a controller, and nothing is reachable to authorise until Phase 2 anyway; the
+      `authz.http.*` block itself is still T013's. The host list is now refused when any element
+      is blank, and the port is read as text and parsed here rather than converted by the
+      environment, so the refusal names `cp.audit.port` as FR-045 requires. The static
+      `validate(...)` is still byte-for-byte what it was.)
 - [x] **T006** [P] [US1] `config/PublicEventsFactoryTest` (new) — **the listener container is built
       on the public-event connection factory, not the audit one** (research R8: the audit starter's
       `auditConnectionFactory` and `auditJmsTemplate` are `@Primary`, and `PublicEventsConfig`
@@ -329,6 +353,10 @@ true rather than claimed.
       library's list wholesale, and dropping `/actuator` makes the probes answer 401),
       `reload-on-each-request: false` in deployed environments (the library default is `true`), and
       `deny-when-no-rules: true`. Green: T012.
+      ⚠ `authz.http.enabled` is already a **startup refusal** on a deployed pod serving the
+      operations API (FR-053, landed with T005 at gate round 2), so the block this task adds has
+      to set it to the literal `true` wherever the service is deployed or the pod will not start —
+      which is the point of the refusal, and is exactly what FR-045's audit keys already require.
 
 ---
 
