@@ -312,6 +312,55 @@ phase closes on the tree as committed, which is what the two commits beyond T004
 `290d898` pins `SchemaMigrationV5IT` to V5, and `20bab2b` moves `BatchStateTest`'s three
 migration-reading fields above the first method. Review gate to follow.)
 
+**Review gate 1 ran against the committed Phase 1 content** with three read-only reviewers plus
+Codex. One finding above LOW, and where it was closed:
+
+* nothing observed **V6's footprint**. T006's narrative claims "no column, table or index is added"
+  and that neither attribution constraint was opened, but V4 and V5 each have a snapshot-diff suite
+  saying so of themselves and V6 had none — and pinning `SchemaMigrationV5IT` to V5 removed the one
+  head-running suite that would have failed noisily on a V6 that added anything else. Closed by
+  `persistence/SchemaMigrationV6IT`, in the `SchemaMigrationV4IT`/`V5IT` shape and pinned at **both**
+  ends (`target("5")` then `target("6")`), at `e4ddb89`, with the Test Matrix row in the same commit.
+  A pin of an already-correct migration cannot be red against the tree, so it was made red against
+  the migration instead: V6 was temporarily given an extra `ADD COLUMN` (red on
+  `v6_should_add_no_column_table_or_index`, `register_batch.stale_note` in the diff), then a
+  re-spelled `register_batch_completed_by_chk` (red on
+  `v6_should_rewrite_only_the_failure_reason_check`). The second mutation is what earned the suite
+  its shape: `v6_should_leave_every_other_constraint_untouched` was first written subtracting the
+  diff from both snapshots, which makes the two sets equal by construction, and it **passed** the
+  mutation. It now subtracts the one constraint V6 may rewrite **by name**, and both cases are red
+  against that mutation. Green against the tree as committed: 4 of 4.
+
+Two LOW findings were closed here as well, both cheap and both in files this phase already owns:
+
+* `failure_reason_check_should_name_exactly_the_bounded_reasons` said "exactly" and asserted
+  `contains`, which proves every constant reaches the database and nothing at all about a code the
+  column admits and no constant names. The codes are now taken out of the live definition and
+  compared `containsExactlyInAnyOrder` against `BatchFailureReason`, which is the direction **V7**
+  needs and which `BatchStateTest` cannot supply, reading the migration *files* rather than the
+  database they were supposed to produce. Red against a V6 temporarily carrying an eighth code
+  (`ABANDONED`), green against the tree: 78 of 78. At `69dee54`.
+* V6's comment said an attributed row under the new reason evaluates as `true = false` in
+  `register_batch_completed_by_shape_chk`'s third arm. It evaluates as `false = true` — the reason
+  is not in that arm's attributed list, and the attribution is present — and the same sentence sat
+  in `the_new_reason_refuses_an_attribution`'s javadoc, where it also conflated the refused row
+  with the admitted one. Both corrected; the row is refused either way and no behaviour changes.
+  Editing V6's text changes its Flyway checksum, which is safe only because V6 has been applied to
+  no environment: **V6 is frozen from here**, and the same correction after cutover would have been
+  a V8. At `ecc3309`.
+
+The remaining LOW findings are left, each with its reason, for the reviewers to re-judge: the five
+stale reason-cardinality sentences (`JdbcRegisterStore` 586 and 1524, `RegisterStore` 295,
+`RegisterStoreIT` 1777, `GenerationMetricsTest` 156) and `RELEASING_REASONS` itself belong to the
+Phase 2 commit that opens `JdbcRegisterStore` — T008/T009 — and the enum shrinks back to six at
+T048; `design_rules`' six-reason list is T041's; and renaming the Phase 1 cases to the `should_`
+form would rewrite the red runs recorded against their current names at T003, T005 and T006.
+
+Green after the remediation: `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` BUILD
+SUCCESSFUL, exit 0, 3634 tests over 577 suites, 0 failures, 0 errors — four more than the phase
+close, being `SchemaMigrationV6IT`'s — with `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest`
+and `jacocoTestCoverageVerification` all green and none of them loosened.
+
 ---
 
 ## Phase 2: User Story 1 — the fenced store operation (Priority: P1) 🎯 MVP
