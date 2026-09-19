@@ -145,10 +145,19 @@ mechanical exemption and record verification evidence; T004/T005 and T006/T007 a
       `courtregister.operations.enabled=true`, `supersede-max-age=30d`, `lock-wait=0s`. Refusals,
       each asserting the message **names the offending setting**:
       `operations_enabled_with_http_audit_disabled_refuses_to_start`,
-      `operations_enabled_with_an_unconfigured_audit_transport_refuses_to_start`,
+      `an_audit_transport_with_no_broker_refuses_to_start`,
+      `an_audit_transport_switched_off_refuses_to_start`,
+      `an_audit_transport_with_no_port_refuses_to_start`,
       `http_audit_enabled_with_no_openapi_spec_key_refuses_to_start`,
       `a_zero_supersede_max_age_refuses_to_start`,
       `a_negative_lock_wait_refuses_to_start`.
+      (The three transport cases were one method, `operations_enabled_with_an_unconfigured_audit_
+      transport_refuses_to_start`, with three runs inside it; split at gate round 1 so a failure in
+      the first no longer hides whether the other two still refuse. Four cases joined them in the
+      same round: the two literal-`true` refusals, `an_absent_http_audit_switch_refuses_a_deployed_
+      pod`, and `a_deployed_pod_with_the_operations_api_switched_off_should_start_unaudited` —
+      which is the half of the guard nothing pinned, because the only cases that switch the
+      operations API off carry no namespace.)
       Seams: `config/OperationsProperties` declared with its components and **no** `@DefaultValue`s;
       `PropertiesValidator` gains a package-private `validateOperations(...)` that returns without
       looking. Red: the defaults case reads `null` where `30d` was expected; every refusal case on

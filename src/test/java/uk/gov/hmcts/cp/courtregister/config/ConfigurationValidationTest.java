@@ -2212,6 +2212,28 @@ class ConfigurationValidationTest {
                         .isNullOrEmpty();
             });
         }
+
+        /**
+         * The audit transport's own master switch, which the shipped file turns <em>off</em>.
+         *
+         * <p>It is not this service's setting and it is not read by any rule above, which is why
+         * nothing else in this suite would notice it moving: {@code AuditComponentScanTest} sets it
+         * explicitly and the {@code test} profile overrides it. What the default protects is a
+         * laptop: with the key on, the audit starter's auto-configuration builds an Artemis
+         * connection factory and validates {@code cp.audit.hosts} and {@code cp.audit.port} while
+         * doing so - whether or not HTTP auditing is on - so a lost or flipped default is a
+         * {@code bootRun} that fails on a broker nobody asked for.
+         */
+        @Test
+        void the_audit_transport_should_ship_switched_off_for_a_laptop() {
+            shippedOnTheStub.run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context.getEnvironment().getProperty("cp.audit.enabled"))
+                        .as("the file reads CP_AUDIT_ENABLED and defaults it off; a deployment that"
+                                + " wants the transport says so through the environment variable")
+                        .isEqualTo("false");
+            });
+        }
     }
 
     /**
@@ -2669,8 +2691,15 @@ class ConfigurationValidationTest {
             });
         }
 
+        /**
+         * The transport's three settings, one method each.
+         *
+         * <p>They were one method with three runs in it, and a failure in the first hid whether
+         * the other two still refused - which is the failure mode a refusal suite can least afford,
+         * because each of these is a different way for the same pod to be served unaudited.
+         */
         @Test
-        void operations_enabled_with_an_unconfigured_audit_transport_refuses_to_start() {
+        void an_audit_transport_with_no_broker_refuses_to_start() {
             deployed.withPropertyValues("cp.audit.hosts=").run(context -> {
                 assertThat(context)
                         .as("the HTTP half being on buys nothing without a broker to publish to:"
@@ -2682,17 +2711,23 @@ class ConfigurationValidationTest {
                         .hasMessageContaining("cp.audit.hosts")
                         .hasMessageContaining("courtregister.operations.enabled");
             });
+        }
 
+        @Test
+        void an_audit_transport_switched_off_refuses_to_start() {
             deployed.withPropertyValues("cp.audit.enabled=false").run(context -> {
                 assertThat(context)
-                        .as("and the library's own master switch is the sharpest form of it:"
-                                + " with it off there is no AuditService on the context at all")
+                        .as("the library's own master switch is the sharpest form of it: with it"
+                                + " off there is no AuditService on the context at all")
                         .hasFailed();
                 assertThat(context.getStartupFailure())
                         .hasMessageContaining("cp.audit.enabled")
                         .hasMessageContaining("courtregister.operations.enabled");
             });
+        }
 
+        @Test
+        void an_audit_transport_with_no_port_refuses_to_start() {
             deployed.withPropertyValues("cp.audit.port=0").run(context -> {
                 assertThat(context)
                         .as("and a port nothing listens on is the same thing said in numbers")
@@ -2701,6 +2736,35 @@ class ConfigurationValidationTest {
                         .hasMessageContaining("cp.audit.port")
                         .hasMessageContaining("courtregister.operations.enabled");
             });
+        }
+
+        /**
+         * The absent key, which every other case here hides.
+         *
+         * <p>The base runner carries {@code audit.http.enabled=true} so that the suite's
+         * pre-existing deployed-pod cases still start, and each refusal above blanks one setting
+         * explicitly - so nothing in the suite exercises the key being <em>missing</em>. The
+         * validator's answer to a missing key is the filter library's own (no
+         * {@code matchIfMissing}, so off), and a regression to a permissive default would leave
+         * every case here green.
+         */
+        @Test
+        void an_absent_http_audit_switch_refuses_a_deployed_pod() {
+            new ApplicationContextRunner()
+                    .withUserConfiguration(PropertiesTestConfiguration.class)
+                    .withPropertyValues(PAYLOAD_IDENTITY_PROPERTY, PROGRESSION_ENDPOINT_PROPERTY,
+                            PROGRESSION_IDENTITY_PROPERTY, REFDATA_ENDPOINT_PROPERTY,
+                            REFDATA_IDENTITY_PROPERTY, OPENAPI_SPEC, AUDIT_HOSTS, AUDIT_PORT,
+                            NAMESPACE_PROPERTY)
+                    .run(context -> {
+                        assertThat(context)
+                                .as("a key nobody set is a filter nobody registered, and the pod"
+                                        + " would serve every endpoint publishing nothing")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("audit.http.enabled")
+                                .hasMessageContaining("courtregister.operations.enabled");
+                    });
         }
 
         /**
@@ -2789,6 +2853,26 @@ class ConfigurationValidationTest {
                     .as("the counterpart every refusal above needs: with the HTTP half on, a"
                             + " document for it to read and a transport to publish through, a"
                             + " deployed pod serving the operations API starts")
+                    .hasNotFailed());
+        }
+
+        /**
+         * The other half of the guard, and the one no case pinned.
+         *
+         * <p>Every refusal above needs the operations API to be <em>on</em>; the only cases in the
+         * repository that switch it off carry no namespace, so dropping
+         * {@code !operations.enabled()} from the guard would have changed nothing any suite
+         * noticed. A deployment that wants the endpoints unaudited has exactly one supported way to
+         * have them - switch them off - and this is what says so.
+         */
+        @Test
+        void a_deployed_pod_with_the_operations_api_switched_off_should_start_unaudited() {
+            deployed.withPropertyValues("courtregister.operations.enabled=false",
+                    "audit.http.enabled=false", "cp.audit.enabled=false", "cp.audit.hosts=",
+                    "cp.audit.port=0")
+                    .run(context -> assertThat(context)
+                    .as("nothing is served, so there is nothing to audit: the refusal is about"
+                            + " endpoints being reachable, not about the settings existing")
                     .hasNotFailed());
         }
 
