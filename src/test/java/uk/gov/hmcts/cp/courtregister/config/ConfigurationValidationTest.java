@@ -2814,13 +2814,13 @@ class ConfigurationValidationTest {
         void an_absent_audit_port_refuses_a_deployed_pod() {
             deployedCarrying(AUTHZ_ENABLED, HTTP_AUDIT_ENABLED, OPENAPI_SPEC, AUDIT_HOSTS)
                     .run(context -> {
-                assertThat(context)
-                        .as("a key nobody set is a transport with nowhere to connect to")
-                        .hasFailed();
-                assertThat(context.getStartupFailure())
-                        .hasMessageContaining("cp.audit.port")
-                        .hasMessageContaining("courtregister.operations.enabled");
-            });
+                        assertThat(context)
+                                .as("a key nobody set is a transport with nowhere to connect to")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("cp.audit.port")
+                                .hasMessageContaining("courtregister.operations.enabled");
+                    });
         }
 
         /**
