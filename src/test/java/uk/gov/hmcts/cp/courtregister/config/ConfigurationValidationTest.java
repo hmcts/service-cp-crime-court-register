@@ -2677,6 +2677,25 @@ class ConfigurationValidationTest {
         private final ApplicationContextRunner deployed =
                 runner.withPropertyValues(NAMESPACE_PROPERTY);
 
+        /**
+         * A deployed pod carrying <strong>only</strong> the audit settings named.
+         *
+         * <p>The base runner carries all four and {@code withPropertyValues} can only add to
+         * them, so a case about a key being <em>absent</em> - as opposed to blank, which is a
+         * value - has to be built from the same parts without it.
+         *
+         * @param auditSettings the audit settings this pod is configured with
+         * @return the runner
+         */
+        private ApplicationContextRunner deployedCarrying(final String... auditSettings) {
+            return new ApplicationContextRunner()
+                    .withUserConfiguration(PropertiesTestConfiguration.class)
+                    .withPropertyValues(PAYLOAD_IDENTITY_PROPERTY, PROGRESSION_ENDPOINT_PROPERTY,
+                            PROGRESSION_IDENTITY_PROPERTY, REFDATA_ENDPOINT_PROPERTY,
+                            REFDATA_IDENTITY_PROPERTY, NAMESPACE_PROPERTY)
+                    .withPropertyValues(auditSettings);
+        }
+
         @Test
         void operations_enabled_with_http_audit_disabled_refuses_to_start() {
             deployed.withPropertyValues("audit.http.enabled=false").run(context -> {
@@ -2739,6 +2758,79 @@ class ConfigurationValidationTest {
         }
 
         /**
+         * A host list that is not empty and still names nothing.
+         *
+         * <p><strong>Characterisation</strong>: this one was already refused when it was written,
+         * because a blank scalar binds to an <em>empty</em> list rather than to a list of one
+         * blank. It is kept as the neighbour of the case below, which is the one that was not:
+         * nothing else in the suite says which side of the line whitespace falls on, and the two
+         * values are a keystroke apart in a values file.
+         */
+        @Test
+        void an_audit_transport_whose_only_host_is_blank_refuses_to_start() {
+            deployed.withPropertyValues("cp.audit.hosts=   ").run(context -> {
+                assertThat(context)
+                        .as("whitespace binds to a one-element list of nothing, which is a broker"
+                                + " named no more than an absent key names one")
+                        .hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("cp.audit.hosts")
+                        .hasMessageContaining("courtregister.operations.enabled");
+            });
+        }
+
+        @Test
+        void an_audit_transport_whose_hosts_are_all_blank_refuses_to_start() {
+            deployed.withPropertyValues("cp.audit.hosts=,").run(context -> {
+                assertThat(context)
+                        .as("and a comma with nothing either side of it binds to two of them,"
+                                + " which is the shape a half-written deployment value takes")
+                        .hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("cp.audit.hosts")
+                        .hasMessageContaining("courtregister.operations.enabled");
+            });
+        }
+
+        /**
+         * The absent port, which the {@code =0} case above hides.
+         *
+         * <p><strong>Characterisation</strong>: also green when it was written, because the rule
+         * reads the key with a default of zero and zero is already refused. Nothing said so,
+         * though, and the branch is one a later edit could change without any case noticing - a
+         * default of anything positive would admit a pod whose transport names no port at all.
+         */
+        @Test
+        void an_absent_audit_port_refuses_a_deployed_pod() {
+            deployedCarrying(HTTP_AUDIT_ENABLED, OPENAPI_SPEC, AUDIT_HOSTS).run(context -> {
+                assertThat(context)
+                        .as("a key nobody set is a transport with nowhere to connect to")
+                        .hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("cp.audit.port")
+                        .hasMessageContaining("courtregister.operations.enabled");
+            });
+        }
+
+        /**
+         * A port that will not read as a number is this service's refusal, not Spring's.
+         *
+         * <p>Asked for an {@code Integer}, the environment raises a conversion failure that names
+         * neither the setting, nor the endpoints it would leave unaudited, nor the operations
+         * switch that made the pair unsafe - and it quotes the value back. FR-045 requires the
+         * refusal to name the offending setting, so the value is read as text and parsed here.
+         */
+        @Test
+        void an_audit_port_that_is_not_a_number_refuses_to_start() {
+            deployed.withPropertyValues("cp.audit.port=sixty").run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("cp.audit.port")
+                        .hasMessageContaining("courtregister.operations.enabled");
+            });
+        }
+
+        /**
          * The absent key, which every other case here hides.
          *
          * <p>The base runner carries {@code audit.http.enabled=true} so that the suite's
@@ -2750,12 +2842,7 @@ class ConfigurationValidationTest {
          */
         @Test
         void an_absent_http_audit_switch_refuses_a_deployed_pod() {
-            new ApplicationContextRunner()
-                    .withUserConfiguration(PropertiesTestConfiguration.class)
-                    .withPropertyValues(PAYLOAD_IDENTITY_PROPERTY, PROGRESSION_ENDPOINT_PROPERTY,
-                            PROGRESSION_IDENTITY_PROPERTY, REFDATA_ENDPOINT_PROPERTY,
-                            REFDATA_IDENTITY_PROPERTY, OPENAPI_SPEC, AUDIT_HOSTS, AUDIT_PORT,
-                            NAMESPACE_PROPERTY)
+            deployedCarrying(OPENAPI_SPEC, AUDIT_HOSTS, AUDIT_PORT)
                     .run(context -> {
                         assertThat(context)
                                 .as("a key nobody set is a filter nobody registered, and the pod"
