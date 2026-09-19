@@ -99,7 +99,7 @@ mechanical exemption and record verification evidence; T004/T005 and T006/T007 a
       over `OpenApiSpecificationParser` alone, and by **class name** rather than by type, because a
       `.class` literal would not compile in the state this suite is deliberately written in. The
       named parser keeps a case of its own.)
-- [ ] **T003** [US1] **Add the dependencies and close the component-scan clash.**
+- [x] **T003** [US1] **Add the dependencies and close the component-scan clash.**
       `gradle/libs.versions.toml`: `cp-auth-rules-filter = "1.0.7"`,
       `cp-audit-filter-springboot = "1.0.5"`, plus the `uk.gov.hmcts.cp:` module lines;
       `build.gradle`: `implementation libs.cp.auth.rules.filter`,
@@ -112,6 +112,34 @@ mechanical exemption and record verification evidence; T004/T005 and T006/T007 a
       the library is **on** by default and validates its Artemis settings even with HTTP audit off).
       Green: T002 passes again with the dependency present. Evidence: the failing run between T002
       and the exclude filter, quoted.
+      (red, with both starters on the classpath and no exclude filter: `AuditComponentScanTest`
+      3 tests, 3 failed - *"Error creating bean with name 'openApiSpecificationParser' defined in
+      URL [jar:.../cp-audit-filter-springboot-1.0.5.jar!/uk/gov/hmcts/cp/filter/audit/parser/
+      OpenApiSpecificationParser.class]: Unsatisfied dependency expressed through constructor
+      parameter 1: No qualifying bean of type 'java.lang.String' available"*, with
+      `cp.audit.enabled=false` and `audit.http.enabled=false` set, which is the point: the scan
+      answers to neither.
+      Then a **second red the task did not predict**, and the one worth keeping: with the filter
+      added verbatim from research R9 the context still failed, now on *"The bean 'objectMapper',
+      defined in class path resource [.../ReportEmailConfigTest$EmailWiringTestConfiguration.class],
+      could not be registered. A bean with that name has already been defined in class path
+      resource [.../LiveNotificationConfigTest$NotificationTestConfiguration.class]"*. Declaring a
+      `@ComponentScan` **replaces** the one `@SpringBootApplication` carries, and with it the
+      `TypeExcludeFilter` that keeps one slice suite's nested `@Configuration` out of another's
+      context. R9's snippet - and the reference implementation it is copied from - omits both of
+      Boot's own filters; this repository's suites are what notice. Fixed by restating
+      `TypeExcludeFilter` and `AutoConfigurationExcludeFilter` beside the audit regex, which is the
+      documented recipe. Research R9 is left as the record of what the reference implementation
+      does; the deviation is in `Application`'s javadoc, where somebody deleting a filter will read
+      it.
+      Green: `AuditComponentScanTest` 3 tests, 0 failures; then the whole suite behind the shared
+      lock, `./gradlew build -Dtest.noFailFast=true` **exit 0** in 10m 35s - so neither starter
+      disturbs the existing classpath (the audit library's Jackson 2 alongside this service's
+      Jackson 3 was the risk, and it does not materialise).
+      `spring-boot-starter-web` was already a first-class dependency, so it is not added; the two
+      starters go in a new `gradle/libs.versions.toml` as the task says, which is not a breach of
+      `build.gradle`'s "keep every dependency here" comment - that comment is about the
+      `apply from:` files, which dependabot cannot read, and a version catalogue is one it can.)
 - [ ] **T004** [P] [US1] `config/OperationsPropertiesTest` (new) and `config/ConfigurationValidationTest`
       (extend) — **the defaults and the refusals**. Defaults off an `ApplicationContextRunner`:
       `courtregister.operations.enabled=true`, `supersede-max-age=30d`, `lock-wait=0s`. Refusals,

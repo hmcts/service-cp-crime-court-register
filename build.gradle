@@ -43,6 +43,15 @@ dependencies {
   }
 
 
+  // --- The operations API's two estate starters (increment 005) ---
+  // Authorisation: drools rules over the caller's usersgroups membership, identity from the
+  // CJSCPPUID header. Audit: every request and response published to the estate's audit context.
+  // Declared in gradle/libs.versions.toml rather than inline - the one exception to the rule above,
+  // because dependabot DOES read a version catalogue (what it does not read is the `apply from:`
+  // files), and because the reference implementation pins the same pair the same way.
+  implementation libs.cp.auth.rules.filter
+  implementation libs.cp.audit.filter.springboot
+
   // --- Persistence: processed-log store (JdbcClient + Flyway) ---
   implementation 'org.springframework.boot:spring-boot-starter-jdbc'
   implementation 'org.springframework.boot:spring-boot-starter-flyway'

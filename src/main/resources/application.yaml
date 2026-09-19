@@ -547,6 +547,23 @@ courtregister:
 # The per-environment connection string is supplied as APPLICATIONINSIGHTS_CONNECTION_STRING,
 # mounted from Key Vault via the Secrets Store CSI driver; there is nothing to set here.
 
+# The estate's audit transport, owned by `cp-audit-filter-springboot` and not by this service.
+#
+# It is here because of a trap rather than because this service has an opinion: the library's
+# auto-configuration is gated `matchIfMissing = true`, so ADDING THE DEPENDENCY SWITCHES IT ON, and
+# its connection-factory bean validates `cp.audit.hosts` and `cp.audit.port` while it is being built
+# - which it does even when HTTP auditing itself is off. A local run has no audit broker, so a key
+# that said nothing would be a service that would not start on a laptop.
+#
+# Off unless an environment says otherwise, therefore, and every environment that serves the
+# operations API says otherwise: the hosts, port, credentials and TLS material arrive from Key Vault
+# through the CSI driver, and none of them is ever a value in this file. `audit.http.*` - the HTTP
+# half, which is what actually publishes an operations call - is a separate block and a separate
+# switch, and startup refuses the combination of operations served with it off.
+cp:
+  audit:
+    enabled: ${CP_AUDIT_ENABLED:false}
+
 management:
   endpoints:
     web:
