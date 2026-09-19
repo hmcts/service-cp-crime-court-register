@@ -21,10 +21,11 @@ Bump rationale: MAJOR - Principle III is redefined (2026-09-19, design owner).
                 permission: every endpoint MUST be behind
                 `cp-auth-rules-filter` with an explicit allow rule naming the
                 groups admitted, MUST be audited by
-                `cp-audit-filter-springboot`, MUST read the
-                `CourtRegisterService` flag exactly where the CLI command it
-                replaces read it (with any override recorded in the audit event
-                and on the run report), and MUST answer under Principle VII -
+                `cp-audit-filter-springboot`, MUST be gated by the
+                `CourtRegisterService` flag at least as strictly as the CLI
+                command it replaces was (with any override recorded in the
+                audit event and on the run report), and MUST answer under
+                Principle VII -
                 bounded codes, counts and identifiers only, no defendant
                 detail, no operator input echoed back.
 
@@ -43,7 +44,29 @@ Bump rationale: MAJOR - Principle III is redefined (2026-09-19, design owner).
                 user group.
 
                 Callers: the usersgroups group "Second Line Support" only, on
-                every endpoint, identity taken from the `CJSCPPUID` header.
+                every endpoint, identity taken from the `CJSCPPUID` header,
+                which the internal ingress injects after authenticating and
+                after stripping whatever the client sent.
+
+                Condition (c) is stated as "at least as strictly as its
+                command was" rather than "exactly where its command was",
+                because one endpoint has to be gated more strictly than its
+                command: `supersede-before` read the flag nowhere, and an
+                unconditional HTTP mutation that makes this service give up a
+                period of registers is a second lever however carefully it is
+                authorised. It is admitted only while the same uncached read
+                says the flag is OFF, and it has no override.
+
+Proposed in: specs/005-operations-rest-api/spec.md, section "Constitution
+amendment proposal (Governance step 1)", as the Governance amendment procedure
+requires. **Order note**: the amendment commit (`d73ef50`) was written before
+the spec commit (`2015c35`) rather than after it, which is the wrong way round -
+Governance step 1 is the proposal and step 2 the bump. The proposal was added to
+the spec in the same branch and before any code landed, so nothing was built
+under an unproposed principle, but the order is recorded here rather than tidied
+away. Governance step 3 (the /speckit-analyze re-run against every in-flight
+feature spec) is task T0A of that increment and covers 005 and the concurrent
+004 "release-stale-batches", which is read and never edited from this branch.
 
 Modified sections (this amendment): Principle III - the opening sentence, a new
 "The operations API" clause with its four conditions, the OpenAPI document added
@@ -633,13 +656,18 @@ Rules:
     every response is published as an audit event to the audit context. An
     endpoint that is reachable without an audit event is worse than the
     `kubectl exec` it replaced, which at least left a cluster audit record.
-  - **(c) Flag-gated where its command was.** An endpoint reads the
-    `CourtRegisterService` flag at exactly the point the CLI command it
-    replaces read it — no earlier, no later, and nowhere the command did not.
-    An override (`ignoreFlag`) is an operator decision and MUST be recorded in
-    the audit event **and** on the run report, exactly as the command printed
-    and counted it. An endpoint that quietly bypasses the flag is a second
-    lever under the bullet above.
+  - **(c) Flag-gated at least as strictly as its command was.** An endpoint
+    reads the `CourtRegisterService` flag where the CLI command it replaces
+    read it, and MUST NOT read it more permissively or omit the read the
+    command made. It MAY be gated **more** strictly than its command, and MUST
+    be where being reachable over HTTP turns an unconditional mutation into a
+    second lever — a stricter gate is stated in the increment's spec and pinned
+    by a test, never improvised. An override is an operator decision, is
+    available on **one** endpoint only (the regeneration break-glass the CLI's
+    `--ignore-flag` already was), and MUST be recorded in the audit event
+    **and** on the run report. An endpoint that quietly bypasses the flag, or
+    that mutates register state irrespective of it, is a second lever under the
+    bullet above.
   - **(d) Telemetry-clean.** Every response — success and refusal alike —
     carries bounded codes, counts and identifiers only, under Principle VII. No
     defendant detail at all, recipient addresses masked as the CLI masked them,
@@ -1058,7 +1086,8 @@ them read it the same way they read everything else.
 
 This constitution supersedes the informal conventions in `.claude/rules/`
 and the template-derived guidance in `CLAUDE.md` — including any API-first
-rule, which does not apply to a service with no business REST API. Where
+rule, which applies to this service only through Principle III's operations
+API and never to a business endpoint, of which there are none. Where
 this document and those files disagree, this document wins; they are
 retained as quick-reference material and MUST be kept in sync.
 

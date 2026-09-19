@@ -343,23 +343,42 @@ the same application services the CLI called:
    RegisterNotificationRepository · ExceptionReportService + its sinks
 ```
 
-- **One endpoint per action, and no capability the CLI did not have.** The same arguments, the same
-  refusals, the same fields — as JSON rather than as `key=value` lines.
-- **The three exit codes are three status families.** `0` → 2xx; `1` (refused, and nothing changed)
-  → **409** for a state refusal and **400** for an argument that will not read; `2` (tried and could
-  not) → **500**. Every non-2xx answer is a `ProblemDetail` carrying the bounded `reason` the
-  command printed.
+- **One endpoint per action, and no capability the CLI did not have** — with three exceptions, each
+  of which makes an endpoint *stricter* than its command because HTTP reaches further than
+  `kubectl exec` did: supersede is admitted only while the flag says OFF and gains a `dryRun` and an
+  age bound; regeneration takes the nightly lock instead of trusting a runbook; and both are
+  audited. Otherwise: the same arguments, the same refusals, the same fields — as JSON rather than
+  as `key=value` lines.
+- **The three exit codes become a status map, refined where HTTP has a truer code.** `400` a
+  malformed or missing argument; `404` a well-formed identifier that names nothing; `409` a state
+  refusal that changed nothing; `503` a dependency this endpoint exists to read or write that is
+  unavailable; `502`/`504` a downstream platform contract that refused or did not answer; `500` an
+  unexpected defect **and nothing else** — a 500 this service can explain is a 409, a 503 or a 502
+  it failed to classify. Every non-2xx answer is a `ProblemDetail` carrying a bounded `reason`.
+- **One endpoint is asynchronous, and it is the dangerous one.** Regeneration answers
+  `202` with a run id and does the work on the generation scheduler's single thread, because the
+  CLI's inline render requests ran under a sixty-minute deadline and no gateway will hold a
+  connection that long. Everything else answers when it is done.
 - **Nothing the caller typed is echoed back**, in the body or in a log line: a refusal names the
   *argument*, never the value (Principle VII). Recipient addresses are masked exactly as
   `list-batches` masked them. No exception text, no store's or far end's own words.
-- **The flag is read where the command read it**, and nowhere else. `check-flag`'s endpoint reads
-  it because that is what it is for; the generate endpoint reads it through the same
-  `FeatureFlagGate`; the exception-report endpoint reads it **nowhere**, as
-  `report-exceptions` did not.
-- **The 18:00 lock is checked, and this is the one rule the CLI did not have.** The CLI left
-  "do not regenerate during the nightly run" to a runbook. An endpoint is reachable by more people
-  than an exec was, so it checks the ShedLock itself and refuses `409 SCHEDULE_RUNNING` while the
-  run holds it.
+- **The flag is read where the command read it, or more strictly, never more loosely.**
+  `check-flag`'s endpoint reads it because that is what it is for; the generate endpoint reads it
+  through the same `FeatureFlagGate` and takes `ignoreFlag` as the per-request break-glass
+  `--ignore-flag` was; **supersede reads it although its command did not**, and is admitted only
+  while it says OFF, with no override and fail-closed on unreadable — an unconditional HTTP mutation
+  that gives a period of registers up is a second lever however well authorised; the
+  exception-report endpoint reads it **nowhere**, as `report-exceptions` did not.
+- **The 18:00 lock is taken, not asked about, and this is the one rule the CLI did not have.** The
+  CLI left "do not regenerate during the nightly run" to a runbook. Asking whether the lock is held
+  and then acting races the scheduler; the background regeneration takes the same
+  `@SchedulerLock` name by a non-blocking attempt and records the refusal as the run's outcome when
+  it cannot.
+- **The claims that already exist do the arbitrating.** Two concurrent notifies for one batch are
+  decided by `RegisterNotifierService`'s claim and its four dispositions, not by anything new; two
+  concurrent regenerations for one date are decided by `releaseFailed` returning no rows to the
+  loser and by the live-key index refusing its assemble — which must surface as a clean bounded
+  refusal, never a 500.
 - **`@ControllerAdvice` and `ProblemDetail` are permitted here and nowhere else.** The message
   listeners and the jobs still convert an exception into a settlement or a persisted state, never
   into a response.
