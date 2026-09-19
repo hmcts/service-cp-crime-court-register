@@ -304,6 +304,13 @@ each of the four below is a blocking prerequisite for every user story.
       `pmdTest`, `checkstyleTest` and `BatchStateTest` green.)
 
 **Phase close**: `flock … ./gradlew build` green; review gate.
+(green at `20bab2b`: `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` BUILD SUCCESSFUL,
+exit 0, 3630 tests over 576 suites, 0 failures, 0 errors; `checkstyleMain` and `checkstyleTest` at
+`maxWarnings = 0`, `pmdMain` and `pmdTest`, and `jacocoTestCoverageVerification` at LINE 0.9690 /
+BRANCH 0.8986 against the unchanged gate of LINE 0.88 / BRANCH 0.85 — none of them loosened. The
+phase closes on the tree as committed, which is what the two commits beyond T004 and T006 were for:
+`290d898` pins `SchemaMigrationV5IT` to V5, and `20bab2b` moves `BatchStateTest`'s three
+migration-reading fields above the first method. Review gate to follow.)
 
 ---
 
