@@ -228,11 +228,20 @@ mechanical exemption and record verification evidence; T004/T005 and T006/T007 a
       `jmsConnectionFactory`, while the type behind that name is
       `spring.jms.cache.enabled`'s choice. Asking by type is how a test - or a configuration class -
       ends up holding the audit one and saying nothing about it.)
-- [ ] **T007** [US1] `config/PublicEventsConfig` — take the connection factory **by name** rather
+- [x] **T007** [US1] `config/PublicEventsConfig` — take the connection factory **by name** rather
       than by type, so the injection says which one it means and cannot be won by somebody else's
       `@Primary`. This is the only change 005 makes to a production class outside `api/`,
       `application/`, `config/` settings and the deletions, and it is a correctness fix forced by
       the dependency. Green: T006.
+      (green: `PublicEventsFactoryTest` 2 tests and `PublicEventsConfigTest` 3 tests, 0 failures;
+      Checkstyle and PMD clean on main and test. `@Qualifier("jmsConnectionFactory")` on the
+      factory method's parameter, with the bean name as a constant on the class - **by name and not
+      by type**, per T006's finding: the audit library's factory is an `ActiveMQConnectionFactory`
+      and so is Boot's whenever `spring.jms.cache.enabled` is false, so a qualifier written as a
+      type would be the same trap in a new spelling. The reason is in the class javadoc, beside the
+      unwrapping paragraph it belongs with, so that somebody deleting the qualifier reads what it
+      was for. Nothing else in the class changed, and `PublicEventsConfigTest` - which calls the
+      `@Bean` method directly - still passes unaltered.)
 
 ---
 
