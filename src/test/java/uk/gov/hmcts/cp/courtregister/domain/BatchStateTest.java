@@ -54,6 +54,16 @@ class BatchStateTest {
     /** The moves data-model.md draws, and the only ones {@link BatchStatus} may permit. */
     private static final Map<BatchStatus, Set<BatchStatus>> DRAWN_MOVES = drawnMoves();
 
+    /** The committed migrations, read as text because a CHECK constraint is text. */
+    private static final Path MIGRATIONS = Path.of("src", "main", "resources", "db", "migration");
+
+    /** Where the failure vocabulary is enumerated for the database, as last rewritten. */
+    private static final Pattern FAILURE_REASON_CHECK =
+            Pattern.compile("register_batch_failure_reason_chk\\s+CHECK");
+
+    /** One quoted code inside an {@code IN} list. */
+    private static final Pattern QUOTED_CODE = Pattern.compile("'([A-Z_]+)'");
+
     private static Map<BatchStatus, Set<BatchStatus>> drawnMoves() {
         final Map<BatchStatus, Set<BatchStatus>> drawn = new EnumMap<>(BatchStatus.class);
         drawn.put(BatchStatus.PENDING, EnumSet.of(
@@ -67,16 +77,6 @@ class BatchStateTest {
         drawn.put(BatchStatus.FAILED, EnumSet.noneOf(BatchStatus.class));
         return drawn;
     }
-
-    /** The committed migrations, read as text because a CHECK constraint is text. */
-    private static final Path MIGRATIONS = Path.of("src", "main", "resources", "db", "migration");
-
-    /** Where the failure vocabulary is enumerated for the database, as last rewritten. */
-    private static final Pattern FAILURE_REASON_CHECK =
-            Pattern.compile("register_batch_failure_reason_chk\\s+CHECK");
-
-    /** One quoted code inside an {@code IN} list. */
-    private static final Pattern QUOTED_CODE = Pattern.compile("'([A-Z_]+)'");
 
     /**
      * The values {@code register_batch_failure_reason_chk} admits once every committed migration

@@ -296,7 +296,12 @@ each of the four below is a blocking prerequisite for every user story.
       constraint V6 widened. It is pinned to `target("5")`, which is what `SchemaMigrationV4IT`
       already does at the same line and for the same stated reason, and the only alternative — to
       stop asserting that a migration changed nothing else — would give up the suite's whole
-      subject. No assertion is relaxed and the V6 cases are untouched.)
+      subject. No assertion is relaxed and the V6 cases are untouched.
+      The full build also surfaced a `pmdTest` failure this range did not cause: T003's three new
+      `BatchStateTest` fields — `MIGRATIONS`, `FAILURE_REASON_CHECK`, `QUOTED_CODE` — landed below
+      `drawnMoves()`, three `FieldDeclarationsShouldBeAtStartOfClass` violations, and `pmdTest` runs
+      in `build`. They are moved above the first method and nothing else about them changes.
+      `pmdTest`, `checkstyleTest` and `BatchStateTest` green.)
 
 **Phase close**: `flock … ./gradlew build` green; review gate.
 
