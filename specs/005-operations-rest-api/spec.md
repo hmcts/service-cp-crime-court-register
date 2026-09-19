@@ -757,6 +757,16 @@ Three questions this spec raised are answered, and are requirements rather than 
 
 ## Open
 
+- **The audit library's swallowed publishing failure.** `cp-audit-filter-springboot`'s
+  `AuditService.postMessageToArtemis` catches every `Exception`, logs it and returns, so without
+  intervention an operations call could succeed with no audit event — which Principle III(b) and
+  Principle VI both refuse. The starter registers that bean `@ConditionalOnMissingBean`, so this
+  service supplies its own: the **request** event is published before the action and a failure
+  refuses the call `503 AUDIT_UNAVAILABLE`, and the **response** event is published after it, where
+  a failure can only be logged at ERROR and counted. That last case is a recorded shortfall, not a
+  closed one — it is the single entry in the plan's Complexity Tracking, the durable outbox that
+  would close it is deliberately out of this increment, and **the entry needs the design owner's
+  dated sign-off before the audit tasks (T044/T045) land**.
 - **The audit header allowlist.** `cp-audit-filter-springboot` captures every request header
   verbatim, including `Authorization` and `Cookie`, and its own README says an allowlist "should be
   agreed with the Audit team before rolling this out broadly". It is an estate decision this

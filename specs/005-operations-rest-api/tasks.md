@@ -519,9 +519,25 @@ the **real** authorisation filter refuses the people it should.
       `@ConditionalOnMissingBean` (research R10), so the test context holds a capturing one. Seams:
       `api/OperationsAuditFacts` (request-scoped) and `api/OperationsAuditService`. Red: the facts
       are absent from the payload.
+      **Two cases are about the publish failing, not about its content** (see Complexity Tracking,
+      the audit-publish deviation): a publisher that throws on the **request** event refuses the
+      call — `503` with the bounded reason `AUDIT_UNAVAILABLE`, and the application service is never
+      called — and a publisher that throws on the **response** event, after the action has already
+      happened, does not change the answer but logs at ERROR naming the action and the run id and
+      moves a bounded counter. Neither is allowed to be a caught-and-ignored exception, which is
+      what the library's own `AuditService.postMessageToArtemis` does.
 - [ ] **T045** [US1] `api/OperationsAuditFacts` and `api/OperationsAuditService` — the controllers
       and the advice populate the facts; the service merges them into the payload's `content` and
       delegates. Nothing else is added to the event. Green: T044.
+      **`OperationsAuditService` is registered as the `AuditService`**, which the starter allows
+      because its own bean is `@ConditionalOnMissingBean` (research R10), and it **does not swallow
+      a publishing failure**: the library's `AuditService.postMessageToArtemis` catches every
+      `Exception`, logs it and returns, which would let an operations call succeed with no audit
+      event at all — condition (b) of Principle III and Principle VI both refuse that. The request
+      event is published **before** the action and a failure there refuses the call
+      (`503 AUDIT_UNAVAILABLE`); the response event is published after it and a failure there is
+      logged at ERROR and counted, because there is nothing left to refuse. That second case is the
+      residual recorded in Complexity Tracking and is the one an outbox would close.
 - [ ] **T046** [US2] `api/OperationsAuthzIT` (new) — **the real filter, wired as deployed**, with
       usersgroups stubbed at the HTTP boundary by WireMock and
       `@DynamicPropertySource` over `authz.http.identity-url-template` (the
