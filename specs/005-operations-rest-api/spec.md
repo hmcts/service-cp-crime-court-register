@@ -379,7 +379,12 @@ command printed.
   the flag was off, each with its record id, hearing id, register date and recorded flag state.
 - **FR-017**: `POST /operations/batches/generate` MUST take a required register date and the
   optional narrowings `courtHouse`, `batchId` and `recordedBefore`, plus `ignoreFlag` (default
-  `false`). It MUST be **asynchronous**: it validates the request, reads the flag, records the run,
+  `false`). **`ignoreFlag: true` MUST be accepted only when the request names a single `batchId`**;
+  with `ignoreFlag: true` and no `batchId` the request MUST be refused `400
+  OVERRIDE_REQUIRES_BATCH`. Overriding the cutover flag is a break-glass for one batch at a time:
+  re-driving a whole day under override is one call per failed batch, deliberately. Without
+  `ignoreFlag`, a date-wide regeneration stays allowed while the flag is ON, exactly as the command
+  allowed it. It MUST be **asynchronous**: it validates the request, reads the flag, records the run,
   answers `202` with a **run id**, and does the work on the generation scheduler's single-threaded
   executor. It MUST NOT do the work inline. The CLI POSTed to systemdocgenerator under a
   sixty-minute run deadline; behind an ingress with a 30–240 second timeout an inline endpoint gives
@@ -679,18 +684,23 @@ change is readable.
    when it is on and HTTP audit is off or its transport unconfigured (FR-045).
 10. **Nothing about the exception report's window or sinks changes.** The endpoint computes the same
     window the command computed, from the same schedule, and asks the same sinks.
-11. **Supersede is subordinated to the flag, bounded, and reversible-by-preview.** Its command read
+11. **Supersede is subordinated to the flag, bounded, and reversible-by-preview.** *Confirmed by the
+    design owner, 2026-09-19 — every protection below is decided, not proposed.* Its command read
     the flag nowhere, and the endpoint reads it: an unconditional HTTP mutation that makes this
     service give up a period of registers is a second lever however well authorised. Admitted only
     while an uncached read says OFF; `409 FLAG_ON` when it is on; `409 FLAG_UNREADABLE` fail-closed;
     no override, ever. Plus a `dryRun` that answers the count and changes nothing, a refusal for an
-    instant in the future, and an age bound (`courtregister.operations.supersede-max-age`, default
-    30 days) so that one keystroke cannot give up the estate's whole history of registers. This is
-    why constitution condition (c) reads "at least as strictly as its command was".
-12. **`ignoreFlag` is per request and nothing else.** Never a configuration default, never a
-    deployment value, always audited with the caller's identity, always `reason=overridden` on the
-    run line. It is the regeneration break-glass `--ignore-flag` already was, and no other endpoint
-    has one.
+    instant in the future, an age bound (`courtregister.operations.supersede-max-age`, default
+    30 days) so that one keystroke cannot give up the estate's whole history of registers, and the
+    count carried into the audit event. This is why constitution condition (c) reads "at least as
+    strictly as its command was".
+12. **`ignoreFlag` is per request, for one batch, and nothing else.** *Decided by the design owner,
+    2026-09-19.* Never a configuration default, never a deployment value, always audited with the
+    caller's identity, always `reason=overridden` on the run line, and **only with an explicit
+    `batchId`** — a whole date under override is refused `400 OVERRIDE_REQUIRES_BATCH` (FR-017).
+    This is narrower than `--ignore-flag` was: the command would override a whole register date, and
+    an endpoint reaches further than an exec did. A date-wide regeneration with the flag ON is
+    unaffected. No other endpoint has an override at all.
 13. **A pod without the generation half answers `501 COMMAND_NOT_WIRED`** on the three endpoints
     that need its beans, which is exactly what the CLI answered on such a pod. A `404` would read as
     a mistyped URL and a `500` would be a bean-definition error reaching an operator.
@@ -711,21 +721,26 @@ change is readable.
 17. **The five removal facts are one phase, landing last.** Nothing is deleted until every endpoint
     that replaces it has a passing test (FR-051).
 
-## Open questions for the design owner
+## Decided by the design owner (2026-09-19)
 
-Recorded rather than decided. None blocks the phases before the endpoint each belongs to.
+Three questions this spec raised are answered, and are requirements rather than assumptions:
 
-- **Q1. Should `ignoreFlag` be accepted only with an explicit `batchId`?** Overriding the cutover
-  flag for one named batch is a narrower break-glass than overriding it for a whole register date.
-  The CLI allowed the whole date. Default taken: the CLI's behaviour stands until the design owner
-  says otherwise.
-- **Q2. Is an estate-wide "Second Line Support" the right population**, or does this service want a
-  court-register-specific group? The endpoints are reachable by every member of a group used in 57
-  estate ACL files, where the CLI was reachable by whoever held exec on the namespace. Default
-  taken: "Second Line Support", per the design owner's decision of 2026-09-19.
-- **Q3. Is the audit header allowlist a blocker for rollout?** The starter captures every request
-  header verbatim, including `Authorization` and `Cookie`, and its own README says an allowlist
-  should be agreed with the Audit team first. Recorded as a rollout gate, not worked around locally.
-- **Q4. `courtregister.operations.supersede-max-age` default.** 30 days is a first value, chosen
-  because it comfortably covers a cutover window and comfortably does not cover a year. It is a
-  setting, so an environment can differ.
+- **The caller group is "Second Line Support", final.** Every drools rule allows exactly that one
+  group and no other. It is an **estate-wide** group — used in 57 ACL files across CPP — so the
+  population that can regenerate and supersede is wider than the holders of cluster RBAC on this
+  namespace who could run the commands. That is the deliberate trade for a named caller and an audit
+  event. Narrowing it later to a court-register-specific group is a change to
+  `src/main/resources/acl/operations-rules.drl` and nothing else: no code, no contract, no
+  redeploy of anything but this service.
+- **`ignoreFlag` requires an explicit `batchId`** (FR-017, assumption 12).
+- **Every supersede protection is confirmed** (FR-021, assumption 11): flag OFF only, fail-closed on
+  unreadable, no override, `dryRun`, no future instant, the 30-day age bound, and the count in the
+  audit event.
+
+## Open
+
+- **The audit header allowlist.** `cp-audit-filter-springboot` captures every request header
+  verbatim, including `Authorization` and `Cookie`, and its own README says an allowlist "should be
+  agreed with the Audit team before rolling this out broadly". It is an estate decision this
+  repository cannot take, it is a **rollout gate** rather than a build gate, and nothing local works
+  around it.

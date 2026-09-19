@@ -238,16 +238,24 @@ The auth starter needs no filter — its package root is `uk.gov.moj.cpp.authz`.
 suppresses the body alone: query parameters, path parameters and **all** request headers are
 captured regardless.
 
-**Decision**: leave `include-payload-body` at `true`, explicitly set rather than defaulted. Our
-request bodies are a date, a court house, two ids, two instants and two booleans; our responses are
-bounded codes, counts, identifiers and masked addresses. An audit event that did not say what was
-asked would not be worth publishing — the whole point is that an override or a supersession can be
-read back later.
+**Decision (revised by the second design review)**: set `include-payload-body` **false**, explicitly.
+An earlier draft left it at `true` on the grounds that our bodies are bounded. What that would also
+publish is every *response*: the batch listing's masked recipient addresses and court-centre ids,
+the exception report's whole entry table, and every `ProblemDetail`. The audit topic is a telemetry
+surface like any other and Principle VII governs it.
+
+What the audit event actually needs is the **action**, the **outcome**, whether the flag was
+**overridden**, and for supersede the **count** — and the generic filter can infer none of that from
+a body. Those are supplied through the starter's own seam: `AuditService` is a plain class
+(`(JmsTemplate, ObjectMapper)`) registered `@ConditionalOnMissingBean`, so `api/` contributes a bean
+of its own that merges a request-scoped set of bounded facts into the payload before delegating.
+Query and path parameters are merged in by the library regardless of the switch; ours are a date and
+a batch id, which are bounded identifiers.
 
 **Flagged, not solved here**: the library captures every request header verbatim, including
 `Authorization` and `Cookie`, and its own README says a header allowlist "should be agreed with the
 Audit team before rolling this out broadly". That is an estate decision outside this repository; it
-is recorded in the plan's risks and in the deployment gates rather than worked around locally.
+is a rollout gate (spec, open question Q3) rather than something worked around locally.
 
 Also relevant: the filter skips any URI **containing** `/health` or `/actuator` (a `contains`, not a
 prefix), so actuator is out of the audit stream without configuration. It publishes a REQUEST event
@@ -270,17 +278,97 @@ The audit filter runs **inside** the authorisation filter, so a denied request i
 this library — the denial is in the log and in the access log, not in the audit context. Recorded
 as a known limitation rather than papered over.
 
-## R12. How SCHEDULE_RUNNING is observed
+## R12. How the nightly lock is respected — taken, not asked about
 
 `config/SchedulingInfrastructureConfig` wires one `JdbcTemplateLockProvider` over a `shedlock`
 table in the processed-log datasource, and `RegisterGenerationJob` holds
 `@SchedulerLock(name = LOCK_NAME, lockAtMostFor = LOCK_AT_MOST_FOR)`.
 
-**Decision**: read the lock, do not invent a flag. A new read-only repository asks the `shedlock`
-row for the generation job's lock name whether `lock_until` is still in the future, at the clock the
-rest of the service uses; the regeneration application service asks it first and refuses
-`SCHEDULE_RUNNING` before anything is read or written. A second switch that said "a run is
-happening" could disagree with whether one is (spec assumption 6).
+**Decision (revised by the second design review)**: the background regeneration **acquires** that
+same lock through the `LockProvider` bean — `lock(new LockConfiguration(...))` returns an
+`Optional<SimpleLock>`, a non-blocking attempt — and holds it for the whole run, releasing it in a
+`finally`. An earlier draft read the `shedlock` row and refused if it was held; that is a
+check-then-act against a scheduler that can start in the gap, and it also needed a new repository
+for a question the lock provider already answers. Taking the lock additionally gives the other
+direction for free: a scheduled run that fires while a regeneration holds it stands aside by the
+mechanism `@SchedulerLock` already provides.
+
+The lock name is `RegisterGenerationJob.LOCK_NAME`, reused rather than restated. `lockAtMostFor`
+for the operator run is the generation `lockAtMostFor` the schedule already validates against the
+run deadline, so one value governs both and cannot drift from itself.
+
+## R16. Why the regeneration endpoint is asynchronous
+
+`GenerateRegisterCli.request` POSTs `generate-document` for every batch **inline**, under
+`Deadline.startingAt(clock.instant(), properties.runDeadline())` — a deadline measured in tens of
+minutes. An HTTP endpoint that did the same sits behind an ingress and an APIM whose timeouts are
+between 30 and 240 seconds. The caller would get a `504` on a run that is still going, and the
+obvious retry would meet the live-key index on batches the first run had already stamped, failing a
+run that had in fact succeeded.
+
+**Decision**: the endpoint validates, reads the flag, mints and records a run id, answers `202`, and
+submits the work to the **generation scheduler's own single-threaded executor** — the same executor
+the 18:00 run uses, so a regeneration and a scheduled run cannot interleave on one pod even before
+the lock is considered. The run's outcome is observable two ways, both of which already exist: the
+`RunReport` line (with an operator trigger and `reason=overridden` where the flag was overridden)
+and `GET /operations/batches?date=D`.
+
+**Coordination with increment 004**: 004's pre-batching pass fails and releases batches older than
+`courtregister.generation.stale-after`. An operator run that spans 18:00 must not be failed under
+it, so 004's pass skips operator-initiated batches younger than the run deadline plus a margin. This
+is recorded here and in the plan's coordination contract; it is **004's change to make**, not 005's,
+and 005 must not edit `RegisterGenerationJob` or `GenerationReconciler` to do it.
+
+## R17. The trust boundary, and what the filter does and does not prove
+
+`cp-auth-rules-filter` authorises **whatever `CJSCPPUID` it is given**. It performs no token
+validation, no signature check and no mTLS assertion: it takes the header, asks usersgroups what
+groups that user has, and runs the rules. Any workload inside the mesh that can reach the pod can
+therefore assert a Second Line Support identity.
+
+What closes that is outside this repository and is listed as deployment gates: the gateway strips
+any client-supplied `CJSCPPUID` and injects the authenticated one, and an Istio
+`AuthorizationPolicy` plus a `NetworkPolicy` make `/operations/**` reachable only from the gateway.
+What is inside this repository is: deny by default on a missing identity (401), on an identity
+service that cannot be asked (403, R4), on an action with no rule and on a rule that does not match
+(403); a server-derived action name that overrides the caller's header (R2); and the `CJSCPPUID`
+value kept out of every log line — it belongs in the audit event, which is the one place the caller
+is named on purpose.
+
+**Testing**: the real filter, wired as deployed, with usersgroups stubbed at the HTTP boundary by
+WireMock. A test that mocks `DroolsAuthzEngine` proves the test.
+
+## R18. What the separate CLI JVM was doing, and what replaces each part
+
+`CliModeConfig` switched off three things in a command's JVM: the Service Bus consumer, both
+schedulers, and the public-event listener container. An HTTP call is served by a pod where all three
+are running. Taking them one at a time:
+
+| What CLI mode prevented | Replacement |
+|---|---|
+| A command's JVM taking deliveries it would not finish | Moot: the pod is a long-lived consumer already |
+| A command's JVM becoming a second consumer on the shared durable subscription | Moot for the same reason. **The rule is retired**, along with its checks in `PublicEventsConfig`'s javadoc, `design_rules.md` and `spec-validator.md` |
+| A command firing the 18:00 run as a side effect | Unchanged — nothing an endpoint does starts a scheduled run |
+| Two notifies for one batch colliding | **Never came from the JVM.** `RegisterNotifierService`'s claim and lease (`register_batch_notifier_claim_chk`, `V2`) already arbitrate it, and the four dispositions are its vocabulary |
+| Two regenerations for one date colliding | The register-generation lock (R12) serialises them; behind it, `releaseFailed` returns no rows to the loser and the live-key index refuses its assemble. That must surface as a bounded refusal on the run, never an unexplained failure — it needs a named test |
+
+## R19. Where the status map came from
+
+The CLI's three exit codes were all a shell could carry. HTTP has more, and a review of the failure
+paths showed three places where the extra codes are truer:
+
+| Situation | CLI | API | Why |
+|---|---|---|---|
+| The flag cannot be read, asked directly | exit 2 | **200** `{flag: UNREADABLE, reason}` | The endpoint answered its question. A 503 tells the gateway this service is down and may cost the caller the reason |
+| An unknown batch id | exit 2, `resend-failed` | **404** | Well-formed and names nothing; a 500 would send an operator after an outage that is not there |
+| `ALREADY_NOTIFYING` | exit 0 | **409** | Another notifier holds the claim; this call changed nothing |
+| `CLAIM_LOST`, `INCOMPLETE` | exit 2 | **500** + the disposition | The call tried and got part-way |
+| The store will not answer | exit 2 | **503** | The dependency, not the service |
+| systemdocgenerator or notificationnotify refused / did not answer | exit 2 | **502** / **504** | A consumed platform contract, named as one |
+
+Everything else keeps its meaning: `400` an argument that is missing or will not read, `409` a state
+refusal that changed nothing, `500` the residue. A `500` this service can explain as a state refusal
+is a `409` it failed to classify.
 
 ## R13. Where the command classes' logic goes
 

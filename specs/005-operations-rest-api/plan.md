@@ -1,0 +1,267 @@
+# Implementation Plan: Operations REST API, replacing the operations CLI
+
+**Branch**: `005-operations-rest-api` | **Date**: 2026-09-19 | **Spec**: [spec.md](./spec.md)
+**Input**: `specs/005-operations-rest-api/spec.md`, with `research.md`, `data-model.md` and
+`quickstart.md` alongside it.
+
+## Summary
+
+Seven endpoints under `/operations/**` replace the six operations commands, and the CLI is removed.
+The HTTP layer is an inbound adapter in `uk.gov.hmcts.cp.courtregister.api`: it parses, calls one
+application service, and maps the answer. Where a command class held orchestration — `list-batches`,
+`generate-register`, `report-exceptions` — that orchestration moves into an application service
+**unchanged**, because a controller may not call a repository.
+
+Two estate starters do the work the CLI could not: `cp-auth-rules-filter` 1.0.7 (drools rules over
+the caller's usersgroups membership, identity from `CJSCPPUID`) and `cp-audit-filter-springboot`
+1.0.5 (every request and response published to the audit context). Both have traps that are
+load-bearing rather than incidental, and `research.md` records each with its source; the three that
+would stop the service starting are R6 (`cp.audit.enabled` is on by default and its connection
+settings are validated even when HTTP audit is off), R9 (the audit library's stereotypes are
+component-scanned because this service's `@SpringBootApplication` sits at `uk.gov.hmcts.cp`), and
+R8 (the audit library's `@Primary` JMS beans would hijack the `public.event` listener's connection
+factory).
+
+Three endpoints are **stricter** than the commands they replace, and each difference is forced by
+the surface rather than chosen: the regeneration is asynchronous and acquires the nightly ShedLock;
+supersede is admitted only while the flag says OFF, with a dry run and an age bound and no override;
+and every endpoint is refused for anyone outside "Second Line Support". Everything else takes the
+same arguments, refuses the same refusals and answers the same fields.
+
+## Technical Context
+
+**Language/Version**: Java 25, Spring Boot 4.1
+**Primary Dependencies (new)**: `uk.gov.hmcts.cp:cp-auth-rules-filter:1.0.7`,
+`uk.gov.hmcts.cp:cp-audit-filter-springboot:1.0.5`, `spring-boot-starter-web` (confirm whether it is
+already a first-class dependency at the first build task; actuator alone is not enough to map a
+controller)
+**Storage**: unchanged — the processed log, the register store, the `shedlock` table, the
+file-service datasource. **No migration in this increment.**
+**Testing**: JUnit Jupiter 6 + Mockito + AssertJ; `@WebMvcTest` slices per controller; WireMock for
+the usersgroups identity service; Testcontainers Postgres for the lock and store `*IT`s; a drools
+unit suite with no Spring; `ApplicationContextRunner` for the start-up refusals
+**Target Platform**: AKS, Flux, `springboot-app` chart; port 4550 in Kubernetes, 8082 locally
+**Project Type**: message-driven service with a scheduled leg and, from this increment, an
+operations HTTP surface
+**Constraints**: responses in bounded codes, counts and identifiers only; no caller input echoed; no
+business endpoint; coverage ratchet unchanged (LINE ≥ 0.88, BRANCH ≥ 0.85)
+**Scale/Scope**: seven endpoints, one action filter, one error-attributes bean, one audit bean,
+three new application services, one OpenAPI document, one drools file; ~20 production classes added
+and ~20 removed
+
+### Configuration (this increment)
+
+| Key | Default | Why |
+|---|---|---|
+| `courtregister.operations.enabled` | `true` | Deployment shape: whether the endpoints are served. **Not** a cutover lever |
+| `courtregister.operations.supersede-max-age` | `30d` | The oldest `sharedBefore` supersede will accept; an unbounded irreversible mutation is one keystroke from the estate's whole history |
+| `courtregister.operations.lock-wait` | `0s` | How long the background regeneration waits for the register-generation lock before recording that it could not take it. Zero is a non-blocking attempt |
+| `authz.http.enabled` | `${AUTHZ_ENABLED:true}` | The library default is **false**; the filter does not exist unless this is explicitly true |
+| `authz.http.identity-url-template` | `${CP_BASE_URL}/usersgroups-query-api/query/api/rest/usersgroups/users/logged-in-user/permissions` | usersgroups; the caller id travels in the header, not the path |
+| `authz.http.user-id-header` | `CJSCPPUID` | |
+| `authz.http.action-header` | `CPP-ACTION` | Written by our own filter and overridden server-side |
+| `authz.http.accept-header` | `application/vnd.usersgroups.get-logged-in-user-permissions+json` | |
+| `authz.http.drools-classpath-pattern` | `classpath:/acl/**/*.drl` | |
+| `authz.http.reload-on-each-request` | `${AUTHZ_RELOAD_RULES:false}` | The library default is **true** |
+| `authz.http.action-required` | `false` | Our filter always supplies one for our paths |
+| `authz.http.deny-when-no-rules` | `true` | Default-deny, and it also governs "the DRL failed verification" |
+| `authz.http.exclude-path-prefixes` | `/actuator`, `/error` | Setting this **replaces** the library list; omitting `/actuator` makes the probes answer 401 |
+| `audit.http.enabled` | `${HTTP_AUDIT_ENABLED:false}` | Off by default, on per environment — and start-up refuses when operations are served and this is off (FR-045) |
+| `audit.http.openapi-rest-spec` | `openapi.yaml` | A **suffix** glob: it must match a file on the classpath or start-up fails |
+| `audit.http.include-payload-body` | `false` | Explicit. The library default is `true` and would publish every response body |
+| `cp.audit.enabled` | `true` deployed, `false` in the local and test profiles | The library's own switch; with it on, `cp.audit.hosts`/`port` are validated at start-up |
+| `cp.audit.hosts` / `port` / `user` / `password` / `ssl-*` | per environment, from Key Vault via CSI | No secret in a committed value |
+| `courtregister.cli` | **removed** | — |
+
+### Constitution Check
+
+| Principle | How this increment satisfies it |
+|---|---|
+| I — defect-fix-first | Not engaged. There is no legacy oracle for an operational surface; **no `doc/DEFECT-FIXES.md` row is added, amended or flipped**, and `RegisteredDefectFixes` and `DifferentialAuditTest` must stay green untouched |
+| II — TDD | Every task below is a red/green pair, a `[A]` characterisation, or a documentation task. Red runs are failing assertions, never compile errors; the seams land in the test task |
+| III — message-contract first | The reason for the amendment. All four conditions are requirements (FR-005–FR-009, FR-010–FR-013, FR-024–FR-027) and gate 8 of `workflow.md`. `openapi.yaml` joins the owned contracts with a contract test in both directions |
+| IV — canonical JSON in, typed out | Unaffected: the hearing payload does not come near this surface. The API's own requests and responses are typed records, as everything this service *produces* is |
+| V — ports and adapters | The controllers are inbound adapters. No controller holds a repository, an HTTP client or a decision; the three command classes that held orchestration give it to application services |
+| VI — nothing swallowed | Every refusal is an explicit status with a bounded reason. The one place this is at risk is the audit starter, which swallows its own publishing failures — that is its behaviour, it is named in research R10 and the plan's risks, and it is not extended to anything of ours |
+| VII — privacy in telemetry | FR-025, FR-026, FR-038, FR-046. Audit bodies off; the `CJSCPPUID` out of every log line; the privacy sweep extended to controller responses and `ProblemDetail` |
+| VIII — estate conventions | Gradle, the pinned analysis set, Conventional Commits, no AI attribution, package root `uk.gov.hmcts.cp.courtregister` |
+
+No entry in Complexity Tracking: nothing here asks for an exception to a principle. The amendment
+**is** the exception, taken at the constitution rather than in a plan.
+
+## Project Structure
+
+### Documentation (this feature)
+
+```
+specs/005-operations-rest-api/
+├── spec.md          the requirements, the amendment proposal, the gates and the open questions
+├── plan.md          this file
+├── research.md      the starters' real behaviour, with sources — read before writing a filter
+├── data-model.md    the seven endpoints: request, success shape, every refusal
+├── quickstart.md    the curl walkthrough that replaces the CLI one
+└── tasks.md         the phases
+```
+
+### Source code — additions and changes
+
+```
+src/main/java/uk/gov/hmcts/cp/
+├── Application.java                          CHANGED  the component-scan exclude filter (R9)
+└── courtregister/
+    ├── api/                                  NEW
+    │   ├── OperationsActionFilter.java               path+method → action name, server-derived,
+    │   │                                             overrides the caller's header (R2)
+    │   ├── ActionRequestWrapper.java                 the header override
+    │   ├── OperationsExceptionHandler.java           @RestControllerAdvice → ProblemDetail
+    │   ├── OperationsErrorAttributes.java            the /error body for 401/403 and unmapped
+    │   │                                             paths: bounded, no path, no trace (R5)
+    │   ├── OperationsAuditFacts.java                 request-scoped bounded facts
+    │   ├── OperationsAuditService.java               the starter's AuditService seam (R10)
+    │   ├── FlagController.java
+    │   ├── BatchesController.java                    list, generate, notify
+    │   ├── RegistersController.java                  recorded-while-off, supersede
+    │   ├── ExceptionReportsController.java
+    │   ├── NotWiredController.java                   501 COMMAND_NOT_WIRED when the generation
+    │   │                                             half is off (FR-052)
+    │   └── dto/                                      the request and response records
+    ├── application/                          NEW classes only
+    │   ├── BatchListingService.java                  ListBatchesCli's reads, unchanged
+    │   ├── RegisterRegenerationService.java          GenerateRegisterCli's orchestration, unchanged
+    │   ├── OperationsRunLauncher.java                the 202 hand-off: mint a run id, submit to the
+    │   │                                             generation executor, take the lock (R12, R16)
+    │   └── OnDemandExceptionReportService.java       ReportExceptionsCli's window and sinks
+    ├── config/
+    │   ├── OperationsProperties.java         NEW     courtregister.operations.*
+    │   ├── OperationsWebConfig.java          NEW     filter registration, conditional controllers
+    │   ├── PropertiesValidator.java          CHANGED the audit-required refusal (FR-045)
+    │   ├── PublicEventsConfig.java           CHANGED the connection factory taken by name (R8)
+    │   └── CliModeConfig.java                DELETED
+    └── batch/cli/                            DELETED (10 classes)
+
+src/main/resources/
+├── openapi.yaml                              NEW  the third owned contract
+├── acl/operations-rules.drl                  NEW  seven allow rules, "Second Line Support" only
+├── application.yaml                          CHANGED  the authz/audit/operations blocks; the
+│                                                      courtregister.cli key removed
+└── logback-cli.xml                           DELETED
+
+docker/startup.sh                             CHANGED  the command dispatch removed
+scripts/container-smoke.sh                    CHANGED  an endpoint instead of two commands
+build.gradle, gradle/libs.versions.toml       CHANGED  the two starters
+README.md                                     CHANGED  the operations section (done in d73ef50)
+specs/002-consolidate-progression-leg/quickstart.md   CHANGED  curl instead of CLI examples
+```
+
+**Structure decision**: the REST layer is a peer of `inbound/` — a second inbound adapter — and not
+a layer above the application. Nothing in `api/` is imported by anything outside it.
+
+### Port and service contracts (this increment)
+
+Three new application services, each taking a command class's body unchanged and returning a typed
+record instead of printing lines:
+
+| Service | From | Returns |
+|---|---|---|
+| `BatchListingService.batchesOn(LocalDate)` | `ListBatchesCli.listDate` | `List<BatchListing>` — batch id, court house, state, record count, recipients (masked address + status) |
+| `BatchListingService.recordedWhileOff()` | `ListBatchesCli.listRecordedWhileOff` | `List<RecordedWhileOff>` — record id, hearing id, register date, flag state |
+| `RegisterRegenerationService.regenerate(Selection, RunCorrelation)` | `GenerateRegisterCli.generate` | `RegenerationTally` — released, registers, batches, requested, deferred, per-batch state, withheld reasons |
+| `OperationsRunLauncher.launch(Selection, Caller)` | new (the 202 hand-off) | `RunAccepted` — the run id |
+| `OnDemandExceptionReportService.report(Window, boolean email)` | `ReportExceptionsCli.asked/reported` | `OnDemandReport` — the report, the per-sink outcomes, the run id, the duration |
+
+`GateDecision`, `NotificationSummary`, `NotificationDisposition`, `FlagDecision`, `ExceptionReport`
+and `RegisterRecord` are reused as they are. No existing port's signature changes.
+
+### Test matrix
+
+| Suite | Kind | Covers |
+|---|---|---|
+| `api/OperationsRulesTest` | drools, no Spring | one allow case and one deny case per action; an unknown action denied; the file names no group but "Second Line Support" |
+| `api/OperationsActionFilterTest` | plain servlet mocks | path+method → action for all seven; a caller-supplied `CPP-ACTION` overridden; an unrecognised path untouched |
+| `api/FlagControllerTest` | `@WebMvcTest` | ON, OFF, UNREADABLE all `200`; the reason is the flag's bounded code |
+| `api/BatchesControllerTest` | `@WebMvcTest` | the listing shape and masking; generate's `202` + run id; generate's `409 FLAG_OFF` / `FLAG_UNREADABLE`; **`400 OVERRIDE_REQUIRES_BATCH` for `ignoreFlag` without a `batchId`**, and the accepted override *with* one; notify's `200` / `409 ALREADY_NOTIFYING` / `500` / `404` / `503` |
+| `api/RegistersControllerTest` | `@WebMvcTest` | recorded-while-off; supersede `200`, `dryRun`, `409 FLAG_ON`, `409 FLAG_UNREADABLE`, `400` future, `400` older than the bound, `400` absent |
+| `api/ExceptionReportsControllerTest` | `@WebMvcTest` | the report shape; `409 EMAIL_OUTPUT_DISABLED` / `EMAIL_OUTPUT_NOT_WIRED`; the flag read nowhere (a strict mock on the reader) |
+| `api/OperationsExceptionHandlerTest` | `@WebMvcTest` | every refusal is a `ProblemDetail` with a bounded reason and **no** supplied value; a malformed body; an unknown field |
+| `api/OperationsErrorAttributesTest` | slice | the `/error` body for 401/403 and an unmapped path: no `path`, no `trace`, no message |
+| `api/OperationsAuditFactsTest` | unit | action, outcome, flagOverride and supersede count reach the payload; no body does |
+| `api/NotWiredControllerTest` | `@WebMvcTest` | `501 COMMAND_NOT_WIRED` on a generation-off pod for the three endpoints that need those beans |
+| `api/OpenApiContractTest` | slice | every mapped path/method is in `openapi.yaml` and every path in it is mapped; `{batchId}` declared as a path parameter |
+| `application/BatchListingServiceTest` | Mockito | the reads, the ordering, the masking rule, the store-failure path |
+| `application/RegisterRegenerationServiceTest` | Mockito | the CLI's cases, re-pointed: narrowing, withholding (`key-in-flight`, `outside-the-bound`), the tally, the deadline |
+| `application/OperationsRunLauncherTest` | Mockito | the lock is **taken**; a lock it cannot take records the refusal and does nothing; the run id is minted before the submit |
+| `application/OnDemandExceptionReportServiceTest` | Mockito | the window forms (instant, ISO duration, `<n>d/h/m/s`), the e-mail refusals, the sink selection, "not every sink took it" |
+| `config/OperationsPropertiesTest` | `ApplicationContextRunner` | the defaults; the refusals — operations on with audit off, audit on with no spec key, `cp.audit` with no hosts, a non-positive `supersede-max-age` |
+| `config/AuditComponentScanTest` | `@SpringBootTest` | the exclusion of `uk.gov.hmcts.cp.filter.audit` holds — without it the context does not start (R9) |
+| `config/PublicEventsFactoryTest` | context | the listener container's connection factory is the public-event one, not the audit one (R8) |
+| `api/OperationsAuthzIT` | full context + WireMock | **the real filter**: in the group → served; not in the group → 403; no `CJSCPPUID` → 401; identity service 500 → 403; a forged `CPP-ACTION` → still refused; `/actuator/health` → 200 |
+| `api/OperationsAuditIT` | full context, publisher seam | an audit event per request and per response; it carries the action, the outcome and the caller; it carries **no** request or response body |
+| `e2e/OperationsConcurrencyIT` | Testcontainers | two notifies for one batch; a regeneration racing the scheduled run in both orders; two regenerations for one date; a public event arriving during a regeneration |
+| `config/TelemetryPrivacyTest` | extended | controller responses and `ProblemDetail` bodies join the log-statement sweep; the `CJSCPPUID` appears in no log statement |
+| `e2e/ContainerSmokeIT` / `scripts/container-smoke.sh` | `[A]` | the image starts the application with no arguments and answers an endpoint |
+
+## Coordination contract with the concurrent 004 tree
+
+004 (`release-stale-batches`) is built at the same time in the **main checkout**,
+`/home/sachin/moj/service-cp-crime-court-register`. This branch never touches that tree, and the
+file ownership is:
+
+**005 owns** — `batch/cli/*`, `config/CliModeConfig`, `docker/startup.sh`, the new `api/` package,
+the new `application/` services listed above, `src/main/resources/openapi.yaml`,
+`src/main/resources/acl/`, `build.gradle`, `gradle/libs.versions.toml`, the `authz.*`, `audit.*`,
+`cp.audit.*` and `courtregister.operations.*` blocks of `application.yaml` and the deletion of
+`courtregister.cli`, `Application.java`, `config/PublicEventsConfig.java`,
+`.specify/memory/constitution.md`, `CLAUDE.md`, `.claude/rules/*`, `.claude/agents/*`, README's
+operations section, `specs/002-consolidate-progression-leg/quickstart.md`'s CLI examples,
+`scripts/container-smoke.sh`, `logback-cli.xml`.
+
+**005 must NOT touch** — `batch/RegisterGenerationJob`, `batch/GenerationReconciler`,
+`application/DocumentRenderer`, `adapter/systemdocgenerator/*`, the `courtregister.generation.*`
+block of `application.yaml`, README's generation section, or `design_rules.md`'s flow diagram and
+batch state machine. Those are 004's.
+
+**Shared, by agreement**:
+
+- `config/PropertiesValidator` — 004 renames the generation grace period; 005 adds the
+  audit-required refusal. Different methods, one file: expect a textual conflict on the rebase and
+  resolve it by keeping both.
+- `.claude/rules/design_rules.md` — 004 edits the flow diagram and the batch state machine; 005
+  edits the opening paragraph, the package structure, the Cutover Rule's wording about endpoints,
+  the topic section's retired CLI-JVM rule, the out-of-scope list and the new "The operations API"
+  section.
+- **004 owes 005 one behaviour**: its pre-batching pass must skip operator-initiated batches younger
+  than the run deadline plus a margin, or an operator regeneration spanning 18:00 is failed under
+  `NOT_COMPLETED_BY_NEXT_RUN`. Recorded here; **it is 004's change**, and 005 does not make it.
+
+**Merge order**: 004 → `main`, then 005 rebases onto `main`, re-runs its spec-validator, then
+005 → `main`. One committer per tree, always.
+
+## Risks
+
+1. **The two starters' three start-up traps** (research R6, R7, R9). Each is a context that will not
+   start, and two of them do not name themselves usefully. Mitigated by making them tasks with
+   tests: a context test for the component-scan exclusion, `ApplicationContextRunner` cases for the
+   audit settings, and the OpenAPI file matching the setting that names it.
+2. **The `@Primary` JMS hijack** (R8). Worst case: the public-event listener silently attaches to
+   the audit broker and every document outcome is lost. Mitigated by a context test naming the
+   factory, and by taking the connection factory by name.
+3. **The audit starter swallows its own failures.** A call that cannot be audited proceeds and says
+   so only in a log line. Principle III(b) asks that every endpoint be audited; what we can enforce
+   is that the audit path is *configured and engaged*, which FR-045 makes a start-up refusal.
+   The residual risk — a broker outage during a call — is the library's, is named here, and is not
+   hidden behind a claim we cannot make.
+4. **Widened reach.** The population that can regenerate and supersede goes from holders of cluster
+   RBAC on this namespace to the estate-wide "Second Line Support" group — decided by the design
+   owner, and traded deliberately for a named caller and an audit trail. Bounded by the supersede
+   age limit, the flag subordination, and `ignoreFlag` needing an explicit batch. Narrowing it later
+   is a change to `acl/operations-rules.drl` alone.
+5. **The rebase onto 004.** `PropertiesValidator`, `application.yaml` and `design_rules.md` are all
+   touched by both. Small, and named above so neither side is surprised.
+6. **Removing the CLI is irreversible in the image.** Which is why it is a phase of its own, last,
+   after every endpoint has a passing test (FR-051), and why the deployment gates are stated in the
+   spec rather than discovered at cutover.
+
+## Complexity Tracking
+
+None. No principle is deviated from; the one that had to change was changed at the constitution,
+under its own amendment procedure, and is proposed in the spec.
