@@ -75,6 +75,20 @@ proposal) is in `spec.md`; step 2 (the bump) is commit `d73ef50`; step 3 is this
       of the plan; the class has always been in `domain/`), and 004's pre-batching pass must skip
       operator-initiated batches (plan, coordination contract). Evidence: the analyse output for
       both specs, and the conflict list.
+      (**Re-run at gate round 2, for the 4.0.0 → 4.1.0 amendment.** The Governance procedure's step
+      3 applies to every bump, and this one scoped the enforcement of Principle III's conditions (a)
+      and (b), so the re-check was against those: FR-045 and FR-053 now read as *implementations* of
+      a scope the constitution states rather than as a spec-level exemption from one; conditions (c)
+      and (d) are unconditional in the spec and unaffected; FR-053 is carried by T004/T005, which
+      have landed, and by T013, which now names the refusal waiting for its yaml block; FR-044's
+      default and the "switch the endpoints off" escape are the same sentence on both sides; and
+      `quickstart.md`'s Local section is what the exemption describes. Three drifts found and
+      closed in the same commit — the spec's amendment section named only the 4.0.0 proposal
+      (Governance step 1 is per amendment), the plan's Constitution Check row named no version and
+      no enforcement environment, and `design_rules`' operations-API section described the filters
+      without saying they are a startup refusal. No conflict with 004: the amendment touches
+      nothing 004 relies on. Metrics: 49 functional requirements, 12 success criteria, 60 tasks;
+      0 ambiguities, 0 duplications, 0 critical issues.)
 
 ---
 
