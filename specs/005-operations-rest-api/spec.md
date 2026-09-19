@@ -71,7 +71,7 @@ registers irrespective of which implementation is live, which is a second lever 
 is authorised. See FR-021 and assumption 11.
 
 **Governance step 3** — re-running `/speckit-analyze` against every in-flight feature spec and
-updating or waiving each conflict — is task **T0A** of this increment. It covers this spec and the
+updating or waiving each conflict — is task **T001** of this increment. It covers this spec and the
 concurrently in-flight `specs/004-release-stale-batches`, which is read but never edited from this
 branch; conflicts found there are recorded for the orchestrator, not fixed here.
 

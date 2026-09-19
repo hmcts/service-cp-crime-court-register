@@ -59,14 +59,15 @@ once.**
 **Purpose**: close the constitution's own amendment procedure before any code lands. Step 1 (the
 proposal) is in `spec.md`; step 2 (the bump) is commit `d73ef50`; step 3 is this.
 
-- [ ] **T001** [A] **Run `/speckit-analyze` for `specs/005-operations-rest-api/`, and again for the
+- [x] **T001** [A] **Run `/speckit-analyze` for `specs/005-operations-rest-api/`, and again for the
       concurrent `specs/004-release-stale-batches/`** (in the main checkout —
       `/home/sachin/moj/service-cp-crime-court-register`, **read-only**: never edit that tree from
       this branch). Governance step 3 requires every in-flight spec to be re-checked against the
       amended principles and each conflict updated or explicitly waived. Update this spec where the
       analysis finds a conflict; for 004, **record** each conflict in this task's commit narrative
       for the orchestrator to act on. The known one to look for: 004's run-report line and 005's
-      operator trigger both touch `batch/RunReport`, and 004's pre-batching pass must skip
+      operator trigger both touch `domain/RunReport` (`batch/` in an earlier draft of this task and
+      of the plan; the class has always been in `domain/`), and 004's pre-batching pass must skip
       operator-initiated batches (plan, coordination contract). Evidence: the analyse output for
       both specs, and the conflict list.
 
@@ -333,14 +334,20 @@ departure is forced — research R16 has the reasoning.
       `409 flag-off`; `409 flag-unreadable`; a date-wide regeneration with the flag ON accepted.
       Red: the override cases.
 - [ ] **T035** [US3] `api/BatchesController#generate` and its request/response records. Green: T034.
-- [ ] **T036** [P] [US3] `batch/RunReportTest` (extend) — **the operator run says it was one**. The
-      run line carries `trigger=operator` for a regeneration launched over HTTP and the scheduler's
-      own value otherwise, and `reason=overridden` where the flag was overridden — the same field
-      `FeatureFlagGate` already counts and logs, which is **kept**, not replaced.
-      ⚠ **`batch/RunReport` is also touched by 004** (its run line gains `released=`). Add a field;
-      do not reshape the line. Expect a textual conflict on the rebase and resolve it by keeping
-      both. Red: the trigger is absent.
-- [ ] **T037** [US3] `batch/RunReport` — the trigger field. Green: T036.
+- [ ] **T036** [P] [US3] `domain/RunReportTest` (**new** — there is no such suite today; the line is
+      asserted only inside `batch/RegisterGenerationJobTest`, which is 004's and must not be
+      touched) — **the operator run says it was one**. The run line carries `trigger=operator` for a
+      regeneration launched over HTTP and the scheduler's own value otherwise, and
+      `reason=overridden` where the flag was overridden — the same field `FeatureFlagGate` already
+      counts and logs, which is **kept**, not replaced.
+      ⚠ **`domain/RunReport` is also touched by 004** (its run line loses `reconciled=` and gains
+      `released_batches=`/`released_registers=`). Add a field; do not reshape the line. Expect a
+      textual conflict on the rebase and resolve it by keeping both. Red: the trigger is absent.
+- [ ] **T037** [US3] `domain/RunReport` — the trigger field, added so that **the existing call site
+      in `batch/RegisterGenerationJob` does not change**: the scheduler's value is the default and
+      the operator's is a second factory. The job is 004's and 005 does not edit it; if the field
+      cannot be added without editing it, the task stops and goes back to the orchestrator rather
+      than reaching into the other tree's file. Green: T036.
 
 ---
 

@@ -210,7 +210,7 @@ file ownership is:
 the new `application/` services listed above, `src/main/resources/openapi.yaml`,
 `src/main/resources/acl/`, `build.gradle`, `gradle/libs.versions.toml`, the `authz.*`, `audit.*`,
 `cp.audit.*` and `courtregister.operations.*` blocks of `application.yaml` and the deletion of
-`courtregister.cli`, `Application.java`, `config/PublicEventsConfig.java`,
+`courtregister.cli`, `Application.java`,
 `.specify/memory/constitution.md`, `CLAUDE.md`, `.claude/rules/*`, `.claude/agents/*`, README's
 operations section, `specs/002-consolidate-progression-leg/quickstart.md`'s CLI examples,
 `scripts/container-smoke.sh`, `logback-cli.xml`.
@@ -229,9 +229,24 @@ batch state machine. Those are 004's.
   edits the opening paragraph, the package structure, the Cutover Rule's wording about endpoints,
   the topic section's retired CLI-JVM rule, the out-of-scope list and the new "The operations API"
   section.
-- **004 owes 005 one behaviour**: its pre-batching pass must skip operator-initiated batches younger
-  than the run deadline plus a margin, or an operator regeneration spanning 18:00 is failed under
-  `NOT_COMPLETED_BY_NEXT_RUN`. Recorded here; **it is 004's change**, and 005 does not make it.
+- `config/PublicEventsConfig` — **both**, and the earlier draft of this contract had it as 005's
+  alone (T001's analysis). 005 takes the connection factory by name (R8); 004 removes
+  `courtregister.generation.completion`, and with it the `setAutoStartup` conjunct and the CLI-JVM
+  javadoc. Two separate edits to one file: expect a textual conflict on the rebase and resolve it by
+  keeping both.
+- `domain/RunReport` — **both**, and it is `domain/`, not `batch/`: 004 replaces `reconciled` with
+  `releasedBatches`/`releasedRegisters` and 005 adds the operator trigger. Its line is asserted in
+  `batch/RegisterGenerationJobTest`, which 004 rewrites and 005 must not touch, and the only class
+  that constructs it is `batch/RegisterGenerationJob`, which is 004's. **005 adds the trigger
+  through a factory that leaves the existing call site as it is**, or the task goes back to the
+  orchestrator; it does not edit the job.
+- **004 owes 005 one behaviour** — and **discharges it**: its pre-batching pass must not fail an
+  operator-initiated batch that spans 18:00. 004's FR-017 states it as "the longer of the minimum
+  age and the nightly run's own lock duration", which is at least the run deadline plus the margin
+  `PropertiesValidator` already enforces between them, and its data model keys the choice off the
+  `system_generated` column `V2` already carries and the CLI's assembly already writes `false` into.
+  **It is 004's change**, 005 does not make it, and 005's regeneration service keeps writing
+  `system_generated = false` because it is the CLI's body moved unchanged.
 
 **Merge order**: 004 → `main`, then 005 rebases onto `main`, re-runs its spec-validator, then
 005 → `main`. One committer per tree, always.
