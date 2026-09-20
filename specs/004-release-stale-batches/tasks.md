@@ -2611,14 +2611,43 @@ whatever the last reconciliation saw and go on looking live.
       stamp and the oldest batch id — with "through this pass" become "through this sweep", and
       nothing follows it: the sweep holds no store, so the three reads are the whole of what it
       asks of the database.)
-- [ ] T032 `config/BatchSweepConfig.java` (new), `batch/BatchAgeSweep.java`,
+- [x] T032 `config/BatchSweepConfig.java` (new), `batch/BatchAgeSweep.java`,
       `config/CliModeConfig.java` — make T031 green. The config declares `BATCH_SWEEP_SCHEDULER` and
       a single-threaded `TaskScheduler`, in the shape `IntakeSweepConfig` uses and for its reason: a
       ten-minute reading queued behind a run that is asking for renders is a reading taken an hour
       late. **This is a configuration class, so T031's context case is its test** — the live condition
       from 003's second exception.
+      (green: `flock -w 7200 … ./gradlew test --tests '*BatchAgeSweepTest*'
+      --tests '*ReportSchedulingConfigTest*' --tests '*CliModeConfigTest*'
+      --tests '*GenerationWiringContextTest*' checkstyleMain checkstyleTest pmdMain pmdTest
+      -Dtest.noFailFast=true` → **BUILD SUCCESSFUL**, every case of the four suites green.
+      **`config/CliModeConfig` is touched comment-only**, which is what this tree's coordination
+      contract permits: the counts its javadoc keeps of the configurations carrying its condition
+      move from five to six and from three to four, the schedule list gains the batch-age refresh,
+      and one sentence says why `BatchSweepConfig` is *not* one of the two configurations
+      conditional on the CLI property alone — it carries the generation half's switch beside it,
+      because three gauges about batches belong to the pod that can hold one. No code of that
+      class changed.)
 
 **Phase close**: `flock … ./gradlew build` green; review gate.
+
+**Phase 6 closed (2026-09-20).** `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` →
+**BUILD SUCCESSFUL, exit 0, 4m 22s, 3660 tests over 579 suites, 0 failures, 0 errors, 0 skipped**.
+`checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification` all
+ran and all passed, none of them loosened. Twelve cases more than Phase 5's 3648: the nine of
+`BatchAgeSweepTest`, `the_context_holds_four_task_schedulers`,
+`a_command_jvm_runs_no_batch_age_sweep` and `an_ordinary_pod_should_hold_the_batch_age_sweep`.
+
+**One thing landed early, and it is named rather than left to the diff.** The first phase-close
+build was red on `TelemetryPrivacyTest`'s "the drive above moved every meter the downstream half
+can publish": `courtregister_batch_sweep_failures_total` existed and nothing drove it. That
+assertion is the existing test going red at the arrival of production code, so the fix belongs in
+this phase — `support/GenerationLegs` gains `theBatchAgeRefresh()` (the parked-batch WARN and both
+absorbed arms) and `BatchAgeSweep` joins `THE_LEGS`, and `boundedLabelVocabulary()` gains
+`SweepFailureReason`'s two codes, which the generation half had never before been labelled from.
+**T039 and T040 keep their content**: what is owed there is the explicit case that the drive names
+the two classes 004 added and no longer names the one it deleted, plus whatever line the sweep is
+found to be rejected for — none was, on this run.
 
 ---
 

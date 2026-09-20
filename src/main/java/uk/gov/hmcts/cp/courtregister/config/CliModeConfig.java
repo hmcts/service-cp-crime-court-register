@@ -20,8 +20,8 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
  *   <li><strong>Every scheduler.</strong> The lock makes the 18:00 run one run; a CLI pod that
  *       held a scheduler would be a second replica of it, and a command that ran long enough to
  *       reach 18:00 London would generate the night twice. The same argument holds for the other
- *       two schedules the service now carries - the 07:00 exception report and the intake gauge
- *       refresh - which is why the condition goes on
+ *       three schedules the service now carries - the 07:00 exception report, the intake gauge
+ *       refresh and the batch-age refresh - which is why the condition goes on
  *       {@link SchedulingInfrastructureConfig} as well: that is where {@code @EnableScheduling}
  *       lives, and without it nothing processes {@code @Scheduled} at all.</li>
  *   <li><strong>The public-event listener container.</strong> The durable subscription is shared,
@@ -43,25 +43,27 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
  * {@code CliMain} at all, and a JVM that got there sets this itself.
  *
  * <p><strong>The conditionals are on the configurations rather than on the beans, and there are
- * five of them.</strong> {@code ServiceBusConsumerConfig} owns both the processor client and the
+ * six of them.</strong> {@code ServiceBusConsumerConfig} owns both the processor client and the
  * one component permitted to start it; {@link SchedulingInfrastructureConfig} owns
  * {@code @EnableScheduling}, {@code @EnableSchedulerLock} and the one {@code LockProvider};
  * {@link SchedulingConfig} owns the generation scheduler and the job on it;
- * {@link ReportSchedulingConfig} and {@link IntakeSweepConfig} own theirs; and
- * {@code PublicEventsConfig} owns the container factory as well as the listener - so switching the
- * configuration off is what makes the absence complete. A bean-level condition would leave a client
- * nothing can start, a scheduler with nothing on it, or a container factory with no listener to
- * create one from: half-absences to reason about instead of plain ones.
+ * {@link ReportSchedulingConfig}, {@link IntakeSweepConfig} and {@link BatchSweepConfig} own
+ * theirs; and {@code PublicEventsConfig} owns the container factory as well as the listener - so
+ * switching the configuration off is what makes the absence complete. A bean-level condition would
+ * leave a client nothing can start, a scheduler with nothing on it, or a container factory with no
+ * listener to create one from: half-absences to reason about instead of plain ones.
  *
- * <p><strong>Two of the five are conditional on this and on nothing else.</strong>
+ * <p><strong>Two of the six are conditional on this and on nothing else.</strong>
  * {@link SchedulingInfrastructureConfig} and {@link IntakeSweepConfig} carry no enabled-flag
  * condition at all, deliberately: the gauges must refresh wherever the intake half runs, which
  * includes a pod with the report and the generation half both switched off. That makes this
  * condition the only thing keeping either of them off a command JVM, which is why
- * {@code CliModeConfigTest} asserts the absence of all three scheduling configurations rather than
- * of the job alone.
+ * {@code CliModeConfigTest} asserts the absence of all four scheduling configurations rather than
+ * of the job alone. {@link BatchSweepConfig} is not one of the two: it carries the generation
+ * half's switch beside this condition, because three gauges about batches belong to the pod that
+ * can hold one.
  *
- * <p>Readiness is unaffected by all three. {@code intakeStartup} is contributed by
+ * <p>Readiness is unaffected by all of them. {@code intakeStartup} is contributed by
  * {@link IntakeStartupHealth}, which is deliberately outside the consumer's own configuration and
  * asks for the lifecycle controller rather than requiring one - so a CLI JVM answers UP with
  * {@code no-consumer-configured}, exactly as an intake-only pod does, and the readiness group's
@@ -70,12 +72,12 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
 public final class CliModeConfig {
 
     /**
-     * The property, named here because three configurations condition on it and a name that only
+     * The property, named here because six configurations condition on it and a name that only
      * agreed by convention would be a listener nobody stopped.
      */
     public static final String CLI_PROPERTY = "courtregister.cli";
 
-    /** What the three conditionals require of it, which is that it is not on. */
+    /** What the six conditionals require of it, which is that it is not on. */
     public static final String NOT_CLI = "false";
 
     private CliModeConfig() {

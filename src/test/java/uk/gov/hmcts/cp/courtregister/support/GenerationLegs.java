@@ -52,6 +52,7 @@ import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
 import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
 import uk.gov.hmcts.cp.courtregister.application.ReportMailer;
 import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
+import uk.gov.hmcts.cp.courtregister.batch.BatchAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
@@ -180,6 +181,7 @@ public final class GenerationLegs implements AutoCloseable {
                     StaleBatchReleaser.class,
                     ExceptionReportJob.class,
                     IntakeAgeSweep.class,
+                    BatchAgeSweep.class,
                     RegisterGenerationService.class,
                     SystemDocGeneratorClient.class,
                     DocumentEventListener.class,
@@ -362,6 +364,9 @@ public final class GenerationLegs implements AutoCloseable {
 
     private final IntakeAgeSweep sweep;
 
+    /** The three in-flight batch readings, whose only lines are a parked batch and a refusal. */
+    private final BatchAgeSweep batchSweep;
+
     /** Whether the refusal the drive applied carried systemdocgenerator's words into the store. */
     private boolean generatorWordsKept;
 
@@ -389,6 +394,7 @@ public final class GenerationLegs implements AutoCloseable {
         this.reportJob = new ExceptionReportJob(reporting, List.of(logSink), REPORT_CRON,
                 GenerationProperties.COURTS_ZONE, intakeMetrics, clock);
         this.sweep = new IntakeAgeSweep(requestLog, intakeMetrics, REPORT_LIMIT, clock);
+        this.batchSweep = new BatchAgeSweep(batches, metrics, clock);
         this.reportMailer = new NotificationNotifyReportMailer(
                 restClientFor(wireMock.baseUrl()), SYSTEM_USER_ID, MAPPER);
     }
@@ -451,6 +457,7 @@ public final class GenerationLegs implements AutoCloseable {
         theMorningRun();
         theOnDemandReport();
         theIntakeGaugeRefresh();
+        theBatchAgeRefresh();
     }
 
     // --- the nightly run -------------------------------------------------------------------------
@@ -1283,6 +1290,41 @@ public final class GenerationLegs implements AutoCloseable {
                                 + PersonalDataMarkers.CHILD_NAME));
         whateverItAnswers(sweep::sweepScheduled);
         whateverItAnswers(sweep::sweepScheduled);
+    }
+
+    /**
+     * The generation half's own sweep: a batch nobody was told about, and both absorbed refusals.
+     *
+     * <p>Three lines and no more, which is the whole of what this sweep can write. The first is
+     * the WARN about a batch parked at GENERATED - a document that exists and Youth Offending
+     * Teams who have not been sent it - and it may carry an identity, a stamp and a count and
+     * nothing else. The other two are the two arms of the one refusal this service absorbs, driven
+     * both ways round for the reason the intake sweep's are: an outage of theirs and a bug of ours
+     * are counted under two bounded reasons precisely so that one cannot hide inside the other,
+     * and an arm nothing drives is a reason no sweep has ever read.
+     *
+     * <p>Driven after the intake refresh because it leaves the batch reads refusing. Everything
+     * else the sweep does is three gauges moving, which no log capture sees and which this class
+     * reaches anyway - the meters are swept by name.
+     */
+    private void theBatchAgeRefresh() {
+        reset(batches);
+        when(batches.generatingSince(any(Instant.class))).thenReturn(List.of());
+        when(batches.pendingSince(any(Instant.class))).thenReturn(List.of());
+        when(batches.generatedSince(any(Instant.class)))
+                .thenReturn(List.of(batch(BatchStatus.GENERATED, PAYLOAD_FILE_ID,
+                        DOCUMENT_FILE_ID)));
+        whateverItAnswers(batchSweep::sweepScheduled);
+
+        when(batches.generatingSince(any(Instant.class)))
+                .thenThrow(new StoreUnavailableException(
+                        "the store could not be reached to read the oldest batch awaiting a render",
+                        new IllegalStateException("the connection pool is empty")))
+                .thenThrow(new IllegalStateException(
+                        "the batch-age refresh met something nobody classified, about "
+                                + PersonalDataMarkers.CHILD_NAME));
+        whateverItAnswers(batchSweep::sweepScheduled);
+        whateverItAnswers(batchSweep::sweepScheduled);
     }
 
     /**

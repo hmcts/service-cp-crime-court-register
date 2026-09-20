@@ -1139,6 +1139,11 @@ class TelemetryPrivacyTest {
      * free text on this leg is a recipient's address or another service's prose about a document
      * whose every defendant is a child.
      *
+     * <p>{@link SweepFailureReason} joined the second source at 004, when the batch-age sweep
+     * gave the generation half an absorbed refusal of its own. It is the same enumeration the
+     * intake sweep's counter is labelled from - one vocabulary for one kind of refusal - and the
+     * two codes exist precisely so that an outage of theirs cannot hide inside a bug of ours.
+     *
      * @return the bounded vocabulary
      */
     private static Set<String> boundedLabelVocabulary() {
@@ -1150,6 +1155,8 @@ class TelemetryPrivacyTest {
                                 .filter(value -> !value.startsWith(METER_PREFIX)),
                         Arrays.stream(BatchStatus.values()).map(TelemetryPrivacyTest::code),
                         Arrays.stream(NotificationStatus.values())
+                                .map(TelemetryPrivacyTest::code),
+                        Arrays.stream(SweepFailureReason.values())
                                 .map(TelemetryPrivacyTest::code),
                         Stream.concat(
                                         Stream.of(new FlagDecision.Enabled(),

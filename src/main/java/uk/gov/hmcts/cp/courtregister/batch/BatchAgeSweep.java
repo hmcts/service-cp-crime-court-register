@@ -8,6 +8,8 @@ import java.util.Objects;
 import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
+import uk.gov.hmcts.cp.courtregister.config.BatchSweepConfig;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
@@ -83,7 +85,11 @@ public class BatchAgeSweep {
      * own right - unlike {@link StaleBatchReleaser}, which is reached from inside a run and carries
      * the run's id. The correlation is opened here rather than inside the body so that a caller
      * reaching the body directly keeps whatever correlation it opened for itself.
+     *
+     * <p>No {@code @SchedulerLock}, for the reason the class javadoc gives.
      */
+    @Scheduled(fixedDelayString = "${courtregister.generation.batch-age-refresh}",
+            scheduler = BatchSweepConfig.BATCH_SWEEP_SCHEDULER)
     public void sweepScheduled() {
         RunCorrelation.under(this::sweep);
     }
