@@ -68,7 +68,8 @@ the section named beside it.
   line already keeps both accounts of a night because neither answers the other's question. The
   released registers are re-batched by the same run and are therefore *also* counted in that night's
   row totals: the released numbers are a diagnostic beside the night's accounts, not a third sum to
-  add to them. *(FR-009, Assumptions.)*
+  add to them. **A third number joined them at Phase 4** (coordinator, 2026-09-20): the batches the
+  pass could not give back, on the line as `contended=`. *(FR-009, Assumptions.)*
 - Q: Are the retired timeout reason and the retired completion mechanism removed from the bounded
   vocabularies, or kept? → A: **Removed** — from the enums and from the schema's bounded lists, in
   a forward migration of their own. *(Revised twice: by design review, and again on 2026-09-19 when
@@ -428,14 +429,24 @@ with zero and with a negative value and confirm each refusal names the setting.
   drop is what stops a Youth Offending Team being told twice and "it is in the log index" is not an
   alerting surface. A redelivery of such an outcome MUST be counted under that same reason and never
   as an unknown correlation.
-- **FR-009**: The run report MUST state how many **batches** the run released and how many
-  **registers** came back with them, in place of the count of outcomes it used to fetch, and MUST
-  state zero rather than nothing where it released none. The two released numbers are a diagnostic
-  beside the night's accounts and are deliberately **not** a third sum: the registers they count are
-  re-batched by the same run and are therefore already inside that run's row totals. For the same
-  reason the registers counted are those still the day's to render: a register the estate re-shared
-  while the pass was giving it back is superseded rather than handed back, nothing will re-batch it,
-  and counting it would put a register in the run's diagnostic that is in none of its totals.
+- **FR-009**: The run report MUST state how many **batches** the run released, how many
+  **registers** came back with them and how many batches the pass **could not** give back, in place
+  of the count of outcomes it used to fetch, and MUST state zero rather than nothing where any of
+  the three is none. On the run's line they are `released_batches=`, `released_registers=` and
+  `contended=`. None of the three is a third sum: the registers counted by `released_registers` are
+  re-batched by the same run and are therefore already inside that run's row totals, and the
+  contended batches are in no total at all because nothing happened to them. For the same reason the
+  registers counted are those still the day's to render: a register the estate re-shared while the
+  pass was giving it back is superseded rather than handed back, nothing will re-batch it, and
+  counting it would put a register in the run's diagnostic that is in none of its totals.
+  `contended=` MUST carry the same number as `courtregister_generation_contended_total` moved by
+  that run, so the line and the counter say one thing. **The third number is the coordinator's
+  decision of 2026-09-20**, taken at Phase 4 and recorded in `plan.md` and `data-model.md`: the
+  batches the pass could not give back are work the night left undone — stale still and untouched,
+  so the next run reaches them again and the 07:00 report names their court centre days every
+  morning meanwhile (FR-003a, FR-019) — and a run line carrying only the two released numbers would
+  describe as complete a night that had left a court centre without its document, which is the
+  silence this service exists to end.
 - **FR-010**: The minimum age MUST be a configuration setting with a documented default of thirty
   minutes, and start-up MUST be refused, naming the setting, for a zero or negative value.
 - **FR-011**: The readings that say how long the oldest batch awaiting a render, the oldest batch that
