@@ -1318,6 +1318,14 @@ durations and a clock. No Spring context, no Docker.
       which is the line a quiet night still writes. All of them carry the run's `runId`, because
       `releaseStale()` runs under `RunCorrelation.under(...)`.
       `data-model.md`'s instrument table gains the contended row in the same commit.
+      **One thing the full build then required, and it is Phase 8's work reached early.**
+      `TelemetryPrivacyTest`'s `[A]` case reads every meter name `GenerationMetrics` declares and
+      fails on one the drive never moved, so three new counters are three unswept series the moment
+      they are declared. `support/GenerationLegs` therefore gains `theStaleBatchPass()` - one batch
+      given back and one the store could not give back, which moves all three counters and writes
+      all three of the pass's lines - and `StaleBatchReleaser` joins `THE_LEGS`, so its lines are
+      inside the label and statement sweeps from the commit that wrote them rather than from T039.
+      T039/T040 are left with `BatchAgeSweep` alone.
 - [x] T014 [US2] `batch/StaleBatchReleaser.java` — make T013 green. Both cutoffs computed once per
       pass from the injected clock and the two settings. The javadoc states the rule the retired
       class stated differently: PENDING and GENERATING are **one** rule, because with no query there

@@ -48,14 +48,17 @@ import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
 import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
 import uk.gov.hmcts.cp.courtregister.application.ReportMailer;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.IntakeAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
+import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
 import uk.gov.hmcts.cp.courtregister.batch.cli.ReportExceptionsCli;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
@@ -141,6 +144,10 @@ public final class GenerationLegs implements AutoCloseable {
     /** The batch every scenario is about, fixed so a suite can look for it in the capture. */
     public static final UUID BATCH_ID = UUID.fromString("11111111-2222-4333-8444-555555555555");
 
+    /** A second batch, the one the stale-batch pass could not give back. */
+    public static final UUID CONTENDED_BATCH_ID =
+            UUID.fromString("22222222-3333-4444-8555-666666666666");
+
     /** The identity one recipient's e-mail is asked for under, fixed for the same reason. */
     public static final UUID NOTIFICATION_ID =
             UUID.fromString("66666666-7777-4888-8999-aaaaaaaaaaaa");
@@ -170,6 +177,7 @@ public final class GenerationLegs implements AutoCloseable {
     public static final List<Class<?>> THE_LEGS = Stream.concat(
             Stream.of(
                     RegisterGenerationJob.class,
+                    StaleBatchReleaser.class,
                     ExceptionReportJob.class,
                     IntakeAgeSweep.class,
                     RegisterGenerationService.class,
@@ -330,6 +338,8 @@ public final class GenerationLegs implements AutoCloseable {
 
     private final GenerationReconciler reconciler;
 
+    private final StaleBatchReleaser releaser;
+
     private final DocumentOutcomeSinkImpl sink;
 
     private final DocumentEventListener listener;
@@ -378,6 +388,8 @@ public final class GenerationLegs implements AutoCloseable {
                 GRACE_PERIOD, clock);
         this.sink = sinkOf();
         this.listener = new DocumentEventListener(sink, metrics, DeliveryObserver.NONE);
+        this.releaser = new StaleBatchReleaser(store, metrics, settings().staleAfter(),
+                settings().lockAtMostFor(), clock);
         this.job = new RegisterGenerationJob(gate, store, assembler, generation, reconciler,
                 metrics, settings(), clock);
         this.reporting = new ExceptionReportService(requestLog, batches, notifications, store,
@@ -418,6 +430,7 @@ public final class GenerationLegs implements AutoCloseable {
         theNightlyRun();
         theRequestingLeg();
         theRenderersClient();
+        theStaleBatchPass();
         theReconciler();
         theTopicListener();
         theOutcomeSink();
@@ -502,6 +515,24 @@ public final class GenerationLegs implements AutoCloseable {
         when(reader.read()).thenReturn(new FlagDecision.Disabled());
         whateverItAnswers(new RegisterGenerationJob(new FeatureFlagGate(reader, metrics), store,
                 assembler, generation, reconciler, metrics, settings(), clock)::run);
+    }
+
+    // --- the stale-batch pass --------------------------------------------------------------------
+
+    /**
+     * The run's first act, in both of the endings it can write about a batch.
+     *
+     * <p>One batch given back and one the store could not give back, so all three of the pass's
+     * statements are written and all three of its counters move. Every value on those lines is an
+     * identity or a count: a released batch names the court centre day it held because that is
+     * what was given back, and a contended one is named by its batch identity alone.
+     */
+    private void theStaleBatchPass() {
+        reset(store);
+        when(store.failAndReleaseStale(any(), any())).thenReturn(new StaleReleaseOutcome(
+                List.of(new ReleasedBatch(BATCH_ID, COURT_CENTRE, REGISTER_DATE, 2)),
+                List.of(CONTENDED_BATCH_ID)));
+        whateverItAnswers(releaser::releaseStale);
     }
 
     // --- the requesting leg ----------------------------------------------------------------------
