@@ -1472,12 +1472,34 @@ numbers.
       found these interactions on mock 'registerStore'", the run having read the store the pass
       should have ended it before). `a_skipped_run_does_not_release_anything` is a guard and passes
       on the red run: a job that calls nothing cannot call it on a skipped night either.
-- [ ] T017 [US4] `batch/RegisterGenerationJobTest` (extend) and `domain/RunReportTest` (extend) — the
+- [x] T017 [US4] `batch/RegisterGenerationJobTest` (extend) and `domain/RunReportTest` (extend) — the
       line. `the_run_line_carries_both_released_numbers`; `a_run_that_released_nothing_says_zero`;
       `the_run_line_carries_no_reconciled_anywhere`, a whole-line assertion rather than a field one,
       because the word must be gone from the format string and not merely zero;
       `the_released_registers_are_not_added_to_either_total`, which pins the one thing a reader of a
       line of totals will otherwise assume. Red: the record and the line still say `reconciled`.
+      **`domain/RunReportTest` is new, not extended** — there was no such file; the record's own
+      claims were asserted only through the job's suite.
+      **Seams landed**: `RunReport`'s `reconciled` component becomes `releasedBatches`,
+      `releasedRegisters` and `contended`, with the javadoc that says the last two are a diagnostic
+      and not a third sum, and `RunTally.reportOf` answers with what the pass gave back (T016
+      already held it). The job's format string still carries a literal `reconciled=0`, which is
+      what T018 replaces and what three of these cases fail on. The **third number is the
+      orchestrator's decision of 2026-09-20**: a batch the pass could not release is work the night
+      left undone, and the run line may not be silent about it, so `contended=` joins the two
+      released keys and the accounting note names all three.
+      **Red** (`flock -w 7200 … ./gradlew test --tests '*RegisterGenerationJobTest*' --tests
+      '*RunReportTest*' -Dtest.noFailFast=true`): **74 tests completed, 11 failed**, every one an
+      assertion and none a compile error — the three new line cases, plus the five whole-line
+      expectations that now name the three keys (`every_field_of_the_report_should_be_on_the_line`,
+      the skipped night's, and the three lines an unfinished run writes),
+      `nothing_on_the_line_should_be_free_text` over the bounded-field pattern, and
+      `a_releaser_that_throws_still_writes_a_line_and_rethrows`. Samples: "expected: 4 but was: -1"
+      for `released_batches`, and the whole-line diffs showing `reconciled=0` where the three keys
+      belong. **[A]** `RunReportTest`'s three cases and
+      `the_released_registers_are_not_added_to_either_total` pass on the red run: they characterise
+      the record the seam leaves and the total it deliberately does not grow, and the total was
+      already right — what was missing was the case that says so.
 - [ ] T019 [US1] `config/GenerationWiringContextTest` (extend) — the bean.
       `a_generation_enabled_context_holds_a_stale_batch_releaser`;
       `a_command_jvm_holds_no_stale_batch_releaser`;

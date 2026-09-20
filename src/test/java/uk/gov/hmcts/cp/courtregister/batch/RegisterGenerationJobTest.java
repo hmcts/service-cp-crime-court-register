@@ -225,6 +225,16 @@ class RegisterGenerationJobTest {
             " snapshot=taken generated=0 notified=0 rows_generated=0 rows_notified=0";
 
     /**
+     * What the line says about a night whose first act found nothing left in flight.
+     *
+     * <p>Three noughts rather than three absences: a night that released nothing and a night that
+     * did not report are different lines, and only a nought told apart from an absence can be
+     * alerted on from the first night.
+     */
+    private static final String NOTHING_RELEASED_ON_THE_LINE =
+            " released_batches=0 released_registers=0 contended=0";
+
+    /**
      * The correlation as {@code normalisedRunLines} renders it, so an expectation can name the
      * field without naming the identity, which is minted per run.
      */
@@ -237,7 +247,7 @@ class RegisterGenerationJobTest {
      * asked the renderer for, the three states the requesting leg can leave a batch in and their
      * total, the court centre days the run passed over, how many registers ended the run under each
      * of those outcomes, what the store said tonight's batches had come to by the time the line was
-     * written, the outcomes it had to chase and how long it took. Written out rather than asserted
+     * written, what its first act gave back and could not give back, and how long it took. Written out rather than asserted
      * field by field because the claim is the whole line - a field dropped from it is a night an
      * operator can no longer read, and a field renamed is an alert that stops firing.
      */
@@ -250,7 +260,10 @@ class RegisterGenerationJobTest {
             + " rows_pending=" + UNSTAMPABLE_ROWS
             + " rows_deferred=" + WAITING_ROWS
             + NOTHING_SETTLED_YET
-            + " reconciled=0 duration_ms=180000";
+            + " released_batches=" + RELEASED_BATCHES
+            + " released_registers=" + RELEASED_REGISTERS
+            + " contended=" + CONTENDED
+            + " duration_ms=180000";
 
     /**
      * The line a run that stopped before it read anything can still write.
@@ -263,15 +276,16 @@ class RegisterGenerationJobTest {
             + NORMALISED_RUN_ID
             + " gate=proceed reason=flag-on batches=0 requested=0 generating=0 failed=0"
             + " pending=0 deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0"
-            + " rows_deferred=0" + NOTHING_SETTLED_YET + " reconciled=0 duration_ms=0";
+            + " rows_deferred=0" + NOTHING_SETTLED_YET + NOTHING_RELEASED_ON_THE_LINE
+            + " duration_ms=0";
 
     /** The same line for a night the flag stopped: the same fields, and nothing earned. */
     private static final String THE_SKIPPED_NIGHTS_LINE = RUN_EVENT
             + NORMALISED_RUN_ID
             + " gate=skipped reason=flag-off batches=0 requested=0 generating=0 failed=0 pending=0"
             + " deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0 rows_deferred=0"
-            + NOTHING_SETTLED_YET
-            + " reconciled=0 duration_ms=0";
+            + NOTHING_SETTLED_YET + NOTHING_RELEASED_ON_THE_LINE
+            + " duration_ms=0";
 
     /**
      * What every value on the line is allowed to be: a count, a duration, or a bounded code.
@@ -287,7 +301,8 @@ class RegisterGenerationJobTest {
                     + "requested=\\d+ generating=\\d+ failed=\\d+ pending=\\d+ deferred=\\d+ "
                     + "rows=\\d+ rows_generating=\\d+ rows_failed=\\d+ rows_pending=\\d+ "
                     + "rows_deferred=\\d+ snapshot=(?:taken|unread) generated=\\d+ notified=\\d+ "
-                    + "rows_generated=\\d+ rows_notified=\\d+ reconciled=\\d+ duration_ms=\\d+");
+                    + "rows_generated=\\d+ rows_notified=\\d+ released_batches=\\d+ "
+                    + "released_registers=\\d+ contended=\\d+ duration_ms=\\d+");
 
     /** What the store answers with; the run's job is to pass it on unchanged. */
     private static final List<RegisterRecord> ACTIVE = List.of(record(), record());
@@ -1213,6 +1228,97 @@ class RegisterGenerationJobTest {
             }
             verifyNoInteractions(store, assembler, service);
         }
+
+        @Test
+        void the_run_line_carries_both_released_numbers() {
+            aMixedNight();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "released_batches"))
+                        .as("how many court centre days this night had to give up on, which is "
+                                + "the one number that says an outcome went missing")
+                        .isEqualTo(RELEASED_BATCHES);
+                softly.assertThat(onTheLine(fields, "released_registers"))
+                        .as("and how many hearings' registers came back with them, because a batch "
+                                + "is one document and a register is one hearing's youth defendants")
+                        .isEqualTo(RELEASED_REGISTERS);
+                softly.assertThat(onTheLine(fields, "contended"))
+                        .as("and what the pass could not give back, which is a night's undone work "
+                                + "and must not be silent on the line that describes the night")
+                        .isEqualTo(CONTENDED);
+            }
+        }
+
+        @Test
+        void a_run_that_released_nothing_says_zero() {
+            aNightHolding(batch());
+            everyRequestIsAccepted();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "released_batches"))
+                        .as("a night that released nothing and a night that did not report are "
+                                + "different lines, and only a nought told apart from an absence "
+                                + "can be alerted on")
+                        .isZero();
+                softly.assertThat(onTheLine(fields, "released_registers")).isZero();
+                softly.assertThat(onTheLine(fields, "contended")).isZero();
+            }
+        }
+
+        /**
+         * The word has to be gone from the format string, not merely nought.
+         *
+         * <p>A whole-line assertion rather than a field one: a line still carrying
+         * {@code reconciled=0} would describe a mechanism this service no longer has, and every
+         * dashboard and alert written against it would go on reading as though it did.
+         */
+        @Test
+        void the_run_line_carries_no_reconciled_anywhere() {
+            aMixedNight();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                softly.assertThat(theOneLine(log))
+                        .as("no vocabulary outlives the thing it names: nothing is reconciled any "
+                                + "more, because nothing is asked of systemdocgenerator between "
+                                + "runs")
+                        .isNotNull()
+                        .doesNotContain("reconciled");
+            }
+        }
+
+        /**
+         * The one thing a reader of a line of totals will otherwise assume.
+         *
+         * <p>The released registers are re-batched by this same run, so they are already inside
+         * {@code rows}. They are a diagnostic beside the night's two accounts and not a third sum,
+         * and a line whose totals had quietly grown by them would be a night that counted the same
+         * registers twice (FR-009).
+         */
+        @Test
+        void the_released_registers_are_not_added_to_either_total() {
+            aMixedNight();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "rows"))
+                        .as("every register this run accounted for, batched or left waiting - and "
+                                + "not one more for the seven the pass handed back into it")
+                        .isEqualTo(THE_MIXED_NIGHTS_ROWS);
+                softly.assertThat(onTheLine(fields, "batches"))
+                        .as("and the batches it assembled, not the batches it failed")
+                        .isEqualTo(3);
+            }
+        }
     }
 
     /**
@@ -2073,7 +2179,11 @@ class RegisterGenerationJobTest {
                 + " pending=0 deferred=2 rows=" + (GENERATING_ROWS + WAITING_ROWS)
                 + " rows_generating=" + GENERATING_ROWS
                 + " rows_failed=0 rows_pending=0 rows_deferred=" + WAITING_ROWS
-                + NOTHING_SETTLED_YET + " reconciled=0 duration_ms=60000";
+                + NOTHING_SETTLED_YET
+                + " released_batches=" + RELEASED_BATCHES
+                + " released_registers=" + RELEASED_REGISTERS
+                + " contended=" + CONTENDED
+                + " duration_ms=60000";
 
         /**
          * The line a night whose one render left and whose store then refused can still write.
@@ -2090,7 +2200,8 @@ class RegisterGenerationJobTest {
                 + NORMALISED_RUN_ID
                 + " gate=proceed reason=flag-on batches=0 requested=1 generating=0 failed=0"
                 + " pending=0 deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0"
-                + " rows_deferred=0" + NOTHING_SETTLED_YET + " reconciled=0 duration_ms=0";
+                + " rows_deferred=0" + NOTHING_SETTLED_YET + NOTHING_RELEASED_ON_THE_LINE
+                + " duration_ms=0";
 
         /** Sets the night up as one the flag allowed and the store then refused. */
         private void aStoreThatWentAway() {

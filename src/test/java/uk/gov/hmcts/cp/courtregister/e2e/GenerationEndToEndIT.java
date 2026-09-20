@@ -201,8 +201,8 @@ class GenerationEndToEndIT {
                         + "written is a separate reading, on RunReport.settled")
                 .containsKey(BatchStatus.GENERATING)
                 .doesNotContainKey(BatchStatus.NOTIFIED);
-        assertThat(report.reconciled())
-                .as("nothing had to be fetched, because the topic delivered")
+        assertThat(report.releasedBatches())
+                .as("nothing was left in flight by an earlier run, so the pass gave nothing back")
                 .isZero();
 
         publishDocumentAvailable(batchId, payloadFileId);
@@ -216,8 +216,9 @@ class GenerationEndToEndIT {
                 .as("the rendered document's id, which is what every e-mail attached")
                 .contains(DOCUMENT_FILE_ID);
         assertThat(registers.completedBy())
-                .as("the topic learned it, not the reconciler; a run whose outcomes all arrive by "
-                        + "reconciliation is a subscription to investigate")
+                .as("the topic learned it, and the topic is the only thing that can: a batch "
+                        + "nothing was ever learned about is what the next run's first act gives "
+                        + "back")
                 .contains(CompletedBy.EVENT.name());
         assertThat(registers.statuses())
                 .as("and the batch's own registers move with it, both of them - this batch's rows "

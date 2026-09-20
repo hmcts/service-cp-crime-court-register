@@ -262,7 +262,7 @@ public class RegisterGenerationJob {
 
         if (decision instanceof Skipped) {
             return recorded(new RunReport(decision, Map.of(), 0, Map.of(), 0, 0,
-                    RunReport.Settled.NOTHING_ASSEMBLED, 0, sinceStart(startedAt)));
+                    RunReport.Settled.NOTHING_ASSEMBLED, 0, 0, 0, sinceStart(startedAt)));
         }
         // Only from here on is the file service anything readiness should have an opinion
         // about, and it stops being one however the run ends.
@@ -641,7 +641,7 @@ public class RegisterGenerationJob {
         LOG.info("event={} run_id={} gate={} reason={} batches={} requested={} generating={} failed={} "
                         + "pending={} deferred={} rows={} rows_generating={} rows_failed={} "
                         + "rows_pending={} rows_deferred={} snapshot={} generated={} notified={} "
-                        + "rows_generated={} rows_notified={} reconciled={} duration_ms={}",
+                        + "rows_generated={} rows_notified={} reconciled=0 duration_ms={}",
                 RUN_EVENT, RunCorrelation.current(), gateOf(report.gateDecision()),
                 reasonOf(report.gateDecision()),
                 outcomes.values().stream().mapToInt(Integer::intValue).sum(), report.requested(),
@@ -651,7 +651,7 @@ public class RegisterGenerationJob {
                 counted(rows, BatchStatus.PENDING), report.deferredRows(),
                 settled.read() ? TAKEN : UNREAD, settled.generated(), settled.notified(),
                 settled.generatedRows(), settled.notifiedRows(),
-                report.reconciled(), report.duration().toMillis());
+                report.duration().toMillis());
         return report;
     }
 
@@ -892,7 +892,8 @@ public class RegisterGenerationJob {
 
             return new RunReport(decision, outcomes, rendersAsked.size(), rowOutcomes,
                     nightsAssembly == null ? 0 : nightsAssembly.deferred().size(),
-                    registersWaiting, settled, 0, duration);
+                    registersWaiting, settled, releaseTally.batches(), releaseTally.registers(),
+                    releaseTally.contended(), duration);
         }
     }
 }

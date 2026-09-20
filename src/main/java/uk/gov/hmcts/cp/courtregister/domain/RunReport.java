@@ -10,7 +10,7 @@ import java.util.Map;
  * what a run adds is the shape of the night - what the flag said, how many batches it asked the
  * renderer for, how many ended each way, how many registers were inside them, how many
  * court-centre days it had to pass over and how many registers are waiting under those, how much of
- * the night had come back by the time it reported, how many outcomes had to be reconciled, and how
+ * the night had come back by the time it reported, what its first act had to give back, and how
  * long the requesting half took against its deadline - and every one of them is a question asked of
  * a dashboard rather than of a database.
  *
@@ -25,13 +25,21 @@ import java.util.Map;
  * <p><strong>What the run asked for is not what came of it, and this reports both.</strong>
  * {@link #requested} counts the batches whose payload was written and whose render was asked for,
  * which is where the nightly job's leg ends: the outcome of a render arrives afterwards, on the
- * public-event topic or from the grace-period reconciler. It is counted at the call rather than off
+ * public-event topic. It is counted at the call rather than off
  * the verdict, so a batch whose render left and whose mark the store then refused is still one
  * render here - and is in none of the {@link #outcomes}, which is a divergence to be read rather
  * than a total that does not add up. {@link #settled} is the other side of
  * that, and it is read rather than reasoned about - see {@link Settled}, which says exactly what
- * its four counts are and, as importantly, what they are not. What <em>this</em> run settled about
- * earlier nights' batches is {@link #reconciled}.
+ * its four counts are and, as importantly, what they are not.
+ *
+ * <p><strong>And three numbers that are a diagnostic rather than an account.</strong>
+ * {@link #releasedBatches} and {@link #releasedRegisters} are what the run's first act gave back -
+ * the batches that had not completed by the time this run began, and the registers that came back
+ * with them - and {@link #contended} is what it could not give back. They are deliberately
+ * <em>not</em> a third sum: the registers counted are re-batched by this same run, so they are
+ * already inside {@link #rows()}, and adding them to either total would count them twice. A night
+ * that released none says nought, because a night that released nothing and a night that did not
+ * report are different lines (FR-009).
  *
  * <p><strong>A skipped run still produces one.</strong> A run that read OFF and did nothing is the
  * expected state for every night before cutover, and a report that only appeared when work happened
@@ -73,9 +81,16 @@ import java.util.Map;
  * @param settled      what the store said tonight's batches had come to at the moment this report
  *                     was made, which is a snapshot of a night that may still be settling and not
  *                     a final tally ({@link Settled})
- * @param reconciled   how many outcomes the grace-period reconciler had to fetch rather than
- *                     receive, which is the broker's health seen from here
- * @param duration     how long the run took
+ * @param releasedBatches   how many batches the run's first act failed and released, having found
+ *                          them still awaiting a render this service can no longer ask about;
+ *                          nought for a skipped run, which does not run the pass at all
+ * @param releasedRegisters how many registers came back with them and are still the day's to
+ *                          render - already inside {@link #rows()}, because the same run re-batches
+ *                          them, and therefore not a total to be added to anything
+ * @param contended         how many batches the pass left exactly as it found them, every attempt
+ *                          at them having lost the race for the day's active register; they are
+ *                          stale still, so the next run reaches them again
+ * @param duration          how long the run took
  */
 public record RunReport(
         GateDecision gateDecision,
@@ -85,7 +100,9 @@ public record RunReport(
         int deferredKeys,
         int deferredRows,
         Settled settled,
-        int reconciled,
+        int releasedBatches,
+        int releasedRegisters,
+        int contended,
         Duration duration) {
 
     /**
@@ -109,7 +126,7 @@ public record RunReport(
      *
      * <p><strong>A snapshot, and it says so in the name.</strong> The requesting leg ends when
      * systemdocgenerator has been asked (FR-008) and the outcome of a render is applied afterwards
-     * by the event listener or by the grace-period reconciler (FR-009), so these four counts are
+     * by the event listener, so these four counts are
      * read back out of {@code register_batch} at the moment the line is written rather than known
      * by the leg that did the requesting. What they describe is therefore a night that may still be
      * settling: a render accepted at 18:04 and marked at 18:04:30 is counted here and one accepted
