@@ -107,7 +107,7 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  *
  * <p>The subject of {@code config/TelemetryPrivacyTest}'s downstream group: everything that happens
  * to a register after the delivery path has recorded it. A batch is assembled, a payload is stored,
- * systemdocgenerator is asked for the render, the outcome comes back by topic or by query, and the
+ * systemdocgenerator is asked for the render, the outcome comes back on the topic, and the
  * document is e-mailed to the Youth Offending Teams the subscription matched - and every one of
  * those steps writes lines and moves meters. What this fixture exists to do is make <em>every</em>
  * one of those lines happen once, with a marker wherever a person could be named, so a sweep over

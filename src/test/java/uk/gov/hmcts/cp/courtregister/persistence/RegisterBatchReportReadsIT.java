@@ -347,15 +347,15 @@ class RegisterBatchReportReadsIT {
             final RegisterBatch rendered = generated(TUESDAY, minutesAgo(90));
 
             softly.assertThat(repository.generatingSince(minutesAgo(30)))
-                    .as("002's read still answers entities, and still answers the same rows the "
-                            + "reconciler's own suite expects of it")
+                    .as("002's read still answers entities, and still answers the same rows "
+                            + "RegisterBatchRepositoryIT expects of it")
                     .containsExactly(requested);
             softly.assertThat(repository.generatedSince(minutesAgo(30)))
                     .as("likewise the parked read, unrenamed and unwidened")
                     .containsExactly(rendered);
             softly.assertThat(repository.pendingSince(minutesAgo(30)))
-                    .as("and its own predicate is untouched: the reconciler can only ask about a "
-                            + "payload, so a batch that never minted one is invisible to it")
+                    .as("and its own predicate is untouched: 002's read is about a batch that "
+                            + "minted a payload, so one that never did is invisible to it")
                     .isEmpty();
             softly.assertThat(latePending(minutesAgo(30)))
                     .as("which is exactly why the report needs a read of its own - that batch has "

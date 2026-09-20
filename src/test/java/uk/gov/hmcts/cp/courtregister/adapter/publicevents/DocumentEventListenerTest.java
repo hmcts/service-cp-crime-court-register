@@ -256,7 +256,7 @@ class DocumentEventListenerTest {
      * invents, because the selector and the listener have to name the same two events and nothing
      * else would notice if they stopped: a selector naming an event the listener drops is a
      * subscription doing work for nobody, and a listener expecting an event the selector excludes is
-     * a batch that waits for the reconciler every night.
+     * a batch that is released unrendered by the next run, every night, for ever.
      */
     @Nested
     @DisplayName("the CPPNAME selector the broker applies")

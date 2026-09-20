@@ -2242,7 +2242,7 @@ claim. T028 runs after them, not before, so the suite it characterises is the fi
       under `docker/` is touched - `startup.sh` belongs to the other tree, and no stub, mapping or
       helper has anything to say about a migration.
 
-- [ ] T028 [A] [US4] `adapter/stub/StubGenerationAdaptersTest`, `e2e/GenerationEndToEndIT`,
+- [X] T028 [A] [US4] `adapter/stub/StubGenerationAdaptersTest`, `e2e/GenerationEndToEndIT`,
       `e2e/GenerationFailureEndToEndIT`, `config/GenerationMetricsTest`,
       `persistence/RegisterBatchRepositoryIT`, `persistence/RegisterBatchReportReadsIT`,
       `adapter/publicevents/DocumentEventListenerTest` and `…IT`, `support/GenerationLegs`,
@@ -2251,9 +2251,102 @@ claim. T028 runs after them, not before, so the suite it characterises is the fi
       observed suite result. A characterisation of the deletion: what these hold is other suites'
       scaffolding, and the behaviour is asserted by T021, T024 and T026.
 
+      **Five of the eleven had nothing left to remove**, and that is the task's first finding rather
+      than a shortfall. `StubGenerationAdaptersTest`, `GenerationEndToEndIT`,
+      `GenerationStackSupport` and `GenerationLegs`' construction went at T022 and T025, when the
+      compiler forced them; `GenerationFailureEndToEndIT` and `GenerationMetricsTest` were already
+      re-pointed there and each now carries an explicit statement that the mechanism is gone
+      (`no_series_should_be_named_for_the_retired_reconciler`, and the class javadoc saying the
+      three release counters stand where `courtregister_generation_reconciled_total` stood). What
+      was left everywhere was **prose describing a live mechanism that is not there**, which in this
+      repository is a defect and not a tidy-up.
+      * `persistence/RegisterBatchRepositoryIT` — the bulk of it. `GRACE_EDGE` becomes `AGE_CUTOFF`
+        and three case names lose "inside its grace period" for "inside the cutoff": the three reads
+        are in-flight **age** reads with no caller at this commit, and Phase 6's `BatchAgeSweep`
+        takes them, so a constant named after a mechanism nothing has would be the next reader's
+        first wrong turn. Nine `as(...)` texts stop saying "reconciling" and say what the read
+        answers; the nest javadocs say the reads see past each other rather than that a safety net
+        finds batches with them.
+      * `persistence/RegisterBatchReportReadsIT` — the two 002-reads-untouched assertions cited
+        "the reconciler's own suite" and "the reconciler can only ask about a payload"; they cite
+        `RegisterBatchRepositoryIT` and the read's own predicate now.
+      * `adapter/publicevents/DocumentEventListenerTest` and `…IT` — three places where a lost
+        completion was explained by what the reconciler would do about it. It is the next run
+        releasing the batch that does, which is the same guarantee reached a different way, and the
+        restart case's "the reconciler is the safety net and not the mechanism" becomes the batch
+        never being completed at all.
+      * `support/GeneratedRegisters` — `hasBeenWaitingFor`'s javadoc explained itself as the only
+        way to reach the grace-period reconciler without shortening the grace period; it is now the
+        only way to reach the staleness rule without shortening
+        `courtregister.generation.stale-after`, which is the same argument about the setting that
+        exists.
+      * `support/GenerationLegs` — the leg's one-line summary still had the outcome coming back
+        "by topic or by query".
+
+      **Three files beyond the list came with it**, on the rule the T023 sweep was written to:
+      `application/RegisterNotifierServiceTest` ("the reconciler only reports and ages it" about a
+      batch nothing settles), `config/TelemetryPrivacyTest` (the eight sources it enumerates are
+      named by leg, and one of them was the reconciler; and the latency meter's exemption note still
+      credited it with timing an ending) and `batch/RegisterGenerationJobTest` (three paragraphs
+      about a night the reconciler is also settling). Gate round 1's finding 5 was comments the
+      sweep missed, so these are folded in here rather than left for a second round.
+
+      **Left standing deliberately**: every sentence that states the retirement as history rather
+      than as a description of what is there - `StaleBatchReleaserTest`'s "the retired reconciler's
+      timeout test is re-pointed at", `DocumentEventListenerTest`'s "that mattered more once the
+      grace-period reconciler went", `SchemaMigrationV6IT`'s "a value the reconciler is still
+      writing until Phase 5" (a suite pinned to `target("6")`, describing that moment on purpose),
+      and the two domain javadocs that say what `CompletedBy` and `isGeneratorAttributed()` used to
+      admit. And the ordinary English word: the digest that exists "for reconciliation", the
+      differential audit's `RECONCILED_IN_001`, and the comparator that "reconciles" a derivation
+      have nothing to do with the deleted class.
+
+      **The recorded suite result** (`flock -w 7200 … ./gradlew build -Dtest.noFailFast=true`):
+      **BUILD SUCCESSFUL, exit 0, 10m 10s, 3642 tests over 577 suites, 0 failures, 0 errors, 0
+      skipped**. `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and
+      `jacocoTestCoverageVerification` all ran and all passed, none of them loosened. Against the
+      first half's re-gate at 3648 over 576 suites that is **six fewer cases in one more suite**,
+      and every one of the six is accounted for: +2 for T047's two new cases; -2 for the
+      `RegisterStoreIT` pair deleted with its subject at T048; **-7 for parameterisation**, because
+      six `@EnumSource(CompletedBy.class)` cases now offer one value instead of two and
+      `@EnumSource(BatchFailureReason.class)` offers six instead of seven; and +1 net at T049, where
+      the two `v6_still_admits_*` cases were replaced by the two `v7_refuses_*` ones and the new
+      `RetiredVocabulary` nest added the migration-refusal case and the one extra suite. The
+      parameterised loss is what a retired constant costs a suite that drives every value of a
+      type, and is the one number here that is not a case anybody wrote or deleted.
+
 **Phase close**: `flock … ./gradlew build` green; review gate. **Read coverage on this gate**: a phase
 that deleted several hundred covered lines is the one shape in which the ratchet is met by accident.
 Quote the numbers; do not adjust the gate.
+
+**Phase 5 closed (2026-09-20).** T047, T048, T049, T050 and T028 are landed on top of the first
+half's seven, and the vocabulary is retired in both places it lived: the two constants are out of
+the enumerations, and `V7__retire_reconciler_vocabulary.sql` is out of the constraints that admitted
+them. `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` → **BUILD SUCCESSFUL, exit 0,
+10m 10s, 3642 tests over 577 suites, 0 failures, 0 errors, 0 skipped**. `checkstyleMain`,
+`checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification` all ran and all passed,
+none of them loosened.
+
+**The coverage, read as this phase's note asks.** `flock -w 7200 … ./gradlew jacocoTestReport check
+-Dtest.noFailFast=true` → BUILD SUCCESSFUL, exit 0, 10m 18s, and the report from that run reads
+**LINE 6514/6717 = 0.9698 and BRANCH 1993/2196 = 0.9076** against the unchanged gate of LINE 0.88 /
+BRANCH 0.85. Against the first half's re-gate at 6516/6719 and 1995/2198 that is **two fewer covered
+lines out of two fewer lines, and two fewer covered branches out of two fewer branches** — both
+ratios identical to four places, because what left the codebase this half is one enum constant, one
+enum constant and one `||` in `isGeneratorAttributed()`, all of them covered. The migration itself
+adds no Java. **The gate was not adjusted**, and on a half this small it could not have been met by
+accident: the denominator moved by two.
+
+**Still open at the phase's end**, and each owned elsewhere: `doc/DEFECT-FIXES.md`'s P2 cell still
+names the deleted `GenerationReconcilerTest` case and promises the `GENERATION_TIMED_OUT` half of
+that fix, which is now doubly stale — T045 owns it. `.claude/agents/spec-validator.md` still names
+the reconciler in its read-these-files list and its outcome-is-learned rule (T044, Phase 9).
+`application.yaml`'s `spring.jms` `subscription-durable` comment still calls the reconciler the
+safety net, and is outside the two blocks this tree owns. `config/CourtRegisterProperties` and
+`docker-compose.yml` are in neither tree's ownership list and are edited here; the coordinator is
+still asked to assign them to 004. And the three in-flight age reads still have no caller until
+Phase 6's `BatchAgeSweep` — T028 renamed their fixtures off the retired mechanism but did not give
+them one.
 
 ---
 

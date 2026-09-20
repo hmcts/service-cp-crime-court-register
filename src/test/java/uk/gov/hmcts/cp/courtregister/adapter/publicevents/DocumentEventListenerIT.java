@@ -74,9 +74,10 @@ import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
  * <ul>
  *   <li><strong>a restart.</strong> A pod redeploys while systemdocgenerator renders. If the
  *       subscription is not durable, or its client id moved, the event is published to nobody and
- *       the batch waits for the reconciler to notice - which it will, but the reconciler is the
- *       safety net and not the mechanism (research §2). Here the listener is stopped, the event is
- *       published to a broker with nothing listening, and the listener is started again;</li>
+ *       the batch is never completed at all - the next run releases it and renders the night again,
+ *       which is recovery and not the mechanism (research §2). Here the listener is stopped, the
+ *       event is published to a broker with nothing listening, and the listener is started
+ *       again;</li>
  *   <li><strong>the selector.</strong> {@code public.event} carries every public event in the
  *       estate. The filter is the broker's, applied at routing time, so an event with another
  *       {@code CPPNAME} is never queued for this subscription at all - and the proof that it was
@@ -303,7 +304,7 @@ class DocumentEventListenerIT {
      * sink's". A sink failure is a register store that was not there for the second or two the
      * outcome arrived in - and unless the session the listener runs in is transacted, the exception
      * it raises reaches a container that acknowledged the message before it ever called the listener,
-     * so the outcome is dropped and the batch waits for the reconciler's grace period instead. The
+     * so the outcome is dropped and the batch waits until the next run stops waiting for it. The
      * redelivery is the claim; this is where it is either true or a comment.
      */
     @Test

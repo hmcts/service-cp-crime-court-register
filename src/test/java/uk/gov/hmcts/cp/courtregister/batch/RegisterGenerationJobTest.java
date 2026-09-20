@@ -501,8 +501,8 @@ class RegisterGenerationJobTest {
      * settled counts are read back rather than reasoned about. All three batches were stamped and
      * all three renders were accepted, so the requesting leg leaves every one of them GENERATING -
      * and while the run was still working through the court centres behind it, the event listener
-     * marked the first one's document and its notification and the reconciler settled the second
-     * one's document. By the time the line is written the store says one NOTIFIED, one GENERATED and
+     * marked the first one's document and its notification and then the second one's document. By
+     * the time the line is written the store says one NOTIFIED, one GENERATED and
      * one still GENERATING, and nothing the requesting leg saw could have said so.
      *
      * <p>Each batch groups a different number of registers so that the two counts of batches and
@@ -2107,10 +2107,11 @@ class RegisterGenerationJobTest {
          *
          * <p>Principle VII asks that every line about processing carry {@code requestId} and
          * {@code hearingId}. A run has neither and cannot: it is one unit of work across many
-         * hearings and many batches. Before this it carried nothing at all, and the eleven lines a
-         * night writes - four from the job, seven from the reconciler - could not be pulled out of
-         * the index as one run. On a night where the reconciler is also settling batches from
-         * earlier nights, that is the difference between reading a run and reading a haystack.
+         * hearings and many batches. Before this it carried nothing at all, and the lines a
+         * night writes - the job's own, and the stale-batch pass's under the same id - could not
+         * be pulled out of the index as one run. On a night where the pass is also releasing
+         * batches from earlier nights, that is the difference between reading a run and reading a
+         * haystack.
          */
         @Test
         void every_line_a_run_writes_should_name_the_run_it_belongs_to() {
@@ -2191,7 +2192,7 @@ class RegisterGenerationJobTest {
      *
      * <p>Every case above is a run that finished, and finishing is not the only thing a run does.
      * The store can go away between the read and the stamp, {@code markPayloadMinted} can refuse,
-     * the reconciler's own query can fail: each of those leaves the run through
+     * the stale-batch pass's own statements can refuse: each of those leaves the run through
      * {@link RegisterGenerationJob#run()} without the report ever being written, so the night that
      * went half way is the one night that produces <em>no</em> line at all. That is worse than the
      * silence the report exists to abolish, because it is the silence of a night that did

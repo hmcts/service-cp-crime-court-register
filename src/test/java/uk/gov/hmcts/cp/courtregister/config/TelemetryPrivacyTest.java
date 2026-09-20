@@ -787,7 +787,7 @@ class TelemetryPrivacyTest {
      * last case below insists the drive above reached <em>each</em> of them: a statement added to
      * any of those classes later is inside this claim from the moment it is written, rather than
      * inside it if somebody remembered to add a case. The classes are named because the two legs
-     * are not a package - the run and the reconciler are in {@code batch}, the two services in
+     * are not a package - the run and the stale-batch pass are in {@code batch}, the two services in
      * {@code application}, the renderer's client, the notifier's client and the topic listener in
      * three {@code adapter} packages - and the ninth,
      * {@link uk.gov.hmcts.cp.courtregister.adapter.fileservice.FileServicePayloadStore}, is in the
@@ -987,8 +987,8 @@ class TelemetryPrivacyTest {
          * arrangement of this leg could put a reading on it, and this case named it as the single
          * unmoved meter so that whoever wired the timer up would be told to fold it into the drive.
          * It is wired now: the outcome sink times a render's round trip off the row it has just
-         * settled, and the reconciler times the one ending that does not pass through the sink. So
-         * the exception is gone and the claim is the plain one - the drive moves every meter
+         * settled, which is the one path an outcome reaches this service by. So the exception is
+         * gone and the claim is the plain one - the drive moves every meter
          * {@link GenerationMetrics} declares, and the label sweep above passes over all of them.
          */
         @Test

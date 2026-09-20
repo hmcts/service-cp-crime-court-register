@@ -269,12 +269,12 @@ public final class GeneratedRegisters {
     /**
      * Puts this court centre's batches' render request further into the past than it was.
      *
-     * <p>The only way a suite can reach the grace-period reconciler without shortening the grace
-     * period itself, and it is the honest one: the rule is "how long ago was the render asked for",
-     * so a batch that has been waiting longer than the grace allows is the input, and moving the
-     * stamp is how a test states that without waiting ten real minutes. Shortening the configured
-     * grace instead would make every other suite's in-flight batch overdue as well, on a store all
-     * of them share.
+     * <p>The only way a suite can reach the staleness rule without shortening
+     * {@code courtregister.generation.stale-after} itself, and it is the honest one: the rule is
+     * "how long ago was the render asked for", so a batch that has been waiting longer than the
+     * setting allows is the input, and moving the stamp is how a test states that without waiting
+     * half an hour. Shortening the configured setting instead would make every other suite's
+     * in-flight batch stale as well, on a store all of them share.
      *
      * @param waited how long ago the render should look as though it was asked for
      */
