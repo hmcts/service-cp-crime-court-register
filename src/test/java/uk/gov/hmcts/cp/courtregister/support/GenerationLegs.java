@@ -966,6 +966,13 @@ public final class GenerationLegs implements AutoCloseable {
         when(assembler.assemble(anyList(), anyList(), anyBoolean())).thenReturn(new BatchAssembly(
                 List.of(new AssembledBatch(pending(), List.of(register(List.of(recipient()))))),
                 List.of(new CourtCentreDay(COURT_CENTRE, REGISTER_DATE))));
+        // The run's first act, on the ordinary night: nothing was left in flight, so the pass
+        // gives nothing back and every arrangement above is about what it says it is about. A
+        // store that answered nothing here would end the run inside its first statement, and the
+        // lines these nights exist to reach would never be written. The pass's own endings are
+        // driven by theStaleBatchPass(), which answers with both of them.
+        when(store.failAndReleaseStale(any(Instant.class), any(Instant.class)))
+                .thenReturn(new StaleReleaseOutcome(List.of(), List.of()));
         when(batches.generatingSince(any(Instant.class))).thenReturn(List.of());
         when(batches.pendingSince(any(Instant.class))).thenReturn(List.of());
         when(batches.generatedSince(any(Instant.class))).thenReturn(List.of());
