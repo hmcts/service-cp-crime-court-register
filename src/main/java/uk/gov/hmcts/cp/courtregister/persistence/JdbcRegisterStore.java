@@ -584,10 +584,12 @@ public class JdbcRegisterStore implements RegisterStore {
      * this whole statement: the batch would stay GENERATING, unable to say why it failed, until the
      * reconciler gave up on it.
      *
-     * <p>The rows stay RECORDED whatever the reason, because nothing was ever sent about them. Two
-     * of the six reasons say the batch never left this service, and only for those is the stamp
+     * <p>The rows stay RECORDED whatever the reason, because nothing was ever sent about them.
+     * Three of the seven reasons leave no document to wait for, and only for those is the stamp
      * released: the rows become unbatched again and the next run re-assembles them under a fresh
-     * batch identity (data-model.md). The other four leave the stamp in place - systemdocgenerator
+     * batch identity (data-model.md). Two of the three say the batch never left this service; the
+     * third says the next run began and this one had not finished, which is the same thing for the
+     * register - nothing is coming. The other four leave the stamp in place - systemdocgenerator
      * was asked, so a document may yet exist, and re-rendering it is a decision a person makes.
      *
      * <p><strong>A released register the estate has already replaced is superseded rather than
@@ -636,9 +638,9 @@ public class JdbcRegisterStore implements RegisterStore {
      *
      * <p>{@code completed_by} is written here for the same reason it is written by statement 6, and
      * it is null for most of these endings: only a {@code generation-failed} event and a reconciled
-     * query are somebody else's answer about the render. The other four are this service's own
-     * verdict about a render it could not ask for or could not hear about, and naming a completion
-     * mechanism for those would credit a decision nobody outside this service made. Which is which
+     * query are somebody else's answer about the render. The other five are this service's own
+     * verdict about a render it could not ask for, could not hear about, or stopped waiting for,
+     * and naming a completion mechanism for those would credit a decision nobody made. Which is which
      * is {@link BatchFailureReason#isGeneratorAttributed()}, and a mark that disagrees with it is
      * refused before this statement is issued rather than persisted contradicting itself.
      */
@@ -693,8 +695,8 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * Statement 9a - the registers of a FAILED batch given back, so the day may be rendered again.
      *
-     * <p>The other half of statement 9. Two of the six reasons release the stamp as they fail; the
-     * other four leave it, because systemdocgenerator was asked and a document may yet exist - so no
+     * <p>The other half of statement 9. Three of the seven reasons release the stamp as they fail;
+     * the other four leave it, because systemdocgenerator was asked and a document may yet exist - so no
      * later run will ever pick those registers up, a stamped row being neither active nor unbatched.
      * Re-rendering that day is a decision a person makes, and this is the statement it is written as.
      *
@@ -819,6 +821,132 @@ public class JdbcRegisterStore implements RegisterStore {
             """;
 
     /**
+     * Statement 9b - every batch the next run found still waiting, failed and released in one act.
+     *
+     * <p><strong>One statement, whose {@code WHERE} clause is the staleness rule itself.</strong>
+     * That is the whole design, and it is a correctness requirement rather than a tidiness
+     * preference. A read followed by a per-batch {@code markFailed} - the shape the retired
+     * reconciler used - fails in two ways this one cannot:
+     *
+     * <ul>
+     *   <li><strong>A lost register.</strong> {@code markFailed} and {@link #releaseFailed} are two
+     *       operations with a status read between them. A crash landing between a mark and a
+     *       release leaves registers stamped to a terminal batch, and {@code ACTIVE_UNBATCHED}'s
+     *       predicate is {@code batch_id IS NULL} - so those rows are invisible to every later run
+     *       and to every command, and the hearing's youth defendants never reach a court register
+     *       again. That is the precise failure this pass exists to end, reintroduced by the fix
+     *       for it.</li>
+     *   <li><strong>A refused mark ending the night.</strong> Between the read and the mark the
+     *       outcome sink can commit a {@code markGenerated}. {@link #permitted} would then throw,
+     *       and run inline in the night's generation that refusal propagates out of the run: one
+     *       batch that came good in the wrong second would cost every court centre its document.
+     *       Here a batch that stopped being stale simply does not match, and zero rows is an
+     *       answer rather than an error.</li>
+     * </ul>
+     *
+     * <p><strong>The predicate is in the UPDATE's own {@code WHERE}, and not in a CTE that feeds
+     * it.</strong> Under READ COMMITTED an {@code UPDATE} that meets a row another transaction has
+     * just committed re-evaluates its own qualification against the new version and skips the row
+     * where it no longer matches. A staleness rule computed in a preceding {@code SELECT} would be
+     * evaluated once, against the statement's snapshot, and the update would then fail a batch
+     * whose render had been accepted in between - the very race the fence exists for. The rule is
+     * therefore written where the re-check can see it.
+     *
+     * <p>{@code COALESCE(requested_at, assembled_at)} is "the stamp for whichever state it is in"
+     * in one expression: a GENERATING batch has a {@code requested_at} and is measured from it, a
+     * PENDING one has none and is measured from the assembly. The column is {@code assembled_at} -
+     * there is no {@code created_at} on this table. A PENDING batch with a null
+     * {@code payload_file_id} is deliberately included: staleness is state and age, not progress,
+     * and the batch that never minted a payload is the one the retired reads excluded and left
+     * deferring its court centre day at every subsequent run (FR-020).
+     *
+     * <p>{@code GENERATED} is in neither list, at any age. It holds a document somebody is owed
+     * e-mails about, and failing it would throw that document away.
+     *
+     * <p>{@code system_generated} picks the cutoff. A batch the schedule made is judged by
+     * {@code stale-after}; a batch an operator asked for is judged by the longer of that and the
+     * run's own lock duration, because a manual generation holds no run lock and may legitimately
+     * still be asking for its renders when the schedule fires (FR-017). Failing its batch would
+     * orphan a render it is making and refuse its own record of having made it.
+     *
+     * <p>{@code completed_by} is written NULL, because nobody outside this service reported
+     * anything: no event arrived and nothing was asked. The reason is not generator-attributed, so
+     * {@link BatchFailureReason#isGeneratorAttributed()} and
+     * {@code register_batch_completed_by_shape_chk} agree on the null, and a row written otherwise
+     * is refused by the constraint rather than by a rule this class keeps of its own.
+     *
+     * <p>The release is statement 9's own branch, over the matched set rather than over one batch:
+     * the same successor search, the same total order {@code (register_time, created_at,
+     * output_id)}, and the same reason for all three of it. A register the estate replaced while
+     * the batch was in flight is superseded as its stamp is cleared rather than handed back - the
+     * key would otherwise hold two active rows and {@code idx_output_active_register_key} would
+     * refuse the write, taking the failure mark down with it and leaving the batch calling itself
+     * in flight under a run that had already given up on it.
+     *
+     * <p>The count answered is the registers that are <em>still this day's to render</em>, which is
+     * what the same run re-assembles. A superseded one is not counted: the run report states it
+     * beside its own accounts as the registers it re-batched, and a number that included a register
+     * nothing will batch would not be that.
+     */
+    private static final String FAIL_AND_RELEASE_STALE = """
+            WITH failed AS (
+                UPDATE register_batch
+                   SET status = 'FAILED',
+                       failure_reason = :reason,
+                       completed_by = NULL,
+                       failed_at = now()
+                 WHERE status IN ('PENDING', 'GENERATING')
+                   AND COALESCE(requested_at, assembled_at)
+                         <= CASE WHEN system_generated THEN :scheduledCutoff
+                                 ELSE :manualCutoff END
+                RETURNING batch_id, court_centre_id, register_date
+            ), stamped AS (
+                SELECT recorded.output_id,
+                       failed.batch_id,
+                       (SELECT successor.output_id
+                          FROM processed_output successor
+                         WHERE successor.hearing_id = recorded.hearing_id
+                           AND successor.court_centre_id = recorded.court_centre_id
+                           AND successor.register_date = recorded.register_date
+                           AND successor.output_id <> recorded.output_id
+                           AND successor.superseded_at IS NULL
+                           AND successor.status IN ('RECORDED', 'GENERATED', 'NOTIFIED')
+                           AND (successor.register_time, successor.created_at,
+                                successor.output_id)
+                               > (recorded.register_time, recorded.created_at,
+                                  recorded.output_id)
+                         ORDER BY successor.register_time DESC,
+                                  successor.created_at DESC,
+                                  successor.output_id DESC
+                         LIMIT 1) AS successor_id
+                  FROM processed_output recorded
+                  JOIN failed ON failed.batch_id = recorded.batch_id
+                 WHERE recorded.status = 'RECORDED'
+            ), released AS (
+                UPDATE processed_output recorded
+                   SET batch_id = NULL,
+                       status = CASE WHEN stamped.successor_id IS NULL
+                                     THEN 'RECORDED' ELSE 'SUPERSEDED' END,
+                       superseded_at = CASE WHEN stamped.successor_id IS NULL
+                                            THEN NULL ELSE now() END,
+                       superseded_by = stamped.successor_id,
+                       updated_at = now()
+                  FROM stamped
+                 WHERE recorded.output_id = stamped.output_id
+                   AND recorded.status = 'RECORDED'
+                RETURNING stamped.batch_id AS batch_id,
+                          stamped.successor_id AS successor_id
+            )
+            SELECT failed.batch_id, failed.court_centre_id, failed.register_date,
+                   (SELECT count(*)
+                      FROM released
+                     WHERE released.batch_id = failed.batch_id
+                       AND released.successor_id IS NULL) AS released_registers
+              FROM failed
+             ORDER BY failed.register_date, failed.batch_id
+            """;
+
+    /**
      * Statement 10 - every recipient of the batch has been attempted.
      *
      * <p>The batch's own terminal state is the summary's verdict - NOTIFIED, PARTIALLY_NOTIFIED or
@@ -922,13 +1050,23 @@ public class JdbcRegisterStore implements RegisterStore {
     private static final Set<BatchStatus> NOTIFICATION_OUTCOMES = Set.of(
             BatchStatus.NOTIFIED, BatchStatus.PARTIALLY_NOTIFIED, BatchStatus.NOTIFIED_NOBODY);
 
-    /** The two failures that never left this service, and so give their rows back to the next run. */
+    /**
+     * The three failures that leave no document to wait for, and so give their rows back.
+     *
+     * <p>Two of them never left this service at all - no payload was stored, or the batch could not
+     * be assembled into one. The third is the next run's verdict that this batch had not finished:
+     * whether its request ever reached systemdocgenerator is a question this service can no longer
+     * ask, and the register's position is the same either way. Holding a register against a
+     * document nothing will now produce is what strands it.
+     *
+     * <p>Named here rather than at each call site, so the fenced statement, a person's per-batch
+     * {@code markFailed} from the operations surface and {@link #releaseFailed} all release on one
+     * rule. A reason that joined the set in one of the three and not the others would be a register
+     * given back by one path and held by another.
+     */
     private static final Set<BatchFailureReason> RELEASING_REASONS = Set.of(
-            BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, BatchFailureReason.ASSEMBLY_FAILED);
-
-    /** What the fenced release answers until T009 gives it a statement. */
-    private static final String STALE_SEAM =
-            "T009 implements the fenced stale release; this is its seam";
+            BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, BatchFailureReason.ASSEMBLY_FAILED,
+            BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN);
 
     /**
      * The connection every statement in this class is issued through.
@@ -1579,10 +1717,29 @@ public class JdbcRegisterStore implements RegisterStore {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>No state is read before the write and no transition is asked of {@link BatchStatus}: the
+     * staleness rule is the statement's own predicate, so a batch that ceased to match between the
+     * call and the row being written is one this operation did not change rather than one it was
+     * refused over. Nothing here can therefore end a run, which is the point - the caller goes on
+     * to assemble whatever the release gave back.
+     */
     @Override
     public List<ReleasedBatch> failAndReleaseStale(final Instant scheduledCutoff,
             final Instant manualCutoff) {
-        throw new UnsupportedOperationException(STALE_SEAM);
+        return StoreOutage.translating("fail and release the stale batches",
+                () -> jdbcClient.sql(FAIL_AND_RELEASE_STALE)
+                        .param("reason", BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN.name())
+                        .param("scheduledCutoff", offsetOf(scheduledCutoff))
+                        .param("manualCutoff", offsetOf(manualCutoff))
+                        .query((rs, rowNumber) -> new ReleasedBatch(
+                                rs.getObject("batch_id", UUID.class),
+                                rs.getObject(COURT_CENTRE_ID_COLUMN, UUID.class),
+                                rs.getObject(REGISTER_DATE_COLUMN, LocalDate.class),
+                                rs.getInt("released_registers")))
+                        .list());
     }
 
     /**

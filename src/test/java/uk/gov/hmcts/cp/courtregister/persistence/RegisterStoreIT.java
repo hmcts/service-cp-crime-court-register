@@ -1778,10 +1778,11 @@ class RegisterStoreIT {
     /**
      * The ending where no document was ever produced, and what it does to the rows.
      *
-     * <p>Six bounded reasons, and the store treats two of them differently from the other four. The
-     * two that say the batch never left this service - the payload was not stored, the assembly
+     * <p>Seven bounded reasons, and the store treats three of them differently from the other four.
+     * The two that say the batch never left this service - the payload was not stored, the assembly
      * itself failed - release the stamp, so the registers become unbatched again and tonight's
-     * failure is tomorrow's first batch. The other four leave the stamp exactly where it is:
+     * failure is tomorrow's first batch, and so does the third, which says the next run began
+     * before this batch finished. The other four leave the stamp exactly where it is:
      * systemdocgenerator was asked, a document may yet exist under that correlation, and re-rendering
      * one is a decision a person makes through the operations CLI rather than one a schedule makes
      * silently at 18:00.

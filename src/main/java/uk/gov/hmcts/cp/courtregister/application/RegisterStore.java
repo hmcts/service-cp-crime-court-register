@@ -292,11 +292,12 @@ public interface RegisterStore {
     /**
      * Fails the batch under a bounded reason, leaving its rows where the reason says they belong.
      *
-     * <p>{@code completedBy} is nullable here and only here: four of the six reasons are this
-     * service's own verdict about a render it could not ask for or could not get an answer about,
-     * and naming a completion mechanism for those would credit a decision nobody outside this
-     * service made. The two that are somebody's answer - a {@code generation-failed} event, a
-     * reconciled query - carry EVENT and RECONCILER respectively.
+     * <p>{@code completedBy} is nullable here and only here: five of the seven reasons are this
+     * service's own verdict about a render it could not ask for, could not get an answer about, or
+     * stopped waiting for, and naming a completion mechanism for those would credit a decision
+     * nobody outside this service made. The two that are somebody's answer - a
+     * {@code generation-failed} event, a reconciled query - carry EVENT and RECONCILER
+     * respectively.
      *
      * <p>Where the reason releases the rows, a row the hearing has since been re-shared for is
      * superseded against the re-share as its stamp is cleared, exactly as {@link #releaseFailed}
@@ -327,8 +328,8 @@ public interface RegisterStore {
     /**
      * Gives one FAILED batch's registers back, so that a person may have the day rendered again.
      *
-     * <p>The other half of {@link #markFailed}. Two of the six reasons say the batch never left this
-     * service, and those release the stamp as they fail - their registers are active and unbatched
+     * <p>The other half of {@link #markFailed}. Three of the seven reasons leave no document to
+     * wait for, and those release the stamp as they fail - their registers are active and unbatched
      * by the time any later run reads them. The other four say systemdocgenerator was asked, so a
      * document may yet exist and the rows keep their stamp: re-rendering that day is a decision a
      * person makes (data-model.md), and this is the statement that decision is written as.
@@ -399,12 +400,47 @@ public interface RegisterStore {
     /**
      * Fails every batch still awaiting its render past its cutoff, and gives its registers back.
      *
-     * <p>The seam the stale-batch pass is written against. One operation rather than a read
-     * followed by a mark, and the rest of what that means is stated where the statement is.
+     * <p>What the nightly run does first, after the flag and before it assembles anything. A batch
+     * still PENDING or GENERATING when the next run begins, and in that state for long enough, is
+     * failed under {@link BatchFailureReason#NOT_COMPLETED_BY_NEXT_RUN} and its registers released,
+     * so that the same run's assembly puts them in a batch tonight and the court centre gets its
+     * document tonight rather than never.
+     *
+     * <p><strong>One atomic operation, fenced on the staleness rule itself - and that is why this
+     * is a method here rather than a loop in the caller.</strong> A read, then a mark, then a
+     * release is not an acceptable shape for it, and the two reasons are the two failures this
+     * increment exists to end:
+     *
+     * <ul>
+     *   <li><strong>A stranded register.</strong> {@link #markFailed} and {@link #releaseFailed}
+     *       are separate operations. A crash between them leaves registers stamped to a terminal
+     *       batch, and {@link #activeUnbatched()} means unbatched - so no later run and no command
+     *       ever reaches those rows again, and a hearing's youth defendants quietly stop reaching
+     *       a court register at all. Here the failure and the release are one act, or neither
+     *       happens.</li>
+     *   <li><strong>A refused mark ending the night.</strong> Between a read and a mark the
+     *       outcome sink can move the batch, and the state machine would then refuse the mark -
+     *       which, run inline in the night's generation, ends the run. One batch that came good in
+     *       the wrong second would cost every court centre its document that night. Here such a
+     *       batch simply does not match.</li>
+     * </ul>
+     *
+     * <p>So <strong>zero rows is an answer, not an error</strong>: a batch that ceased to be stale
+     * between this call and the row being written is one the operation did not change, and the
+     * caller reports it as such. A store that cannot be reached at all still fails the way every
+     * other unreachable store does.
+     *
+     * <p>A batch holding a document is never matched, at any age - somebody is owed e-mails about
+     * it. A batch an operator asked for is given the longer cutoff, because a manual generation
+     * holds no run lock and may still be requesting its renders when the schedule fires. Both
+     * cutoffs are the caller's to compute, from its own clock and its own settings: this port
+     * defaults neither, and a pass that let the store decide what "too long" means would be a
+     * setting nobody could change.
      *
      * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
      * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
-     * @return one record per batch this operation changed, oldest day first
+     * @return one record per batch this operation changed, oldest day first, each with the count of
+     *         registers still that day's to render; empty where nothing was stale
      */
     List<ReleasedBatch> failAndReleaseStale(Instant scheduledCutoff, Instant manualCutoff);
 

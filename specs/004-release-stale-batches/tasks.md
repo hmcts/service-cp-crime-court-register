@@ -451,7 +451,7 @@ Postgres. No pass, no run, no Spring context.
 
 ### Implementation
 
-- [ ] T009 [US1] `application/RegisterStore.java`, `persistence/JdbcRegisterStore.java` — make T008
+- [x] T009 [US1] `application/RegisterStore.java`, `persistence/JdbcRegisterStore.java` — make T008
       green. The port method and its `ReleasedBatch` answer; the single statement of data-model.md,
       with `COALESCE(requested_at, assembled_at)` and the `system_generated` `CASE`; the reuse of
       `MARK_FAILED`'s existing release-and-supersede branch over the matched set; and
@@ -460,9 +460,58 @@ Postgres. No pass, no run, no Spring context.
       read-then-mark shape would cost — a stranded register that `activeUnbatched` can never see, and
       a refused transition that ends a night — because that is the reason the method exists at all
       rather than being a loop in the caller.
+      (green: `./gradlew test --tests '*RegisterStoreIT*' --tests '*StaleReleaseConcurrencyIT*'
+      -Dtest.noFailFast=true`, 85 tests, 0 failures, 0 errors — `RegisterStoreIT$StaleRelease` 11 of
+      11 and `StaleReleaseConcurrencyIT` 2 of 2, with the other fifteen nested suites unchanged.
+      `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` green.
+      **The predicate is in the UPDATE's own `WHERE`, not in a CTE that feeds it**, and that is a
+      correctness point rather than a style one. Under READ COMMITTED an `UPDATE` that meets a row
+      another transaction has just committed re-evaluates *its own* qualification against the new
+      row version and skips it where it no longer matches. A staleness rule computed in a preceding
+      `SELECT` is evaluated once, against the statement's snapshot, and the update would then fail a
+      batch whose render had been accepted in between. The fence is the re-check, so the rule has to
+      be written where the re-check can see it.
+      **The count answered is the registers still the day's to render**, which excludes one a
+      re-share superseded as its stamp was cleared: FR-009 says the released registers are already
+      inside the run's row totals because the same run re-batches them, and a superseded register is
+      not one anything will re-batch. Recorded here as a decision, since the FR does not spell it
+      out.
+      `attributionOf` is **not** called by this statement — there is no batch identity to name
+      before the rows are chosen. The statement writes `completed_by = NULL` and
+      `register_batch_completed_by_shape_chk` is what refuses the contrary, which is the same rule
+      rather than a second one. Where data-model.md says the reason is "called with `null`" it is
+      describing an operator's per-batch `markFailed`, and that path is covered by the reason
+      joining `RELEASING_REASONS`.
+      The six stale reason-cardinality sentences review gate 1 left for this commit are re-pointed
+      here: `RegisterStore` 295 and 330, `JdbcRegisterStore` 587, 639 and 696,
+      `RegisterStoreIT`'s `Failure` javadoc and `GenerationMetricsTest`'s series-count comment.
+      `JdbcRegisterStore` 1524's "the four reasons `RELEASING_REASONS` does not name" is **left
+      alone**: seven less three is still four, and it was already right.
+      **T010 was strengthened in this commit, and it had to be.** Staging the read-then-mark
+      variant — the read, a 150 ms window, then a per-batch `markFailed` — showed the suite as
+      committed at `dc4106c` **passing against it**: the loser's refusal is an `IllegalStateException`
+      either way, no register is stranded without a crash, and nothing is notified twice because the
+      batch the variant wrongly failed never reaches the notifier. Two assertions were added, and
+      both are red against the variant: the pass's own escapes must be **empty** (FR-003a's "no
+      single batch's outcome may end the run" — the variant's `markFailed` throws "batch … may not
+      move from GENERATED to FAILED" straight out of the pass, which run inline in `generate()` costs
+      every court centre its document), and **no batch may end FAILED under the new reason with a
+      stamp later than the cutoff the round gave the pass** — which is the fence itself, and which
+      the variant breaks in the render-acceptance race by failing a batch whose render had just been
+      accepted. Mutation result: 2 tests, 2 failures, 3 and 4 failing assertions, all on the
+      `TOGETHER` rounds. Reverted; green against the tree as committed. The variant is not
+      committed.)
 
 **Phase close**: `flock … ./gradlew build` green; review gate. **This gate is the one to read
 closely**: everything after it assumes the statement is atomic and fenced.
+(green at the tree carrying T008, T010 and T009: `flock -w 7200 … ./gradlew build
+-Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 10m 5s, **3647 tests over 579 suites, 0 failures,
+0 errors** — thirteen more than review gate 1's 3634, being `RegisterStoreIT$StaleRelease`'s eleven
+and `StaleReleaseConcurrencyIT`'s two — with `checkstyleMain` and `checkstyleTest` at
+`maxWarnings = 0`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification` all green and none of
+them loosened; the coverage report reads LINE 0.9690 / BRANCH 0.8986 against the unchanged gate of
+LINE 0.88 / BRANCH 0.85. No migration was added: the phase writes `NOT_COMPLETED_BY_NEXT_RUN`, which
+V6 already admits, and adds no column, table or index. Review gate to follow.)
 
 ---
 

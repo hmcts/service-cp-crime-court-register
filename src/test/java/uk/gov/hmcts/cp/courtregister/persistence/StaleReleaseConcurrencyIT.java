@@ -5,7 +5,9 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -157,15 +159,16 @@ class StaleReleaseConcurrencyIT {
 
         for (final Order order : ROUNDS) {
             final UUID courtCentre = UUID.randomUUID();
+            final Instant cutoff = cutoff();
             final RegisterBatch batch = staleBatch(courtCentre, false);
-            final List<Throwable> escaped = raced(order,
-                    () -> store.failAndReleaseStale(cutoff(), cutoff()),
+            final Escapes escaped = raced(order,
+                    () -> store.failAndReleaseStale(cutoff, cutoff),
                     () -> store.markRequested(batch.batchId(), UUID.randomUUID()));
 
             final Ending ending = endingOf(batch.batchId());
             settleTheNight(courtCentre);
             endings.add(ending);
-            assertInvariants(courtCentre, order, escaped);
+            assertInvariants(courtCentre, order, cutoff, escaped);
         }
 
         softly.assertThat(endings.get(0))
@@ -187,16 +190,17 @@ class StaleReleaseConcurrencyIT {
 
         for (final Order order : ROUNDS) {
             final UUID courtCentre = UUID.randomUUID();
+            final Instant cutoff = cutoff();
             final RegisterBatch batch = staleBatch(courtCentre, true);
-            final List<Throwable> escaped = raced(order,
-                    () -> store.failAndReleaseStale(cutoff(), cutoff()),
+            final Escapes escaped = raced(order,
+                    () -> store.failAndReleaseStale(cutoff, cutoff),
                     () -> store.markGenerated(batch.batchId(), UUID.randomUUID(), Instant.now(),
                             CompletedBy.EVENT));
 
             final Ending ending = endingOf(batch.batchId());
             settleTheNight(courtCentre);
             endings.add(ending);
-            assertInvariants(courtCentre, order, escaped);
+            assertInvariants(courtCentre, order, cutoff, escaped);
         }
 
         softly.assertThat(endings.get(0))
@@ -217,17 +221,32 @@ class StaleReleaseConcurrencyIT {
      *
      * @param courtCentre this round's court centre
      * @param order       the order its two contenders were let go in, named in every failure
+     * @param cutoff      the cutoff this round's pass was given, which is the fence itself
      * @param escaped     whatever the two contenders threw
      */
-    private void assertInvariants(final UUID courtCentre, final Order order,
-            final List<Throwable> escaped) {
-        softly.assertThat(escaped)
-                .as("%s: the loser of a race is refused by the state machine and by nothing else. "
-                        + "That refusal is the self-healing path - the listener rethrows it, the "
-                        + "broker redelivers, and the sink reads a batch it may no longer move",
+    private void assertInvariants(final UUID courtCentre, final Order order, final Instant cutoff,
+            final Escapes escaped) {
+        softly.assertThat(escaped.release())
+                .as("%s: **no single batch's outcome may end the run** (FR-003a). The pass is run "
+                        + "inline in the night's generation, so a refusal escaping it costs every "
+                        + "court centre its document - which is exactly what a read-then-mark "
+                        + "shape does the moment the outcome sink commits between its two steps",
                         order)
+                .isEmpty();
+        softly.assertThat(escaped.outcome())
+                .as("%s: and the contender that loses is refused by the state machine and by "
+                        + "nothing else. That refusal is the self-healing path - the listener "
+                        + "rethrows it, the broker redelivers, and the sink reads a batch it may "
+                        + "no longer move", order)
                 .allSatisfy(thrown -> softly.assertThat(thrown)
                         .isInstanceOf(IllegalStateException.class));
+        softly.assertThat(prematurelyFailed(courtCentre, cutoff))
+                .as("%s: and no batch is given up on that was not stale by the rule. The fence is "
+                        + "the predicate itself, re-evaluated against the row as it stands when "
+                        + "the write lands; a rule computed into a list beforehand would fail a "
+                        + "batch whose render had been accepted in between - orphaning that render "
+                        + "and rendering the same court centre day twice", order)
+                .isZero();
         softly.assertThat(strandedRegisters(courtCentre))
                 .as("%s: no register is left awaiting a document while stamped to a batch nothing "
                         + "will finish. Unbatched means batch_id IS NULL, so such a row is "
@@ -305,28 +324,37 @@ class StaleReleaseConcurrencyIT {
     }
 
     /**
-     * Runs the two contenders in this round's order, and answers with whatever escaped them.
+     * What escaped each of the two contenders, kept apart because only one of them may throw.
+     *
+     * @param release what the pass threw, which must be nothing whoever won the race
+     * @param outcome what the render acceptance or the document arrival threw
+     */
+    private record Escapes(List<Throwable> release, List<Throwable> outcome) {
+    }
+
+    /**
+     * Runs the two contenders in this round's order, and answers with whatever escaped each.
      *
      * @param order   which is let go first, or whether both are let go at once
      * @param release the pass
      * @param outcome the render acceptance or the document arrival racing it
-     * @return the throwables the two raised, in the order they were collected
+     * @return what each of them threw
      */
-    private List<Throwable> raced(final Order order, final Runnable release,
+    private static Escapes raced(final Order order, final Runnable release,
             final Runnable outcome) {
         return switch (order) {
-            case RELEASE_FIRST -> sequentially(release, outcome);
-            case OUTCOME_FIRST -> sequentially(outcome, release);
+            case RELEASE_FIRST -> sequentially(release, outcome, true);
+            case OUTCOME_FIRST -> sequentially(outcome, release, false);
             case TOGETHER -> concurrently(release, outcome);
         };
     }
 
     /** One after the other, so the winner is the one named rather than the one that got there. */
-    private static List<Throwable> sequentially(final Runnable first, final Runnable second) {
-        final List<Throwable> escaped = new ArrayList<>();
-        escaped.addAll(escaping(first));
-        escaped.addAll(escaping(second));
-        return List.copyOf(escaped);
+    private static Escapes sequentially(final Runnable first, final Runnable second,
+            final boolean releaseFirst) {
+        final List<Throwable> from = escaping(first);
+        final List<Throwable> then = escaping(second);
+        return releaseFirst ? new Escapes(from, then) : new Escapes(then, from);
     }
 
     /**
@@ -336,7 +364,7 @@ class StaleReleaseConcurrencyIT {
      * the second start would otherwise be the head start, and the round would be a staged order
      * wearing a race's clothes.
      */
-    private static List<Throwable> concurrently(final Runnable release, final Runnable outcome) {
+    private static Escapes concurrently(final Runnable release, final Runnable outcome) {
         try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
             final CountDownLatch start = new CountDownLatch(1);
             final Future<List<Throwable>> first = pool.submit(() -> {
@@ -348,10 +376,8 @@ class StaleReleaseConcurrencyIT {
                 return escaping(outcome);
             });
             start.countDown();
-            final List<Throwable> escaped = new ArrayList<>();
-            escaped.addAll(first.get(RACE_SECONDS, TimeUnit.SECONDS));
-            escaped.addAll(second.get(RACE_SECONDS, TimeUnit.SECONDS));
-            return List.copyOf(escaped);
+            return new Escapes(first.get(RACE_SECONDS, TimeUnit.SECONDS),
+                    second.get(RACE_SECONDS, TimeUnit.SECONDS));
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("the race was interrupted", interrupted);
@@ -409,6 +435,24 @@ class StaleReleaseConcurrencyIT {
             throw new IllegalStateException(
                     "expected one batch to age for " + batchId + ", aged " + aged);
         }
+    }
+
+    /** A batch given up on although its own stamp says it was not stale when the write landed. */
+    private long prematurelyFailed(final UUID courtCentre, final Instant cutoff) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT count(*)
+                          FROM register_batch
+                         WHERE court_centre_id = :courtCentre
+                           AND status = 'FAILED'
+                           AND failure_reason = :reason
+                           AND COALESCE(requested_at, assembled_at) > :cutoff
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("reason", NOT_COMPLETED)
+                .param("cutoff", OffsetDateTime.ofInstant(cutoff, ZoneOffset.UTC))
+                .query(Long.class)
+                .single();
     }
 
     /** A register still awaiting its document while stamped to a batch nothing will finish. */
