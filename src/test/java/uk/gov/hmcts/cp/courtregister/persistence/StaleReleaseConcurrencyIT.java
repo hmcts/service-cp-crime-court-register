@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -18,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
@@ -25,6 +27,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.transaction.support.TransactionOperations;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
@@ -53,12 +56,18 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  * a mark, and it is the suite the rest of the increment stands on: everything after Phase 2 assumes
  * the operation is atomic and fenced on the staleness rule itself.
  *
- * <p>Two contenders, because they are the two ways a batch stops being stale while a run is deciding
- * about it: a render request accepted for a PENDING batch ({@code markRequested}), and a
- * {@code document-available} applied to a GENERATING one ({@code markGenerated}). Each is run in
- * <strong>both winner orders</strong> - staged, so the two deterministic outcomes can be asserted by
- * name - and then <strong>repeatedly, genuinely concurrently</strong>, where either may win and only
- * the invariants may be asserted.
+ * <p>Two contenders for the batch, because they are the two ways a batch stops being stale while a
+ * run is deciding about it: a render request accepted for a PENDING batch ({@code markRequested}),
+ * and a {@code document-available} applied to a GENERATING one ({@code markGenerated}). Each is run
+ * in <strong>both winner orders</strong> - staged, so the two deterministic outcomes can be asserted
+ * by name - and then <strong>repeatedly, genuinely concurrently</strong>, where either may win and
+ * only the invariants may be asserted.
+ *
+ * <p>And a third contender for the <strong>key</strong> rather than for the batch: the hearing
+ * re-shared while the pass is giving its register back ({@code recordAndComplete}). It cannot be
+ * refused and it refuses nothing, but it and the release write into one active-register key, and
+ * its commit can land inside the pass's own statement - where the statement's snapshot cannot see
+ * it. That round is staged too, by holding the batch row the statement writes first.
  *
  * <p>The invariants, after every round:
  *
@@ -121,6 +130,9 @@ class StaleReleaseConcurrencyIT {
     /** The single row a fixture ageing a batch is expected to touch. */
     private static final int ONE_BATCH = 1;
 
+    /** How often the staged window asks whether the pass has reached the row it is held at. */
+    private static final int POLL_MILLIS = 20;
+
     /**
      * The orders a round is run in: the two staged ones, then four genuine races.
      *
@@ -133,9 +145,25 @@ class StaleReleaseConcurrencyIT {
             Order.RELEASE_FIRST, Order.OUTCOME_FIRST,
             Order.TOGETHER, Order.TOGETHER, Order.TOGETHER, Order.TOGETHER);
 
+    /**
+     * The orders the third contender is run in, which needs one more than the other two.
+     *
+     * <p>A re-share cannot lose this race by being refused - it is a register the estate sent and
+     * this service records it whatever a batch is doing - so the order that matters is not which of
+     * them wins but <strong>where the re-share's commit lands inside the pass's own statement</strong>.
+     * {@link Order#INSIDE_THE_WINDOW} is that one, staged deterministically; the two staged winners
+     * are here for the same reason they are in {@link #ROUNDS}, and the races afterwards because a
+     * property that needs the scheduler's cooperation is not a property.
+     */
+    private static final List<Order> RESHARE_ROUNDS = List.of(
+            Order.RELEASE_FIRST, Order.OUTCOME_FIRST, Order.INSIDE_THE_WINDOW,
+            Order.TOGETHER, Order.TOGETHER);
+
     private final RegisterStore store =
             new JdbcRegisterStore(ProcessedLogTestSupport.jdbcClient(),
                     ProcessedLogTestSupport.transactions());
+
+    private final TransactionOperations transactions = ProcessedLogTestSupport.transactions();
 
     private final RegisterNotificationRepository notifications =
             new RegisterNotificationRepository(ProcessedLogTestSupport.jdbcClient());
@@ -148,9 +176,15 @@ class StaleReleaseConcurrencyIT {
         PostgresTestSupport.applyFlyway();
     }
 
-    /** Which of the two contenders is let go first, or whether both are let go at once. */
+    /**
+     * Which of the two contenders is let go first, or whether both are let go at once.
+     *
+     * <p>{@link #INSIDE_THE_WINDOW} is the fourth and is not an order of arrival at all: it is the
+     * contender committing <em>while the pass's statement is already running</em>, which is the one
+     * place a re-share is invisible to the statement that has to account for it.
+     */
     private enum Order {
-        RELEASE_FIRST, OUTCOME_FIRST, TOGETHER
+        RELEASE_FIRST, OUTCOME_FIRST, TOGETHER, INSIDE_THE_WINDOW
     }
 
     @Test
@@ -161,7 +195,7 @@ class StaleReleaseConcurrencyIT {
             final UUID courtCentre = UUID.randomUUID();
             final Instant cutoff = cutoff();
             final RegisterBatch batch = staleBatch(courtCentre, false);
-            final Escapes escaped = raced(order,
+            final Escapes escaped = raced(order, batch.batchId(),
                     () -> store.failAndReleaseStale(cutoff, cutoff),
                     () -> store.markRequested(batch.batchId(), UUID.randomUUID()));
 
@@ -192,7 +226,7 @@ class StaleReleaseConcurrencyIT {
             final UUID courtCentre = UUID.randomUUID();
             final Instant cutoff = cutoff();
             final RegisterBatch batch = staleBatch(courtCentre, true);
-            final Escapes escaped = raced(order,
+            final Escapes escaped = raced(order, batch.batchId(),
                     () -> store.failAndReleaseStale(cutoff, cutoff),
                     () -> store.markGenerated(batch.batchId(), UUID.randomUUID(), Instant.now(),
                             CompletedBy.EVENT));
@@ -214,6 +248,57 @@ class StaleReleaseConcurrencyIT {
                         + "pass may not touch it at any age: it holds a document somebody is owed "
                         + "e-mails about")
                 .isEqualTo(new Ending("GENERATED", null));
+    }
+
+    /**
+     * The third contender: the hearing re-shared while the pass is giving its register back.
+     *
+     * <p>Not a race for the batch, which is why it is a case of its own. A re-share is a register
+     * the estate sent and this service records it whatever a batch is doing, so neither contender
+     * refuses the other - what they contend for is the <em>key</em>: one hearing, one court centre,
+     * one register date may hold exactly one active unbatched register
+     * ({@code idx_output_active_register_key}). The pass clearing a stale register's stamp and the
+     * recorder writing the register that replaces it are two writes into that one key.
+     *
+     * <p>So the property is that a re-share is <strong>superseded against, never unstamped
+     * beside</strong>, wherever its commit lands - including inside the pass's own statement, where
+     * the statement's snapshot cannot see it. A release refused by that index is a store refusal
+     * rather than a state-machine one, and FR-003a is written about the operation: no single
+     * batch's outcome may end the run, and a refusal escaping the pass ends it for every court
+     * centre.
+     */
+    @Test
+    void a_re_share_racing_the_release_is_superseded_rather_than_unstamped() {
+        final List<Ending> endings = new ArrayList<>();
+
+        for (final Order order : RESHARE_ROUNDS) {
+            final UUID courtCentre = UUID.randomUUID();
+            final UUID reshared = UUID.randomUUID();
+            final Instant cutoff = cutoff();
+            final RegisterBatch batch =
+                    staleBatch(courtCentre, reshared, UUID.randomUUID(), true);
+            final Escapes escaped = raced(order, batch.batchId(),
+                    () -> store.failAndReleaseStale(cutoff, cutoff),
+                    () -> record(courtCentre, reshared));
+
+            final Ending ending = endingOf(batch.batchId());
+            settleTheNight(courtCentre);
+            endings.add(ending);
+            assertInvariants(courtCentre, order, cutoff, escaped);
+            softly.assertThat(activeRegistersOf(courtCentre, reshared))
+                    .as("%s: and the hearing holds exactly one register the day is still to "
+                            + "render. Two would put one hearing's youth defendants on the court "
+                            + "centre's document twice; none would lose the register the re-share "
+                            + "replaced it with", order)
+                    .isEqualTo(1L);
+        }
+
+        softly.assertThat(endings)
+                .as("a re-share changes nothing about the batch, so every order ends the same way: "
+                        + "the batch the run gave up on is failed under the one bounded reason that "
+                        + "means the passage of time, and the register it held is accounted for by "
+                        + "supersession rather than by being handed back beside its replacement")
+                .containsOnly(new Ending("FAILED", NOT_COMPLETED));
     }
 
     /**
@@ -278,8 +363,21 @@ class StaleReleaseConcurrencyIT {
      * @return the batch as the row stood at assembly
      */
     private RegisterBatch staleBatch(final UUID courtCentre, final boolean requested) {
-        final UUID first = UUID.randomUUID();
-        final UUID second = UUID.randomUUID();
+        return staleBatch(courtCentre, UUID.randomUUID(), UUID.randomUUID(), requested);
+    }
+
+    /**
+     * The same, where a round has to know which hearing it is about to share again.
+     *
+     * @param courtCentre this round's court centre
+     * @param first       the hearing whose register the round names
+     * @param second      the other hearing of the day, so the batch is a batch and not a row
+     * @param requested   whether the batch has had its render requested, so GENERATING rather than
+     *                    PENDING
+     * @return the batch as the row stood at assembly
+     */
+    private RegisterBatch staleBatch(final UUID courtCentre, final UUID first, final UUID second,
+            final boolean requested) {
         record(courtCentre, first);
         record(courtCentre, second);
         final List<RegisterRecord> waiting = waiting(courtCentre);
@@ -354,18 +452,121 @@ class StaleReleaseConcurrencyIT {
     /**
      * Runs the two contenders in this round's order, and answers with whatever escaped each.
      *
-     * @param order   which is let go first, or whether both are let go at once
+     * @param order   which is let go first, whether both are let go at once, or whether the
+     *                contender is committed inside the pass's own statement
+     * @param batchId the batch the round is raced over, which the staged window holds by the row
      * @param release the pass
-     * @param outcome the render acceptance or the document arrival racing it
+     * @param outcome the render acceptance, the document arrival or the re-share racing it
      * @return what each of them threw
      */
-    private static Escapes raced(final Order order, final Runnable release,
+    private Escapes raced(final Order order, final UUID batchId, final Runnable release,
             final Runnable outcome) {
         return switch (order) {
             case RELEASE_FIRST -> sequentially(release, outcome, true);
             case OUTCOME_FIRST -> sequentially(outcome, release, false);
             case TOGETHER -> concurrently(release, outcome);
+            case INSIDE_THE_WINDOW -> insideTheWindow(batchId, release, outcome);
         };
+    }
+
+    /**
+     * The contender committed after the pass's statement began and before its write landed.
+     *
+     * <p><strong>Why this round exists.</strong> {@code failAndReleaseStale} is one statement, and
+     * a statement reads one snapshot: every one of its {@code WITH} clauses sees the table as it
+     * stood when the statement began. A register re-shared after that moment is therefore not a
+     * successor the statement can find, however plainly it is one by the time the write lands - and
+     * the write then clears the stale register's stamp into a second active row for the key, which
+     * {@code idx_output_active_register_key} refuses. That refusal is not a state-machine refusal
+     * the pass can read as "this batch is no longer stale": it is the store refusing a row, and run
+     * inline in the night's generation it would cost every court centre its document (FR-003a).
+     *
+     * <p><strong>How the window is held open.</strong> The pass's first act is to write the batch
+     * row, so a transaction holding that row {@code FOR UPDATE} stops the statement there - after
+     * its snapshot and before its release. The re-share is committed against that held statement,
+     * the row is let go, and the pass finishes reading a snapshot the re-share is not in. Nothing
+     * here reaches into the store: the lock is on the same table the statement writes, taken the
+     * way any other session would take it.
+     *
+     * @param batchId the batch whose row is held while the contender commits
+     * @param release the pass, run on a thread of its own because it is deliberately blocked
+     * @param outcome the contender, committed while the pass is held
+     * @return what each of them threw
+     */
+    private Escapes insideTheWindow(final UUID batchId, final Runnable release,
+            final Runnable outcome) {
+        final AtomicInteger holder = new AtomicInteger();
+        final CountDownLatch held = new CountDownLatch(1);
+        final CountDownLatch committed = new CountDownLatch(1);
+        try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+            final Future<?> holding = pool.submit(
+                    () -> holdingTheBatchRow(batchId, holder, held, committed));
+            held.await();
+            final Future<List<Throwable>> passing = pool.submit(() -> escaping(release));
+            awaitHeldBy(holder.get());
+            final List<Throwable> escaped = escaping(outcome);
+            committed.countDown();
+            holding.get(RACE_SECONDS, TimeUnit.SECONDS);
+            return new Escapes(passing.get(RACE_SECONDS, TimeUnit.SECONDS), escaped);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("the staged window was interrupted", interrupted);
+        } catch (ExecutionException | TimeoutException unfinished) {
+            throw new IllegalStateException("a contender never finished", unfinished);
+        }
+    }
+
+    /**
+     * Holds the batch's row until the latch is counted down, and says which backend holds it.
+     *
+     * @param batchId   the batch whose row is held
+     * @param holder    where the holding session's backend id is published, so the pass can be
+     *                  waited for by what is blocking it rather than by a sleep
+     * @param held      counted down once the row is genuinely held
+     * @param committed waited on, so the transaction ends only when the contender has committed
+     */
+    private void holdingTheBatchRow(final UUID batchId, final AtomicInteger holder,
+            final CountDownLatch held, final CountDownLatch committed) {
+        transactions.executeWithoutResult(oneTransaction -> {
+            holder.set(ProcessedLogTestSupport.jdbcClient()
+                    .sql("SELECT pg_backend_pid()")
+                    .query(Integer.class)
+                    .single());
+            ProcessedLogTestSupport.jdbcClient()
+                    .sql("SELECT batch_id FROM register_batch WHERE batch_id = :batchId FOR UPDATE")
+                    .param("batchId", batchId)
+                    .query(UUID.class)
+                    .single();
+            held.countDown();
+            try {
+                if (!committed.await(RACE_SECONDS, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("the contender never committed");
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("the held row was interrupted", interrupted);
+            }
+        });
+    }
+
+    /** Waits until some session is blocked by the one holding the row, which is the pass. */
+    private void awaitHeldBy(final int holder) {
+        await().atMost(Duration.ofSeconds(RACE_SECONDS))
+                .pollInterval(Duration.ofMillis(POLL_MILLIS))
+                .until(() -> blockedBy(holder) > 0);
+    }
+
+    /** How many sessions are waiting on the session holding the batch row. */
+    private long blockedBy(final int holder) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT count(*)
+                          FROM pg_stat_activity
+                         WHERE :holder = ANY (pg_blocking_pids(pid))
+                        """)
+                .param("holder", holder)
+                .query(Long.class)
+                .single();
     }
 
     /** One after the other, so the winner is the one named rather than the one that got there. */
@@ -522,6 +723,22 @@ class StaleReleaseConcurrencyIT {
                 .param("registerDate", MONDAY)
                 .query(Long.class)
                 .list();
+    }
+
+    /** How many registers one hearing of this court centre's day still has, in whatever state. */
+    private long activeRegistersOf(final UUID courtCentre, final UUID hearingId) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT count(*)
+                          FROM processed_output
+                         WHERE court_centre_id = :courtCentre
+                           AND hearing_id = :hearingId
+                           AND superseded_at IS NULL
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("hearingId", hearingId)
+                .query(Long.class)
+                .single();
     }
 
     /** How many of this court centre's registers are still the day's, in whatever state. */
