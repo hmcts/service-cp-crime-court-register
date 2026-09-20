@@ -44,8 +44,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DataAccessResourceFailureException;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.dao.DuplicateKeyException;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RecordedCompletion;
@@ -275,6 +273,27 @@ class RegisterStoreIT {
 
     /** The index one hearing's active register is kept unique by, named where a case asserts it. */
     private static final String ACTIVE_REGISTER_KEY = "idx_output_active_register_key";
+
+    /** The bounded classification a release refused by a key it does not account for carries. */
+    private static final String UNACCOUNTED_KEY = "a unique key";
+
+    /** The bounded classification a release refused by a rule that is no key at all carries. */
+    private static final String UNACCOUNTED_RULE = "an integrity rule that is no key";
+
+    /** The package no refusal may still be travelling as by the time it crosses the port. */
+    private static final String SPRING_DAO = "org.springframework.dao";
+
+    /**
+     * The words Postgres quotes a whole refused row under, which a register's row must never carry.
+     *
+     * <p>{@code FAIL_AND_RELEASE_STALE} writes {@code processed_output}, and a
+     * {@code processed_output} row holds the register document itself - so a CHECK constraint
+     * refusing one is reported with every value of that row on the detail line.
+     */
+    private static final String FAILING_ROW = "Failing row contains";
+
+    /** The words Postgres quotes a refused <em>key</em>'s values under, which name the row too. */
+    private static final String REFUSED_KEY_DETAIL = "already exists";
 
     /** The state increment 001 writes an output row in before it POSTs the register. */
     private static final String POST_PENDING = "PENDING";
@@ -3426,14 +3445,19 @@ class RegisterStoreIT {
                             + "- the catch that swallows every programming error beside it")
                     .isInstanceOf(RegisterNotReleasedException.class)
                     .hasMessageNotContaining(ACTIVE_REGISTER_KEY)
-                    .cause()
-                    .as("named by the index that refused it and not by the active-register key, "
-                            + "which is the difference the pass acts on: a refusal on a rule this "
-                            + "operation does not account for is the store saying the write may "
-                            + "never be made, and no fresh snapshot changes that, so it is raised "
-                            + "rather than made again three times and then reported contended")
-                    .isInstanceOf(DuplicateKeyException.class)
-                    .hasMessageContaining(testOnlyUnbatchedIndex());
+                    .as("classified by the kind of rule that refused it and not by the "
+                            + "active-register key, which is the difference the pass acts on: a "
+                            + "refusal on a rule this operation does not account for is the store "
+                            + "saying the write may never be made, and no fresh snapshot changes "
+                            + "that, so it is raised rather than made again three times and then "
+                            + "reported contended")
+                    .hasMessageContaining(UNACCOUNTED_KEY)
+                    .as("and it travels alone. The driver's own exception is not attached, "
+                            + "because the statement it was raised from writes processed_output - "
+                            + "the table the register document itself sits in - and Postgres "
+                            + "reports a refusal by quoting the row")
+                    .hasNoCause();
+            nothingOfTheDriverTravels(refusal.get());
 
             softly.assertThat(batchOn(MONDAY))
                     .as("and the mark goes down with it. A mark that survived its own release "
@@ -3489,13 +3513,18 @@ class RegisterStoreIT {
                             + "crossed the port untranslated could only be read there as "
                             + "RuntimeException")
                     .isInstanceOf(RegisterNotReleasedException.class)
-                    .cause()
-                    .as("carrying the store's own refusal, which is where the constraint's name "
-                            + "is, and which is not the key race this operation retries: no fresh "
-                            + "snapshot changes a rule, so it is raised rather than attempted "
-                            + "three times and then reported contended")
-                    .isInstanceOf(DataIntegrityViolationException.class)
-                    .isNotInstanceOf(DuplicateKeyException.class);
+                    .as("classified apart from the key race this operation retries, and apart "
+                            + "from a key it does not account for: no fresh snapshot changes a "
+                            + "rule, so it is raised rather than attempted three times and then "
+                            + "reported contended")
+                    .hasMessageContaining(UNACCOUNTED_RULE)
+                    .hasMessageNotContaining(UNACCOUNTED_KEY)
+                    .as("and the driver's refusal is not attached here either. A CHECK constraint "
+                            + "is the one Postgres reports with 'Failing row contains' and the "
+                            + "whole row after it, and the rows this statement writes are the "
+                            + "rows a youth register is recorded in")
+                    .hasNoCause();
+            nothingOfTheDriverTravels(refusal.get());
 
             softly.assertThat(batchOn(MONDAY))
                     .as("and the mark goes down with the release it was refused beside, exactly as "
@@ -4837,6 +4866,58 @@ class RegisterStoreIT {
      */
     private String testOnlyUnbatchedIndex() {
         return "test_only_unbatched_" + courtCentre.toString().replace("-", "");
+    }
+
+    /**
+     * Asserts that nothing the driver said travels with a refusal, as a class or as a word.
+     *
+     * <p><strong>Why the whole chain and not only the exception itself.</strong> A cause is how a
+     * driver's detail line reaches a stack trace, and a stack trace is written whole: naming the
+     * top-level class would leave a later change free to re-attach the refusal underneath it and
+     * this suite green. So the chain is walked, and both things are asked of every link - that it
+     * is not an {@code org.springframework.dao} type, which is what Principle V forbids crossing
+     * the port, and that nothing it says is anything Postgres quoted back.
+     *
+     * <p>Postgres reports a refused row two ways and both are checked: {@code Failing row contains
+     * (...)} for a CHECK, and {@code Key (...)=(...) already exists} for a unique index. The
+     * statement writes {@code processed_output}, whose row holds the register document, so what
+     * those lines would quote is a child's name and date of birth - which may not reach a log
+     * index at INFO or above, and a refusal raised out of the nightly run is written at ERROR
+     * (constitution Principle VII).
+     *
+     * @param refusal what the release threw
+     */
+    private void nothingOfTheDriverTravels(final Throwable refusal) {
+        softly.assertThat(everyClassIn(refusal))
+                .as("no refusal crosses the port as a Spring data-access type, at any depth: the "
+                        + "pass in batch/ may name none of them, so one that did could only be "
+                        + "caught there as RuntimeException")
+                .isNotEmpty()
+                .noneMatch(travelling -> travelling.startsWith(SPRING_DAO));
+        softly.assertThat(everythingSaidBy(refusal))
+                .as("and nothing the driver said travels either - not the detail line it quotes a "
+                        + "refused row under, not the court centre, and above all nothing of the "
+                        + "child the register is about")
+                .doesNotContain(FAILING_ROW, REFUSED_KEY_DETAIL, courtCentre.toString(),
+                        "SMITH, John", "2008-04-11");
+    }
+
+    /** Every class a refusal travels as: the exception itself, and every cause beneath it. */
+    private static List<String> everyClassIn(final Throwable refusal) {
+        final List<String> travelling = new ArrayList<>();
+        for (Throwable link = refusal; link != null; link = link.getCause()) {
+            travelling.add(link.getClass().getName());
+        }
+        return travelling;
+    }
+
+    /** Everything a refusal says: its own message, and every message beneath it, run together. */
+    private static String everythingSaidBy(final Throwable refusal) {
+        final StringBuilder said = new StringBuilder();
+        for (Throwable link = refusal; link != null; link = link.getCause()) {
+            said.append(String.valueOf(link.getMessage())).append('\n');
+        }
+        return said.toString();
     }
 
     /** The moment a batch's render was asked for, read back out of {@code register_batch}. */
