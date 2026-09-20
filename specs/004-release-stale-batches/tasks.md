@@ -1581,6 +1581,35 @@ numbers.
 **Phase close**: `flock … ./gradlew build` green; review gate. The new behaviour is live from here;
 the reconciler is dead code with a timer still on it, which the next phase removes.
 
+**Phase 4 closed (2026-09-20).** `flock -w 7200 … ./gradlew jacocoTestReport build
+-Dtest.noFailFast=true` → **BUILD SUCCESSFUL, exit 0, 10m 25s, 3689 tests over 583 suites, 0
+failures, 0 errors** — eleven more than the Phase 3 gate above, being `RunReportTest`'s three, the
+job's seven new cases and `GenerationMetricsTest`'s three released ones, less the two the retired
+counter's own class held. `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and
+`jacocoTestCoverageVerification` all ran and all passed, none of them loosened; the coverage report
+from that same run reads **LINE 6647/6854 = 0.9698 and BRANCH 2009/2228 = 0.9017** against the
+unchanged gate of LINE 0.88 / BRANCH 0.85. No migration was added and no schema changed.
+
+Two things the range met on the way that are worth the next phase knowing:
+
+* **The leg drive had to be told what the pass answers.** `support/GenerationLegs.readyToGenerate`
+  now stubs `failAndReleaseStale` with an empty outcome, because the run's first act is a store
+  call: without it every arrangement that drives the run ended inside that first statement, and
+  `TelemetryPrivacyTest` caught it exactly as it is written to — two lines the sweep claims to
+  cover (`RegisterGenerationJob:426`, the batch that could not be stamped, and `:536`, the run's
+  own batches read back) were no longer being written. The pass's own two endings are still driven
+  by `theStaleBatchPass()`.
+* **`GenerationMetricsTest`'s unlabelled `counter(String)` helper was orphaned** by the retirement
+  and PMD's `UnusedPrivateMethod` refused the build over it. Closed by giving the three released
+  series the published-surface class the retired one had, rather than by deleting the helper: the
+  names are what a dashboard is written against, and nought on all three is the expected reading.
+
+**For T022**: `GenerationReconciler.settle` still counts its completions into a local that only its
+own answer reads, under a comment naming this; `GenerationConfig.generationReconciler` is still a
+bean and still carries `@Scheduled`, which is what keeps the timer on until the class goes; and
+`GenerationReconcilerTest` keeps four cases renamed to what they now claim, the counter assertions
+having gone with the series.
+
 ---
 
 ## Phase 5: User Story 4 — the removal, then the vocabulary retirement
