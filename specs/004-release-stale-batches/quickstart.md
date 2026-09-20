@@ -9,16 +9,41 @@ sets up. Only the differences are written out.
 
 ## Local dependencies
 
-**Start from a clean store.** `V7` narrows two CHECK constraints, and Postgres refuses to add a
-constraint to a table that already holds a violating row — so a volume carrying a batch failed
-`GENERATION_TIMED_OUT` or completed by `RECONCILER` (anything a pre-004 local run produced) makes the
-migration fail at start-up. `V6`, which only widens, refuses on nothing and needs none of this.
-Either delete those rows or start clean:
+**Start from a clean store.** `V7__retire_reconciler_vocabulary.sql` narrows three CHECK
+constraints, and Postgres refuses to add a constraint to a table that already holds a violating row
+— so a volume carrying a batch failed `GENERATION_TIMED_OUT` or completed by `RECONCILER` (anything
+a pre-004 local run produced) makes the migration fail at start-up. `V6`, which only widens, refuses
+on nothing and needs none of this. Either delete those rows or start clean:
 
 ```bash
 docker compose down -v
 docker compose up -d postgres servicebus-emulator artemis fileservice-postgres wiremock
 ```
+
+**Confirmed on this compose file's own volume**, not reasoned about. On a
+`service-cp-crime-court-register_postgres-data` carrying one batch failed `GENERATION_TIMED_OUT` and
+completed by `RECONCILER`, `V7` stops on
+
+```
+ERROR:  check constraint "register_batch_failure_reason_chk" of relation "register_batch"
+        is violated by some row
+```
+
+and the row is still there afterwards — the migration refuses rather than dropping what it cannot
+admit, which is the behaviour to want: an operator learns from a pod that will not start, not from
+an absence. After `docker compose down -v` and a fresh `up`, `V1`–`V7` apply in order and the store
+ends with `failure_reason` admitting the six and `completed_by` admitting `'EVENT'` alone.
+
+Two details worth knowing when this happens to you:
+
+- **Flyway rolls the whole migration back**, so a refused `V7` leaves the schema exactly at `V6` and
+  the pod simply keeps failing to start. Applying the file by hand through `psql` without a
+  transaction does not: statement 1's `DROP CONSTRAINT` commits before the `ADD` fails, and the
+  table is left with no failure-reason constraint at all until you re-run it. If you are poking at a
+  local database by hand, wrap it in `BEGIN`/`COMMIT`.
+- **`down -v` takes the file service's volume with it** (`fileservice-data`), which is what you
+  want here: the payloads and the exception-report CSVs it holds belong to the batches you are
+  clearing.
 
 **Note the omission**: `sdg-echo` is *not* started. It is the helper that publishes
 `document-available` back onto `public.event` after each `generate-document`, and for this

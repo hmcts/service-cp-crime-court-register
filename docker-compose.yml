@@ -107,6 +107,15 @@ services:
       CR_REPORT_TEMPLATE_ID: 22222222-2222-2222-2222-222222222222
       COURTREGISTER_REPORT_RECIPIENTS: support@example.invalid
 
+  # The service's own store. Flyway runs at the application's start-up, not here.
+  #
+  # START FROM A CLEAN VOLUME ACROSS V7. V7__retire_reconciler_vocabulary.sql narrows three CHECK
+  # constraints, and Postgres refuses to add a constraint to a table that already holds a violating
+  # row - so a postgres-data volume carrying a batch failed GENERATION_TIMED_OUT or completed by
+  # RECONCILER (anything a pre-004 local run produced) stops the migration and the application will
+  # not start. `docker compose down -v` before the first run on 004, or delete those rows. Confirmed
+  # on this file's own volume; the refusal names register_batch_failure_reason_chk and leaves the
+  # row where it was. V6 and everything before it only ever widened and refuse on nothing.
   postgres:
     image: postgres:16
     ports:

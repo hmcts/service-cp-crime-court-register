@@ -2206,11 +2206,41 @@ claim. T028 runs after them, not before, so the suite it characterises is the fi
       enumerations and out of the constraint, and each half is read from where it actually lives.
       `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` green in the same round, after one
       `CheckResultSet` violation on a `ResultSet.next()` asserted rather than branched on.
-- [ ] T050 [A] [US4] `docker/`, `specs/004-release-stale-batches/quickstart.md` — **[A]**, and this
+- [X] T050 [A] [US4] `docker/`, `specs/004-release-stale-batches/quickstart.md` — **[A]**, and this
       is T007 arriving where it belongs. Record that `docker compose down -v` is required before
       **V7** on any volume holding a pre-004 row, and confirm on a real local volume that the
       migration refuses without it and applies with it. No pair: it is an observation about Postgres,
       not a behaviour this repository implements.
+
+      **Confirmed, on this compose file's own `postgres-data` volume and not on a fresh
+      container.** The volume already on this machine was a pre-004 local run's, carrying V1–V4;
+      V5 and V6 applied to it, one batch was seeded FAILED / `GENERATION_TIMED_OUT` /
+      `RECONCILER` - the exact row the caveat is about - and V7 then stopped on
+
+      ```
+      ERROR:  check constraint "register_batch_failure_reason_chk" of relation "register_batch"
+              is violated by some row
+      ```
+
+      with the row still in the table afterwards. `docker compose down -v`, a fresh `up -d
+      postgres`, and V1–V7 applied in order: `register_batch_failure_reason_chk` ends admitting the
+      six and `register_batch_completed_by_chk` ends as `completed_by IS NULL OR completed_by =
+      'EVENT'`. The stack was taken down with `-v` again afterwards, so nothing of this is left on
+      the machine.
+
+      **One thing the walkthrough learned that the caveat did not say.** Flyway wraps a migration in
+      a transaction on PostgreSQL, so a refused V7 leaves the schema exactly at V6 and the pod goes
+      on failing to start - which is the good ending. Applying the file by hand through `psql`
+      without a `BEGIN` does not: statement 1's `DROP CONSTRAINT` commits before its `ADD` fails,
+      and the table is left with no failure-reason constraint at all. Both are now in
+      `quickstart.md`, because the second is what a developer poking at a local database by hand
+      will actually meet.
+
+      Written down in two places, each for its own reader: `quickstart.md`'s "Local dependencies",
+      for somebody walking the increment, and a comment above the `postgres` service in
+      `docker-compose.yml`, for somebody who starts the stack and never opens the spec. Nothing else
+      under `docker/` is touched - `startup.sh` belongs to the other tree, and no stub, mapping or
+      helper has anything to say about a migration.
 
 - [ ] T028 [A] [US4] `adapter/stub/StubGenerationAdaptersTest`, `e2e/GenerationEndToEndIT`,
       `e2e/GenerationFailureEndToEndIT`, `config/GenerationMetricsTest`,
