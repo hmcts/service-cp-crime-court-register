@@ -7,6 +7,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import java.time.Clock;
@@ -17,7 +18,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.mock.env.MockEnvironment;
@@ -33,11 +36,13 @@ import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
+import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 import uk.gov.hmcts.cp.courtregister.pipeline.PdfPayloadMapper;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 import uk.gov.hmcts.cp.courtregister.support.WorkloadIdentityStub;
 
 /**
@@ -238,6 +243,99 @@ class GenerationWiringContextTest {
                         Duration.class, Clock.class);
     }
 
+    /**
+     * <strong>[A]</strong> And the half-wired context the completeness check is written for.
+     *
+     * <p>Characterisation: the branch exists and behaves this way already. It is asserted because
+     * nothing asserted it — every case above holds a context that is complete, so the WARN line and
+     * the {@code null} it accompanies were reachable from no test at all, and the check's own list
+     * of collaborators is exactly the sort of thing a later wiring change edits without noticing.
+     *
+     * <p>Driven by calling the {@code @Bean} method rather than by standing up a context missing a
+     * bean: the pass is declared on this same configuration, so a context that holds the
+     * configuration holds the pass, and there is no set of properties that produces the incomplete
+     * case. The method is the unit; the providers are what a context hands it.
+     */
+    @Nested
+    @DisplayName("a context the downstream half is only half on")
+    class AnIncompleteContext {
+
+        @Test
+        @DisplayName("[A] schedules no run, and the line names the collaborator that was missing")
+        void a_context_without_the_pass_should_schedule_no_run_and_name_it() {
+            try (CapturedLog log = CapturedLog.capturing(SchedulingConfig.class)) {
+                final RegisterGenerationJob job = new SchedulingConfig().registerGenerationJob(
+                        holding(FeatureFlagGate.class, mock(FeatureFlagGate.class)),
+                        holding(RegisterStore.class, mock(RegisterStore.class)),
+                        holding(BatchAssembler.class, mock(BatchAssembler.class)),
+                        holding(RegisterGenerationService.class,
+                                mock(RegisterGenerationService.class)),
+                        holdingNothing(StaleBatchReleaser.class),
+                        // Read only on the branch that constructs the run, which this is not.
+                        null, null, null, null);
+
+                assertThat(job)
+                        .as("a run whose first act would be a call to nothing is not a run: it "
+                                + "would report a quiet night every night while every batch whose "
+                                + "outcome went missing stayed in flight")
+                        .isNull();
+                assertThat(log.messages())
+                        .as("and the one trace a deployment gets has to say which collaborator was "
+                                + "missing, or an inert pod is indistinguishable from a quiet one")
+                        .anyMatch(line -> line.contains("releaser=false"))
+                        .allSatisfy(line -> assertThat(line)
+                                .as("gate, store, assembler and service were all present, so the "
+                                        + "line must not accuse them")
+                                .doesNotContain("gate=false", "store=false", "assembler=false",
+                                        "service=false"));
+            }
+        }
+
+        @Test
+        @DisplayName("[A] the check no longer names the reconciler")
+        void the_completeness_check_should_not_name_the_reconciler() {
+            try (CapturedLog log = CapturedLog.capturing(SchedulingConfig.class)) {
+                new SchedulingConfig().registerGenerationJob(
+                        holdingNothing(FeatureFlagGate.class),
+                        holdingNothing(RegisterStore.class),
+                        holdingNothing(BatchAssembler.class),
+                        holdingNothing(RegisterGenerationService.class),
+                        holdingNothing(StaleBatchReleaser.class),
+                        null, null, null, null);
+
+                assertThat(log.messages())
+                        .as("the run stopped asking for a reconciler at T016, and a line still "
+                                + "naming one would describe a collaborator the job does not have")
+                        .isNotEmpty()
+                        .allSatisfy(line -> assertThat(line).doesNotContain("reconciler"));
+            }
+        }
+
+        /**
+         * A provider answering with one bean, as a context holding it would.
+         *
+         * @param <T>  the collaborator's type
+         * @param type the type the configuration asks for
+         * @param bean the bean it is given
+         * @return a provider over a factory holding exactly that bean
+         */
+        private <T> ObjectProvider<T> holding(final Class<T> type, final T bean) {
+            final DefaultListableBeanFactory factory = new DefaultListableBeanFactory();
+            factory.registerSingleton(type.getName(), bean);
+            return factory.getBeanProvider(type);
+        }
+
+        /**
+         * A provider answering with nothing, as a context missing the bean does.
+         *
+         * @param <T>  the collaborator's type
+         * @param type the type the configuration asks for
+         * @return a provider over an empty factory
+         */
+        private <T> ObjectProvider<T> holdingNothing(final Class<T> type) {
+            return new DefaultListableBeanFactory().getBeanProvider(type);
+        }
+    }
     /**
      * A JVM started to run one operations command must not hold the pass.
      *
