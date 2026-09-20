@@ -102,6 +102,12 @@ here in the same form.
   **fenced on the cutoff predicate itself**: a batch that stopped being stale between any two moments
   simply does not match, and a lost race is a zero-row result rather than an exception.
   *(FR-003, FR-017.)*
+  **Narrowed at review gate 3 (2026-09-20):** the fence is unchanged, but the unit of atomicity is
+  **one batch** — the predicate is read once into a list that decides nothing, and each batch is then
+  failed and released by that same fenced statement narrowed to its own id, in its own transaction
+  and with its own bounded retry on the day's active-register key; a batch every attempt was refused
+  over is reported, not thrown. One transaction over every stale batch was atomic in the wrong unit.
+  FR-003a is the live statement of this; this answer is the record of the moment it was taken.
 - Q: What happens when the pass and the outcome sink race at 18:00? → A: **Both orders are safe, and
   neither may end the run.** Sink first: the batch is GENERATED, the pass's predicate no longer
   matches it, nothing happens. Pass first: the sink's mark is refused by the state machine, the
@@ -109,6 +115,8 @@ here in the same form.
   outcome — self-healing. Running the pass as a read-then-mark loop would instead let a refused mark
   throw out of the run and lose the whole night's generation, which is why the fenced statement is a
   correctness requirement and not a tidiness preference. *(FR-003, Edge Cases.)*
+  **Superseded in part at review gate 3 (2026-09-20)**: the same argument turned out to apply to the
+  pass's own scope, so the statement is now made per batch — see the answer above.
 - Q: Is a late outcome for an already-ended batch really *counted* today? → A: **No — it is logged at
   WARN and counted nowhere.** The public-events ignored counter fires for a foreign source, an
   unknown correlation, a payload mismatch and three envelope faults, but not for an outcome the state
@@ -554,11 +562,14 @@ with zero and with a negative value and confirm each refusal names the setting.
 - **The age is measured from the stamp each state already carries**: from when the render was
   requested for a GENERATING batch, and from when the batch was assembled for a PENDING one. Both are
   columns the store already keeps and the retired pass already read.
-- **The release is one fenced operation, not a loop of two statements.** The new reason joins the
-  reasons that release a batch's registers as part of failing it, and the whole pass is a single
-  statement whose own predicate is the staleness rule. Two statements leave a window in which a batch
-  is FAILED and its registers are still stamped — invisible to every later run, because unbatched
-  means `batch_id IS NULL` — and a loop leaves a refused mark able to throw out of the run.
+- **The release is one fenced statement per batch, not a loop of two statements** (narrowed at
+  review gate 3). The new reason joins the reasons that release a batch's registers as part of failing
+  it, and one batch's failure and release are a single statement whose own predicate is the staleness
+  rule. Two statements leave a window in which a batch is FAILED and its registers are still stamped —
+  invisible to every later run, because unbatched means `batch_id IS NULL` — and a read-then-mark loop
+  leaves a refused mark able to throw out of the run. What the pass repeats is the fenced statement
+  itself, once per stale batch and in a transaction of its own, so that the refusal one court centre's
+  registers can raise is not also the other court centres' ending (FR-003a).
 - **`released` is two numbers, batches and registers.** Neither answers the other's question, and the
   run line already keeps both accounts of a night. They are a diagnostic beside those accounts and
   not a third sum: the registers counted are re-batched by the same run and are already inside its

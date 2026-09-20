@@ -12,14 +12,19 @@ long enough, is failed `BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN` and its re
 so the run's own assembly puts them in a batch tonight. The pass is the first thing the run does
 after the flag gate and before `store.activeUnbatched()`.
 
-**The whole of the release is one fenced store operation [review].**
-`RegisterStore.failAndReleaseStale(scheduledCutoff, manualCutoff)` issues a single statement whose
-`WHERE` clause *is* the staleness rule, fails every matching batch under the new reason and releases
-its registers in the same transaction, and answers with the batches it actually changed. There is no
-read followed by a mark: a batch that stopped being stale in between simply does not match, so there
-is no refused transition to throw out of the run, and there is no window in which a batch is FAILED
-while its registers are still stamped to it — which would be a **lost register**, invisible to every
-later run because `activeUnbatched` means `batch_id IS NULL`.
+**The release is one fenced store operation, atomic per batch [review, revised at gate 3].**
+`RegisterStore.failAndReleaseStale(scheduledCutoff, manualCutoff)` reads the staleness predicate once
+into a list that decides nothing, then issues **one statement per batch**, narrowed by batch id and in
+a transaction of its own, whose `WHERE` clause *is* the staleness rule: it fails the batch under the
+new reason and releases its registers in the same statement, and the operation answers with the
+batches it actually changed and, beside them, the batches it could not change. There is no read
+followed by a mark: a batch that stopped being stale in between simply does not match, so there is no
+refused transition to throw out of the run, and there is no window in which a batch is FAILED while
+its registers are still stamped to it — which would be a **lost register**, invisible to every later
+run because `activeUnbatched` means `batch_id IS NULL`. The unit is one batch because a refusal met on
+one court centre's registers must not roll back another's release, and a batch whose every attempt met
+that refusal is **reported on `StaleReleaseOutcome.contended()`, never thrown**: no single batch's
+outcome may end the run (FR-003a).
 
 Everything else is **removal**. `GenerationReconciler` goes, and with it its `@Scheduled`/
 `@SchedulerLock` timer, its lock, its cadence read from the grace period, the end-of-run
@@ -85,7 +90,7 @@ design reviews of the same day (spec Clarifications, second session).
 | # | Finding | Effect on this plan |
 |---|---|---|
 | 1 | `failure_reason` is CHECK-constrained to six values in `V2`; the new reason would be rejected by Postgres | `V6` **and** `V7` (the split found in implementation, below), and `SchemaMigrationV2IT` extended to hold the enum and the constraint to each other in both directions after each |
-| 2 | `markFailed` + `releaseFailed` is two operations with a read between them; a crash or a race strands registers on a terminal batch | The whole pass becomes one fenced statement, `failAndReleaseStale`; concurrent `*IT`s in both race orders; SC-009 |
+| 2 | `markFailed` + `releaseFailed` is two operations with a read between them; a crash or a race strands registers on a terminal batch | The pass becomes `failAndReleaseStale`: one fenced statement per batch, each in its own transaction and with its own bounded retry (narrowed at gate 3); concurrent `*IT`s in both race orders; SC-009 |
 | 3 | The refused-transition drop is logged, not counted | New bounded reason `terminal-batch` on `courtregister_public_events_ignored_total`; FR-008, SC-010 |
 | 4 | The retirement's blast radius is wider than the three classes named | Full file inventory below, including the three gauges, the counter, `RunReport`, `RunCorrelation`'s nesting javadoc and sixteen suites |
 | 5 | The report's late-batch threshold derives from the grace period | Its own setting at the previous derived value |
@@ -140,8 +145,8 @@ and `BatchAgeSweepTest` replace `GenerationReconcilerTest`; `RegisterGenerationJ
 scheduler of its own: four `TaskScheduler` beans where there were three, and four `@Scheduled`
 methods where there were four — the reconciliation timer out, the batch-age sweep in.
 
-**Performance Goals**: the pass is **one statement** at the front of a run whose budget is sixty
-minutes. SC-004 (zero calls to systemdocgenerator between runs) is met by construction once the query
+**Performance Goals**: the pass is **one statement per stale batch**, and on an ordinary night there
+are none, at the front of a run whose budget is sixty minutes. SC-004 (zero calls to systemdocgenerator between runs) is met by construction once the query
 path is deleted: no code remains that could make one.
 
 **Constraints**: constitution v3.2.0 — ids before calls (the pass mints none); bounded reason codes
@@ -222,6 +227,9 @@ docker/wiremock's GET document/{id} mapping
 
 ```text
 application/RegisterStore.java         + failAndReleaseStale(scheduledCutoff, manualCutoff)
+application/ReleasedBatch.java         new - one batch the pass changed, and its register count
+application/StaleReleaseOutcome.java   new [gate 3] - what the pass released, and what it could
+                                       not release because every attempt lost the day's key
 application/DocumentRenderer.java      one method; javadoc loses "two conversations"
 application/DocumentOutcomeSink.java   javadoc loses "the reconciler fetches the ones that did not"
 application/DocumentOutcomeSinkImpl.java  the refused transition is counted [review]
@@ -242,7 +250,9 @@ batch/RegisterGenerationJob.java       releaser first; no end-of-run chase; two 
 batch/RunCorrelation.java              the nesting javadoc names the run and the sweep, not the
                                        reconciler; the ambient-adoption branch stays live because
                                        the releaser calls under() from inside the run
-persistence/JdbcRegisterStore.java     failAndReleaseStale; NOT_COMPLETED_BY_NEXT_RUN joins
+persistence/JdbcRegisterStore.java     failAndReleaseStale - the predicate read once, then one
+                                       fenced statement per batch in its own transaction with its
+                                       own bounded retry [gate 3]; NOT_COMPLETED_BY_NEXT_RUN joins
                                        RELEASING_REASONS; attributionOf is called with null
 persistence/RegisterBatchRepository.java  generatingSince/pendingSince/generatedSince keep their
                                        javadoc's claims but lose "the reconciler asks"; the
@@ -270,8 +280,9 @@ docker/wiremock/README.md              loses the query line
 ## Design Decisions (summary; full rationale in research.md)
 
 1. **The pass is a class, not a method on the job** — one object, one method, a count back.
-2. **The release is one fenced statement in the store [review]** — the predicate is the fence, a
-   lost race is zero rows, and there is no read-then-write to be refused.
+2. **The release is one fenced statement per batch in the store [review, narrowed at gate 3]** — the
+   predicate is the fence, a lost race is zero rows, and there is no read-then-write to be refused;
+   one batch is the unit, and a batch no attempt can release is reported, not thrown (FR-003a).
 3. **PENDING and GENERATING are one rule** — with no query there is nothing to tell them apart, and
    the rule covers the PENDING batch with no payload id that the retired reads never saw (FR-020).
 4. **`GENERATED` is never touched by the pass** — it holds a document somebody is owed e-mails

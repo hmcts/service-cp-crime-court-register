@@ -18,11 +18,24 @@ service and the metrics; a sixth responsibility inside it would be untestable wi
 
 ---
 
-## D2 — The release is one fenced statement in the store **[reversed by review]**
+## D2 — The release is one fenced statement per batch in the store **[reversed by review, narrowed at gate 3]**
 
-**Decision**: `RegisterStore.failAndReleaseStale(scheduledCutoff, manualCutoff)` — a single
-statement, in one transaction, whose `WHERE` clause *is* the staleness rule, returning only the
-batches it changed.
+**Decision**: `RegisterStore.failAndReleaseStale(scheduledCutoff, manualCutoff)` — the staleness
+predicate read once into a list that decides nothing, then **one statement per batch**, narrowed by
+batch id and in a transaction of its own, whose `WHERE` clause *is* the staleness rule, with a bounded
+retry on the day's active-register key; answering with `StaleReleaseOutcome`: the batches it changed,
+and beside them the batches every attempt was refused over.
+
+**What gate 3 narrowed, and why the fence is unchanged**: the first implementation made the rule the
+`WHERE` clause of **one** `UPDATE` over every stale batch. The fence was right and stays; the *unit*
+was wrong. A re-share that takes the day's active-register key refuses the release of the batch that
+holds it, and under one statement that refusal rolled back every other court centre's release with it
+— and an exhausted retry then left the run with an exception to carry. One hearing shared at the wrong
+moment, the whole country's documents lost, twice over, which is what FR-003a forbids. Per batch, the
+ending of one batch says nothing about the ending of another, and **exhaustion is reported rather than
+thrown**: the contended batch is left exactly as it was found, named on `StaleReleaseOutcome.contended()`,
+counted by the pass, and the next run reaches it again while the 07:00 report names its court centre
+day as a late batch meanwhile.
 
 **What the first pass got wrong**: it specified the pass as a read (`pendingSince`, `generatingSince`)
 followed by a `markFailed` per batch, with `NOT_COMPLETED_BY_NEXT_RUN` added to `RELEASING_REASONS`
@@ -40,13 +53,17 @@ but the read-then-mark shape has two failures the reviews found:
   inline in `generate()` — propagates out of `correlatedRun`, which reports and **rethrows**. One
   batch that came good in the wrong second would cost every court centre its document that night.
 
-The fenced statement removes both. There is no moment between the decision and the write: a batch
-that stopped being stale does not match, and zero rows is an answer.
+The fenced statement removes both. There is no moment between the decision and the write — the list
+the predicate is read into decides nothing, because every batch on it is judged again by the statement
+that writes its row: a batch that stopped being stale does not match, and zero rows is an answer.
 
 **Rejected**: a read-then-mark loop with a per-batch `try`/`catch` (the shape the retired reconciler
 used). It survives the race but not the crash, and it makes the correctness of the feature depend on
 a catch block being wide enough — which is exactly the kind of claim the wide catch in
-`correlatedRun` exists to stop having to make.
+`correlatedRun` exists to stop having to make. The per-batch shape gate 3 settled on is *not* that
+loop: what it repeats is the fenced statement itself, which fails and releases one batch in one act,
+so neither the race nor the crash has a window to land in — only the *scope* of the transaction
+changed, from every stale batch to one.
 
 ---
 

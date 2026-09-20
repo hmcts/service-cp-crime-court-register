@@ -89,15 +89,31 @@ unchanged by it.
 ## The store operation
 
 `RegisterStore.failAndReleaseStale(Instant scheduledCutoff, Instant manualCutoff)` →
-`List<ReleasedBatch>` (`batchId`, `courtCentreId`, `registerDate`, `releasedRegisters`).
+`StaleReleaseOutcome` **[gate 3]**, which is two lists: `released`, one `ReleasedBatch` per batch the
+operation changed (`batchId`, `courtCentreId`, `registerDate`, `releasedRegisters`), and `contended`,
+the ids of the batches it left exactly as it found them.
 
-**One statement, in one transaction, whose `WHERE` clause is the staleness rule.** There is no read
-followed by a mark, and that is the whole point: a read-then-mark pass can be overtaken between the
-two, and then either the mark is refused — which, run inline in `generate()`, throws out of the run
-and loses the entire night's generation — or, worse, the mark lands and the separate release does
+**One statement per batch, each in its own transaction, whose `WHERE` clause is the staleness rule
+[gate 3].** The staleness predicate is read once, into a list that **decides nothing** — every batch
+it names is judged again by the statement that writes its row, so a batch that stopped being stale in
+between matches nothing — and each batch is then failed and released by one statement of its own,
+narrowed by batch id, with its own bounded retry on the day's active-register key. There is still no
+read followed by a mark, and that is the whole point: a read-then-mark pass can be overtaken between
+the two, and then either the mark is refused — which, run inline in `generate()`, throws out of the
+run and loses the entire night's generation — or, worse, the mark lands and the separate release does
 not, leaving registers stamped to a terminal batch where no later run can see them, because
 `activeUnbatched`'s predicate is `batch_id IS NULL`. That is a **lost register**, and it is the exact
 failure this increment exists to end.
+
+**The unit of atomicity is one batch, not the pass [gate 3].** One transaction over every stale batch
+is atomic in the wrong unit: a refusal met on one court centre's registers rolls back every other
+court centre's release with it, so one hearing shared at the wrong moment costs the whole country its
+documents. And exhaustion is **reported, never thrown**: a batch whose every attempt met the same
+refusal — a re-share, or a share delivered out of order, holding the day's active-register key — is
+left exactly as it was found, named on `StaleReleaseOutcome.contended()`, counted by the pass, and
+the operation goes on to the batches after it and answers normally. No single batch's outcome may end
+the run (FR-003a). A contended batch is stale still and untouched, so the next run reaches it again,
+and the 07:00 report names its court centre day as a late batch every morning meanwhile.
 
 The predicate:
 
@@ -123,7 +139,7 @@ WHERE status IN ('PENDING', 'GENERATING')
 The write, in the same statement's scope: `status = 'FAILED'`,
 `failure_reason = 'NOT_COMPLETED_BY_NEXT_RUN'`, `completed_by = NULL`, and the **existing** release
 and supersession branch of `MARK_FAILED` (the one `:releaseRows` selects) applied to the matched
-batches' registers. `NOT_COMPLETED_BY_NEXT_RUN` joins `JdbcRegisterStore.RELEASING_REASONS`, so a
+batch's registers. `NOT_COMPLETED_BY_NEXT_RUN` joins `JdbcRegisterStore.RELEASING_REASONS`, so a
 per-batch `markFailed` — which the operations surface may still make — releases on it too.
 
 ## Vocabulary
@@ -186,10 +202,13 @@ same reason, never as an unknown correlation.
 ```text
 recorded rows, active and unbatched
    ▼ (18:00 run, flag ON)
-   ▼ STALE-BATCH RELEASE PASS   ── one statement: every PENDING or GENERATING batch older than
-   │                               its cutoff (stale-after for the schedule's own batches, the
-   │                               longer of stale-after and the run lock for an operator's)
+   ▼ STALE-BATCH RELEASE PASS   ── one statement per batch: every PENDING or GENERATING batch
+   │                               older than its cutoff (stale-after for the schedule's own
+   │                               batches, the longer of stale-after and the run lock for an
+   │                               operator's), each in a transaction of its own
    │                               ▼ FAILED / NOT_COMPLETED_BY_NEXT_RUN, rows released
+   │                               ▼ or, where every attempt lost the day's active-register key,
+   │                                 reported contended and left for the next run
    ▼ BatchAssembler groups by (court centre, register date)
    │  a court centre day whose batch is still in flight - and younger than its cutoff, because
    │  the pass has just run - is DEFERRED
