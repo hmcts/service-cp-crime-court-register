@@ -514,15 +514,38 @@ wants to claim beyond this.
 copies: parse, call one application service, map. The batch listing is where the masking rule and
 the "a controller may not hold a repository" rule both land.
 
-- [ ] **T014** [P] [US1] `api/FlagControllerTest` (new) — `@WebMvcTest` with `FeatureFlagReader`
+- [x] **T014** [P] [US1] `api/FlagControllerTest` (new) — `@WebMvcTest` with `FeatureFlagReader`
       mocked and both filters off (`authz.http.enabled=false`, `cp.audit.enabled=false`).
       Cases: `Enabled` → `200 {"flag":"ON"}`; `Disabled` → `200 {"flag":"OFF"}`; `Unreadable` →
       **`200`** `{"flag":"UNREADABLE","reason":"<the reading's bounded code>"}` — **not** 503 (spec
       assumption 2); the reader is asked exactly once and its answer is not cached. Seams:
       `api/FlagController` and its response record. Red: 404, no mapping — **no**: the seam maps the
       path and throws `UnsupportedOperationException`, so the red is a failing assertion on the body.
-- [ ] **T015** [US1] `api/FlagController` and `api/dto/FlagResponse` — the three readings through a
+      (Landed with T015 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. 12 tests, 0 failures: ON, OFF and UNREADABLE all 200; every one of the six unreadable
+      causes reaching `reason` as its own bounded code, off an `@EnumSource` so a seventh cause
+      cannot be added without a case; the reader asked exactly once with
+      `verifyNoMoreInteractions`; a second call asking again rather than answering from a cache;
+      and a method the endpoint does not answer never reaching the reader.
+      The slice sets a fourth property the task does not name, `courtregister.generation.enabled=true`,
+      and it is not incidental - see T015's entry.)
+- [x] **T015** [US1] `api/FlagController` and `api/dto/FlagResponse` — the three readings through a
       switch expression over `FlagDecision`, as `CheckFlagCli.answered` did. Green: T014.
+      (green: `FlagControllerTest` 12 tests, 0 failures; the whole `api` package and
+      `TestProfileContextTest` beside it, green. Checkstyle and PMD clean on main and test; one PMD
+      finding was fixed rather than suppressed, a loop over the unreadable causes becoming an
+      `@EnumSource`.
+      **A condition the task did not name, and a question for T040/T041.** `FeatureFlagReader` is
+      contributed only where `courtregister.generation.enabled` is true - `LiveFeatureFlagConfig`
+      and `StubGenerationConfig` are both behind that key - so a `@RestController` holding one
+      would fail the refresh on every pod that renders nothing, including the whole `test` profile.
+      The controller therefore carries
+      `@ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")`,
+      which is exactly where `check-flag` answered `command-not-wired`. T041's text says the flag
+      endpoint is among "the other four served normally" on a generation-off pod; on today's wiring
+      it is a **fourth** endpoint that needs those beans, so T040/T041 must either add it to the
+      not-wired set or make the reader unconditional. Not decided here: `LiveFeatureFlagConfig` and
+      the `courtregister.generation.*` block are outside this increment's range.)
 - [ ] **T016** [P] [US6] `application/BatchListingServiceTest` (new) — **`ListBatchesCli`'s reads,
       moved and unchanged**. Cases: a date's batches in the statement's order, each with its record
       count from `RegisterStore.batched` and its recipients from `RegisterNotificationRepository`;
