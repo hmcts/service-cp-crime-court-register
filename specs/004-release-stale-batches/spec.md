@@ -375,13 +375,25 @@ with zero and with a negative value and confirm each refusal names the setting.
   existing reason, meaning "this batch had not completed by the time the next run began". It MUST
   name no completion mechanism, because nobody outside this service reported anything about it, and
   it MUST be one of the reasons that release a batch's registers.
-- **FR-003a**: The failure and the release MUST be **one atomic operation, fenced on the staleness
-  predicate itself**. No sequence of a read, then a mark, then a release is acceptable: a crash or a
-  concurrent outcome between any two of those leaves registers stamped to a terminal batch, where no
-  later run can see them. A batch that ceased to be stale between the operation being asked for and
-  the row being written MUST simply not be changed, and that MUST be reported as a batch the pass did
-  not release rather than as an error. **No single batch's outcome may end the run**: whatever
-  happens to one batch, the run goes on to assemble.
+- **FR-003a**: The failure and the release of **one batch** MUST be **one atomic operation, fenced on
+  the staleness predicate itself**. No sequence of a read, then a mark, then a release is acceptable:
+  a crash or a concurrent outcome between any two of those leaves registers stamped to a terminal
+  batch, where no later run can see them. A batch that ceased to be stale between the operation being
+  asked for and the row being written MUST simply not be changed, and that MUST be reported as a batch
+  the pass did not release rather than as an error. **No single batch's outcome may end the run**:
+  whatever happens to one batch, the run goes on to assemble. That has two consequences the
+  implementation MUST meet, both of them ways of ending the run that no care in the caller could undo:
+  - **Contention is isolated per batch.** The batches are read once by the staleness predicate and
+    each is then failed and released by a statement of its own, in a transaction of its own, with a
+    bounded retry of its own on the day's active-register key. One transaction over every stale batch
+    is atomic in the wrong unit: a refusal met on one court centre's registers would roll back every
+    other court centre's release with it.
+  - **Exhaustion is reported, never thrown.** A batch whose every attempt met that refusal MUST be
+    left exactly as it was found, named in the operation's answer under a bounded account of its own,
+    counted by the pass's line and its counter, and the operation MUST go on to the batches after it
+    and return normally. A contended batch is stale still and untouched, so the next run reaches it
+    again; meanwhile the 07:00 report names its court centre day as a late batch (FR-019's kinds),
+    which is the surface support already watches.
 - **FR-004**: A batch in flight for less than the minimum age MUST be left exactly as it is, and the
   existing rule that defers a court centre day whose batch is in flight MUST continue to apply to it
   unchanged.

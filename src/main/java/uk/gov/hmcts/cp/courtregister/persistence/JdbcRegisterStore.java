@@ -12,6 +12,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
@@ -46,7 +47,6 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
-import uk.gov.hmcts.cp.courtregister.domain.StoreContendedException;
 
 /**
  * The register store over this service's own Postgres.
@@ -823,12 +823,36 @@ public class JdbcRegisterStore implements RegisterStore {
             """;
 
     /**
-     * Statement 9b - every batch the next run found still waiting, failed and released in one act.
+     * Statement 9b - the batches a run found still waiting, named so each can be its own statement.
      *
-     * <p><strong>One statement, whose {@code WHERE} clause is the staleness rule itself.</strong>
-     * That is the whole design, and it is a correctness requirement rather than a tidiness
-     * preference. A read followed by a per-batch {@code markFailed} - the shape the retired
-     * reconciler used - fails in two ways this one cannot:
+     * <p><strong>This read decides nothing.</strong> It is the same predicate {@link
+     * #FAIL_AND_RELEASE_STALE} carries, asked once so the pass has a list to walk, and every batch
+     * it names is judged again by the statement that writes the row. A batch that stopped being
+     * stale in between therefore matches nothing and is changed by nothing: the fence is the
+     * write's own {@code WHERE}, and this list is only the order the writes are made in.
+     *
+     * <p>Ordered by register date so the oldest day is given back first, and by batch identity so
+     * the order is total rather than merely mostly decided - two batches of one date must not swap
+     * places between runs, or the run report's lines would be a different account of the same
+     * night each time.
+     */
+    private static final String STALE_BATCHES = """
+            SELECT batch_id
+              FROM register_batch
+             WHERE status IN ('PENDING', 'GENERATING')
+               AND COALESCE(requested_at, assembled_at)
+                     <= CASE WHEN system_generated THEN :scheduledCutoff
+                             ELSE :manualCutoff END
+             ORDER BY register_date, batch_id
+            """;
+
+    /**
+     * Statement 9c - one batch the next run found still waiting, failed and released in one act.
+     *
+     * <p><strong>One statement per batch, whose {@code WHERE} clause is the staleness rule
+     * itself.</strong> That is the whole design, and it is a correctness requirement rather than a
+     * tidiness preference. A read followed by a per-batch {@code markFailed} - the shape the
+     * retired reconciler used - fails in two ways this one cannot:
      *
      * <ul>
      *   <li><strong>A lost register.</strong> {@code markFailed} and {@link #releaseFailed} are two
@@ -877,13 +901,22 @@ public class JdbcRegisterStore implements RegisterStore {
      * {@code register_batch_completed_by_shape_chk} agree on the null, and a row written otherwise
      * is refused by the constraint rather than by a rule this class keeps of its own.
      *
-     * <p>The release is statement 9's own branch, over the matched set rather than over one batch:
-     * the same successor search, the same total order {@code (register_time, created_at,
-     * output_id)}, and the same reason for all three of it. A register the estate replaced while
-     * the batch was in flight is superseded as its stamp is cleared rather than handed back - the
-     * key would otherwise hold two active rows and {@code idx_output_active_register_key} would
-     * refuse the write, taking the failure mark down with it and leaving the batch calling itself
-     * in flight under a run that had already given up on it.
+     * <p><strong>And one batch at a time, which is the other half of the same requirement.</strong>
+     * One statement over every stale batch is atomic in the wrong unit: a refusal met on any one
+     * court centre's registers rolls back every other court centre's release with it, so one
+     * hearing the estate re-shared at the wrong moment costs the whole country its documents that
+     * night. FR-003a says no single batch's outcome may end the run, and a shared transaction is a
+     * way of ending it that no amount of care in the caller can undo. Each batch is therefore its
+     * own statement, its own transaction and its own bounded retry, and the failure and the release
+     * of that batch stay one act - which is what the requirement was ever about.
+     *
+     * <p>The release is statement 9's own branch, narrowed to this batch: the same successor
+     * search, the same total order {@code (register_time, created_at, output_id)}, and the same
+     * reason for all three of it. A register the estate replaced while the batch was in flight is
+     * superseded as its stamp is cleared rather than handed back - the key would otherwise hold two
+     * active rows and {@code idx_output_active_register_key} would refuse the write, taking the
+     * failure mark down with it and leaving the batch calling itself in flight under a run that had
+     * already given up on it.
      *
      * <p><strong>The successor search sees one snapshot, and a re-share can commit after it.</strong>
      * Every clause here reads the table as it stood when the statement began, so a register
@@ -891,8 +924,8 @@ public class JdbcRegisterStore implements RegisterStore {
      * then clears the stale register's stamp beside the replacement it could not see, which is the
      * second active row the index refuses. There is no predicate that can fence it, because the
      * write it collides with is not in the snapshot the predicate is evaluated against. It is
-     * settled outside the statement instead: {@link #failAndReleaseStale} makes the statement again
-     * on a fresh snapshot, which has the re-share in it and supersedes against it.
+     * settled outside the statement instead: {@link #failAndReleaseStale} makes this batch's
+     * statement again on a fresh snapshot, which has the re-share in it and supersedes against it.
      *
      * <p>The count answered is the registers that are <em>still this day's to render</em>, which is
      * what the same run re-assembles. A superseded one is not counted: the run report states it
@@ -906,7 +939,8 @@ public class JdbcRegisterStore implements RegisterStore {
                        failure_reason = :reason,
                        completed_by = NULL,
                        failed_at = now()
-                 WHERE status IN ('PENDING', 'GENERATING')
+                 WHERE batch_id = :batchId
+                   AND status IN ('PENDING', 'GENERATING')
                    AND COALESCE(requested_at, assembled_at)
                          <= CASE WHEN system_generated THEN :scheduledCutoff
                                  ELSE :manualCutoff END
@@ -1737,75 +1771,126 @@ public class JdbcRegisterStore implements RegisterStore {
      * refused over. <strong>No batch that stopped being stale can therefore end a run</strong>,
      * which is the point - the caller goes on to assemble whatever the release gave back.
      *
+     * <p><strong>The stale batches are read first, and each is then its own write.</strong> The
+     * read carries the same predicate and decides nothing: every batch it names is judged again by
+     * the statement that writes its row, so a batch that stopped being stale in between matches
+     * nothing and is left alone. What the read buys is the unit of atomicity. One statement over
+     * every stale batch would make one court centre's refusal every court centre's rollback, which
+     * is the run-ending outcome FR-003a forbids, reached through the transaction rather than
+     * through an exception.
+     *
      * <p><strong>The one thing the predicate cannot fence, and what is done about it.</strong> A
      * statement reads one snapshot, so a hearing re-shared after this one began is a successor the
      * {@code stamped} search cannot see, however plainly it is one by the time the write lands. The
      * release would then clear the stale register's stamp <em>beside</em> its replacement rather
      * than superseding against it, and {@value #ACTIVE_ROW_KEY} refuses the second active row for
-     * the key - taking the whole statement, and every other court centre's release with it. That is
-     * a lost race and not a rule this operation can never meet, so it is retried the way
-     * {@link #recordAndComplete} retries the same index: the statement is made again, on a fresh
-     * snapshot that has the re-share in it, up to {@value #RECORD_ATTEMPTS} times. The rolled-back
-     * attempt changed nothing, so each retry starts from the store as it stands.
+     * the key. That is a lost race and not a rule this operation can never meet, so it is retried
+     * the way {@link #recordAndComplete} retries the same index: this batch's statement is made
+     * again, on a fresh snapshot that has the re-share in it, up to {@value #RECORD_ATTEMPTS}
+     * times. The rolled-back attempt changed nothing, so each retry starts from the store as it
+     * stands.
+     *
+     * <p><strong>Exhaustion is reported, never thrown.</strong> A batch whose every attempt met the
+     * same refusal is left exactly as it was found and named in
+     * {@link StaleReleaseOutcome#contended()}, and the operation goes on to the batches after it
+     * and answers normally. The alternative was an exception, and an exception here is the run-
+     * ending outcome again: the pass runs inline in the night's generation, so one hearing shared
+     * at the wrong moment would cost every court centre its document. A contended batch is stale
+     * still and untouched, so the next run reaches it again, and the 07:00 report names its court
+     * centre day as a late batch every morning meanwhile.
      *
      * <p><strong>Each attempt must be its own transaction, and this method is written to be called
      * outside one.</strong> The statement is issued straight at the client, so an attempt commits
      * or rolls back by itself. Wrapped in a caller's transaction the first refusal would abort that
-     * transaction, every retry would be made inside an aborted one and all three would fail - so
-     * this call is not to be put behind an outer {@code @Transactional} or a
+     * transaction, every retry would be made inside an aborted one and all three would fail - and
+     * the other batches would go down with them, which is the very thing the per-batch shape is
+     * for. So this call is not to be put behind an outer {@code @Transactional} or a
      * {@code TransactionTemplate}.
      *
      * <p>A refusal on any other key is the store saying this write may never be made, which no
      * retry changes; it is rethrown as itself.
-     *
-     * @throws StoreContendedException if {@value #RECORD_ATTEMPTS} attempts each met a register
-     *                                 re-shared inside the statement's own window
      */
     @Override
     public StaleReleaseOutcome failAndReleaseStale(final Instant scheduledCutoff,
             final Instant manualCutoff) {
         return StoreOutage.translating("fail and release the stale batches",
-                () -> new StaleReleaseOutcome(attemptedRelease(scheduledCutoff, manualCutoff),
-                        List.of()));
+                () -> eachStaleBatch(scheduledCutoff, manualCutoff));
     }
 
     /**
-     * The release itself, made again on a fresh snapshot for as long as a re-share keeps beating it.
+     * Every stale batch in turn, each accounted for as released or as contended.
      *
      * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
      * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
-     * @return one record per batch the winning attempt changed
+     * @return what was released, and what every attempt was refused over
      */
-    private List<ReleasedBatch> attemptedRelease(final Instant scheduledCutoff,
+    private StaleReleaseOutcome eachStaleBatch(final Instant scheduledCutoff,
+            final Instant manualCutoff) {
+        final List<ReleasedBatch> released = new ArrayList<>();
+        final List<UUID> contended = new ArrayList<>();
+        for (final UUID batchId : staleBatches(scheduledCutoff, manualCutoff)) {
+            final StaleReleaseOutcome one =
+                    attemptedRelease(batchId, scheduledCutoff, manualCutoff);
+            released.addAll(one.released());
+            contended.addAll(one.contended());
+        }
+        return new StaleReleaseOutcome(List.copyOf(released), List.copyOf(contended));
+    }
+
+    /**
+     * The batches the staleness rule names, read once so each can be written separately.
+     *
+     * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
+     * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
+     * @return their identities, oldest day first
+     */
+    private List<UUID> staleBatches(final Instant scheduledCutoff, final Instant manualCutoff) {
+        return jdbcClient.sql(STALE_BATCHES)
+                .param("scheduledCutoff", offsetOf(scheduledCutoff))
+                .param("manualCutoff", offsetOf(manualCutoff))
+                .query(UUID.class)
+                .list();
+    }
+
+    /**
+     * One batch's release, made again on a fresh snapshot for as long as a re-share keeps beating
+     * it, and reported rather than thrown where none of the attempts got through.
+     *
+     * @param batchId         the batch this release is about, and the only row it may touch
+     * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
+     * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
+     * @return this one batch's account: released by the winning attempt, or contended
+     */
+    private StaleReleaseOutcome attemptedRelease(final UUID batchId, final Instant scheduledCutoff,
             final Instant manualCutoff) {
         List<ReleasedBatch> released = null;
         for (int attempt = 0; released == null && attempt < RECORD_ATTEMPTS; attempt++) {
             try {
-                released = release(scheduledCutoff, manualCutoff);
+                released = release(batchId, scheduledCutoff, manualCutoff);
             } catch (DuplicateKeyException collision) {
                 if (!violates(collision, ACTIVE_ROW_KEY)) {
                     throw collision;
                 }
             }
         }
-        if (released == null) {
-            throw new StoreContendedException("a register was re-shared inside the statement's own "
-                    + "window on each of " + RECORD_ATTEMPTS + " attempts at failing and releasing "
-                    + "the stale batches, so none of them was released");
-        }
-        return released;
+        return released == null
+                ? new StaleReleaseOutcome(List.of(), List.of(batchId))
+                : new StaleReleaseOutcome(released, List.of());
     }
 
     /**
-     * One attempt at the release, which is one statement and therefore one transaction.
+     * One attempt at one batch's release, which is one statement and therefore one transaction.
      *
+     * @param batchId         the batch this attempt is about
      * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
      * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
-     * @return one record per batch this attempt changed
+     * @return the one record where this attempt changed the batch, and nothing where the batch had
+     *         stopped being stale
      */
-    private List<ReleasedBatch> release(final Instant scheduledCutoff,
+    private List<ReleasedBatch> release(final UUID batchId, final Instant scheduledCutoff,
             final Instant manualCutoff) {
         return jdbcClient.sql(FAIL_AND_RELEASE_STALE)
+                .param(BATCH_ID, batchId)
                 .param("reason", BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN.name())
                 .param("scheduledCutoff", offsetOf(scheduledCutoff))
                 .param("manualCutoff", offsetOf(manualCutoff))

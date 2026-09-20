@@ -16,7 +16,6 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
-import uk.gov.hmcts.cp.courtregister.domain.StoreContendedException;
 
 /**
  * Where an assembled register is kept, and how a batch's progress is written against it.
@@ -407,10 +406,10 @@ public interface RegisterStore {
      * so that the same run's assembly puts them in a batch tonight and the court centre gets its
      * document tonight rather than never.
      *
-     * <p><strong>One atomic operation, fenced on the staleness rule itself - and that is why this
-     * is a method here rather than a loop in the caller.</strong> A read, then a mark, then a
-     * release is not an acceptable shape for it, and the two reasons are the two failures this
-     * increment exists to end:
+     * <p><strong>Atomic per batch, fenced on the staleness rule itself - and that is why this is a
+     * method here rather than a loop in the caller.</strong> A read, then a mark, then a release is
+     * not an acceptable shape for it, and the two reasons are the two failures this increment
+     * exists to end:
      *
      * <ul>
      *   <li><strong>A stranded register.</strong> {@link #markFailed} and {@link #releaseFailed}
@@ -427,24 +426,32 @@ public interface RegisterStore {
      * </ul>
      *
      * <p>So <strong>zero rows is an answer, not an error</strong>: a batch that ceased to be stale
-     * between this call and the row being written is one the operation did not change, and the
-     * caller reports it as such. A store that cannot be reached at all still fails the way every
-     * other unreachable store does.
+     * between this call and the row being written is one the operation did not change, and it is
+     * named in neither list. A store that cannot be reached at all still fails the way every other
+     * unreachable store does.
      *
-     * <p><strong>What can still escape, and who decides about it.</strong> One thing a staleness
-     * predicate cannot fence is a register re-shared while the operation is running: the
+     * <p><strong>Per batch, and that is a promise rather than an implementation detail.</strong>
+     * FR-003a says no single batch's outcome may end the run, and one transaction over every stale
+     * batch is a way of ending it that no care in the caller can undo: a refusal met on one court
+     * centre's registers would roll back every other court centre's release with it. Each batch is
+     * therefore failed and released by a statement of its own, in a transaction of its own - the
+     * failure and the release of <em>that</em> batch still one act, which is what the requirement
+     * was ever about.
+     *
+     * <p><strong>What a re-share can do, and what the caller is told about it.</strong> One thing a
+     * staleness predicate cannot fence is a register re-shared while the operation is running: the
      * replacement is not in the snapshot the operation reads, so the release would give the
      * replaced register back beside its replacement and the store would refuse the second active
-     * row for the key. That is a lost race rather than a rule, so the adapter makes the operation
-     * again on a fresh snapshot that has the re-share in it, and only where a re-share beat every
-     * one of those attempts does anything reach the caller - as
-     * {@link StoreContendedException}, which is the store answering and not the store going away.
-     * <strong>The caller decides what that means for the night.</strong> FR-003a is written about
-     * this operation - no single batch's outcome may end the run - so the pass is expected to
-     * report it as a pass that released nothing and let the run go on to assemble; rethrowing it
-     * would end the run for every court centre over one hearing that was re-shared three times in
-     * a few milliseconds. That decision and its pinning test belong to the pass, not to this port,
-     * which owes the caller only the type and the promise that nothing was released under it.
+     * row for the key. That is a lost race rather than a rule, so the adapter makes that batch's
+     * statement again on a fresh snapshot that has the re-share in it. A batch whose every attempt
+     * met the same refusal is <strong>reported, not thrown</strong>: it is named in
+     * {@link StaleReleaseOutcome#contended()}, left exactly as it was found, and the operation goes
+     * on to the batches after it and answers normally. Nothing about one batch reaches the caller
+     * as an exception, because the pass runs inline in the night's generation and an exception
+     * there costs every court centre its document over one hearing that was re-shared three times
+     * in a few milliseconds. A contended batch is stale still and untouched, so the next run
+     * reaches it again; meanwhile the 07:00 report names its court centre day as a late batch every
+     * morning, which is the surface support already watches.
      *
      * <p>A batch holding a document is never matched, at any age - somebody is owed e-mails about
      * it. A batch an operator asked for is given the longer cutoff, because a manual generation
@@ -455,11 +462,9 @@ public interface RegisterStore {
      *
      * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
      * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
-     * @return one record per batch this operation changed, oldest day first, each with the count of
-     *         registers still that day's to render, and beside them the batches it could not
-     *         release; empty where nothing was stale
-     * @throws StoreContendedException if a register was re-shared inside the operation's own window
-     *                                 on every attempt it makes, so nothing was released
+     * @return the batches this operation changed, oldest day first, each with the count of
+     *         registers still that day's to render, and beside them the batches it left exactly as
+     *         it found them because every attempt at them lost the same race for the day's key
      */
     StaleReleaseOutcome failAndReleaseStale(Instant scheduledCutoff, Instant manualCutoff);
 
