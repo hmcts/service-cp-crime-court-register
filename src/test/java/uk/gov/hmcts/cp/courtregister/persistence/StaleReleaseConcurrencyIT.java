@@ -214,6 +214,7 @@ class StaleReleaseConcurrencyIT {
             settleTheNight(courtCentre);
             endings.add(ending);
             assertInvariants(courtCentre, order, cutoff, escaped);
+            theRefusalExists(order, escaped);
         }
 
         softly.assertThat(endings.get(0))
@@ -246,6 +247,7 @@ class StaleReleaseConcurrencyIT {
             settleTheNight(courtCentre);
             endings.add(ending);
             assertInvariants(courtCentre, order, cutoff, escaped);
+            theRefusalExists(order, escaped);
         }
 
         softly.assertThat(endings.get(0))
@@ -351,58 +353,62 @@ class StaleReleaseConcurrencyIT {
         final UUID contendedCentre = UUID.randomUUID();
         final UUID otherCentre = UUID.randomUUID();
         final UUID heldKey = UUID.randomUUID();
-        final RegisterBatch contended =
-                staleBatch(contendedCentre, heldKey, UUID.randomUUID(), true);
-        final RegisterBatch other = staleBatch(otherCentre, true);
-        record(contendedCentre, heldKey, MONDAY_SHARED.minus(EARLIER_SHARE));
-        final Instant cutoff = cutoff();
-        final AtomicReference<StaleReleaseOutcome> answered = new AtomicReference<>();
+        try {
+            final RegisterBatch contended =
+                    staleBatch(contendedCentre, heldKey, UUID.randomUUID(), true);
+            final RegisterBatch other = staleBatch(otherCentre, true);
+            record(contendedCentre, heldKey, MONDAY_SHARED.minus(EARLIER_SHARE));
+            final Instant cutoff = cutoff();
+            final AtomicReference<StaleReleaseOutcome> answered = new AtomicReference<>();
 
-        final List<Throwable> escaped =
-                escaping(() -> answered.set(store.failAndReleaseStale(cutoff, cutoff)));
+            final List<Throwable> escaped =
+                    escaping(() -> answered.set(store.failAndReleaseStale(cutoff, cutoff)));
 
-        softly.assertThat(escaped)
-                .as("nothing escapes the pass, whatever became of any one batch (FR-003a). An "
-                        + "exhaustion raised out of the store would end the night's generation "
-                        + "before a single court centre had been assembled")
-                .isEmpty();
-        softly.assertThat(contendedOf(answered.get()))
-                .as("the batch every attempt lost the key race for is reported instead, so the "
-                        + "pass counts it and says so rather than the run failing over it")
-                .contains(contended.batchId())
-                .doesNotContain(other.batchId());
-        softly.assertThat(releasedOf(answered.get()))
-                .as("and it is reported in the other list from the batches that were released, "
-                        + "because a batch the pass could not release is not a batch it released")
-                .doesNotContain(contended.batchId())
-                .contains(other.batchId());
-        softly.assertThat(endingOf(contended.batchId()))
-                .as("the contended batch is left exactly as it was found - still awaiting its "
-                        + "render, still stale, and reachable by the run that follows. A batch "
-                        + "failed without its registers coming back is the stranded register this "
-                        + "increment exists to end")
-                .isEqualTo(new Ending("GENERATING", null));
-        softly.assertThat(stampedTo(contended.batchId()))
-                .as("so both of its registers are still its own, rather than one of them given "
-                        + "back and the other kept")
-                .isEqualTo(2L);
-        softly.assertThat(endingOf(other.batchId()))
-                .as("while the other court centre's day is failed anyway, under the one bounded "
-                        + "reason that means the passage of time")
-                .isEqualTo(new Ending("FAILED", NOT_COMPLETED));
-        softly.assertThat(stampedTo(other.batchId()))
-                .as("and its registers are back, which is what puts them in tonight's batch")
-                .isZero();
-        softly.assertThat(strandedRegisters(contendedCentre))
-                .as("no register of the contended day is left awaiting a document while stamped "
-                        + "to a batch nothing will finish, because nothing about that batch moved")
-                .isZero();
-        softly.assertThat(strandedRegisters(otherCentre))
-                .as("nor any of the released day's, because its failure and its release were one "
-                        + "act")
-                .isZero();
-
-        letTheKeyGo(contendedCentre, heldKey);
+            softly.assertThat(escaped)
+                    .as("nothing escapes the pass, whatever became of any one batch (FR-003a). An "
+                            + "exhaustion raised out of the store would end the night's generation "
+                            + "before a single court centre had been assembled")
+                    .isEmpty();
+            softly.assertThat(contendedOf(answered.get()))
+                    .as("the batch every attempt lost the key race for is reported instead, so the "
+                            + "pass counts it and says so rather than the run failing over it")
+                    .contains(contended.batchId())
+                    .doesNotContain(other.batchId());
+            softly.assertThat(releasedOf(answered.get()))
+                    .as("and it is reported in the other list from the batches that were "
+                            + "released, because a batch the pass could not release is not a "
+                            + "batch it released")
+                    .doesNotContain(contended.batchId())
+                    .contains(other.batchId());
+            softly.assertThat(endingOf(contended.batchId()))
+                    .as("the contended batch is left exactly as it was found - still awaiting "
+                            + "its render, still stale, and reachable by the run that follows. A "
+                            + "batch failed without its registers coming back is the stranded "
+                            + "register this increment exists to end")
+                    .isEqualTo(new Ending("GENERATING", null));
+            softly.assertThat(stampedTo(contended.batchId()))
+                    .as("so both of its registers are still its own, rather than one of them given "
+                            + "back and the other kept")
+                    .isEqualTo(2L);
+            softly.assertThat(endingOf(other.batchId()))
+                    .as("while the other court centre's day is failed anyway, under the one "
+                            + "bounded reason that means the passage of time")
+                    .isEqualTo(new Ending("FAILED", NOT_COMPLETED));
+            softly.assertThat(stampedTo(other.batchId()))
+                    .as("and its registers are back, which is what puts them in tonight's batch")
+                    .isZero();
+            softly.assertThat(strandedRegisters(contendedCentre))
+                    .as("no register of the contended day is left awaiting a document while "
+                            + "stamped to a batch nothing will finish, because nothing about that "
+                            + "batch moved")
+                    .isZero();
+            softly.assertThat(strandedRegisters(otherCentre))
+                    .as("nor any of the released day's, because its failure and its release "
+                            + "were one act")
+                    .isZero();
+        } finally {
+            letTheKeyGo(contendedCentre, heldKey);
+        }
     }
 
     /**
@@ -414,6 +420,13 @@ class StaleReleaseConcurrencyIT {
      * later share would have superseded it, and the batch is then released like any other; what the
      * round proved is already asserted above, and this only stops it being asserted again, by
      * accident, in somebody else's suite.
+     *
+     * <p><strong>Called from a {@code finally}</strong>, because the blast radius is the whole
+     * container and not this round. Soft assertions mean a failed assertion still reaches the end
+     * of the round, but a read that throws - a database that went away mid-round, a fixture that
+     * did not find what it looked for - would not, and the key would be left held for every suite
+     * after it. The cost of giving it up twice is nothing; the cost of not giving it up once is
+     * every other suite's stale release.
      *
      * @param courtCentre this round's court centre
      * @param hearingId   the hearing whose out-of-order share held the key
@@ -500,6 +513,36 @@ class StaleReleaseConcurrencyIT {
                 .param("batchId", batchId)
                 .query(Long.class)
                 .single();
+    }
+
+    /**
+     * The staged round whose loser is known, and whose refusal must therefore be there at all.
+     *
+     * <p>{@link #assertInvariants} says that whatever the losing contender threw was the state
+     * machine's own refusal, and it says it with {@code allSatisfy} - which is true of an empty
+     * list. For the {@code TOGETHER} rounds that is all that can honestly be asked: either
+     * contender may win, the winner throws nothing, and teaching the fixture which one won is
+     * exactly the decision {@code Order} declines to make for a race. For
+     * {@link Order#RELEASE_FIRST} the winner is known by construction - the batch is FAILED before
+     * the state-machine move is made - so the refusal is not merely well-formed if it happens, it
+     * must exist. Without this, a {@code markRequested} or a {@code markGenerated} that quietly
+     * moved nothing against a FAILED batch would leave the round green and the self-healing half
+     * of it pinned by nothing: the listener rethrows, the broker redelivers, and the sink then
+     * reads a batch it may no longer move.
+     *
+     * @param order   the order this round's contenders were let go in
+     * @param escaped whatever the two contenders threw
+     */
+    private void theRefusalExists(final Order order, final Escapes escaped) {
+        if (order != Order.RELEASE_FIRST) {
+            return;
+        }
+        softly.assertThat(escaped.outcome())
+                .as("%s: and the refusal is there to be well-formed. The pass went first, so the "
+                        + "batch was FAILED before the move was made and the state machine had to "
+                        + "refuse it; a move that silently did nothing would leave the broker "
+                        + "nothing to redeliver and the outcome unaccounted for", order)
+                .hasSize(1);
     }
 
     /**
