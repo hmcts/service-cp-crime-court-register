@@ -426,7 +426,7 @@ wants to claim beyond this.
       imports, the global, `$o: Outcome()` / `$a: Action(name == "courtregister-operations.<verb>")`
       / `eval(userAndGroupProvider.isMemberOfAnyOfTheSuppliedGroups($a, "Second Line Support"))` /
       `$o.setSuccess(true)`. No deny rule anywhere — absence is the denial. Green: T008.
-- [ ] **T010** [P] [US2] `api/OperationsActionFilterTest` (new) — **the action name is derived by
+- [x] **T010** [P] [US2] `api/OperationsActionFilterTest` (new) — **the action name is derived by
       this service and overrides the caller**. `MockHttpServletRequest` plus an
       `ArgumentCaptor<HttpServletRequest>` on the chain, asserting `getHeader("CPP-ACTION")` on the
       wrapped request. Cases: all seven path+method combinations map to their action name
@@ -435,10 +435,33 @@ wants to claim beyond this.
       through with the header untouched; `POST` and `GET` on the same path map to different actions
       where they differ. Seams: `api/OperationsActionFilter` and `api/ActionRequestWrapper`
       skeletons. Red: the derived header is `null`.
-- [ ] **T011** [US2] `api/OperationsActionFilter` and `api/ActionRequestWrapper` — a path+method to
+      (Landed with T011 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. 17 tests, 0 failures. Every case asserts the header the **chain** was handed, captured
+      off the wrapped request with an `ArgumentCaptor<HttpServletRequest>`, because what the filter
+      returns is nothing and what matters is what the next filter reads. Seven path+method cases off
+      one `@CsvSource`; a forged `CPP-ACTION` overridden; the lookup case-insensitive through
+      `getHeader` **and** `getHeaders`; the name present in `getHeaderNames`; and five cases that
+      nothing is added where nothing is served - `/actuator/health` untouched with and without a
+      caller's header, `GET` on the generate path, `GET` on the notify path, and a path below a
+      served one.
+      Deviation, additive: the task's "`POST` and `GET` on the same path map to different actions
+      where they differ" names a pair these seven endpoints do not have - no path of this surface
+      answers two methods. The two cases above assert the same property from the other side, that
+      the lookup is keyed by method as well as path, which is what would have been proven.)
+- [x] **T011** [US2] `api/OperationsActionFilter` and `api/ActionRequestWrapper` — a path+method to
       action map for the seven endpoints, at `Ordered.HIGHEST_PRECEDENCE` (research R11: ours,
       then authz at `+30`, then audit at `+50`), wrapping the request so the server's value wins.
       Registered in `config/OperationsWebConfig`. Green: T010.
+      (green: `OperationsActionFilterTest` 17 tests, 0 failures; `TestProfileContextTest`,
+      `AuditComponentScanTest` and `LogStatementSweepTest` beside it, all green, so the new
+      `@Configuration` disturbs neither context. Checkstyle and PMD clean on main and test.
+      The wrapper overrides `getHeader`, `getHeaders` **and** `getHeaderNames` together: a value
+      visible through one accessor and not another is the same hole in a quieter spelling. The
+      registration is a `FilterRegistrationBean` rather than a `@Component`, because the order is
+      the whole reason the class exists and a registration is where an order is stated; it is
+      gated on `courtregister.operations.enabled`, default on, and mapped over every path rather
+      than over `/operations/*` so that the list of this service's paths lives in exactly one
+      place.)
 - [ ] **T012** [P] [US2] `api/OperationsErrorAttributesTest` (new) — **the `/error` body carries
       nothing the caller typed**. The authorisation filter refuses through `sendError`, which
       forwards to `/error` and never reaches a `@RestControllerAdvice` (research R5), and Spring's
