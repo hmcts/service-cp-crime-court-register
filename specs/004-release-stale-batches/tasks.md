@@ -645,6 +645,81 @@ and answered identically — BUILD SUCCESSFUL, exit 0, 10m 19s, the same 3650 ov
 two counters — and it is that second run's XMLs and report that are left in `build/` for the next
 gate to read.
 
+**Review gate 3 ran against the same phase again**, and every reviewer's remaining finding turned
+on one question gate 2 had left open: what the operation does with a batch it cannot release. The
+design owner settled it on 2026-09-20, and the settlement changed the operation's shape rather than
+only its `@throws` line.
+
+* **The unit of atomicity was the whole pass, and it should be one batch** — the finding gate 2's
+  fix had made visible without closing. `9811570` retried the statement on the active-row key, but
+  the statement was still one `UPDATE` over *every* stale batch: a refusal met on one court centre's
+  registers rolled back every other court centre's release with it, and an exhausted retry then left
+  the run with an exception. Two different ways for one hearing shared at the wrong moment to cost
+  the whole country its documents, and FR-003a forbids both.
+  The staleness predicate is now read once, into a list that **decides nothing** — every batch it
+  names is judged again by the statement that writes its row, so a batch that stopped being stale in
+  between matches nothing exactly as before — and each batch is then failed and released by a
+  statement of its own, narrowed by batch id, in its own transaction, with its own bounded retry.
+  The fence is unchanged and deliberately so: the rule stays in the `UPDATE`'s own `WHERE`, which is
+  where READ COMMITTED re-evaluates it against the row as it stands.
+* **Exhaustion is reported, never thrown.** A batch whose every attempt met the same refusal is left
+  exactly as it was found and named on `StaleReleaseOutcome.contended()`; the operation goes on to
+  the batches after it and answers normally. `StoreContendedException`, which gate 2 had introduced
+  for the opposite decision, has no writer and no reader and is deleted. The port's javadoc and
+  FR-003a say what happens instead, and T011/T012 carry the pass's half of it: the contended batches
+  are counted, said at WARN, and the run goes on to assemble.
+  The gate-2 reasoning that produced the exception is not wrong and is worth keeping in view — a
+  `batch/` class may name no `org.springframework.dao` type, so the persistence layer does have to
+  translate. What changed is that there is now nothing to translate: the operation no longer has a
+  failure to hand up, because no one batch's ending is the operation's ending.
+* **The pinning test, and one deviation from the decision's letter.** The decision named a
+  `StaleReleaseConcurrencyIT` round committing a fresh re-share inside every one of the
+  `RECORD_ATTEMPTS` windows, staged with the `INSIDE_THE_WINDOW` fixture. That was **built and
+  abandoned**, and the reason is recorded here because it is a fact about the fixture rather than a
+  preference. Chaining the windows means the holder of window *k+1* must own the batch row before
+  the attempt that follows window *k* asks for it, and the gap between a refused attempt's rollback
+  and the next holder's grant cannot be closed from the test: the attempt is a client round trip and
+  the grant is a server wakeup, and the run recorded window 3's attempt slipping past its holder
+  while windows 1 and 2 held. A round that passes on the scheduler's goodwill is not a pin.
+  `a_batch_no_attempt_can_release_is_reported_while_the_others_are_released` stages the same refusal
+  **as data**: a share of the batch's own hearing stamped *earlier* than the register the release
+  would have to give back. The recorder writes it active — a batched register is not its to
+  supersede — and the release's successor search is the mirror of the same ordering, so it is never
+  a successor. Every attempt meets the second active row for the key, and no fresh snapshot helps.
+  That is a share delivered out of order, which a broker that redelivers produces. A second court
+  centre's stale batch stands beside it and is failed and released anyway, which is the isolation
+  itself; the contended one is named, untouched, and nothing escapes.
+  `a_batch_contended_once_is_released_by_the_attempt_that_follows` keeps the windowed fixture for
+  the case it is reliable for — one refusal, then the attempt that reads a snapshot the re-share is
+  in — and asserts it on the answer rather than on the rows.
+  **The red run is the isolation's own evidence.** Against the seam, the out-of-order key did not
+  only fail its own round: the store-wide statement carried the refusal into every other suite
+  sharing the container, and `RegisterStoreIT$StaleRelease` and all three existing concurrency
+  rounds went red with "a register was re-shared inside the statement's own window on each of 3
+  attempts … so none of them was released". That is the blast radius the finding is about, observed
+  rather than argued. Green after the fix: `RegisterStoreIT` 83 of 83, `StaleReleaseConcurrencyIT`
+  5 of 5.
+  The round gives the held key up when it is done, because the operation answers for the whole
+  store: a key left held would have every other suite spend its three attempts on this round's batch
+  at every call.
+* The LOW findings gate 3 listed were **already closed at gate 2** and were re-checked rather than
+  re-done: `DuplicateKeyException` named with its index at `RegisterStoreIT:3378`, the `<=` boundary
+  at `a_batch_stamped_exactly_at_its_cutoff_is_stale`, the aged FAILED and NOTIFIED batches at
+  `no_batch_a_run_has_finished_with_is_ever_matched_at_any_age`, `plan.md`'s "at most one live batch
+  per key", the T008→T010→T009 hard ordering, and Phase 1's close stating the gate that ran rather
+  than ratios it never measured.
+
+**Green after gate 3's remediation**: `flock -w 7200 … ./gradlew jacocoTestReport build
+-Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 10m 18s, **3652 tests over 579 suites, 0 failures,
+0 errors** — two more than gate 2's close, being the two new rounds — with `checkstyleMain` and
+`checkstyleTest` at `maxWarnings = 0`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification` all
+green and none of them loosened. The coverage report was regenerated in that same run and reads
+**LINE 6589/6796 = 0.9695 and BRANCH 1998/2220 = 0.9000** against the unchanged gate of LINE 0.88 /
+BRANCH 0.85; it contains `failAndReleaseStale`, which is how a reader can tell it is this tree's
+report. That run was made on the tree this gate's commits produce, before this record was written
+into it; the same command was then made again against the tree **as committed** and it is that
+second run's XMLs and report that are left in `build/` for the next gate to read.
+
 ---
 
 ## Phase 3: User Stories 1 and 2 — the pass and its cutoffs (Priority: P1) 🎯 MVP
@@ -662,6 +737,9 @@ durations and a clock. No Spring context, no Docker.
       `the_two_numbers_are_batches_and_registers`;
       `one_line_per_released_batch_names_it_by_id_and_nothing_else`;
       `a_pass_that_released_nothing_says_so`;
+      `a_contended_batch_is_counted_and_the_pass_goes_on` (**review gate 3**: the store reports a
+      batch it could not release on `StaleReleaseOutcome.contended()` rather than throwing, so the
+      account the pass keeps has a third number and the pass returns normally with it);
       `the_pass_adopts_the_runs_correlation`. Seam: the class with `releaseStale()` throwing
       `UnsupportedOperationException`. Red: a failing assertion on the first case.
 - [ ] T013 [US2] `batch/StaleBatchReleaserTest` (extend) — the two cutoffs, which T012's minimal
@@ -677,8 +755,11 @@ durations and a clock. No Spring context, no Docker.
 
 - [ ] T012 [US1] `batch/StaleBatchReleaser.java` — make T011 green **and no more**: one call to
       `failAndReleaseStale`, the lines, the two counters, the two numbers back, all under
-      `RunCorrelation.under(...)`, which adopts the run's ambient id. The split from T013 is
-      deliberate: computing the cutoffs here would leave T013 with nothing to fail against.
+      `RunCorrelation.under(...)`, which adopts the run's ambient id. The contended batches the
+      answer names are counted and said at WARN — a path that drops something moves a counter — and
+      the pass returns; the run goes on to assemble what the rest of the pass gave back (FR-003a).
+      The split from T013 is deliberate: computing the cutoffs here would leave T013 with nothing to
+      fail against.
 - [ ] T014 [US2] `batch/StaleBatchReleaser.java` — make T013 green. Both cutoffs computed once per
       pass from the injected clock and the two settings. The javadoc states the rule the retired
       class stated differently: PENDING and GENERATING are **one** rule, because with no query there
