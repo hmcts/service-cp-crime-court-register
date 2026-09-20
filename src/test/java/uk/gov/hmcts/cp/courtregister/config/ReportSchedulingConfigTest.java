@@ -36,9 +36,9 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
-import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.IntakeAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
+import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 
@@ -227,7 +227,7 @@ class ReportSchedulingConfigTest {
                     .isNotEmpty();
             assertThat(scheduler(context, IntakeSweepConfig.INTAKE_SWEEP_SCHEDULER))
                     .as("its own scheduler, so the fixed-delay refresh cannot land on the thread "
-                            + "the 18:00 run, the reconciler or the 07:00 report is using (SC-008)")
+                            + "the 18:00 run or the 07:00 report is using (SC-008)")
                     .isNotNull()
                     .satisfies(sweeps -> {
                         assertThat(sweeps.getThreadNamePrefix()).isEqualTo(SWEEP_THREAD_PREFIX);
@@ -349,7 +349,7 @@ class ReportSchedulingConfigTest {
         podWith(false, true).run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context.getBeanNamesForType(RegisterGenerationJob.class)).isNotEmpty();
-            assertThat(context.getBeanNamesForType(GenerationReconciler.class)).isNotEmpty();
+            assertThat(context.getBeanNamesForType(StaleBatchReleaser.class)).isNotEmpty();
             assertThat(context.getBeanNamesForType(BatchAssembler.class)).isNotEmpty();
             assertThat(context.getBeanNamesForType(FeatureFlagGate.class)).isNotEmpty();
             assertThat(context.getBeanNamesForType(RegisterGenerationService.class)).isNotEmpty();
@@ -365,7 +365,7 @@ class ReportSchedulingConfigTest {
             assertThat(context.getBeanNamesForType(RegisterGenerationJob.class))
                     .as("and a report pod generates nothing, which is the whole of FR-004")
                     .isEmpty();
-            assertThat(context.getBeanNamesForType(GenerationReconciler.class)).isEmpty();
+            assertThat(context.getBeanNamesForType(StaleBatchReleaser.class)).isEmpty();
         });
     }
 

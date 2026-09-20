@@ -1803,9 +1803,41 @@ values on every pass.
 
 ### Implementation
 
-- [ ] T022 [US4] Delete `batch/GenerationReconciler.java` and `batch/GenerationReconcilerTest.java`;
+- [X] T022 [US4] Delete `batch/GenerationReconciler.java` and `batch/GenerationReconcilerTest.java`;
       delete the leftover bean in `config/GenerationConfig`; delete the `register-reconciliation`
       lock name. Make T021 green.
+
+      **Four test files came with it, because a deletion that leaves the suite uncompilable is not
+      a deletion.** Each named the class by type and each is on T028's list; what travelled here is
+      only what the compiler forced, and T028 keeps the rest (the query wiring, the `GRACE_PERIOD`
+      constants and the recorded suite result).
+      * `support/GenerationLegs` — the reconciler leaves `THE_LEGS`, its field, its construction,
+        the `GRACE_PERIOD` constant, `theReconciler()` and the six arrangements under it, and
+        `reconcilingOne()`. `generatedDocument()` went with them: it was the query answer only that
+        drive read, and PMD's `UnusedPrivateMethod` refused the build over it. The privacy sweep's
+        floor is fifty statements and is nowhere near threatened - what left the scan is the
+        deleted class's own lines, which is what a sweep over the sources is for.
+      * `e2e/GenerationFailureEndToEndIT` — the `an_outcome_that_never_arrived_should_be_fetched_
+        and_the_batch_notified` case, and the class is three cases rather than four. The outcome
+        that never arrived is not a case this suite can hold any more: there is nothing to fetch,
+        and what happens to such a batch is the next run's first act, which is T037's to assert
+        here and `StaleBatchReleaserTest`'s to prove.
+      * `batch/ExceptionReportJobTest` — `the_lock_name_is_neither_generations_nor_the_reconcilers`
+        becomes `the_lock_name_is_not_generations`, there being one other lock to differ from.
+      * `config/ReportSchedulingConfigTest` — the two reconciler-bean assertions in
+        `the_generation_beans_are_unchanged` re-point at `StaleBatchReleaser`, which is the bean
+        that now stands where the reconciler stood: present on a generating pod, absent on a report
+        one.
+
+      **Green** (`flock -w 7200 … ./gradlew test --tests '*GenerationWiringContextTest*' --tests
+      '*CliModeConfigTest*' --tests '*ReportSchedulingConfigTest*' --tests '*ExceptionReportJobTest*'
+      --tests '*TelemetryPrivacyTest*' -Dtest.noFailFast=true`): BUILD SUCCESSFUL, **103 tests, 0
+      failures** — `no_context_holds_a_generation_reconciler` and
+      `the_generation_half_carries_exactly_one_scheduler_lock` both green, and the report's own
+      wiring and lock untouched. `pmdMain`, `pmdTest`, `checkstyleMain` and `checkstyleTest` all
+      green in the same round; the three Checkstyle warnings it opened with were T024's and T026's
+      import order and an empty lambda block, both fixed here rather than left for the phase gate.
+      `DocumentRendererTest` is still red at this commit, which is T025's red and not a regression.
 - [ ] T023 [US4] `batch/RunCorrelation.java`, `persistence/RegisterBatchRepository.java`,
       `application/{DocumentOutcomeSink,RegisterNotifierService,NotificationDisposition,NotificationSummary}.java`,
       `domain/{BatchStatus,RegisterBatch}.java`, `config/{SchedulingConfig,SchedulingInfrastructureConfig,

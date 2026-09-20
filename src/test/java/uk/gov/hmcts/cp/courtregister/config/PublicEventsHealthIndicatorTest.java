@@ -202,7 +202,7 @@ class PublicEventsHealthIndicatorTest {
         final SimpleJmsListenerEndpoint endpoint = new SimpleJmsListenerEndpoint();
         endpoint.setId(COMPONENT);
         endpoint.setDestination(TOPIC);
-        endpoint.setMessageListener(message -> { });
+        endpoint.setMessageListener(message -> {});
 
         assertThat(subscriptionFactoryFor(true).createListenerContainer(endpoint).isAutoStartup())
                 .as("the generation half is on, so the one route an outcome arrives by is up; "

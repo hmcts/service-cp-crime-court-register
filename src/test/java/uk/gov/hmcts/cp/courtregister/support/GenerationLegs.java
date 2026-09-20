@@ -55,7 +55,6 @@ import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
-import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.IntakeAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
@@ -119,7 +118,8 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * have and because none of the three writes a log line of its own. Everything above them is real:
  * the payload mapper that turns a batch into a render payload, the client that asks
  * systemdocgenerator, the client that asks notificationnotify, the topic listener, the outcome
- * sink, the reconciler and the nightly run. The two HTTP clients matter most - they are the classes
+ * sink, the stale-batch pass and the nightly run. The two HTTP clients matter most - they are the
+ * classes
  * with a recipient's address in their hands and a far end's status line in their exceptions - so
  * they run over a real socket against a real server, and every answer below is one
  * systemdocgenerator or notificationnotify really could give.
@@ -182,7 +182,6 @@ public final class GenerationLegs implements AutoCloseable {
                     IntakeAgeSweep.class,
                     RegisterGenerationService.class,
                     SystemDocGeneratorClient.class,
-                    GenerationReconciler.class,
                     DocumentEventListener.class,
                     DocumentOutcomeSinkImpl.class,
                     RegisterNotifierService.class,
@@ -291,9 +290,6 @@ public final class GenerationLegs implements AutoCloseable {
 
     private static final Duration BATCH_AGE_REFRESH = Duration.ofMinutes(10);
 
-    /** The interval the transitional reconciler still sweeps on. */
-    private static final Duration GRACE_PERIOD = Duration.ofMinutes(10);
-
     private static final ObjectMapper MAPPER = JacksonConfig.contractObjectMapper();
 
     /** Any generate-document command, which is one path and takes no parameter. */
@@ -335,8 +331,6 @@ public final class GenerationLegs implements AutoCloseable {
     private final RegisterGenerationService generation;
 
     private final RegisterNotifierService notifying;
-
-    private final GenerationReconciler reconciler;
 
     private final StaleBatchReleaser releaser;
 
@@ -384,8 +378,6 @@ public final class GenerationLegs implements AutoCloseable {
                 payloadFileStore, renderer, MAPPER, retryPolicy(), waited -> {}, metrics, clock);
         this.notifying = new RegisterNotifierService(store, batches, notifications, notifier,
                 metrics, TEMPLATE_ID, retryPolicy(), waited -> {}, clock);
-        this.reconciler = new GenerationReconciler(batches, renderer, sinkOf(), store, metrics,
-                GRACE_PERIOD, clock);
         this.sink = sinkOf();
         this.listener = new DocumentEventListener(sink, metrics, DeliveryObserver.NONE);
         this.releaser = new StaleBatchReleaser(store, metrics, settings().staleAfter(),
@@ -431,7 +423,6 @@ public final class GenerationLegs implements AutoCloseable {
         theRequestingLeg();
         theRenderersClient();
         theStaleBatchPass();
-        theReconciler();
         theTopicListener();
         theOutcomeSink();
         theNotifyingLeg();
@@ -622,67 +613,6 @@ public final class GenerationLegs implements AutoCloseable {
 
         queryFaulting();
         whateverItAnswers(this::askAboutTheDocument);
-    }
-
-    // --- the reconciler --------------------------------------------------------------------------
-
-    private void theReconciler() {
-        aBatchNobodyHasBeenToldAbout();
-        aRenderTheGeneratorHasFinished();
-        aRenderTheGeneratorRefused();
-        aRenderTheGeneratorHasNoVerdictFor();
-        aRendererThatWouldNotAnswerTheQuery();
-        anEndingWhoseRoundTripCouldNotBeRead();
-    }
-
-    /**
-     * The silence that was ended and could not be timed, which is the sink's line one door along.
-     *
-     * <p>This ending is written through the store rather than through the sink, so the reading is
-     * taken here and so is the line about a reading nobody could take. It is absorbed for a second
-     * reason as well as the sink's: this call is inside the loop over every overdue batch, so a
-     * refusal let out would leave the batches behind this one waiting another grace period.
-     */
-    private void anEndingWhoseRoundTripCouldNotBeRead() {
-        reconcilingOne();
-        when(batches.findById(BATCH_ID)).thenThrow(new StoreUnavailableException(
-                "the store could not be reached to read a settled batch back",
-                new IllegalStateException("the connection pool is empty")));
-        queryAnswering(HttpStatus.OK.value(), "{}");
-        whateverItAnswers(reconciler::reconcile);
-    }
-
-    private void aBatchNobodyHasBeenToldAbout() {
-        reset(batches);
-        when(batches.generatingSince(any(Instant.class))).thenReturn(List.of());
-        when(batches.pendingSince(any(Instant.class))).thenReturn(List.of());
-        when(batches.generatedSince(any(Instant.class)))
-                .thenReturn(List.of(batch(BatchStatus.GENERATED, null, null)));
-        whateverItAnswers(reconciler::reconcile);
-    }
-
-    private void aRenderTheGeneratorHasFinished() {
-        reconcilingOne();
-        queryAnswering(HttpStatus.OK.value(), generatedDocument());
-        whateverItAnswers(reconciler::reconcile);
-    }
-
-    private void aRenderTheGeneratorRefused() {
-        reconcilingOne();
-        queryAnswering(HttpStatus.OK.value(), refusedDocument());
-        whateverItAnswers(reconciler::reconcile);
-    }
-
-    private void aRenderTheGeneratorHasNoVerdictFor() {
-        reconcilingOne();
-        queryAnswering(HttpStatus.OK.value(), "{}");
-        whateverItAnswers(reconciler::reconcile);
-    }
-
-    private void aRendererThatWouldNotAnswerTheQuery() {
-        reconcilingOne();
-        queryFaulting();
-        whateverItAnswers(reconciler::reconcile);
     }
 
     // --- the topic listener ----------------------------------------------------------------------
@@ -985,16 +915,6 @@ public final class GenerationLegs implements AutoCloseable {
 
     private void payloadStoreRefusing() {
         doRefuseThePayload();
-    }
-
-    private void reconcilingOne() {
-        reset(batches, store);
-        when(batches.generatingSince(any(Instant.class)))
-                .thenReturn(List.of(batch(BatchStatus.GENERATING, PAYLOAD_FILE_ID, null)));
-        when(batches.pendingSince(any(Instant.class))).thenReturn(List.of());
-        when(batches.generatedSince(any(Instant.class))).thenReturn(List.of());
-        when(batches.findById(BATCH_ID))
-                .thenReturn(Optional.of(batch(BatchStatus.GENERATING, PAYLOAD_FILE_ID, null)));
     }
 
     private void notifyingOne(final NotificationClaim claim, final BatchStatus status) {
@@ -1527,15 +1447,6 @@ public final class GenerationLegs implements AutoCloseable {
         org.mockito.Mockito.doThrow(new StoreRefusedRowException(
                         "a notification row for this batch and address is already held"))
                 .when(notifications).insert(any(RegisterNotification.class));
-    }
-
-    /** The query answer that says the document exists. */
-    private static String generatedDocument() {
-        return """
-                {
-                  "documentFileServiceId": "%s",
-                  "generatedTime": "2026-03-02T18:05:11.412+00:00"
-                }""".formatted(DOCUMENT_FILE_ID);
     }
 
     /** The query answer that says the render was refused, in systemdocgenerator's own words. */

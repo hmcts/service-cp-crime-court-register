@@ -23,7 +23,6 @@ import uk.gov.hmcts.cp.courtregister.adapter.notificationnotify.NotificationNoti
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DocumentEventListener;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
-import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
@@ -38,23 +37,20 @@ import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 
 /**
- * The four ways a night does not go to plan, through the whole assembled service (T061).
+ * The three ways a night does not go to plan, through the whole assembled service (T061).
  *
  * <p>{@code GenerationEndToEndIT} is the night that worked: the render was accepted, the topic
  * delivered the document and every Youth Offending Team was told. This is its counterpart, and every
  * case here is a silence the progression leg leaves as one - a failed render that stayed
- * indistinguishable from a successful one (defect fix P2), an outcome that never arrived at all, and
- * a batch reported as delivered when one of its recipients was never written to (defect fix P9).
+ * indistinguishable from a successful one (defect fix P2) and a batch reported as delivered when one
+ * of its recipients was never written to (defect fix P9).
  *
- * <p><strong>The four cases, and the ordering that makes them four.</strong>
+ * <p><strong>The three cases, and the ordering that makes them three.</strong>
  *
  * <ul>
  *   <li>A {@code generation-failed} on the topic ends the batch FAILED under the bounded
  *       GENERATION_FAILED, carrying systemdocgenerator's own words into {@code sdg_reason} - and
  *       nobody is e-mailed, because there is no document to attach.</li>
- *   <li>No event at all: the batch is asked about through systemdocgenerator's query API once its
- *       grace period has passed, and the answer takes the same code path a delivered one does, so it
- *       reaches the same e-mails and the row says RECONCILER rather than EVENT.</li>
  *   <li>notificationnotify refuses one recipient: that row is FAILED with the status that made it
  *       one, the recipient behind it is still told, and the batch is PARTIALLY_NOTIFIED rather than
  *       reporting the state it would have reported had everybody been e-mailed.</li>
@@ -62,11 +58,10 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  *       {@code notificationId} in the same path - and the batch reaches NOTIFIED.</li>
  * </ul>
  *
- * <p><strong>The grace period is not shortened; the batch is aged instead.</strong> The reconciler's
- * rule is how long ago the render was asked for, and its read is over the whole
- * {@code register_batch} table - a store every suite in this JVM shares. Shortening the configured
- * grace would make every other suite's in-flight batch overdue at the same moment, so this suite
- * moves its own batch's {@code requested_at} into the past and leaves the setting alone.
+ * <p><strong>The outcome that never arrived is no longer one of them.</strong> It was the
+ * reconciler's case, and with the query gone there is nothing to fetch: a batch whose outcome is
+ * lost is released by the next run's own first act, which is {@code StaleBatchReleaser}'s to prove
+ * and T037's to assert here.
  *
  * <p><strong>An acceptance suite (tasks.md [A]).</strong> Nothing here is driven test-first: it
  * records what the assembled service does.
@@ -96,9 +91,6 @@ class GenerationFailureEndToEndIT {
      * Principle VII). What the batch is failed under is the bounded reason beside it.
      */
     private static final String SDG_REASON = "template OEE_Layout5 rejected the payload at page 1";
-
-    /** How much longer than its grace period the un-answered batch is made to have waited. */
-    private static final Duration GRACE_PASSED = Duration.ofMinutes(30);
 
     /**
      * What notificationnotify answers the refused recipient with.
@@ -187,7 +179,7 @@ class GenerationFailureEndToEndIT {
                 .as("and the renderer's own words beside it, for support to read out of the column")
                 .contains(SDG_REASON);
         assertThat(registers.completedBy())
-                .as("the topic learned of the refusal, not the reconciler")
+                .as("the topic is how the refusal was learned, and it is the only way")
                 .contains(CompletedBy.EVENT.name());
         assertThat(registers.documentFileId())
                 .as("a render that failed produced no document, so none is recorded")
@@ -199,36 +191,6 @@ class GenerationFailureEndToEndIT {
         assertThat(registers.notifications())
                 .as("nor is an attempt invented against a recipient nothing was ever asked for")
                 .isEmpty();
-    }
-
-    @Test
-    @DisplayName("no event at all: the reconciler fetches the outcome and the e-mails still go")
-    void an_outcome_that_never_arrived_should_be_fetched_and_the_batch_notified() {
-        run();
-        final UUID payloadFileId = registers.payloadFileId().orElseThrow();
-        stack.sdgQueryAnswersDocument(payloadFileId, DOCUMENT_FILE_ID, GENERATED_AT);
-        stack.sdgQueryKnowsNothing();
-        registers.hasBeenWaitingFor(GRACE_PASSED);
-
-        final int reconciled = service.getBean(GenerationReconciler.class).reconcile();
-
-        assertThat(reconciled)
-                .as("this batch was completed by the pass; the count is the broker's health seen "
-                        + "from here, and it is not asserted exactly because the read is over a "
-                        + "table every suite in this JVM shares")
-                .isPositive();
-        assertThat(registers.batchStatuses())
-                .as("the fetched document takes the same code path a delivered one does, so it "
-                        + "reaches the same ending rather than stopping at GENERATED")
-                .containsExactly(BatchStatus.NOTIFIED.name());
-        assertThat(registers.documentFileId()).contains(DOCUMENT_FILE_ID);
-        assertThat(registers.completedBy())
-                .as("and the row says which mechanism learned it: a night whose outcomes all "
-                        + "arrive this way is a subscription to investigate")
-                .contains(CompletedBy.RECONCILER.name());
-        assertThat(addressedTo(stack.emailsSent()))
-                .as("both teams are told, by the reconciler's route exactly as by the topic's")
-                .containsExactlyInAnyOrder(DURHAM.emailAddress1(), GATESHEAD.emailAddress1());
     }
 
     @Test
