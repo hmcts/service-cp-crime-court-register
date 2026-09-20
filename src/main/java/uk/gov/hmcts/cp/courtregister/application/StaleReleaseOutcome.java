@@ -32,4 +32,20 @@ import java.util.UUID;
  *                  centre day behind each one is what the morning report is already about
  */
 public record StaleReleaseOutcome(List<ReleasedBatch> released, List<UUID> contended) {
+
+    /**
+     * Copies both lists, and refuses the account that is missing one.
+     *
+     * <p>The pass walks both of these as the run's first act, so a list that is not there ends the
+     * night inside the pass - reported as an unexpected failure rather than as the store's own
+     * signal, and on a run no court centre has had a document from yet. The refusal belongs here,
+     * where the account is built and the mistake is plain, rather than at the walk.
+     *
+     * <p>And copied for the same reason: this record is read after the statements that produced it
+     * have moved on, so it holds what it was given rather than a view of somebody's working list.
+     */
+    public StaleReleaseOutcome {
+        released = List.copyOf(released);
+        contended = List.copyOf(contended);
+    }
 }
