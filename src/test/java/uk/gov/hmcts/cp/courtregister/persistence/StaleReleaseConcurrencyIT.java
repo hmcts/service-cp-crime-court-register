@@ -66,6 +66,14 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  * by name - and then <strong>repeatedly, genuinely concurrently</strong>, where either may win and
  * only the invariants may be asserted.
  *
+ * <p>Those same two contenders are also run <strong>at the row itself</strong>, in a round each with
+ * no timing in it: a session takes the batch row {@code FOR UPDATE}, the pass blocks on its write,
+ * and the holder's own transaction then moves the batch and commits. What that pins is the rule the
+ * whole fence rests on - under READ COMMITTED an {@code UPDATE} that waited re-evaluates its own
+ * {@code WHERE} against the row version it was granted - and it pins it by arrangement rather than
+ * by two threads landing inside the same few microseconds, which is all a {@code TOGETHER} round can
+ * offer.
+ *
  * <p>And a third contender for the <strong>key</strong> rather than for the batch: the hearing
  * re-shared while the pass is giving its register back ({@code recordAndComplete}). It cannot be
  * refused and it refuses nothing, but it and the release write into one active-register key, and
@@ -261,6 +269,124 @@ class StaleReleaseConcurrencyIT {
                         + "pass may not touch it at any age: it holds a document somebody is owed "
                         + "e-mails about")
                 .isEqualTo(new Ending("GENERATED", null));
+    }
+
+    /**
+     * The re-check the fence rests on, pinned rather than raced - the render accepted at the row.
+     *
+     * <p>The {@code TOGETHER} rounds above prove the fence only when the two contenders happen to
+     * land within the same handful of microseconds, which is a property asserted at the scheduler's
+     * discretion. What actually makes the operation safe is a rule of READ COMMITTED: an
+     * {@code UPDATE} that reaches a row another transaction has just committed re-evaluates
+     * <em>its own</em> {@code WHERE} against the row as it now stands, and skips it where it no
+     * longer qualifies. That is why the staleness rule is written in the {@code UPDATE}'s own
+     * predicate and not in a clause that feeds it.
+     *
+     * <p>This round stages exactly that, with no timing in it. A session takes the batch row
+     * {@code FOR UPDATE}, so the pass reads its list of stale batches and then blocks on the write;
+     * the <strong>holder's own transaction</strong> then moves the batch on - the render is
+     * accepted, so a PENDING batch becomes GENERATING and is stamped {@code now()} - and commits.
+     * The pass is granted the row it was waiting for, re-reads the version the holder left, finds a
+     * batch that is no longer stale, and changes nothing about it.
+     *
+     * <p>And "changes nothing" is three separate claims, all asserted: the batch is not released,
+     * it is not <em>contended</em> either - a batch nothing was refused over lost no race - and the
+     * row stands exactly where the holder left it.
+     */
+    @Test
+    void a_render_accepted_at_the_row_the_release_waits_for_leaves_the_batch_alone() {
+        final UUID courtCentre = UUID.randomUUID();
+        final Instant cutoff = cutoff();
+        final RegisterBatch batch = staleBatch(courtCentre, false);
+        final AtomicReference<StaleReleaseOutcome> answered = new AtomicReference<>();
+
+        final Escapes escaped = whileTheRowIsHeld(batch.batchId(),
+                () -> answered.set(store.failAndReleaseStale(cutoff, cutoff)),
+                () -> store.markRequested(batch.batchId(), UUID.randomUUID()));
+
+        theBatchWasLeftAlone(courtCentre, cutoff, batch, escaped, answered.get(),
+                new Ending("GENERATING", null));
+        settleTheNight(courtCentre);
+    }
+
+    /**
+     * The same re-check, with the document arriving at the held row instead.
+     *
+     * <p>The other way a batch stops being stale, and the one the predicate answers by
+     * <strong>status</strong> rather than by stamp: a GENERATING batch the outcome sink takes to
+     * GENERATED is out of {@code PENDING, GENERATING} altogether, and a batch holding a document is
+     * never matched at any age because somebody is owed e-mails about that document. Staged the
+     * same way, so the property is pinned by the arrangement and not by which thread the scheduler
+     * happened to favour.
+     */
+    @Test
+    void a_document_arriving_at_the_row_the_release_waits_for_leaves_the_batch_alone() {
+        final UUID courtCentre = UUID.randomUUID();
+        final Instant cutoff = cutoff();
+        final RegisterBatch batch = staleBatch(courtCentre, true);
+        final AtomicReference<StaleReleaseOutcome> answered = new AtomicReference<>();
+
+        final Escapes escaped = whileTheRowIsHeld(batch.batchId(),
+                () -> answered.set(store.failAndReleaseStale(cutoff, cutoff)),
+                () -> store.markGenerated(batch.batchId(), UUID.randomUUID(), Instant.now(),
+                        CompletedBy.EVENT));
+
+        theBatchWasLeftAlone(courtCentre, cutoff, batch, escaped, answered.get(),
+                new Ending("GENERATED", null));
+        settleTheNight(courtCentre);
+    }
+
+    /**
+     * Everything the two staged re-check rounds ask, which is that nothing at all happened.
+     *
+     * @param courtCentre this round's court centre
+     * @param cutoff      the cutoff this round's pass was given, which is the fence itself
+     * @param batch       the batch the holder moved out of the pass's reach
+     * @param escaped     whatever the pass and the holder's move threw
+     * @param answered    what the pass answered with, or {@code null} where it refused
+     * @param expected    where the holder left the batch, which is where it must still be
+     */
+    private void theBatchWasLeftAlone(final UUID courtCentre, final Instant cutoff,
+            final RegisterBatch batch, final Escapes escaped, final StaleReleaseOutcome answered,
+            final Ending expected) {
+        softly.assertThat(escaped.release())
+                .as("nothing escapes the pass: a batch that stopped being stale under it is a "
+                        + "batch it did not change, and never a refusal it has to carry (FR-003a)")
+                .isEmpty();
+        softly.assertThat(escaped.outcome())
+                .as("and the move the holder made is not refused either - it held the row the "
+                        + "pass is waiting for, so it is the winner by construction")
+                .isEmpty();
+        softly.assertThat(releasedOf(answered))
+                .as("the batch the holder moved while the pass was blocked on its row is not "
+                        + "released: the staleness rule is re-evaluated against the row version "
+                        + "the holder committed, which is what READ COMMITTED does for an UPDATE "
+                        + "that waited - and the rule is in the UPDATE's own WHERE precisely so "
+                        + "that it can be. A predicate computed into a list beforehand would fail "
+                        + "a batch whose render had been accepted in between")
+                .doesNotContain(batch.batchId());
+        softly.assertThat(contendedOf(answered))
+                .as("nor is it reported contended: contention is every attempt losing the race "
+                        + "for the day's key, and this batch was refused nothing - it simply "
+                        + "matched nothing, which is zero rows and an answer")
+                .doesNotContain(batch.batchId());
+        softly.assertThat(endingOf(batch.batchId()))
+                .as("so the batch stands exactly where the holder left it, rather than being "
+                        + "given up on by a run that had already read it as stale")
+                .isEqualTo(expected);
+        softly.assertThat(stampedTo(batch.batchId()))
+                .as("and both of its registers are still its own: a release that ran anyway would "
+                        + "have handed them back out of a batch that is still going to produce a "
+                        + "document with them in it")
+                .isEqualTo(2L);
+        softly.assertThat(prematurelyFailed(courtCentre, cutoff))
+                .as("which is the fence read the way the whole suite reads it: no batch is given "
+                        + "up on that its own stamp says was not stale when the write landed")
+                .isZero();
+        softly.assertThat(strandedRegisters(courtCentre))
+                .as("and no register is left awaiting a document while stamped to a batch nothing "
+                        + "will finish")
+                .isZero();
     }
 
     /**
@@ -744,7 +870,7 @@ class StaleReleaseConcurrencyIT {
         final CountDownLatch committed = new CountDownLatch(1);
         try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
             final Future<?> holding = pool.submit(
-                    () -> holdingTheBatchRow(batchId, holder, held, committed));
+                    () -> holdingTheBatchRow(batchId, holder, held, committed, () -> {}));
             held.await();
             final Future<List<Throwable>> passing = pool.submit(() -> escaping(release));
             awaitHeldBy(holder.get());
@@ -763,14 +889,17 @@ class StaleReleaseConcurrencyIT {
     /**
      * Holds the batch's row until the latch is counted down, and says which backend holds it.
      *
-     * @param batchId   the batch whose row is held
-     * @param holder    where the holding session's backend id is published, so the pass can be
-     *                  waited for by what is blocking it rather than by a sleep
-     * @param held      counted down once the row is genuinely held
-     * @param committed waited on, so the transaction ends only when the contender has committed
+     * @param batchId      the batch whose row is held
+     * @param holder       where the holding session's backend id is published, so the pass can be
+     *                     waited for by what is blocking it rather than by a sleep
+     * @param held         counted down once the row is genuinely held
+     * @param committed    waited on, so the transaction ends only when the contender is done
+     * @param beforeCommit what the holder does inside its own transaction before letting the row
+     *                     go, which is nothing where the contender is a session of its own
      */
     private void holdingTheBatchRow(final UUID batchId, final AtomicInteger holder,
-            final CountDownLatch held, final CountDownLatch committed) {
+            final CountDownLatch held, final CountDownLatch committed,
+            final Runnable beforeCommit) {
         transactions.executeWithoutResult(oneTransaction -> {
             holder.set(ProcessedLogTestSupport.jdbcClient()
                     .sql("SELECT pg_backend_pid()")
@@ -790,7 +919,52 @@ class StaleReleaseConcurrencyIT {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("the held row was interrupted", interrupted);
             }
+            beforeCommit.run();
         });
+    }
+
+    /**
+     * The contender committed <strong>by the session holding the row the pass is waiting for</strong>.
+     *
+     * <p>The difference from {@link #insideTheWindow} is which session moves the batch, and it is
+     * the whole point of the fixture. There the contender is a session of its own and the held row
+     * is only a way of keeping the pass's statement open; here the holder <em>is</em> the
+     * contender, so the pass cannot possibly reach the row until the move has committed. What that
+     * buys is a re-check with no timing in it: the pass takes its snapshot, blocks on the row, and
+     * is granted a version of it that the staleness rule no longer matches.
+     *
+     * <p>Under READ COMMITTED that is exactly the case an {@code UPDATE} handles by re-evaluating
+     * its own {@code WHERE} against the newly committed row version - which is why the staleness
+     * rule lives in the {@code UPDATE}'s predicate rather than in a clause that feeds it, and which
+     * no {@code TOGETHER} round can pin, because a round that depends on two threads landing inside
+     * the same few microseconds is asserting the scheduler's goodwill.
+     *
+     * @param batchId the batch whose row is held, and which the holder then moves
+     * @param release the pass, run on a thread of its own because it is deliberately blocked
+     * @param moved   the state-machine move, made inside the holder's own transaction
+     * @return what each of them threw
+     */
+    private Escapes whileTheRowIsHeld(final UUID batchId, final Runnable release,
+            final Runnable moved) {
+        final AtomicInteger holder = new AtomicInteger();
+        final CountDownLatch held = new CountDownLatch(1);
+        final CountDownLatch move = new CountDownLatch(1);
+        final AtomicReference<List<Throwable>> byTheHolder = new AtomicReference<>(List.of());
+        try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+            final Future<?> holding = pool.submit(() -> holdingTheBatchRow(batchId, holder, held,
+                    move, () -> byTheHolder.set(escaping(moved))));
+            held.await();
+            final Future<List<Throwable>> passing = pool.submit(() -> escaping(release));
+            awaitHeldBy(holder.get());
+            move.countDown();
+            holding.get(RACE_SECONDS, TimeUnit.SECONDS);
+            return new Escapes(passing.get(RACE_SECONDS, TimeUnit.SECONDS), byTheHolder.get());
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("the held row was interrupted", interrupted);
+        } catch (ExecutionException | TimeoutException unfinished) {
+            throw new IllegalStateException("a contender never finished", unfinished);
+        }
     }
 
     /** Waits until some session is blocked by the one holding the row, which is the pass. */
