@@ -17,6 +17,7 @@ import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
+import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
 
 /**
  * The nightly run's own executor, and the run itself.
@@ -138,6 +139,13 @@ public class SchedulingConfig {
 
         final boolean complete = gate != null && store != null && assembler != null
                 && service != null && reconciler != null;
+        // A seam, not the wiring: the pass is built here from the store and the two durations the
+        // run already holds, so that the job can call it before the bean that will own it exists
+        // (T020 promotes this to a bean of its own and drops the reconciler from the check).
+        final StaleBatchReleaser releaser = complete
+                ? new StaleBatchReleaser(store, metrics, properties.staleAfter(),
+                        properties.lockAtMostFor(), clock)
+                : null;
         if (!complete) {
             LOG.warn("The downstream half is enabled but incomplete on this context, so no "
                     + "generation run is scheduled: a job that could not read the flag, assemble a "
@@ -146,7 +154,7 @@ public class SchedulingConfig {
                     store != null, assembler != null, service != null, reconciler != null);
         }
         return complete
-                ? new RegisterGenerationJob(gate, store, assembler, service, reconciler, metrics,
+                ? new RegisterGenerationJob(gate, store, assembler, service, releaser, metrics,
                         properties, clock, runProgress)
                 : null;
     }

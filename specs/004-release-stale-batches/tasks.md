@@ -1446,7 +1446,7 @@ numbers.
 
 ### Tests first ⚠️
 
-- [ ] T015 [US1] `batch/RegisterGenerationJobTest` (extend) — where the pass sits.
+- [x] T015 [US1] `batch/RegisterGenerationJobTest` (extend) — where the pass sits.
       `the_releaser_runs_after_the_gate_and_before_the_store_is_read`, an `InOrder` over the gate, the
       releaser and `store.activeUnbatched()` — the assertion the whole increment rests on, because a
       pass after assembly would release into a batch already made;
@@ -1454,6 +1454,24 @@ numbers.
       `released_registers_reach_the_assembler_in_the_same_run` (US1.3);
       `a_releaser_that_throws_still_writes_a_line_and_rethrows`. Seam: the constructor takes a
       `StaleBatchReleaser` in place of the `GenerationReconciler`. Red: the job does not call it.
+      **Seams landed**: the job's constructor parameter and field swap type; the end-of-run
+      `tally.chased(reconciler.reconcile())` goes with them, because a releaser has nothing to
+      reconcile and the class would not otherwise compile (T016 keeps the javadoc that describes
+      it); `SchedulingConfig.registerGenerationJob` builds a `StaleBatchReleaser` **inline** from
+      the store and the two durations it already holds, deliberately **not** as a bean, so that
+      T019's context case has a real red to record; `support/GenerationLegs` passes the releaser it
+      already builds. The throwing case uses `StoreUnavailableException`, which is what a store
+      lost under the pass raises, and asserts it leaves the run after the line is written.
+      **Red**: `flock -w 7200 … ./gradlew test --tests '*RegisterGenerationJobTest*'
+      -Dtest.noFailFast=true` → **67 tests completed, 3 failed**, three assertions and no compile
+      error — `the_releaser_runs_after_the_gate_and_before_the_store_is_read`
+      ("Wanted but not invoked: staleBatchReleaser.releaseStale()"),
+      `released_registers_reach_the_assembler_in_the_same_run` ("Argument(s) are different!", the
+      assembler was handed the empty list the store answers before the pass has run) and
+      `a_releaser_that_throws_still_writes_a_line_and_rethrows` ("No interactions wanted here …
+      found these interactions on mock 'registerStore'", the run having read the store the pass
+      should have ended it before). `a_skipped_run_does_not_release_anything` is a guard and passes
+      on the red run: a job that calls nothing cannot call it on a skipped night either.
 - [ ] T017 [US4] `batch/RegisterGenerationJobTest` (extend) and `domain/RunReportTest` (extend) — the
       line. `the_run_line_carries_both_released_numbers`; `a_run_that_released_nothing_says_zero`;
       `the_run_line_carries_no_reconciled_anywhere`, a whole-line assertion rather than a field one,

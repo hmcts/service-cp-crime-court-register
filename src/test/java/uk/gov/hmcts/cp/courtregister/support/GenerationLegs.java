@@ -390,7 +390,7 @@ public final class GenerationLegs implements AutoCloseable {
         this.listener = new DocumentEventListener(sink, metrics, DeliveryObserver.NONE);
         this.releaser = new StaleBatchReleaser(store, metrics, settings().staleAfter(),
                 settings().lockAtMostFor(), clock);
-        this.job = new RegisterGenerationJob(gate, store, assembler, generation, reconciler,
+        this.job = new RegisterGenerationJob(gate, store, assembler, generation, releaser,
                 metrics, settings(), clock);
         this.reporting = new ExceptionReportService(requestLog, batches, notifications, store,
                 REPORT_LIMIT, REPORT_LIMIT, REPORT_LIMIT, MAX_ENTRIES, GENERATION_CRON,
@@ -514,7 +514,7 @@ public final class GenerationLegs implements AutoCloseable {
         final FeatureFlagReader reader = mock(FeatureFlagReader.class);
         when(reader.read()).thenReturn(new FlagDecision.Disabled());
         whateverItAnswers(new RegisterGenerationJob(new FeatureFlagGate(reader, metrics), store,
-                assembler, generation, reconciler, metrics, settings(), clock)::run);
+                assembler, generation, releaser, metrics, settings(), clock)::run);
     }
 
     // --- the stale-batch pass --------------------------------------------------------------------

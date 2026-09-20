@@ -131,7 +131,7 @@ public class RegisterGenerationJob {
 
     private final RegisterGenerationService service;
 
-    private final GenerationReconciler reconciler;
+    private final StaleBatchReleaser releaser;
 
     private final GenerationMetrics metrics;
 
@@ -152,7 +152,7 @@ public class RegisterGenerationJob {
      * @param store      the register store, for the records this run may batch
      * @param assembler  the grouping into one batch per court centre and register date
      * @param service    the requesting leg, asked once per batch and sequentially
-     * @param reconciler the grace-period safety net under the public-event topic
+     * @param releaser   the run's first act: the batches the night before did not finish
      * @param metrics    the instrument surface a nightly flow is read by between runs
      * @param properties the settings the run works to, the run deadline above all
      * @param clock      the run's own clock, which the deadline and the report's duration are
@@ -160,9 +160,9 @@ public class RegisterGenerationJob {
      */
     public RegisterGenerationJob(final FeatureFlagGate gate, final RegisterStore store,
             final BatchAssembler assembler, final RegisterGenerationService service,
-            final GenerationReconciler reconciler, final GenerationMetrics metrics,
+            final StaleBatchReleaser releaser, final GenerationMetrics metrics,
             final GenerationProperties properties, final Clock clock) {
-        this(gate, store, assembler, service, reconciler, metrics, properties, clock,
+        this(gate, store, assembler, service, releaser, metrics, properties, clock,
                 RunProgress.NONE);
     }
 
@@ -173,7 +173,7 @@ public class RegisterGenerationJob {
      * @param store       the register store, for the records this run may batch
      * @param assembler   the grouping into one batch per court centre and register date
      * @param service     the requesting leg, asked once per batch and sequentially
-     * @param reconciler  the grace-period safety net under the public-event topic
+     * @param releaser    the run's first act: the batches the night before did not finish
      * @param metrics     the instrument surface a nightly flow is read by between runs
      * @param properties  the settings the run works to, the run deadline above all
      * @param clock       the run's own clock, which the deadline and the report's duration are
@@ -183,14 +183,14 @@ public class RegisterGenerationJob {
      */
     public RegisterGenerationJob(final FeatureFlagGate gate, final RegisterStore store,
             final BatchAssembler assembler, final RegisterGenerationService service,
-            final GenerationReconciler reconciler, final GenerationMetrics metrics,
+            final StaleBatchReleaser releaser, final GenerationMetrics metrics,
             final GenerationProperties properties, final Clock clock,
             final RunProgress runProgress) {
         this.gate = gate;
         this.store = store;
         this.assembler = assembler;
         this.service = service;
-        this.reconciler = reconciler;
+        this.releaser = releaser;
         this.metrics = metrics;
         this.properties = properties;
         this.clock = clock;
@@ -302,7 +302,6 @@ public class RegisterGenerationJob {
         tally.assembled(active, assembler.assemble(active, recorded, true));
 
         request(tally);
-        tally.chased(reconciler.reconcile());
     }
 
     /**
@@ -746,9 +745,6 @@ public class RegisterGenerationJob {
         /** How many batches the run deadline left unrequested. */
         private int batchesLeftBehind;
 
-        /** How many outcomes the reconciler had to fetch rather than receive. */
-        private int outcomesChased;
-
         /**
          * Records what the night held, which is everything the deferral readings are taken from.
          *
@@ -833,15 +829,6 @@ public class RegisterGenerationJob {
             rowOutcomes.merge(status, registers, Integer::sum);
         }
 
-        /**
-         * Records how many outcomes the reconciler had to fetch.
-         *
-         * @param outcomesFetched what it fetched
-         */
-        private void chased(final int outcomesFetched) {
-            this.outcomesChased = outcomesFetched;
-        }
-
         private List<RegisterRecord> active() {
             return activeRegisters;
         }
@@ -872,7 +859,7 @@ public class RegisterGenerationJob {
 
             return new RunReport(decision, outcomes, rendersAsked.size(), rowOutcomes,
                     nightsAssembly == null ? 0 : nightsAssembly.deferred().size(),
-                    registersWaiting, settled, outcomesChased, duration);
+                    registersWaiting, settled, 0, duration);
         }
     }
 }
