@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import java.time.Clock;
 import java.time.Duration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,9 +31,11 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
+import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
+import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 import uk.gov.hmcts.cp.courtregister.pipeline.PdfPayloadMapper;
 import uk.gov.hmcts.cp.courtregister.support.WorkloadIdentityStub;
@@ -70,28 +73,82 @@ import uk.gov.hmcts.cp.courtregister.support.WorkloadIdentityStub;
  */
 @ExtendWith(WorkloadIdentityStub.class)
 @SpringBootTest(properties = {
-    "courtregister.generation.enabled=true",
-    "courtregister.generation.completion=event",
-    "courtregister.generation.sdg-mode=LIVE",
-    "courtregister.generation.nn-mode=LIVE",
-    "courtregister.generation.fileservice-mode=LIVE",
-    "courtregister.generation.flag-mode=LIVE",
-    "courtregister.fileservice.url=jdbc:postgresql://fileservice.internal:5432/fileservice",
-    "courtregister.feature.endpoint=https://appconfig.internal",
-    "courtregister.feature.label=ste86",
-    "courtregister.endpoints.systemdocgenerator=http://systemdocgenerator.internal:8080",
-    "courtregister.endpoints.notificationnotify=http://notificationnotify.internal:8080",
-    "courtregister.endpoints.system-user-id=00000000-0000-4000-8000-000000000000",
-    "courtregister.email.templates.cr_standard=5c9a0e21-3d47-4f18-9b62-0a71c4e8d530",
-    "courtregister.payload.mode=STUB",
-    "courtregister.referencedata.mode=STUB",
-    // Intake is a different half and needs a broker this suite has no business standing up.
-    "courtregister.consumer.enabled=false",
-    "spring.artemis.broker-url=tcp://localhost:61616",
-    "spring.artemis.embedded.enabled=true",
-    "spring.artemis.embedded.queues=public.event"})
+    GenerationWiringContextTest.GENERATION_ENABLED,
+    GenerationWiringContextTest.COMPLETION_EVENT,
+    GenerationWiringContextTest.SDG_MODE,
+    GenerationWiringContextTest.NN_MODE,
+    GenerationWiringContextTest.FILESERVICE_MODE,
+    GenerationWiringContextTest.FLAG_MODE,
+    GenerationWiringContextTest.FILESERVICE_URL,
+    GenerationWiringContextTest.FLAG_ENDPOINT,
+    GenerationWiringContextTest.FLAG_LABEL,
+    GenerationWiringContextTest.SDG_ENDPOINT,
+    GenerationWiringContextTest.NN_ENDPOINT,
+    GenerationWiringContextTest.SYSTEM_USER_ID,
+    GenerationWiringContextTest.TEMPLATE_ID,
+    GenerationWiringContextTest.PAYLOAD_MODE,
+    GenerationWiringContextTest.REFDATA_MODE,
+    GenerationWiringContextTest.CONSUMER_DISABLED,
+    GenerationWiringContextTest.BROKER_URL,
+    GenerationWiringContextTest.EMBEDDED_BROKER,
+    GenerationWiringContextTest.EMBEDDED_TOPIC})
 @DisplayName("the downstream half on a generating pod")
 class GenerationWiringContextTest {
+
+    /**
+     * The settings a generating pod is deployed with, named so that the command JVM below differs
+     * from this context by {@code courtregister.cli} and by nothing else.
+     *
+     * <p>A nested {@code @SpringBootTest} does not inherit the enclosing one's {@code properties},
+     * so the pair would otherwise be two different deployments and the absence it asserts would be
+     * attributable to whichever setting had been left out.
+     */
+    static final String GENERATION_ENABLED = "courtregister.generation.enabled=true";
+
+    static final String COMPLETION_EVENT = "courtregister.generation.completion=event";
+
+    static final String SDG_MODE = "courtregister.generation.sdg-mode=LIVE";
+
+    static final String NN_MODE = "courtregister.generation.nn-mode=LIVE";
+
+    static final String FILESERVICE_MODE = "courtregister.generation.fileservice-mode=LIVE";
+
+    static final String FLAG_MODE = "courtregister.generation.flag-mode=LIVE";
+
+    static final String FILESERVICE_URL =
+            "courtregister.fileservice.url=jdbc:postgresql://fileservice.internal:5432/fileservice";
+
+    static final String FLAG_ENDPOINT = "courtregister.feature.endpoint=https://appconfig.internal";
+
+    static final String FLAG_LABEL = "courtregister.feature.label=ste86";
+
+    static final String SDG_ENDPOINT =
+            "courtregister.endpoints.systemdocgenerator=http://systemdocgenerator.internal:8080";
+
+    static final String NN_ENDPOINT =
+            "courtregister.endpoints.notificationnotify=http://notificationnotify.internal:8080";
+
+    static final String SYSTEM_USER_ID =
+            "courtregister.endpoints.system-user-id=00000000-0000-4000-8000-000000000000";
+
+    static final String TEMPLATE_ID =
+            "courtregister.email.templates.cr_standard=5c9a0e21-3d47-4f18-9b62-0a71c4e8d530";
+
+    static final String PAYLOAD_MODE = "courtregister.payload.mode=STUB";
+
+    static final String REFDATA_MODE = "courtregister.referencedata.mode=STUB";
+
+    /** Intake is a different half and needs a broker this suite has no business standing up. */
+    static final String CONSUMER_DISABLED = "courtregister.consumer.enabled=false";
+
+    static final String BROKER_URL = "spring.artemis.broker-url=tcp://localhost:61616";
+
+    static final String EMBEDDED_BROKER = "spring.artemis.embedded.enabled=true";
+
+    static final String EMBEDDED_TOPIC = "spring.artemis.embedded.queues=public.event";
+
+    /** The one property the command JVM below differs by. */
+    static final String CLI_ON = "courtregister.cli=true";
 
     private final ApplicationContext context;
 
@@ -141,6 +198,85 @@ class GenerationWiringContextTest {
                 .as("progression's payload generator, which the requesting leg maps every batch "
                         + "through")
                 .isNotEmpty();
+    }
+
+    /**
+     * The run's first act has to be a bean for the run to be given one.
+     *
+     * <p>Nothing else on the context constructs it: the job is contributed by
+     * {@link SchedulingConfig} over the collaborators it asks in order, and a pass that no
+     * configuration declared would leave the nightly run with nothing to call - every batch whose
+     * outcome went missing sitting in flight, and its court centre day passed over at every
+     * subsequent run, which is the failure this increment exists to end.
+     */
+    @Test
+    @DisplayName("holds the pass the run gives back stale batches through")
+    void a_generation_enabled_context_holds_a_stale_batch_releaser() {
+        assertThat(context.getBeanNamesForType(StaleBatchReleaser.class))
+                .as("a null here is a nightly run whose first act does nothing: a batch nobody "
+                        + "heard an outcome about stays in flight, and its court centre gets no "
+                        + "document night after night until a person notices")
+                .isNotEmpty();
+    }
+
+    /**
+     * <strong>[A]</strong> The pass takes what it measures by and not the record it came from.
+     *
+     * <p>Green on introduction - it states the shape Phase 3 landed - and asserted here because
+     * the wiring is where that shape is easiest to lose: a constructor handed the whole
+     * {@code GenerationProperties} would let the pass read any setting the deployment carries,
+     * including the two that are deployment shape rather than cutover levers, and the class would
+     * stop being testable on two durations.
+     */
+    @Test
+    @DisplayName("[A] the pass takes the two durations and not the whole record")
+    void the_releaser_takes_the_two_durations_and_not_the_whole_record() {
+        assertThat(StaleBatchReleaser.class.getDeclaredConstructors()[0].getParameterTypes())
+                .as("the store it releases through, where the numbers are counted, the two cutoffs "
+                        + "and the clock they are measured back from - and no settings record")
+                .containsExactly(RegisterStore.class, GenerationMetrics.class, Duration.class,
+                        Duration.class, Clock.class);
+    }
+
+    /**
+     * A JVM started to run one operations command must not hold the pass.
+     *
+     * <p>An operator regenerating one court centre must not, as a side effect, give up on another
+     * court centre's in-flight batch: the pass belongs to the scheduled run, which holds the lock
+     * that makes it one run. The absence is complete because the pass is declared beside the job on
+     * {@link SchedulingConfig}, which carries {@link CliModeConfig}'s condition - a bean-level
+     * condition would leave a pass nothing calls.
+     */
+    @Nested
+    @SpringBootTest(properties = {
+        GENERATION_ENABLED, COMPLETION_EVENT, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
+        FILESERVICE_URL, FLAG_ENDPOINT, FLAG_LABEL, SDG_ENDPOINT, NN_ENDPOINT, SYSTEM_USER_ID,
+        TEMPLATE_ID, PAYLOAD_MODE, REFDATA_MODE, CONSUMER_DISABLED, BROKER_URL, EMBEDDED_BROKER,
+        EMBEDDED_TOPIC, CLI_ON})
+    @DisplayName("a JVM started to run one operations command")
+    class ACommandJvm {
+
+        private final ApplicationContext commandContext;
+
+        @Autowired
+        ACommandJvm(final ApplicationContext commandContext) {
+            this.commandContext = commandContext;
+        }
+
+        @Test
+        @DisplayName("holds no stale-batch pass")
+        void a_command_jvm_holds_no_stale_batch_releaser() {
+            assertThat(commandContext.getBeanNamesForType(StaleBatchReleaser.class))
+                    .as("the on-demand generation command does not run the pass: one court "
+                            + "centre's regeneration may not decide that another's in-flight batch "
+                            + "has failed, and the per-batch release the operations surface "
+                            + "already offers is the supported way to free one")
+                    .isEmpty();
+            assertThat(commandContext.getBeanProvider(RegisterGenerationJob.class).getIfAvailable())
+                    .as("and it holds no run to call one either, which is what makes the absence "
+                            + "a plain one rather than a half")
+                    .isNull();
+        }
     }
 
     @Test

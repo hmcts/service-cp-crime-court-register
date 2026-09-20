@@ -1500,10 +1500,23 @@ numbers.
       `the_released_registers_are_not_added_to_either_total` pass on the red run: they characterise
       the record the seam leaves and the total it deliberately does not grow, and the total was
       already right — what was missing was the case that says so.
-- [ ] T019 [US1] `config/GenerationWiringContextTest` (extend) — the bean.
+- [x] T019 [US1] `config/GenerationWiringContextTest` (extend) — the bean.
       `a_generation_enabled_context_holds_a_stale_batch_releaser`;
       `a_command_jvm_holds_no_stale_batch_releaser`;
       `the_releaser_takes_the_two_durations_and_not_the_whole_record`. Red: no such bean.
+      **The command JVM is a nested context of its own**, because a nested `@SpringBootTest` does
+      **not** inherit the enclosing one's `properties` — the first attempt loaded a pod configured
+      with nothing but `courtregister.cli=true` and failed to start. The outer list is now named
+      constants that both annotations share, so the pair differs by that one property and by
+      nothing else, which is what makes the absence attributable to it.
+      **Red** (`flock -w 7200 … ./gradlew test --tests '*GenerationWiringContextTest*'
+      -Dtest.noFailFast=true`): **11 tests completed, 1 failed** — `holds the pass the run gives
+      back stale batches through`, "Expecting actual not to be empty", an assertion and no compile
+      error. The command JVM's case is a guard and passes on the red run, as it must: a bean no
+      configuration declares is absent from every context. **[A]**
+      `the_releaser_takes_the_two_durations_and_not_the_whole_record` is green on introduction — it
+      states the constructor Phase 3 landed, asserted here because the wiring is where that shape
+      is easiest to lose.
 
 ### Implementation
 
