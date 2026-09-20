@@ -2936,13 +2936,31 @@ what this phase added: T037's one, T038's two and T039's one.
       query endpoint in it — the same thing T041 found on the design rules' own table.
       **Owed elsewhere and named here**: the four scope paragraphs still list 001, 002 and 003 and
       not 004. Handed to the 005 tree with the two hand-offs Phases 5 and 7 already made.)
-- [ ] T045 `doc/DEFECT-FIXES.md` — the one cell. `P2`'s pinning-test list replaces
+- [x] T045 `doc/DEFECT-FIXES.md` — the one cell. `P2`'s pinning-test list replaces
       `GenerationReconcilerTest.a_batch_nothing_can_be_learned_about_should_be_failed_generation_timed_out`
       with `StaleBatchReleaserTest.a_batch_still_generating_past_the_minimum_age_should_be_failed_and_released`,
       and the status cell gains one dated sentence: the mechanism that keeps the promise changed in
       increment 004, from a grace-period query to the next run's release pass, and the promise — a
       failed or lost render is never silently dropped — is unchanged. **No new row, no changed claim,
       no changed status.** `RegisteredDefectFixes` green in the same commit.
+      (green: `flock -w 7200 … ./gradlew test --tests '*DifferentialAuditTest*'
+      --tests '*RegisteredDefectFixes*' --tests '*StaleBatchReleaserTest*' -Dtest.noFailFast=true`
+      → **BUILD SUCCESSFUL**: `DifferentialAuditTest` 389, `RegisteredDefectFixesRejectionTest` 28
+      and `StaleBatchReleaserTest` 11, none failed. The audit is the suite that reads this file, and
+      it reads the row ids: no row was added, removed or renumbered, so it answers the same.
+      **Two cells, and both were named in the task.** The pinning cell now reads
+      `StaleBatchReleaserTest.a_batch_still_generating_past_the_minimum_age_should_be_failed_and_released`
+      for the half the row also promises, and the status cell gains one dated sentence saying the
+      mechanism changed in 004 while the promise did not, naming the end-to-end case as well.
+      **Everything else in the row is left as written, deliberately.** The fixed-behaviour cell
+      still describes the grace-period reconciler and the status cell still describes what T048
+      landed: that is what increment 002 shipped, and the dated sentence is what tells a reader the
+      rest is history. Rewriting it would make the row claim 002 shipped a mechanism it did not -
+      the same reasoning T042 applied to the README's 002 bullet.
+      **One more mention of the deleted class is left alone and named here**: the *"What T068 ran"*
+      paragraph above the table lists `GenerationReconcilerTest` among the suites that run
+      executed. It is a record of a run that happened, not a pointer to a file, and correcting it
+      would be editing a dated observation.)
 - [ ] T046 [A] The gates, recorded. `flock … ./gradlew build` with the JaCoCo ratchet at **0.88 line /
       0.85 branch** unchanged, PMD over main, Checkstyle over main and test, the differential audit
       and the consolidation audit; then the `quickstart.md` walkthrough end to end on a **clean** local
