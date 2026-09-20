@@ -151,14 +151,15 @@ if (a.resume) {
 const commits = [...implemented.commits]
 log(`implemented ${implemented.tasks_done.length}/${TASKS.length} tasks in ${implemented.commits.length} commits; build exit ${implemented.build_exit_code}`)
 
-function incomplete(work) {
+function incomplete(work, opts) {
   const out = []
+  const fixer = !!(opts && opts.fixer)   // a fixer touches only the tasks its findings name
   if (work.build_exit_code !== 0) out.push(synthetic('BLOCKER', `the build exited ${work.build_exit_code}: ${work.build_summary}`, 'make the full build exit 0, test-first'))
   // in resume mode the range may already be fully committed before this run: no new commit is fine then
   if (!work.commits.length && !a.resume) out.push(synthetic('BLOCKER', 'no commits were made', 'implement the range and commit it'))
   // implementers sometimes return "T004 - what it did" rather than the bare id: count any id they name
   const done = new Set((work.tasks_done || []).flatMap(x => String(x).match(/T\d{3}/g) || []))
-  const missing = TASKS.filter(t => !done.has(t))
+  const missing = fixer ? [] : TASKS.filter(t => !done.has(t))
   if (missing.length) out.push(synthetic('BLOCKER', `tasks not completed: ${missing.join(', ')}`, 'complete every task in the range'))
   const status = String(work.git_status_after || '').trim()
   if (status && !/^\(?(clean|none|empty|nothing)\)?\.?$/i.test(status)) out.push(synthetic('HIGH', 'the tree was left dirty after the last commit', 'commit or remove the leftover files; never leave stray files'))
@@ -291,7 +292,7 @@ if (pending.length) {
   remediations += 1
   if (!fixed) throw new Error('phase-gate: the remediation implementer returned nothing before the first gate')
   declined = [...declined, ...(fixed.open_points || [])]
-  const still = incomplete(fixed)
+  const still = incomplete(fixed, { fixer: true })
   if (still.length) throw new Error(`phase-gate: still incomplete after remediation: ${still.map(p => p.summary).join('; ')}`)
 }
 
@@ -309,7 +310,7 @@ while (!allPass(reviews) && remediations < MAX_REMEDIATIONS) {
   const fixed = await remediate(round, must, may, declined)
   remediations += 1
   if (!fixed) throw new Error(`phase-gate: the remediation implementer returned nothing in round ${round}`)
-  const still = incomplete(fixed)
+  const still = incomplete(fixed, { fixer: true })
   if (still.length) log(`remediation r${round} left the range incomplete: ${still.map(p => p.summary).join('; ')}`)
   const newlyDeclined = fixed.open_points || []
   declined = [...declined, ...newlyDeclined]
