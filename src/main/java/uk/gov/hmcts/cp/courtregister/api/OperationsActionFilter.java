@@ -30,9 +30,13 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * authorisation filter at {@code +30} and the audit filter at {@code +50}, because both of those
  * read the action this one derives.
  *
- * <p>A path this filter does not recognise is passed through <strong>untouched</strong>, header and
- * all: actuator is not part of this surface, and a request to a path that maps to nothing must not
- * be given an action name that could match a rule.
+ * <p>A request this filter names no action for - an actuator path, a method one of these paths does
+ * not answer, a {@code HEAD} on a path served for {@code GET} - is passed through with the header
+ * <strong>removed</strong>. It is not given an action name that could match a rule, and it does not
+ * keep the caller's either: the whole point of deriving the name server-side is lost if a path this
+ * service does not recognise is the way round it. What such a request is authorised as is the
+ * library's own computed {@code "<METHOD> <path>"}, which matches no rule in
+ * {@code acl/operations-rules.drl} and is therefore refused.
  */
 public class OperationsActionFilter extends OncePerRequestFilter {
 
@@ -68,11 +72,7 @@ public class OperationsActionFilter extends OncePerRequestFilter {
             final HttpServletResponse response, final FilterChain chain)
             throws ServletException, IOException {
         final String action = actionFor(request.getMethod(), pathOf(request));
-        if (action == null) {
-            chain.doFilter(request, response);
-        } else {
-            chain.doFilter(new ActionRequestWrapper(request, action), response);
-        }
+        chain.doFilter(new ActionRequestWrapper(request, action), response);
     }
 
     /**
@@ -80,7 +80,8 @@ public class OperationsActionFilter extends OncePerRequestFilter {
      *
      * @param method the request's method, as the container reports it
      * @param path   the request's path, without the context path
-     * @return the action name to authorise against, or {@code null} to leave the request alone
+     * @return the action name to authorise against, or {@code null} where this service names no
+     *         action for the request - which the wrapper turns into the header's absence
      */
     // PMD.OnlyOneReturn: the absence of an action is not a value to carry down the method; saying
     // so where it is decided is what keeps the notify lookup off a path that is not one.

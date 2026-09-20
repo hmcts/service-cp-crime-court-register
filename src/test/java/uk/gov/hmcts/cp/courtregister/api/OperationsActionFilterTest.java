@@ -137,9 +137,37 @@ class OperationsActionFilterTest {
         }
 
         @Test
-        void an_unmapped_path_should_keep_whatever_the_caller_sent() throws Exception {
+        void an_unmapped_path_should_not_keep_whatever_the_caller_sent() throws Exception {
             assertThat(seenByTheChain("GET", "/actuator/health", PREFIX + "check-flag"))
-                    .isEqualTo(PREFIX + "check-flag");
+                    .as("deriving the name server-side is worth nothing if a path this service "
+                            + "does not recognise is the way round it")
+                    .isNull();
+        }
+
+        @Test
+        void a_head_on_a_path_served_for_get_should_not_carry_a_name_the_caller_chose()
+                throws Exception {
+            assertThat(seenByTheChain("HEAD", "/operations/flag", PREFIX + "generate-register"))
+                    .as("Spring answers HEAD through the @GetMapping, so this reaches a served "
+                            + "endpoint; the lookup is keyed by method as well as path, so this "
+                            + "service derives nothing for it, and what is left must not be the "
+                            + "caller's own word for what they are doing")
+                    .isNull();
+        }
+
+        @Test
+        void the_header_should_not_be_among_the_names_where_nothing_was_derived() throws Exception {
+            final MockHttpServletRequest request =
+                    new MockHttpServletRequest("GET", "/actuator/health");
+            request.addHeader(ACTION, PREFIX + "check-flag");
+            final FilterChain chain = mock(FilterChain.class);
+            filter.doFilter(request, new MockHttpServletResponse(), chain);
+            final ArgumentCaptor<HttpServletRequest> passed =
+                    ArgumentCaptor.forClass(HttpServletRequest.class);
+            verify(chain).doFilter(passed.capture(), any());
+            assertThat(Collections.list(passed.getValue().getHeaders(ACTION))).isEmpty();
+            assertThat(Collections.list(passed.getValue().getHeaderNames()))
+                    .noneSatisfy(name -> assertThat(name).isEqualToIgnoringCase(ACTION));
         }
 
         @Test
