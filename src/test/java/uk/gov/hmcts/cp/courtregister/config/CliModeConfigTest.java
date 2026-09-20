@@ -25,6 +25,7 @@ import org.springframework.core.env.StandardEnvironment;
 import org.springframework.jms.config.JmsListenerEndpointRegistry;
 import org.springframework.jms.listener.MessageListenerContainer;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
+import org.springframework.scheduling.config.CronTask;
 import org.springframework.scheduling.config.ScheduledTask;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RestController;
@@ -124,6 +125,9 @@ class CliModeConfigTest {
 
     private static final String EMBEDDED_TOPIC = "spring.artemis.embedded.queues=public.event";
 
+    /** The 18:00 weekday run, as {@code application.yaml} ships it. */
+    private static final String GENERATION_CRON = "0 0 18 * * MON-FRI";
+
     /** The one property the two contexts differ by. */
     private static final String CLI_ON = "courtregister.cli=true";
 
@@ -141,9 +145,9 @@ class CliModeConfigTest {
      * Whatever this context has scheduled, which is nothing at all where no scheduling
      * configuration was imported.
      *
-     * <p>Asked of the annotation post-processor rather than of the job bean, because the job is not
-     * the only {@code @Scheduled} on a generating context - {@code GenerationReconciler} carries one
-     * too - and "no scheduled job" is a claim about both.
+     * <p>Asked of the annotation post-processor rather than of the job bean, because the run is
+     * not the only {@code @Scheduled} on a generating context - the morning report and the intake
+     * sweep carry one each - and "a command schedules nothing" is a claim about all of them.
      *
      * @param context the context under assertion
      * @return the scheduled tasks, empty where nothing processes {@code @Scheduled}
@@ -404,12 +408,33 @@ class CliModeConfigTest {
                     .isNotEmpty();
         }
 
+        /**
+         * FR-007 read off a real context: the generation half fires once a night and no oftener.
+         *
+         * <p>Characterisation of what the timer's removal left. The one cron trigger this pod
+         * carries is the 18:00 run; the morning report is not on this context, because
+         * {@code courtregister.report.enabled} is not set here, and the intake sweep is a fixed
+         * delay rather than a cron - a reading, not a decision. A second cron on the generation
+         * half would be a second thing deciding what became of a batch, which is the arrangement
+         * 004 exists to end.
+         */
+        @Test
+        @DisplayName("fires the generation half on exactly one cron")
+        void the_generation_half_carries_exactly_one_cron() {
+            assertThat(scheduledTasks(context))
+                    .as("the 18:00 run, and no second wall-clock decision about a batch")
+                    .filteredOn(task -> task.getTask() instanceof CronTask)
+                    .extracting(task -> ((CronTask) task.getTask()).getExpression())
+                    .containsExactly(GENERATION_CRON);
+        }
+
         @Test
         @DisplayName("runs the public-event listener container")
         void an_ordinary_pod_should_run_the_jms_listener_container() {
             assertThat(listenerContainers(context))
-                    .as("the durable subscription this pod holds; with nothing subscribed, every "
-                            + "outcome waits for the grace-period reconciler")
+                    .as("the durable subscription this pod holds; with nothing subscribed, no "
+                            + "outcome arrives at all and every batch waits until the next run "
+                            + "gives up on it")
                     .isNotEmpty()
                     .allSatisfy(container -> assertThat(container.isRunning())
                             .as("event-driven completion means the container starts with the pod")

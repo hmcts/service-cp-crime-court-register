@@ -10,8 +10,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
+import java.util.stream.Stream;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -36,8 +42,8 @@ import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
+import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
-import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
@@ -50,13 +56,13 @@ import uk.gov.hmcts.cp.courtregister.support.WorkloadIdentityStub;
  *
  * <p>Every class Phase 5 landed is reachable from a unit test and none of them was reachable from
  * Spring. There was no {@code @Component} on and no {@code @Bean} constructing
- * {@code DocumentOutcomeSinkImpl}, {@link GenerationReconciler}, {@link RegisterGenerationService},
+ * {@code DocumentOutcomeSinkImpl}, {@link RegisterGenerationService},
  * {@link BatchAssembler}, {@link PdfPayloadMapper}, {@link FileServicePayloadStore} or
  * {@link SystemDocGeneratorClient}; the only {@code PayloadFileStore} and {@code DocumentRenderer}
  * beans in the whole context were {@link StubGenerationConfig}'s stand-ins. So
  * {@code PublicEventsConfig.documentEventListener} found no sink and returned {@code null} - no
  * {@code @JmsListener}, no durable subscription - and {@code SchedulingConfig.registerGenerationJob}
- * found no gate, assembler, service or reconciler and returned {@code null} - nothing scheduled. A
+ * found no gate, assembler or service and returned {@code null} - nothing scheduled. A
  * pod deployed with {@code courtregister.generation.enabled=true} was inert, and the only trace of
  * it was two WARN lines.
  *
@@ -109,6 +115,25 @@ class GenerationWiringContextTest {
      * attributable to whichever setting had been left out.
      */
     static final String GENERATION_ENABLED = "courtregister.generation.enabled=true";
+
+    /**
+     * The retired safety net's binary name, spelled rather than imported.
+     *
+     * <p>A case that imported the type would be deleted with it, which is the one thing an
+     * assertion about a deletion may not be.
+     */
+    private static final String RECONCILER =
+            "uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler";
+
+    /** Where the {@code batch} package's own sources are, for the lock sweep. */
+    private static final Path BATCH_SOURCES = Path.of("src", "main", "java", "uk", "gov", "hmcts",
+            "cp", "courtregister", "batch");
+
+    /** The same package, as a binary name prefix. */
+    private static final String BATCH_PACKAGE = "uk.gov.hmcts.cp.courtregister.batch.";
+
+    /** The extension a source of it carries, named so the sweep carries no literal. */
+    private static final String JAVA = ".java";
 
     static final String COMPLETION_EVENT = "courtregister.generation.completion=event";
 
@@ -169,7 +194,8 @@ class GenerationWiringContextTest {
                 .as("the bean is contributed only where an outcome has somewhere to be applied, so "
                         + "a null here is a pod holding no subscription at all: every "
                         + "document-available systemdocgenerator publishes for this service is "
-                        + "delivered to nobody, and every batch waits for the reconciler")
+                        + "delivered to nobody, and every batch waits until the next run "
+                        + "gives up on it")
                 .isNotNull();
     }
 
@@ -177,7 +203,7 @@ class GenerationWiringContextTest {
     @DisplayName("holds the sink an outcome is applied through")
     void the_context_should_hold_an_outcome_sink() {
         assertThat(context.getBeanProvider(DocumentOutcomeSink.class).getIfAvailable())
-                .as("the listener and the reconciler drive one port, and it is what turns an "
+                .as("the one port an outcome is applied through, and it is what turns an "
                         + "announcement into batch state")
                 .isNotNull();
     }
@@ -195,16 +221,104 @@ class GenerationWiringContextTest {
         assertThat(context.getBeanNamesForType(RegisterGenerationService.class))
                 .as("the requesting leg the run asks once per batch")
                 .isNotEmpty();
-        assertThat(context.getBeanNamesForType(GenerationReconciler.class))
-                .as("the retired safety net, kept as a bean until T022 deletes the class; its "
-                        + "timer is gone, so the run's first act is the only thing that decides a "
-                        + "stale batch")
-                .isNotEmpty();
         assertThat(context.getBeanNamesForType(PdfPayloadMapper.class))
                 .as("progression's payload generator, which the requesting leg maps every batch "
                         + "through")
                 .isNotEmpty();
     }
+
+    /**
+     * The retired safety net, asserted gone rather than asserted unused.
+     *
+     * <p>Two halves, because a bean nobody fires and a class nobody has is not the same claim and
+     * only the second one keeps. The bean is what a context would fire; the class is what a merge
+     * could bring back with a timer on it again, which is the shape the increment removed: a sweep
+     * that reached a stale batch before the run's own pass did, and failed it under a reason that
+     * does not give its registers back.
+     *
+     * <p>Stated over the bean <em>names</em> and a class <em>name</em> rather than over the type,
+     * because a case that imported the type could not outlive it - and the assertion has to be one
+     * that still compiles the day after the deletion, or it goes with it.
+     */
+    @Test
+    @DisplayName("holds no reconciler, and neither does any other context, the class being gone")
+    void no_context_holds_a_generation_reconciler() {
+        assertThat(context.getBeanDefinitionNames())
+                .as("a bean of it is a class something can call, and the run stopped calling it at "
+                        + "T016: what would be left is an object a later wiring change could put a "
+                        + "schedule back on")
+                .noneSatisfy(name -> assertThat(name).containsIgnoringCase("reconciler"));
+        assertThatThrownBy(() -> Class.forName(RECONCILER))
+                .as("and the class itself, because a type on the classpath is a type a merge can "
+                        + "wire up again with nothing to catch it (FR-007)")
+                .isInstanceOf(ClassNotFoundException.class);
+    }
+
+    /**
+     * One ShedLock name in the whole of {@code batch}, beside the morning report's.
+     *
+     * <p>A sweep over the package's sources rather than a list of the classes somebody remembered:
+     * the claim is about every locked method the generation half can carry, and a case naming two
+     * classes would say nothing about a third arriving beside them. FR-007 leaves the generation
+     * half exactly one schedule, so it leaves it exactly one lock, and the report's is the only
+     * other lock this service takes.
+     *
+     * <p>{@code IntakeAgeSweep} deliberately holds none, which is why the expected set is two and
+     * not three: a gauge describes the JVM that publishes it, so every replica takes its own
+     * readings and an alert aggregates them.
+     */
+    @Test
+    @DisplayName("the generation half carries exactly one scheduler lock")
+    void the_generation_half_carries_exactly_one_scheduler_lock() throws IOException {
+        assertThat(schedulerLockNames())
+                .as("the run's own, and the morning report's; a third is a second thing holding a "
+                        + "lock over batches the run is the only decider of")
+                .containsExactlyInAnyOrder(RegisterGenerationJob.LOCK_NAME,
+                        ExceptionReportJob.LOCK_NAME);
+    }
+
+    /**
+     * Every {@code @SchedulerLock} name declared anywhere in the {@code batch} package.
+     *
+     * <p>The classes are found from the sources rather than from a scan of the classpath, which is
+     * what makes this a claim about the package as it is written: a class added to it is in the
+     * sweep the moment it is saved, and a class deleted from it leaves nothing behind for the sweep
+     * to keep asserting about. {@code batch/cli} is left out on purpose - a command holds no
+     * scheduler and therefore takes no lock, which {@link CliModeConfigTest} is what asserts.
+     *
+     * @return the lock names, in no particular order
+     * @throws IOException if the package's sources cannot be read
+     */
+    private static List<String> schedulerLockNames() throws IOException {
+        try (Stream<Path> sources = Files.list(BATCH_SOURCES)) {
+            return sources.filter(source -> source.getFileName().toString().endsWith(JAVA))
+                    .map(GenerationWiringContextTest::loaded)
+                    .flatMap(declaring -> Stream.of(declaring.getDeclaredMethods()))
+                    .map(method -> method.getAnnotation(SchedulerLock.class))
+                    .filter(lock -> lock != null)
+                    .map(SchedulerLock::name)
+                    .toList();
+        }
+    }
+
+    /**
+     * One class of the {@code batch} package, from the file that declares it.
+     *
+     * @param source the source file, which this repository names after its one public type
+     * @return the loaded class
+     */
+    private static Class<?> loaded(final Path source) {
+        final String simple = source.getFileName().toString();
+        final String binary =
+                BATCH_PACKAGE + simple.substring(0, simple.length() - JAVA.length());
+        try {
+            return Class.forName(binary);
+        } catch (ClassNotFoundException notCompiled) {
+            throw new AssertionError(binary
+                    + " is a source in the batch package that no class answers to", notCompiled);
+        }
+    }
+
 
     /**
      * The run's first act has to be a bean for the run to be given one.

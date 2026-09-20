@@ -1713,11 +1713,41 @@ values on every pass.
 
 ### Tests first ⚠️
 
-- [ ] T021 [US4] `config/GenerationWiringContextTest` and `config/CliModeConfigTest` (both extend) —
+- [X] T021 [US4] `config/GenerationWiringContextTest` and `config/CliModeConfigTest` (both extend) —
       the reconciler's absence. `no_context_holds_a_generation_reconciler`;
       `the_generation_half_carries_exactly_one_scheduler_lock`, a reflection sweep over the `batch`
       package naming the one it expects; `the_generation_half_carries_exactly_one_cron`. Red: the
       bean and the second lock exist.
+
+      The absence is asserted over **bean names and a class name**, never over the type: a case that
+      imported `GenerationReconciler` would be deleted with it, and an assertion about a deletion
+      that cannot outlive the deletion is no assertion at all. `no_context_holds_a_generation_
+      reconciler` therefore states both halves - no bean definition names one, and `Class.forName`
+      on the binary name raises `ClassNotFoundException` - because a bean nobody fires and a class
+      nobody has are different claims and only the second one keeps. The lock sweep reads the
+      `batch` package's own **sources**, loads each class and collects every `@SchedulerLock` name,
+      so a class added beside the run is in the claim the moment it is saved; `batch/cli` is left
+      out because a command holds no scheduler at all, which `CliModeConfigTest` is what asserts.
+
+      **Red** (`flock -w 7200 … ./gradlew test --tests '*GenerationWiringContextTest*' --tests
+      '*CliModeConfigTest*' -Dtest.noFailFast=true`): **30 tests completed, 2 failed**, both
+      assertions and neither a compile error - `no_context_holds_a_generation_reconciler`
+      ("Expecting no elements of: [… "generationConfig", "generationReconciler", …] to satisfy
+      the given assertions requirements, but these elements did: ["generationReconciler"]") and
+      `the_generation_half_carries_exactly_one_scheduler_lock` ("Expecting actual:
+      ["exception-report", "register-reconciliation", "register-generation"] to contain
+      exactly in any order: ["register-generation", "exception-report"] but the following
+      elements were unexpected: ["register-reconciliation"]").
+
+      `the_generation_half_carries_exactly_one_cron` is **green on introduction** and recorded as a
+      characterisation rather than claimed as a red: the reconciler's timer went early, at
+      `f23812c5` in Phase 4's gate round, so the property it states was already true when it was
+      written. It is asserted anyway because it is the one of the three that says what FR-007 asks
+      for in the end state - one wall-clock decision about a batch, and no second. Its first
+      expectation named the 07:00 report's cron beside the run's and failed on a context that does
+      not carry it (`courtregister.report.enabled` is unset in this pair, so `ReportSchedulingConfig`
+      contributes nothing); the expectation was narrowed to the run's own cron, which is what "the
+      generation half carries exactly one" means on this context.
 - [ ] T024 [US4] `application/DocumentRendererTest` (new, reflection) and
       `adapter/systemdocgenerator/SystemDocGeneratorClientTest` (extend) — the query's absence.
       `the_renderer_port_declares_one_method`, which is what stops the query being reintroduced
