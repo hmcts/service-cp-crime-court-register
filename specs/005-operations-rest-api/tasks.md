@@ -546,7 +546,7 @@ the "a controller may not hold a repository" rule both land.
       it is a **fourth** endpoint that needs those beans, so T040/T041 must either add it to the
       not-wired set or make the reader unconditional. Not decided here: `LiveFeatureFlagConfig` and
       the `courtregister.generation.*` block are outside this increment's range.)
-- [ ] **T016** [P] [US6] `application/BatchListingServiceTest` (new) — **`ListBatchesCli`'s reads,
+- [x] **T016** [P] [US6] `application/BatchListingServiceTest` (new) — **`ListBatchesCli`'s reads,
       moved and unchanged**. Cases: a date's batches in the statement's order, each with its record
       count from `RegisterStore.batched` and its recipients from `RegisterNotificationRepository`;
       a batch with no court house yields `null` (the command printed `-`); the masking rule
@@ -555,9 +555,35 @@ the "a controller may not hold a repository" rule both land.
       address masks to `***`; `recordedWhileOff` yields record id, hearing id, register date and
       flag state; a store that will not answer propagates rather than returning a partial listing.
       Seams: `application/BatchListingService` and the two result records. Red: the masking case.
-- [ ] **T017** [US6] `application/BatchListingService` — the body of `ListBatchesCli.listDate`,
+      (Landed with T017 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. 23 tests, 0 failures. The masking rule is a `@CsvSource` of seven rows - a local part
+      longer than one, one of length two, one of length one, nothing before the `@`, no `@` at all,
+      an empty address, and a null one in a case of its own - which is the rule character for
+      character rather than the three cases the task names. The date's cases pin the statements'
+      order in both directions (batches and recipients), the absent court house **and** the empty
+      one, and an empty date answering an empty listing rather than silence. Four cases pin that a
+      read which fails propagates: the date's own read, a record count, a recipient read, and the
+      waiting listing - a listing that came back short is the answer support would act on.
+      Two privacy cases carry the `PersonalDataMarkers` through: the records behind the counts hold
+      a child's name, date of birth and ethnicity, and none of it is in what comes out, nor is the
+      unmasked address.
+      Deviation from the command, recorded: a batch with no court house yields `null` where
+      `ListBatchesCli` printed `-`. That is the task's own wording (data-model §2) and it is the
+      same fact in the shape JSON has for it; an empty string is treated as absent too, as the
+      command did.)
+- [x] **T017** [US6] `application/BatchListingService` — the body of `ListBatchesCli.listDate`,
       `print` and `listRecordedWhileOff` with the `Consumer<String>` printing removed and typed
       records returned. **Move, do not rewrite**: the diff is a move plus a return type. Green: T016.
+      (green: `BatchListingServiceTest` 23 tests, 0 failures; `TestProfileContextTest` beside it,
+      green. Checkstyle and PMD clean on main and test. `masked` and the record-count read are
+      moved character for character, comment and all; what changed is that the two methods build
+      `BatchListing` and `RecordedWhileOff` instead of calling a `Consumer<String>`, and that the
+      `listed(...)` wrapper is gone - the store's own unchecked type leaves here and the caller
+      decides what a caller should be told, which is what a service does in place of an exit code.
+      The bean is declared in `config/OperationsWebConfig` and carries `@Profile("!test")`, because
+      the store and both repositories carry it in `config/ProcessedLogConfig` - a file this
+      increment may not touch - and a listing over readers that do not exist is a context that will
+      not refresh.)
 - [ ] **T018** [P] [US1] [US6] `api/BatchesControllerTest` (new, listing cases only) and
       `api/RegistersControllerTest` (new, recorded-while-off cases only) — `@WebMvcTest` with
       `BatchListingService` mocked. Cases: the listing shape of data-model §2 and §3; a `date` that

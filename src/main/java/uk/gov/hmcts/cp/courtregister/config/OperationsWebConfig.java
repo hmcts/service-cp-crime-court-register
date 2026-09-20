@@ -4,9 +4,14 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.core.Ordered;
 import uk.gov.hmcts.cp.courtregister.api.OperationsActionFilter;
 import uk.gov.hmcts.cp.courtregister.api.OperationsErrorAttributes;
+import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
+import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 
 /**
  * What the operations API needs registered on the servlet container.
@@ -63,5 +68,27 @@ public class OperationsWebConfig {
     @Bean
     public OperationsErrorAttributes operationsErrorAttributes() {
         return new OperationsErrorAttributes();
+    }
+
+    /**
+     * The two listings, over the three reads they are built from.
+     *
+     * <p>{@code @Profile("!test")} for the reason the store and its two repositories carry it in
+     * {@code ProcessedLogConfig}: that profile deliberately has no database, and a listing over
+     * readers that do not exist is a context that will not refresh. The condition is stated here
+     * rather than taken from there because this increment does not touch that file.
+     *
+     * @param batchRepository        the date's batches
+     * @param notificationRepository each batch's recipient rows
+     * @param registerStore          the register rows behind a batch's count and the
+     *                               recorded-while-off listing
+     * @return the listings the two read endpoints call
+     */
+    @Bean
+    @Profile("!test")
+    public BatchListingService batchListingService(final RegisterBatchRepository batchRepository,
+            final RegisterNotificationRepository notificationRepository,
+            final RegisterStore registerStore) {
+        return new BatchListingService(batchRepository, notificationRepository, registerStore);
     }
 }
