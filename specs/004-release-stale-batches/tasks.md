@@ -1269,7 +1269,7 @@ durations and a clock. No Spring context, no Docker.
       never be a series (cardinality, and privacy on a register whose every defendant is a child) -
       and `data-model.md` gains its row at T012.
       `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` green.)
-- [ ] T013 [US2] `batch/StaleBatchReleaserTest` (extend) — the two cutoffs, which T012's minimal
+- [x] T013 [US2] `batch/StaleBatchReleaserTest` (extend) — the two cutoffs, which T012's minimal
       implementation is deliberately allowed not to compute.
       `the_scheduled_cutoff_is_the_clock_minus_the_minimum_age`;
       `the_manual_cutoff_is_the_longer_of_the_minimum_age_and_the_run_lock` (FR-017), with a case
@@ -1277,6 +1277,17 @@ durations and a clock. No Spring context, no Docker.
       `a_batch_at_exactly_the_minimum_age_is_stale` (US2.3), asserted on the cutoff argument rather
       than on an outcome, because the boundary lives in the predicate. Red: T012 passes `now` for
       both.
+      (red: `flock -w 7200 … ./gradlew test --tests '*StaleBatchReleaserTest*'
+      -Dtest.noFailFast=true`, **11 tests, 4 failed**, 0 errors — the four new cases and nothing
+      else, every failure an assertion and none of them the seam's: T012 is green, and what these
+      four are red against is the minimal implementation's `now` for both cutoffs. "expected:
+      2026-09-21T16:30:00Z but was: 2026-09-21T17:00:00Z" for the scheduled cutoff,
+      "2026-09-21T15:50:00Z" for the manual one against a seventy-minute lock, the same
+      16:30 for the manual one against a **ten-minute** lock - which is the case each way round,
+      so an implementation that simply always took the lock fails - and "expected: 30M but was: 0S"
+      for the boundary, asserted as the distance from the clock rather than on an outcome, because
+      the `<=` itself is the store's and is pinned there.
+      `checkstyleTest` and `pmdTest` green; `SHORT_LOCK` is the one fixture the cases add.)
 
 ### Implementation
 

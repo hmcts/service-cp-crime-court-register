@@ -67,6 +67,15 @@ class StaleBatchReleaserTest {
     /** The nightly run's own lock duration, which is the grace an operator's batch gets. */
     private static final Duration RUN_LOCK = Duration.ofMinutes(70);
 
+    /**
+     * A run lock shorter than the minimum age, so neither ordering of the two settings is assumed.
+     *
+     * <p>Not a configuration this service ships - the lock outlasts the run deadline by design -
+     * but the rule is a `max` and a rule stated as a `max` has to be asserted both ways round, or
+     * an implementation that simply always took the lock would pass.
+     */
+    private static final Duration SHORT_LOCK = Duration.ofMinutes(10);
+
     private static final UUID FIRST_BATCH = UUID.fromString("3b3a9c02-7d61-4f4c-8f10-1a5bb9d0f7c2");
     private static final UUID SECOND_BATCH =
             UUID.fromString("c1f4e6a8-05b7-4a3d-9f2e-6d8c3b17a940");
@@ -269,6 +278,63 @@ class StaleBatchReleaserTest {
         softly.assertThat(RunCorrelation.current())
                 .as("a correlation this pass opened is removed however the pass ended")
                 .isNull();
+    }
+
+    @Test
+    void the_scheduled_cutoff_is_the_clock_minus_the_minimum_age() {
+        answering(new StaleReleaseOutcome(List.of(), List.of()));
+
+        pass();
+
+        softly.assertThat(scheduledCutoff.get())
+                .as("a batch the schedule made is stale once it has been in flight for the "
+                        + "minimum age, measured back from the clock this run reads - not from "
+                        + "the run before it, and not from a duration the store defaults")
+                .isEqualTo(NOW.minus(STALE_AFTER));
+    }
+
+    @Test
+    void the_manual_cutoff_is_the_longer_of_the_minimum_age_and_the_run_lock() {
+        answering(new StaleReleaseOutcome(List.of(), List.of()));
+
+        pass();
+
+        softly.assertThat(manualCutoff.get())
+                .as("a batch an operator asked for holds no run lock and has the whole requesting "
+                        + "deadline to work in, so it is given the longer grace: failing it would "
+                        + "orphan a render the manual run is still making and refuse its own "
+                        + "record of having made it (FR-017)")
+                .isEqualTo(NOW.minus(RUN_LOCK));
+    }
+
+    @Test
+    void the_manual_cutoff_is_the_minimum_age_where_it_outlasts_the_run_lock() {
+        final StaleBatchReleaser shortLocked =
+                new StaleBatchReleaser(store, metrics, STALE_AFTER, SHORT_LOCK, clock);
+        answering(new StaleReleaseOutcome(List.of(), List.of()));
+
+        softly.assertThatCode(shortLocked::releaseStale).as(SEAM).doesNotThrowAnyException();
+
+        softly.assertThat(manualCutoff.get())
+                .as("the rule is the longer of the two and not the lock: an operator's batch is "
+                        + "never given less grace than the schedule's, whichever way a deployment "
+                        + "sets the two settings")
+                .isEqualTo(NOW.minus(STALE_AFTER));
+    }
+
+    @Test
+    void a_batch_at_exactly_the_minimum_age_is_stale() {
+        answering(new StaleReleaseOutcome(List.of(), List.of()));
+
+        pass();
+
+        softly.assertThat(Duration.between(scheduledCutoff.get(), NOW))
+                .as("the boundary is inclusive and lives in the store's predicate, which is "
+                        + "`<=`, so the pass's half of it is a cutoff that is exactly the minimum "
+                        + "age back - a pass that shaved a millisecond off would leave a batch at "
+                        + "exactly thirty minutes for another night, and the rule would need two "
+                        + "clauses to state instead of one")
+                .isEqualTo(STALE_AFTER);
     }
 
     /**
