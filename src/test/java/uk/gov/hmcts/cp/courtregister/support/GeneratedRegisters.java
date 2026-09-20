@@ -360,6 +360,50 @@ public final class GeneratedRegisters {
     }
 
     /**
+     * How many of this court centre's registers are in no batch and waiting for a run.
+     *
+     * <p>A register's own status is not the batch's - it stays RECORDED while the batch that holds
+     * it is GENERATING, and moves when the document does - so what a deferred court centre day
+     * looks like in the store is a recorded register with no batch behind it, which is this
+     * reading and not {@link #statuses()}.
+     *
+     * @return the active, unbatched registers of this court centre
+     */
+    public int registersWaiting() {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT count(*)
+                          FROM processed_output
+                         WHERE court_centre_id = :courtCentre
+                           AND status = 'RECORDED'
+                           AND superseded_at IS NULL
+                           AND batch_id IS NULL
+                        """)
+                .param("courtCentre", courtCentre)
+                .query(Integer.class)
+                .single();
+    }
+
+    /**
+     * How many registers one named batch of this court centre's holds.
+     *
+     * @param batchId the batch being asked about
+     * @return the registers stamped into it, which a release would give back
+     */
+    public int registersIn(final UUID batchId) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT count(*)
+                          FROM processed_output
+                         WHERE court_centre_id = :courtCentre AND batch_id = :batchId
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("batchId", batchId)
+                .query(Integer.class)
+                .single();
+    }
+
+    /**
      * Says of this court centre's batches what an operator's regeneration says of its own.
      *
      * <p>{@code system_generated} is progression's own flag and the one thing that tells a batch

@@ -2797,10 +2797,30 @@ VII.
       **The late outcome is asserted as a delta and not as a level**: the ignored counter is the
       JVM's, so the case reads it before and awaits one more, which is what makes it independent of
       whatever order the four cases run in.)
-- [ ] T038 [A] [US2] `e2e/GenerationEndToEndIT` (extend) — the other side of the boundary and the
+- [x] T038 [A] [US2] `e2e/GenerationEndToEndIT` (extend) — the other side of the boundary and the
       operator's batch: a batch ten minutes old is untouched and its court centre day is deferred as
       today; a `system_generated = false` batch forty minutes old is untouched because its cutoff is
       the longer one.
+      (green: `flock -w 7200 … ./gradlew test --tests '*GenerationEndToEndIT*'
+      -Dtest.noFailFast=true` → **BUILD SUCCESSFUL**, 5 tests, 0 failed, 0 errors. An [A] task, so
+      no red: both cases assert the arm the release pass already had, through the assembled
+      service.
+      **A register's status is not its batch's, and the first draft of both cases said it was.**
+      The draft asserted `statuses()` would read GENERATING for the rows a live batch holds; the run
+      answered `RECORDED`, because assembly stamps the batch id and the row moves only when the
+      document does. That is the store's own rule and not a defect, so the assertion was replaced
+      rather than the code: `registersIn(batchId)` and `registersWaiting()` say what a deferred day
+      and an untouched batch look like - two registers still the batch's, one recorded register
+      behind them in no batch at all. (The failing draft is recorded here rather than as a red run:
+      it was a test asserting the wrong thing, not the behaviour being absent.)
+      **`wasAskedForByAnOperator()` landed one commit early**, inside T037's, because the two tasks
+      share `GeneratedRegisters`; it is the `system_generated = false` stamp this task's second case
+      needs and nothing else reads it.
+      **The deferred counts are asserted as positive, not as one.** `deferredKeys` and
+      `deferredRows` are the night's across every court centre and the register store is shared by
+      every suite in the JVM, so this day's own deferral is read from its rows and the report is
+      asserted only to have said that something was passed over - which is the claim that would
+      fail if a run stopped counting deferrals at all.)
 - [ ] T039 `config/TelemetryPrivacyTest` (extend) — the privacy sweep over the two new classes.
       `GenerationLegs` drives `StaleBatchReleaser` and `BatchAgeSweep` and no longer names
       `GenerationReconciler`; every line they produce carries only a batch id, a count and a bounded

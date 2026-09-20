@@ -110,6 +110,29 @@ class GenerationEndToEndIT {
     /** When it says it finished, with the offset the estate publishes times under. */
     private static final Instant GENERATED_AT = Instant.parse("2026-08-21T17:04:11Z");
 
+    /** A third hearing of the same day, shared after the night's first run had been and gone. */
+    private static final Instant AFTER_THE_RUN = Instant.parse("2026-08-21T18:12:00Z");
+
+    /**
+     * How long a batch has been waiting in the case that is about the other side of the boundary.
+     *
+     * <p>Inside {@code courtregister.generation.stale-after}, which this repository ships at thirty
+     * minutes: a batch this young is one the estate may still be rendering, and giving up on it
+     * would throw away a document somebody is about to be sent (FR-002).
+     */
+    private static final Duration TEN_MINUTES = Duration.ofMinutes(10);
+
+    /**
+     * How long the batch an operator asked for has been waiting.
+     *
+     * <p>Past the schedule's own thirty minutes and inside the seventy of
+     * {@code courtregister.generation.lock-at-most-for}, which is the grace a batch a person asked
+     * for is judged by instead: a manual generation holds no run lock and has the whole requesting
+     * deadline to work in, so failing it at forty minutes would orphan a render that run is still
+     * making (FR-017). The same batch, stamped as the schedule's, would be released at this age.
+     */
+    private static final Duration FORTY_MINUTES = Duration.ofMinutes(40);
+
     /** How long the outcome is given to travel the topic and reach the batch row. */
     private static final Duration DELIVERED_WITHIN = Duration.ofSeconds(30);
 
@@ -284,6 +307,74 @@ class GenerationEndToEndIT {
                         .map(row -> GenerationStackSupport.notificationPathFor(
                                 row.notificationId()))
                         .toList());
+    }
+
+    @Test
+    @DisplayName("a batch inside the minimum age is left in flight, and its day deferred as today")
+    void a_batch_not_yet_stale_should_be_left_alone_and_its_court_centre_day_deferred() {
+        run();
+        final UUID inFlight = registers.batches().getFirst();
+        registers.record(UUID.randomUUID(), REGISTER_DAY, AFTER_THE_RUN, List.of(LEEDS));
+        registers.hasBeenWaitingFor(TEN_MINUTES);
+
+        final RunReport report = run();
+
+        assertThat(report.releasedBatches())
+                .as("ten minutes is inside the minimum age, so the pass gave nothing back: a batch "
+                        + "the estate may still be rendering is not a batch to fail (FR-002)")
+                .isZero();
+        assertThat(registers.batches())
+                .as("and no second batch was assembled for the day, because the first is still in "
+                        + "flight - two live batches for one court centre day would be two "
+                        + "documents and two e-mails")
+                .containsExactly(inFlight);
+        assertThat(registers.batchStatuses())
+                .as("the batch is exactly as the first run left it")
+                .containsExactly(BatchStatus.GENERATING.name());
+        assertThat(registers.registersIn(inFlight))
+                .as("the two registers the first run batched are still that batch's")
+                .isEqualTo(2);
+        assertThat(registers.registersWaiting())
+                .as("and the hearing shared since is recorded and in no batch, which is what its "
+                        + "court centre day being deferred looks like in the store")
+                .isEqualTo(1);
+        assertThat(report.deferredKeys())
+                .as("and the run says so rather than passing over the key in silence; a count "
+                        + "rather than an identity, and the store above is where this day's own "
+                        + "deferral is read - the register store is shared by every suite in this "
+                        + "JVM, so the number is the night's")
+                .isPositive();
+        assertThat(report.deferredRows()).isPositive();
+    }
+
+    @Test
+    @DisplayName("a batch an operator asked for is judged by the longer of the two cutoffs")
+    void a_batch_an_operator_asked_for_should_be_judged_by_the_longer_cutoff() {
+        run();
+        final UUID byHand = registers.batches().getFirst();
+        registers.wasAskedForByAnOperator();
+        registers.hasBeenWaitingFor(FORTY_MINUTES);
+
+        final RunReport report = run();
+
+        assertThat(report.releasedBatches())
+                .as("forty minutes is past the schedule's own cutoff and inside the operator's: a "
+                        + "manual generation holds no run lock and has the whole requesting "
+                        + "deadline to work in, so this batch is one the 18:00 run must not fail "
+                        + "underneath it (FR-017)")
+                .isZero();
+        assertThat(registers.batches())
+                .as("nothing was released, so nothing was re-batched")
+                .containsExactly(byHand);
+        assertThat(registers.batchStatuses()).containsExactly(BatchStatus.GENERATING.name());
+        assertThat(registers.registersIn(byHand))
+                .as("and its registers are still the batch's, which is what being left alone means "
+                        + "for the rows a released batch would have given back")
+                .isEqualTo(2);
+        assertThat(registers.registersWaiting())
+                .as("nothing came back to be batched by the schedule underneath the person who "
+                        + "asked for this one")
+                .isZero();
     }
 
     /**
