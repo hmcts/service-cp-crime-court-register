@@ -1558,11 +1558,25 @@ numbers.
       '*RunReportTest*' --tests '*GenerationMetricsTest*' --tests '*GenerationReconcilerTest*'
       -Dtest.noFailFast=true`): BUILD SUCCESSFUL, **162 tests, 0 failures, 0 errors**, the eleven
       red assertions among them.
-- [ ] T020 [US1] `config/GenerationConfig.java`, `config/SchedulingConfig.java` — make T019 green. The
+- [x] T020 [US1] `config/GenerationConfig.java`, `config/SchedulingConfig.java` — make T019 green. The
       `generationReconciler` bean becomes `staleBatchReleaser`, taking `properties.staleAfter()` and
       `properties.lockAtMostFor()`; the job bean's `ObjectProvider<GenerationReconciler>` becomes
       `ObjectProvider<StaleBatchReleaser>`. **A wiring task's test is its context case**, which T019
       is.
+      **Landed on `SchedulingConfig` and not on `GenerationConfig`, and the reconciler's bean
+      stays.** Two reasons, both of them the task's own: `GenerationConfig` carries the
+      generation-enabled condition but **not** `CliModeConfig`'s, so a `staleBatchReleaser`
+      declared there would be held by a command JVM and T019's second case could not be true;
+      `SchedulingConfig` carries both, which is exactly the pair of conditions the pass answers to.
+      And this phase's own close says the reconciler is left "dead code with a timer still on it,
+      which the next phase removes" — true only while its bean exists, so `generationReconciler`
+      is untouched here and T022 deletes it with the class. The job bean no longer asks for it: the
+      completeness check names the releaser in its place, and so does its WARN line.
+      **Green** (`flock -w 7200 … ./gradlew test --tests '*GenerationWiringContextTest*' --tests
+      '*CliModeConfigTest*' -Dtest.noFailFast=true`): BUILD SUCCESSFUL, **25 tests, 0 failures, 0
+      errors** over the three contexts — the generating pod, the command JVM and
+      `CliModeConfigTest`'s own pair, which still holds the run on the ordinary pod and none of it
+      on the command one.
 
 **Phase close**: `flock … ./gradlew build` green; review gate. The new behaviour is live from here;
 the reconciler is dead code with a timer still on it, which the next phase removes.

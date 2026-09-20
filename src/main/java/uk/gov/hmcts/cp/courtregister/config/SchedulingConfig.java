@@ -15,7 +15,6 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
-import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
 
@@ -41,7 +40,8 @@ import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
  * enabled context now - this one, the report's and the intake sweep's - and each scheduled method
  * names the one it belongs on, so the run still cannot land on a thread anything else is using. One
  * thread, because the run is sequential by design and a pool would only make it look otherwise. The
- * grace-period reconciler shares this scheduler and always has; what changed is that it says so.
+ * transitional grace-period reconciler shares this scheduler and always has; what changed is that
+ * it says so.
  *
  * <p><strong>Only where the downstream half is deployed.</strong> The whole of this is conditional
  * on {@code courtregister.generation.enabled}, so an intake-only pod holds no lock, keeps no
@@ -100,6 +100,39 @@ public class SchedulingConfig {
     }
 
     /**
+     * The run's first act: the batches the night before did not finish.
+     *
+     * <p>Declared beside the run rather than beside the rest of the downstream half, because this
+     * configuration carries the two conditions the pass has to answer to and
+     * {@link GenerationConfig} carries only one of them. The pass belongs to the scheduled run: it
+     * is destructive - it fails a batch and re-renders a court centre's day - and it is safe only
+     * inside the lock that makes the 18:00 run one run. An operations command holds no such lock,
+     * and an operator regenerating one court centre must not, as a side effect, decide that
+     * another court centre's in-flight batch has failed, so a JVM in CLI mode holds no pass at all
+     * (the per-batch release the operations surface already offers is the supported way to free
+     * one).
+     *
+     * <p>It takes the two durations it measures by rather than the settings record they are in: a
+     * batch this service's schedule made is stale after {@code stale-after}, and one an operator
+     * asked for is given the longer of that and the run's own lock duration, because a manual
+     * generation has the whole requesting deadline to ask for its renders (FR-017).
+     *
+     * @param store      the register store, whose one fenced statement per batch does the deciding
+     * @param metrics    where the released and contended counts are recorded
+     * @param properties the settings the pass measures by, the minimum age above all
+     * @param clock      this pod's reading of now, which both cutoffs are measured back from
+     * @return the pass the nightly run calls first
+     */
+    @Bean
+    public StaleBatchReleaser staleBatchReleaser(final RegisterStore store,
+            final GenerationMetrics metrics, final GenerationProperties properties,
+            final Clock clock) {
+
+        return new StaleBatchReleaser(store, metrics, properties.staleAfter(),
+                properties.lockAtMostFor(), clock);
+    }
+
+    /**
      * The nightly run, over the collaborators it asks in order.
      *
      * <p>Declared here rather than annotated as a component, and tolerant of a context that holds
@@ -112,7 +145,7 @@ public class SchedulingConfig {
      * @param stores      the register store, for the records a run may batch
      * @param assemblers  the grouping into one batch per court centre and register date
      * @param services    the requesting leg, asked once per batch
-     * @param reconcilers the grace-period safety net under the public-event topic
+     * @param releasers   the pass the run calls first, before anything is read
      * @param metrics     the downstream half's instruments
      * @param properties  the settings the run works to
      * @param clock       this pod's reading of now
@@ -125,7 +158,7 @@ public class SchedulingConfig {
             final ObjectProvider<RegisterStore> stores,
             final ObjectProvider<BatchAssembler> assemblers,
             final ObjectProvider<RegisterGenerationService> services,
-            final ObjectProvider<GenerationReconciler> reconcilers,
+            final ObjectProvider<StaleBatchReleaser> releasers,
             final GenerationMetrics metrics,
             final GenerationProperties properties,
             final Clock clock,
@@ -135,23 +168,16 @@ public class SchedulingConfig {
         final RegisterStore store = stores.getIfAvailable();
         final BatchAssembler assembler = assemblers.getIfAvailable();
         final RegisterGenerationService service = services.getIfAvailable();
-        final GenerationReconciler reconciler = reconcilers.getIfAvailable();
+        final StaleBatchReleaser releaser = releasers.getIfAvailable();
 
         final boolean complete = gate != null && store != null && assembler != null
-                && service != null && reconciler != null;
-        // A seam, not the wiring: the pass is built here from the store and the two durations the
-        // run already holds, so that the job can call it before the bean that will own it exists
-        // (T020 promotes this to a bean of its own and drops the reconciler from the check).
-        final StaleBatchReleaser releaser = complete
-                ? new StaleBatchReleaser(store, metrics, properties.staleAfter(),
-                        properties.lockAtMostFor(), clock)
-                : null;
+                && service != null && releaser != null;
         if (!complete) {
             LOG.warn("The downstream half is enabled but incomplete on this context, so no "
                     + "generation run is scheduled: a job that could not read the flag, assemble a "
                     + "batch or ask for a render would report a quiet night rather than a missing "
-                    + "one. gate={} store={} assembler={} service={} reconciler={}", gate != null,
-                    store != null, assembler != null, service != null, reconciler != null);
+                    + "one. gate={} store={} assembler={} service={} releaser={}", gate != null,
+                    store != null, assembler != null, service != null, releaser != null);
         }
         return complete
                 ? new RegisterGenerationJob(gate, store, assembler, service, releaser, metrics,
