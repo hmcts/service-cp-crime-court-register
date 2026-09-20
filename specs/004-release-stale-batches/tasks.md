@@ -570,6 +570,13 @@ Codex. What it found above LOW, and where each was closed:
   along with the corollary that the call may not be put behind an outer transaction, or the first
   refusal would abort it and all three attempts would fail inside it. Green: `StaleReleaseConcurrencyIT`
   3 of 3, `RegisterStoreIT` 83 of 83.
+  **One branch of that fix went in untested and left untested**, recorded here so the next reviewer
+  does not re-derive it: `9811570`'s exhaustion path threw `StoreContendedException` after
+  `RECORD_ATTEMPTS` refusals, and the only round that reached the retry — `INSIDE_THE_WINDOW` — pins
+  one refusal followed by a successful attempt, so nothing ever drove the throw. It was deleted at
+  gate 3 (`425beec`), still untested, and what replaced it is pinned by
+  `a_batch_no_attempt_can_release_is_reported_while_the_others_are_released`. HEAD is clean; the
+  range's history carries one production branch no test ever ran.
 * **What escapes an exhausted retry** — the decision gate 1 was asked to re-judge, and the
   reviewers split on it. Codex and `qa` accepted `ConcurrencyFailureException` provided the port
   said so; `spec-validator` refused it, on the ground that the class which has to decide is Phase
@@ -697,8 +704,9 @@ only its `@throws` line.
   sharing the container, and `RegisterStoreIT$StaleRelease` and all three existing concurrency
   rounds went red with "a register was re-shared inside the statement's own window on each of 3
   attempts … so none of them was released". That is the blast radius the finding is about, observed
-  rather than argued. Green after the fix: `RegisterStoreIT` 83 of 83, `StaleReleaseConcurrencyIT`
-  5 of 5.
+  rather than argued. Green after the fix: `RegisterStoreIT` 85 of 85 (`StaleRelease` 13 of 13),
+  `StaleReleaseConcurrencyIT` 5 of 5. (The 83 quoted at gate 2 is correct for the moment it
+  describes: `2d2413c` added the boundary and finished-batch cases after it.)
   The round gives the held key up when it is done, because the operation answers for the whole
   store: a key left held would have every other suite spend its three attempts on this round's batch
   at every call.
@@ -722,6 +730,110 @@ build -Dtest.noFailFast=true` was then run against the tree **as committed** and
 identically - BUILD SUCCESSFUL, exit 0, 10m 5s, the same 3652 over 579 - and it is that run's XMLs
 that are left beside the report; `build` runs the coverage gate and not the report, so the ratios
 above are the earlier run's measurement of the same code and are not requoted from a second one.
+
+**Review gate 4 ran against the same phase again**, with the three read-only reviewers. It found no
+BLOCKER and no HIGH in the code: what it found above LOW was that the design artefacts had been left
+behind by gate 3's change of shape.
+
+* **The design artefacts still described the retired shape** (MEDIUM at `code-reviewer`). Gate 3
+  changed the operation — the predicate read once into a list that decides nothing, one fenced
+  statement per batch in a transaction of its own, exhaustion reported rather than thrown — and
+  re-pointed the port's javadoc and FR-003a at it, and nothing else. `data-model.md` still gave the
+  return type as `List<ReleasedBatch>` and the shape as "one statement, in one transaction" over
+  every stale batch, and its flow diagram, `plan.md`'s summary, inventory and decision list,
+  `research.md`'s D2 and `spec.md`'s Assumptions all said the same. All five are re-pointed at
+  `cd45160`, and the two dated Clarifications answers are kept as the record of the moment they were
+  taken, each with a pointer to what gate 3 narrowed: a Q/A session is history, and history is not
+  retro-edited.
+* **The refusal no retry can settle crossed the port as a Spring type** (LOW at `code-reviewer`,
+  `spec-validator` and the Codex wrapper's own observation — three reviewers, so it was closed
+  rather than deferred). `attemptedRelease` rethrew `DuplicateKeyException` on any key but the
+  active-register one. The class that has to read it is Phase 3's `StaleBatchReleaser` in `batch/`,
+  which may name no `org.springframework.dao` type (constitution Principle V), so it could only have
+  caught it as `RuntimeException` — the catch that swallows every programming error beside it, which
+  is the same argument gate 2 settled the exhaustion question on. It is translated into
+  `domain/RegisterNotReleasedException` with the collision as its cause, which is the idiom
+  `recordAndComplete` uses for the same table one operation above, and the port's javadoc now says
+  what it is and that it is allowed to end the run: FR-003a is about a batch's **ordinary** ending,
+  the lost race for the day's key, and that one is reported and never raised. Red at `87bb6f5` on the
+  assertion (`RegisterNotReleasedException` expected, `DuplicateKeyException` was), green at
+  `5a26d3d`.
+* **Two things the concurrency suite left to goodwill** (LOW at `qa`, the second of them the finding
+  gate 2 left open for re-judgement), both closed at `4dc8768`. `assertInvariants` asserts the losing
+  contender's escape with `allSatisfy`, which passes on an empty list, so a `markRequested` or a
+  `markGenerated` that silently moved nothing against a FAILED batch would have left the staged
+  rounds green; in `RELEASE_FIRST` the winner is known by construction, so `theRefusalExists` asserts
+  exactly one escape — and only for that order, because which contender won a `TOGETHER` round is the
+  decision `Order` deliberately declines to make. Mutation-checked at `hasSize(2)`: the two staged
+  rounds go red and the re-share round, whose contender cannot be refused, does not. And
+  `letTheKeyGo` ran as the round's last statement, so a read that threw before it would have left the
+  out-of-order share holding the day's key for every other suite on the shared container; it runs in
+  a `finally` now.
+* **The other two settled endings were outside the predicate by construction alone** (LOW at `qa`),
+  closed at `5410e9d`. `no_batch_a_run_has_finished_with_is_ever_matched_at_any_age` stood an aged
+  FAILED batch and an aged NOTIFIED one beside the waiting day; `PARTIALLY_NOTIFIED` and
+  `NOTIFIED_NOBODY` are endings a run has finished with too, and both now stand in the case at the
+  same age, walked there by `walkedToSettled`, which takes the tally rather than assuming everybody
+  was told. Mutation-checked: admitting either status to the predicate fails the case. The same
+  commit corrects the `releaseFailed` class comment, which still said four of **six** reasons leave
+  the stamp in place — the enum has been seven since `NOT_COMPLETED_BY_NEXT_RUN`, as the two
+  statements it describes already say.
+* **Gate 3's green was requoted wrong** (LOW at `spec-validator`): it said `RegisterStoreIT` 83 of 83
+  where the XMLs read 85, `StaleRelease` being 13 since `2d2413c`. Corrected above, with the note
+  that gate 2's own 83 is right for the moment it describes. The same commit records that
+  `9811570`'s exhaustion branch went in untested and was retired untested.
+
+**The whole-increment Codex gate did not run at gate 3, and has not run since.** Every call to
+`mcp__codex__codex` on that round — the full review prompt and a one-word probe alike — was refused
+with "You've hit your usage limit … try again at 1:00 PM", so that round has no Codex findings, and
+the three items above attributed to "the Codex wrapper" are the wrapper's own observations rather
+than Codex's. **No Phase 2 close and no Phase 3 start may be recorded on the strength of gate 3 or
+gate 4**: the Codex leg of this range's gate is unmet and is owed a run. Nothing in the wrapper's own
+checks blocks it — tree clean, every commit on `004-release-stale-batches`, no untracked files, every
+touched file inside this tree's coordination scope.
+
+Findings left open at this gate, each with its reason:
+
+* **A permanently contended batch has no operator remedy in this increment** (LOW, the wrapper's
+  observation). A batch whose hearing holds an earlier-stamped active unbatched share — the
+  out-of-order delivery `StaleReleaseConcurrencyIT` stages as data — is reported contended on every
+  run for ever: the release can never supersede that share, and the recorder never supersedes a
+  batched row. FR-003a accepts the waiting, and the 07:00 report names the court centre day as a late
+  batch every morning, but nothing here clears it. T011/T012 carry the counter and the WARN line, so
+  the condition is alertable; **the operator remedy is a follow-up for the operations surface (005 or
+  later)**, because the existing per-batch release the surface already offers is a command this tree
+  does not own.
+* **`STALE_BATCHES`' `batch_id` tiebreak is unasserted** (LOW at `qa`, marked optional there). The
+  ordering case proves `register_date` with two days; proving the tiebreak needs two live batches on
+  one date, which `idx_register_batch_live_key` allows only at two different court centres — and
+  every `mine*` filter in `RegisterStoreIT` is written against the one court centre a case speaks
+  for. That is fixture work of its own rather than an assertion, and the ordering it would pin is a
+  presentation detail of a list the pass logs.
+* **No case drives `failAndReleaseStale` over a broken `DataSource`** (LOW at `qa`). Outage
+  translation for it is covered by `StoreOutageTest` plus the call site, as T009's narrative already
+  records; the stronger proof belongs with Phase 3's `StaleBatchReleaserTest`, which owns the
+  caller's half.
+* **Nothing pins that the call is made outside a transaction** (LOW at `qa`). The javadoc states it
+  and the suites construct the store directly, so a Phase 3 caller wrapping the pass in a
+  `TransactionTemplate` would turn every retry into "current transaction is aborted" with no test
+  going red. The guard belongs where the caller is: T011/T012 are where a case can run the real store
+  under a transaction, and a runtime assertion in the store would be a check on its caller written in
+  the wrong class.
+* **`COALESCE(requested_at, assembled_at)` leans on a timestamp/state shape the columns do not
+  enforce** (LOW at Codex, gate 2, left open there for the same reason). Latent, reachable only
+  through a row no ordinary flow writes, and the fix is a constraint rather than a predicate, so it
+  belongs with the schema work.
+
+**Green after gate 4's remediation**: `flock -w 7200 … ./gradlew jacocoTestReport build
+-Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 10m 11s, **3652 tests over 579 suites, 0 failures,
+0 errors** — the same count as gate 3's close, because this round added assertions to existing cases
+and no case of its own — with `checkstyleMain` and `checkstyleTest` at `maxWarnings = 0`, `pmdMain`,
+`pmdTest` and `jacocoTestCoverageVerification` all green and none of them loosened. The coverage
+report was regenerated in that same run and reads **LINE 6592/6799 = 0.9696 and BRANCH 1998/2220 =
+0.9000** against the unchanged gate of LINE 0.88 / BRANCH 0.85; it contains `failAndReleaseStale`,
+which is how a reader can tell it is this tree's report. That run was made on the tree this gate's
+commits produce, before this record was written into it, and it is the report it regenerated that is
+left in `build/`.
 
 ---
 
