@@ -265,6 +265,8 @@ class RegisterStoreIT {
     private static final String GENERATING = "GENERATING";
     private static final String GENERATED = "GENERATED";
     private static final String NOTIFIED = "NOTIFIED";
+    private static final String PARTIALLY_NOTIFIED = "PARTIALLY_NOTIFIED";
+    private static final String NOTIFIED_NOBODY = "NOTIFIED_NOBODY";
     private static final String FAILED = "FAILED";
 
     /** The status a batch is assembled into, spelled out because {@code PENDING} is taken here. */
@@ -2437,7 +2439,7 @@ class RegisterStoreIT {
     /**
      * The other half of {@code markFailed}, and the only write here a person types by hand.
      *
-     * <p>Four of the six reasons leave the stamp in place because systemdocgenerator was asked and a
+     * <p>Four of the seven reasons leave the stamp in place because systemdocgenerator was asked and
      * document may yet exist, so no later run will ever pick those registers up again: a stamped row
      * is not active and unbatched. Re-rendering that day is therefore a decision a person makes, and
      * this is the statement the decision is written as.
@@ -3293,6 +3295,8 @@ class RegisterStoreIT {
         void no_batch_a_run_has_finished_with_is_ever_matched_at_any_age() {
             final AtomicReference<UUID> failed = new AtomicReference<>();
             final AtomicReference<UUID> notified = new AtomicReference<>();
+            final AtomicReference<UUID> partlyNotified = new AtomicReference<>();
+            final AtomicReference<UUID> toldNobody = new AtomicReference<>();
             final AtomicReference<UUID> waiting = new AtomicReference<>();
             final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
 
@@ -3314,6 +3318,23 @@ class RegisterStoreIT {
                 notified.set(sent.batchId());
                 walkedToNotified(sent, UUID.randomUUID(), UUID.randomUUID());
 
+                record(seededCommand(HEARING_FOUR, MONDAY_SHARED),
+                        document(HEARING_FOUR, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch someTold = assembled(MONDAY, mine(store.activeUnbatched()));
+                partlyNotified.set(someTold.batchId());
+                walkedToSettled(someTold, UUID.randomUUID(), UUID.randomUUID(),
+                        new NotificationSummary(1, 1, BatchStatus.PARTIALLY_NOTIFIED));
+
+                record(seededCommand(HEARING_FOUR, MONDAY_RESHARED),
+                        document(HEARING_FOUR, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch nobodyToTell =
+                        assembled(MONDAY, mine(store.activeUnbatched()));
+                toldNobody.set(nobodyToTell.batchId());
+                walkedToSettled(nobodyToTell, UUID.randomUUID(), UUID.randomUUID(),
+                        new NotificationSummary(0, 0, BatchStatus.NOTIFIED_NOBODY));
+
                 record(seededCommand(HEARING_THREE, TUESDAY_SHARED),
                         document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
@@ -3323,6 +3344,8 @@ class RegisterStoreIT {
 
                 ageBatch(generationFailed.batchId(), LAST_NIGHT);
                 ageBatch(sent.batchId(), LAST_NIGHT);
+                ageBatch(someTold.batchId(), LAST_NIGHT);
+                ageBatch(nobodyToTell.batchId(), LAST_NIGHT);
                 ageBatch(stillWaiting.batchId(), LAST_NIGHT);
                 released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
             }).as(WALKED).doesNotThrowAnyException();
@@ -3342,6 +3365,17 @@ class RegisterStoreIT {
                             + "than a GENERATED one: there is nothing left to give back, and a "
                             + "failure written over it would say a night that worked did not")
                     .contains(new BatchOutcome(NOTIFIED, null, null));
+            softly.assertThat(outcomeOf(partlyNotified.get()))
+                    .as("nor is the ending where some of the day's Youth Offending Teams were told "
+                            + "and the rest are resendable: the ones that were told were told, and "
+                            + "the rest are a resend of this batch rather than a reason to render "
+                            + "the day again under another one")
+                    .contains(new BatchOutcome(PARTIALLY_NOTIFIED, null, null));
+            softly.assertThat(outcomeOf(toldNobody.get()))
+                    .as("and neither is the ending where there was nobody to tell, which is a "
+                            + "night that worked as much as any other: the document exists, it is "
+                            + "simply that no team subscribed to that court centre day")
+                    .contains(new BatchOutcome(NOTIFIED_NOBODY, null, null));
             softly.assertThat(outcomeOf(waiting.get()))
                     .as("while the day of the very same age that was still waiting for its render "
                             + "is the one the pass is about")
@@ -4214,8 +4248,26 @@ class RegisterStoreIT {
      */
     private void walkedToNotified(final RegisterBatch batch, final UUID payloadFileId,
             final UUID documentFileId) {
+        walkedToSettled(batch, payloadFileId, documentFileId,
+                new NotificationSummary(1, 0, BatchStatus.NOTIFIED));
+    }
+
+    /**
+     * The same walk, settled on a tally the case chooses rather than on the everybody-was-told one.
+     *
+     * <p>Three states settle a notification run - everybody was told, somebody was not, and there
+     * was nobody to tell - and all three are endings a run has finished with. A case that can only
+     * reach the first of them can only claim the predicate about the first of them.
+     *
+     * @param batch          the batch assembly left at PENDING
+     * @param payloadFileId  the payload the render was asked for
+     * @param documentFileId the document systemdocgenerator produced
+     * @param summary        the tally and the terminal state it produces
+     */
+    private void walkedToSettled(final RegisterBatch batch, final UUID payloadFileId,
+            final UUID documentFileId, final NotificationSummary summary) {
         walkedToGenerated(batch, payloadFileId, documentFileId);
-        store.markNotified(batch.batchId(), new NotificationSummary(1, 0, BatchStatus.NOTIFIED));
+        store.markNotified(batch.batchId(), summary);
     }
 
     private static List<RegisterRecord> recordsOn(
