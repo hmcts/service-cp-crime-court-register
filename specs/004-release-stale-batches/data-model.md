@@ -292,6 +292,7 @@ before** its cutoff, so a batch at exactly the minimum age is stale.
 | `courtregister_generation_reconciled_total` | outcomes the reconciler fetched | **retired** |
 | `courtregister_generation_released_batches_total` | — | **new**: batches a run released |
 | `courtregister_generation_released_registers_total` | — | **new**: registers that came back with them |
+| `courtregister_generation_contended_total` | — | **new [Phase 3]**: batches the pass could not release, every attempt at them having lost the day's active-register key. Unlabelled, because a batch id may never be a series; FR-003a asks for it by name ("counted by the pass's line and its counter") and the design rules ask for it generally — a path that leaves something undone moves a counter |
 | `courtregister_oldest_generating_age` | the retired timer | `BatchAgeSweep`, same meaning and cadence |
 | `courtregister_oldest_pending_age` | the retired timer | `BatchAgeSweep`, same meaning and cadence |
 | `courtregister_oldest_generated_age` | the retired timer | `BatchAgeSweep`, same meaning and cadence |

@@ -1280,13 +1280,33 @@ durations and a clock. No Spring context, no Docker.
 
 ### Implementation
 
-- [ ] T012 [US1] `batch/StaleBatchReleaser.java` — make T011 green **and no more**: one call to
+- [x] T012 [US1] `batch/StaleBatchReleaser.java` — make T011 green **and no more**: one call to
       `failAndReleaseStale`, the lines, the two counters, the two numbers back, all under
       `RunCorrelation.under(...)`, which adopts the run's ambient id. The contended batches the
       answer names are counted and said at WARN — a path that drops something moves a counter — and
       the pass returns; the run goes on to assemble what the rest of the pass gave back (FR-003a).
       The split from T013 is deliberate: computing the cutoffs here would leave T013 with nothing to
       fail against.
+      (green: `flock -w 7200 … ./gradlew test --tests '*StaleBatchReleaserTest*' --tests
+      '*GenerationMetricsTest*' checkstyleMain checkstyleTest pmdMain pmdTest
+      -Dtest.noFailFast=true` BUILD SUCCESSFUL, **52 tests, 0 failures, 0 errors** —
+      `StaleBatchReleaserTest` 7 of 7 and `GenerationMetricsTest` 45 of 45 — with all four analysis
+      tasks green.
+      **The split is kept in the fields as well as in the arithmetic**: `staleAfter` and `runLock`
+      are constructor parameters here and become fields at T014, because two fields nothing reads
+      are two `pmdMain` violations and a deliberately minimal implementation should not have to
+      suppress a rule to stay minimal. Both cutoffs are `clock.instant()`, which is exactly what
+      T013 is red against.
+      **Three counters, and the third is the deviation T011's record states**: the released batches,
+      the released registers and `courtregister_generation_contended_total`. Every run moves all
+      three, by nought where it released nothing, so the series exist to be alerted on from the
+      first quiet night rather than appearing the first time something goes wrong.
+      **The pass's own lines**: one INFO per released batch naming the batch, the court centre and
+      the register date with the count; one WARN per contended batch naming it by identity alone;
+      and one INFO summary carrying `released_batches=`, `released_registers=` and `contended=`,
+      which is the line a quiet night still writes. All of them carry the run's `runId`, because
+      `releaseStale()` runs under `RunCorrelation.under(...)`.
+      `data-model.md`'s instrument table gains the contended row in the same commit.
 - [ ] T014 [US2] `batch/StaleBatchReleaser.java` — make T013 green. Both cutoffs computed once per
       pass from the injected clock and the two settings. The javadoc states the rule the retired
       class stated differently: PENDING and GENERATING are **one** rule, because with no query there

@@ -2,7 +2,13 @@ package uk.gov.hmcts.cp.courtregister.batch;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 
 /**
@@ -19,10 +25,29 @@ import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
  * makes is which two instants to ask about; the decision about any one batch is the store's, in one
  * fenced statement per batch.
  *
- * <p>This is the seam T011's cases are written against. T012 makes them green and T014 computes the
- * two cutoffs.
+ * <p><strong>Nothing about one batch may end the night.</strong> The store isolates each batch and
+ * reports the ones it could not release rather than raising them, so this pass counts those, says
+ * each once at WARN by identity, and goes on: the run behind it has the rest of the country's
+ * documents to make (FR-003a). A contended batch is stale still and untouched, so the next run
+ * reaches it again, and the 07:00 report names its court centre day every morning meanwhile. What
+ * does leave this pass is a store that went away - that is the run's own failure, reported on its
+ * line and rethrown, exactly as every other read the run cannot make is.
+ *
+ * <p>T014 computes the two cutoffs; until then both are the clock's own instant, which is the split
+ * T013 has a red run against.
  */
 public class StaleBatchReleaser {
+
+    private static final Logger LOG = LoggerFactory.getLogger(StaleBatchReleaser.class);
+
+    /** The store, asked once per run for the fenced release of every stale batch. */
+    private final RegisterStore store;
+
+    /** Where the two released numbers and the contended one are counted. */
+    private final GenerationMetrics metrics;
+
+    /** The clock both cutoffs are measured back from. */
+    private final Clock clock;
 
     /**
      * Creates the pass over the store it releases through and the settings it measures by.
@@ -37,18 +62,94 @@ public class StaleBatchReleaser {
      */
     public StaleBatchReleaser(final RegisterStore store, final GenerationMetrics metrics,
             final Duration staleAfter, final Duration runLock, final Clock clock) {
-        // T012 and T014 take these: the fields land with the code that reads them, so the seam
-        // leaves no unread state behind if the pair is ever split.
+        this.store = store;
+        this.metrics = metrics;
+        this.clock = clock;
+        // T014 takes the two durations and computes the cutoffs from them; until then both are
+        // this clock's own instant, which is the red run T013 records.
     }
 
     /**
      * Fails and releases every batch the run found still waiting, and says what that was.
      *
+     * <p>One call, because the decision about any one batch is the store's: the staleness rule is
+     * the write's own {@code WHERE} clause, so there is nothing for this pass to read first and
+     * nothing for it to decide in between. A batch that stopped being stale between the question
+     * and the write is simply not in the answer, which is a number here and not an error.
+     *
+     * <p>Under {@link RunCorrelation#under(java.util.function.Supplier)}, which adopts the run's
+     * ambient id rather than minting a second one: a night that wrote itself down under two
+     * correlations could not be read out of the estate's index as one thing. Where the pass is
+     * driven on its own - a test, or any caller outside a run - it opens one of its own and removes
+     * it again, because the scheduler's threads are pooled.
+     *
      * @return what the pass released and what it could not release
      */
     public ReleaseTally releaseStale() {
-        throw new UnsupportedOperationException(
-                "T012 implements the stale-batch pass; this is its red run");
+        return RunCorrelation.under(this::release);
+    }
+
+    /**
+     * The pass itself, under whatever correlation {@link #releaseStale()} settled on.
+     *
+     * @return what the pass released and what it could not release
+     */
+    private ReleaseTally release() {
+        final Instant now = clock.instant();
+        final StaleReleaseOutcome outcome = store.failAndReleaseStale(now, now);
+
+        int registers = 0;
+        for (final ReleasedBatch released : outcome.released()) {
+            registers += released.releasedRegisters();
+            said(released);
+        }
+        for (final UUID contended : outcome.contended()) {
+            saidContended(contended);
+        }
+
+        final ReleaseTally tally =
+                new ReleaseTally(outcome.released().size(), registers, outcome.contended().size());
+        metrics.staleBatchesReleased(tally.batches());
+        metrics.staleRegistersReleased(tally.registers());
+        metrics.staleBatchesContended(tally.contended());
+        LOG.info("The stale-batch pass gave back what the night before had not finished, and the "
+                + "run goes on to assemble it. released_batches={} released_registers={} "
+                + "contended={}", tally.batches(), tally.registers(), tally.contended());
+        return tally;
+    }
+
+    /**
+     * One line about one batch the run gave up on.
+     *
+     * <p>Identities and counts, which is the whole of what a release is: the batch, the court
+     * centre day it held and how many registers went back for tonight. Nothing here is a defendant,
+     * a recipient or a word another system wrote, so the line is safe at INFO (constitution
+     * Principle VII), and the run's own correlation is on it because
+     * {@link #releaseStale()} opened or adopted one.
+     *
+     * @param released the batch, as the store answered with it
+     */
+    private static void said(final ReleasedBatch released) {
+        LOG.info("Batch {} had not completed by the time this run began, so it is failed and its "
+                + "{} registers go back to tonight's assembly. court_centre={} register_date={}",
+                released.batchId(), released.releasedRegisters(), released.courtCentreId(),
+                released.registerDate());
+    }
+
+    /**
+     * One line about one batch nothing could be given back from.
+     *
+     * <p>At WARN and counted, because a path that leaves something undone moves a counter and "it
+     * is in the log index" is not an alerting surface. The batch is untouched and stale still, so
+     * the next run reaches it again; the pass says so and carries on rather than ending a night
+     * over one hearing the estate re-shared at the wrong moment (FR-003a).
+     *
+     * @param batchId the batch every attempt at was refused over
+     */
+    private static void saidContended(final UUID batchId) {
+        LOG.warn("Batch {} could not be given back: every attempt at it lost the race for its "
+                + "day's active register, so it is left exactly as it was found and the next run "
+                + "reaches it again. The rest of this pass is unaffected.", batchId);
     }
 
     /**
