@@ -2658,12 +2658,25 @@ from being sent after something already put right.
 
 ### Tests first ⚠️
 
-- [ ] T033 [US3] `application/DocumentOutcomeSinkTest` (extend) — **the drop that is not counted
+- [x] T033 [US3] `application/DocumentOutcomeSinkTest` (extend) — **the drop that is not counted
       today**. `a_document_available_for_a_batch_not_completed_by_the_next_run_moves_nothing_and_is_counted`
       and `a_generation_failed_for_one_moves_nothing_and_is_counted`, each asserting the batch is
       unchanged, no notification is made, **and the ignored counter moves under `terminal-batch`**;
       `a_redelivery_of_such_an_outcome_is_counted_under_the_same_reason`, never as an unknown
       correlation. Red: the counter does not move — the current code logs at WARN and counts nothing.
+      (red: `flock -w 7200 … ./gradlew test --tests '*DocumentOutcomeSinkTest*'
+      -Dtest.noFailFast=true`, **32 tests, 3 failed**, 0 errors — the three new cases and nothing
+      else, every failure an assertion and every one of them the counter: "expected: 1.0 but was:
+      -1.0" twice and "expected: 2.0 but was: -1.0" for the redelivery, `-1.0` being what a series
+      that does not exist reads as. The three *behavioural* halves of each case — the batch
+      unchanged, the notifier untouched, the correlation not counted as unknown — are green from
+      the first run, which is the point: the behaviour is unchanged and what was missing was the
+      evidence.
+      **The seam is the instrument**: `GenerationMetrics.TERMINAL_BATCH` and
+      `terminalBatchIgnored()`, which a test cannot name before they exist. No surface case in
+      `GenerationMetricsTest` moves, because the meter is
+      `courtregister_public_events_ignored_total` and only a seventh bounded reason is new;
+      `TelemetryPrivacyTest`'s bounded vocabulary picks the constant up by reflection.)
 - [ ] T035 `application/ExceptionReportServiceTest` (extend) and
       `batch/cli/ReportExceptionsCliTest` (extend) — **FR-019**.
       `a_batch_released_by_the_run_is_reported_as_batch_released_not_batch_failed`;

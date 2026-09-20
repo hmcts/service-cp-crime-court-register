@@ -151,6 +151,28 @@ public class GenerationMetrics {
     public static final String INCOMPLETE_OUTCOME = "incomplete-outcome";
 
     /**
+     * The {@code reason} label of an outcome for a batch this service has already ended.
+     *
+     * <p>A {@code document-available} for a batch the run gave up on and released, or a second
+     * refusal for one already FAILED under a different reason: the state machine does not draw the
+     * move, so the batch is left where it stands and the outcome is dropped. Until 004 that drop
+     * was a WARN and nothing else - the one acknowledged-and-dropped path on the subscription that
+     * moved no counter, which the design rules forbid.
+     *
+     * <p>It is counted now because the drop is a <em>guarantee</em> rather than a curiosity: it is
+     * what stops a Youth Offending Team being told twice about one court centre and register date
+     * after a released batch's late outcome arrives (SC-003, SC-010). A guarantee that moves no
+     * counter cannot be alerted on.
+     *
+     * <p><strong>Not one of the notification counter's late-* labels.</strong>
+     * {@link #LATE_ACCEPTANCE_IGNORED} and {@link #LATE_FAILURE_IGNORED} are on
+     * {@link #NOTIFICATIONS_IGNORED} and describe two notifiers racing over one recipient's row -
+     * a different event entirely, one leg further on. Reusing them here would hide a rendering
+     * fact inside a notification series.
+     */
+    public static final String TERMINAL_BATCH = "terminal-batch";
+
+    /**
      * The {@code reason} label of a delivery whose body would not parse at all.
      *
      * <p>The four readings above are all taken from an envelope this service read: they say what a
@@ -409,6 +431,19 @@ public class GenerationMetrics {
      */
     public void batchSweepFailure(final SweepFailureReason reason) {
         counter(BATCH_SWEEP_FAILURES, REASON_TAG, code(reason)).increment();
+    }
+
+    /**
+     * Counts an outcome for a batch this service had already ended, which moved nothing.
+     *
+     * <p>The drop that stops a second e-mail. A batch the run released is FAILED, and the
+     * {@code document-available} systemdocgenerator may still deliver for it must not re-stamp it:
+     * its registers are in tonight's batch and that batch is what tells the court centre's Youth
+     * Offending Teams. Nought is the expected reading, and a series that moves is the number of
+     * times the guarantee was needed.
+     */
+    public void terminalBatchIgnored() {
+        counter(PUBLIC_EVENTS_IGNORED, REASON_TAG, TERMINAL_BATCH).increment();
     }
 
     /**

@@ -647,6 +647,104 @@ class DocumentOutcomeSinkTest {
     }
 
     /**
+     * An outcome for a batch this service had already ended, which is what stops a second e-mail.
+     *
+     * <p>004 creates a new way to reach this state and the behaviour is unchanged: a late or
+     * duplicate outcome for a batch already FAILED has always moved nothing. What was <em>not</em>
+     * there was the counter. The refused transition was a WARN and was counted nowhere - the one
+     * acknowledged-and-dropped path on the subscription with no bounded reason, which the design
+     * rules forbid and which is now the guarantee the whole increment rests on: the batch the run
+     * gave up on at 18:00 may still be alive inside systemdocgenerator, and the document-available
+     * that arrives at 18:05 must move nothing, because the registers it was about are in tonight's
+     * batch and that batch is what tells the Youth Offending Teams (SC-003, SC-010).
+     */
+    @Nested
+    @DisplayName("an outcome for a batch this service has already ended")
+    class AnOutcomeForABatchAlreadyEnded {
+
+        @Test
+        void a_document_available_for_a_batch_not_completed_by_the_next_run_moves_nothing_and_is_counted() {
+            final RegisterBatch batch = releasedByTheNextRun();
+
+            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
+
+            told("the batch is left exactly where the run put it: re-stamping it would take "
+                            + "systemdocgenerator's verdict about a render nobody is waiting for "
+                            + "and attach it to a court centre day tonight's run has already "
+                            + "re-batched",
+                    () -> verify(store, never()).markGenerated(any(), any(), any(), any()));
+            told("and nobody is told, which is the whole guarantee: one e-mail per court centre "
+                            + "and register date, from the batch that really rendered",
+                    () -> verifyNoInteractions(notifier));
+            softly.assertThat(ignored(GenerationMetrics.TERMINAL_BATCH))
+                    .as("a path that drops something moves a counter, and this is the drop a "
+                            + "double e-mail is prevented by - \"it is in the log index\" is not "
+                            + "an alerting surface")
+                    .isEqualTo(1);
+            softly.assertThat(ignored(GenerationMetrics.UNKNOWN_CORRELATION))
+                    .as("the correlation was never in doubt: this outcome names a batch this "
+                            + "service holds and has ended")
+                    .isEqualTo(ABSENT);
+        }
+
+        @Test
+        void a_generation_failed_for_one_moves_nothing_and_is_counted() {
+            final RegisterBatch batch = releasedByTheNextRun();
+
+            generationFailed(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
+
+            told("FAILED is terminal and the reason on the row is this service's own: a refusal "
+                            + "arriving afterwards would replace \"this had not completed by the "
+                            + "time the next run began\" with the renderer's verdict about a "
+                            + "batch nobody is waiting for",
+                    () -> verify(store, never()).markFailed(any(), any(), any(), any()));
+            softly.assertThat(ignored(GenerationMetrics.TERMINAL_BATCH))
+                    .as("counted under the same bounded reason as the acceptance, because it is "
+                            + "the same fact about the same batch: an outcome arrived for "
+                            + "something this service had already ended")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void a_redelivery_of_such_an_outcome_is_counted_under_the_same_reason() {
+            final RegisterBatch batch = releasedByTheNextRun();
+
+            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
+            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
+
+            softly.assertThat(ignored(GenerationMetrics.TERMINAL_BATCH))
+                    .as("a durable subscription offers an unapplied outcome again, so the second "
+                            + "delivery is the ordinary case rather than a new fault")
+                    .isEqualTo(2);
+            softly.assertThat(ignored(GenerationMetrics.UNKNOWN_CORRELATION))
+                    .as("and never as an unknown correlation: counting a redelivery there would "
+                            + "report a lost correlation every time the broker did what a durable "
+                            + "subscription is for")
+                    .isEqualTo(ABSENT);
+        }
+
+        /**
+         * The batch the run gave up on: FAILED, released, and naming no completion mechanism.
+         *
+         * <p>{@code completed_by} is null because nobody outside this service reported anything
+         * about it - which is exactly why a late outcome for it is the one this counter exists
+         * for.
+         *
+         * @return the batch, as the sink's one lookup finds it
+         */
+        private RegisterBatch releasedByTheNextRun() {
+            final RegisterBatch batch = generating(MONDAY);
+            final RegisterBatch released = new RegisterBatch(batch.batchId(), COURT_CENTRE,
+                    OU_CODE, COURT_HOUSE, batch.registerDate(), batch.fileName(),
+                    batch.payloadFileId(), null, BatchStatus.FAILED,
+                    BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN, null, true, null, ASSEMBLED_AT,
+                    REQUESTED_AT, null, null, FAILURE_RECORDED_AT, 1, null, 0);
+            when(batches.findById(batch.batchId())).thenReturn(Optional.of(released));
+            return released;
+        }
+    }
+
+    /**
      * The leg a generated batch is handed on to, and everything that never reaches it.
      *
      * <p>A document that exists and has been sent to nobody is the state defect fix P1 is about, so
