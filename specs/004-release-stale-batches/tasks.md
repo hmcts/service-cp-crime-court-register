@@ -1685,6 +1685,18 @@ the right way round and it is named here so Phase 6 does not have to rediscover 
   T020's reasoning, the `GenerationConfig` line reworded, the deletion line noting that the timer
   went early, and the run suite's matrix row naming the FR-003a case and the two skip reasons.
 
+**Re-gated after the round.** `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` →
+**BUILD SUCCESSFUL, exit 0, 10m, 3694 tests over 584 suites, 0 failures, 0 errors** — five more
+than the close above: `GenerationMetricsTest`'s absence case, the wiring suite's two
+incomplete-context cases, the run suite's contended one, the second parameter of the skipped one,
+and the reconciler suite's two schedule cases replaced by two absence cases. `checkstyleMain`,
+`checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification` all ran and all passed,
+none of them loosened. The report from `flock … ./gradlew jacocoTestReport` over that run reads
+**LINE 6651/6854 = 0.9704 and BRANCH 2022/2228 = 0.9075** against the unchanged gate of LINE 0.88 /
+BRANCH 0.85 — thirteen more covered branches than the close's 2009, being `SchedulingConfig`'s
+incomplete branch and the gate decisions the parameterised skip case now drives. No migration was
+added and no schema changed.
+
 ---
 
 ## Phase 5: User Story 4 — the removal, then the vocabulary retirement
