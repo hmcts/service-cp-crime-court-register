@@ -564,6 +564,86 @@ class StaleReleaseConcurrencyIT {
     }
 
     /**
+     * The per-batch isolation held against a caller that is already inside a transaction.
+     *
+     * <p>The round above proves each batch is accounted for separately when the pass is called the
+     * way the night calls it - outside any transaction of the caller's. That is a precondition, and
+     * a precondition nothing enforces is a comment: a caller that wrapped the pass in a
+     * {@code TransactionTemplate} or an outer {@code @Transactional} would have every attempt join
+     * <em>its</em> transaction, and the whole of FR-003a would be gone without a line of this
+     * adapter changing. One batch's refusal would abort the surrounding transaction, the attempts
+     * after it would be made inside an aborted one, and every court centre already released would
+     * be rolled back with them.
+     *
+     * <p>So the operation is not asked to be called correctly, it is made correct: each attempt runs
+     * in a transaction of its own, suspending whatever the caller had open. This round is what says
+     * so. The pass is called from inside a surrounding transaction that is then rolled back, with
+     * the released batch stood on the <strong>earlier</strong> day so it is walked before the batch
+     * no attempt can release - the reverse of the round above, because what is asserted here is
+     * that a release already made is not taken back by what follows it.
+     *
+     * <p>Every assertion about a row is read after the surrounding transaction has ended, which is
+     * what makes "committed" the claim rather than "written": a release that had joined the
+     * caller's transaction is gone by then.
+     */
+    @Test
+    void a_release_is_committed_though_the_callers_transaction_rolls_back() {
+        final UUID releasedCentre = UUID.randomUUID();
+        final UUID contendedCentre = UUID.randomUUID();
+        final UUID heldKey = UUID.randomUUID();
+        final RegisterBatch released = staleBatch(releasedCentre, true);
+        final RegisterBatch contended = staleBatch(contendedCentre, heldKey, UUID.randomUUID(),
+                true, TUESDAY_SHARED);
+        final Instant cutoff = cutoff();
+        final AtomicReference<StaleReleaseOutcome> answered = new AtomicReference<>();
+
+        withTheKeyTakenBackInsideEveryAttempt(contendedCentre, heldKey, TUESDAY_SHARED, () -> {
+            final List<Throwable> escaped = escaping(() -> transactions.execute(surrounding -> {
+                answered.set(store.failAndReleaseStale(cutoff, cutoff));
+                surrounding.setRollbackOnly();
+                return null;
+            }));
+
+            softly.assertThat(escaped)
+                    .as("nothing escapes the pass because the caller happened to be inside a "
+                            + "transaction. Attempts folded into the caller's would leave the "
+                            + "second and third made inside a transaction the first refusal had "
+                            + "already aborted, and what escapes then is not a refusal anything "
+                            + "was written to read")
+                    .isEmpty();
+            softly.assertThat(releasedOf(answered.get()))
+                    .as("the batch the pass could release is still reported released, and the "
+                            + "batch it could not is still only contended")
+                    .contains(released.batchId())
+                    .doesNotContain(contended.batchId());
+            softly.assertThat(contendedOf(answered.get()))
+                    .as("which is the same account the pass gives outside a transaction: the "
+                            + "surrounding one is the caller's business and none of the store's")
+                    .contains(contended.batchId())
+                    .doesNotContain(released.batchId());
+        });
+
+        softly.assertThat(endingOf(released.batchId()))
+                .as("and the release is committed, read back after the surrounding transaction "
+                        + "rolled back. A release that had joined it would be gone - a night that "
+                        + "reported registers handed back and handed back none, which is the "
+                        + "stranded register this increment exists to end wearing a report saying "
+                        + "otherwise")
+                .isEqualTo(new Ending("FAILED", NOT_COMPLETED));
+        softly.assertThat(stampedTo(released.batchId()))
+                .as("with its registers genuinely back, and not merely back inside a transaction "
+                        + "nobody committed")
+                .isZero();
+        softly.assertThat(endingOf(contended.batchId()))
+                .as("while the batch every attempt was refused over is left exactly as it was "
+                        + "found, its own rollback having taken nothing else with it")
+                .isEqualTo(new Ending("GENERATING", null));
+        softly.assertThat(stampedTo(contended.batchId()))
+                .as("so both of its registers are still its own")
+                .isEqualTo(2L);
+    }
+
+    /**
      * Runs the body with the day's active register taken back inside every attempt at it.
      *
      * <p>A re-share of the hearing is recorded and then superseded by hand, so the statement's
@@ -585,7 +665,26 @@ class StaleReleaseConcurrencyIT {
      */
     private void withTheKeyTakenBackInsideEveryAttempt(final UUID courtCentre, final UUID hearingId,
             final Runnable refused) {
-        record(courtCentre, hearingId, MONDAY_SHARED.plus(LATER_SHARE));
+        withTheKeyTakenBackInsideEveryAttempt(courtCentre, hearingId, MONDAY_SHARED, refused);
+    }
+
+    /**
+     * The same, where the round's contended batch is not on this suite's own day.
+     *
+     * <p>The share held against the key has to fall on the <em>batch's</em> register date, because
+     * the key is {@code (hearing, court centre, register date)} and a share on another day is
+     * another key entirely - one the release never touches, so the trigger would fire against
+     * nothing and the round would go green having staged no refusal at all.
+     *
+     * @param courtCentre this round's court centre
+     * @param hearingId   the hearing whose key is taken back, and the only rows the trigger sees
+     * @param shared      the moment the estate stamped the batch's registers, which is the day the
+     *                    share held against the key has to be stamped on too
+     * @param refused     the pass, which is expected to meet the refusal on every attempt
+     */
+    private void withTheKeyTakenBackInsideEveryAttempt(final UUID courtCentre, final UUID hearingId,
+            final Instant shared, final Runnable refused) {
+        record(courtCentre, hearingId, shared.plus(LATER_SHARE));
         final UUID share = supersededByHand(courtCentre, hearingId);
         final String name = "test_only_retake_" + courtCentre.toString().replace("-", "");
         ProcessedLogTestSupport.jdbcClient()
