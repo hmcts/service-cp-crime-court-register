@@ -1138,6 +1138,24 @@ gate and both Checkstyle tasks were already green in that run, so nothing but th
 **Phase 2 may close on this gate.** The Codex leg is met, both of its findings are closed in the
 tree, and the three reviewer legs passed at gate 5 with their remaining findings recorded above.
 
+## Review gate 7 — the workflow leg, against Phase 2 as committed at `c07af34` (2026-09-20)
+
+One HIGH, and it is about the tree rather than the code: *"the tree was left dirty after the last
+commit"*, to be closed by committing or removing whatever a shell redirection had left behind.
+
+**It does not reproduce, and nothing was lost closing it.** At `c07af34` — the gate-6 remediation's
+last commit — `git status --porcelain` is empty, `git status --porcelain --ignored=matching -uall`
+names nothing outside `build/` and `.gradle/`, which `.gitignore` has always carried, and
+`git stash list` is empty. The 35 commits of `90001de..c07af34` add no file at the repository root
+and touch nothing outside this tree's half of the coordination contract, so no redirection artefact
+was committed either. Whatever the gate read was gone before this round opened; there was no file
+to commit and none to remove, and the round therefore changed no code.
+
+**Re-verified green at `c07af34`**: `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true`
+BUILD SUCCESSFUL, exit 0, **3657 tests, 0 failures, 0 errors** — the same count gate 6 closed on —
+with `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification`
+all green, and `git status --porcelain` still empty after the build.
+
 ---
 
 ## Phase 3: User Stories 1 and 2 — the pass and its cutoffs (Priority: P1) 🎯 MVP
