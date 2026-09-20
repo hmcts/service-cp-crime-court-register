@@ -2911,11 +2911,25 @@ VII.
       per kind and a walkthrough whose expected output is missing a key is one an operator reads as
       a failure; and "the five kinds together are proved by" loses its number, which is the same
       correction the suites took in Phase 7. Nothing else in either file is touched.)
-- [ ] T044 [P] `.claude/agents/{spec-validator,software-engineer,qa,code-reviewer}.md` — the scope
+- [x] T044 [P] `.claude/agents/{spec-validator,software-engineer,qa,code-reviewer}.md` — the scope
       paragraphs name **004-release-stale-batches** alongside the three complete increments;
       `spec-validator`'s generation-leg read list swaps `batch/GenerationReconciler` for
       `batch/StaleBatchReleaser` and `batch/BatchAgeSweep`, its contract row loses the query
       endpoint, and its "the outcome is learned, never assumed" bullet is re-pointed at the new arm.
+      (**Two of the four edits are this tree's and they are the two that landed.** The coordination
+      contract gives 004 the *reconciler and grace-period sentences* in these four files and only
+      those; the scope paragraphs belong to the 005 tree, which is editing the same paragraphs for
+      the REST surface, and an increment name written into them from here is a conflict on a file
+      neither tree can merge around. So `spec-validator.md`'s read list now names
+      `batch/StaleBatchReleaser` and `batch/BatchAgeSweep`, and its "the outcome is learned, never
+      assumed" bullet says the batch nothing can be learned about is failed
+      `NOT_COMPLETED_BY_NEXT_RUN` by the next run's release pass, through the store, with its rows
+      released.
+      **The contract row needed nothing**: row 3 has always read *"`generate-document` (REST
+      command, 202) and its public `document-available` / `generation-failed` events"*, with no
+      query endpoint in it — the same thing T041 found on the design rules' own table.
+      **Owed elsewhere and named here**: the four scope paragraphs still list 001, 002 and 003 and
+      not 004. Handed to the 005 tree with the two hand-offs Phases 5 and 7 already made.)
 - [ ] T045 `doc/DEFECT-FIXES.md` — the one cell. `P2`'s pinning-test list replaces
       `GenerationReconcilerTest.a_batch_nothing_can_be_learned_about_should_be_failed_generation_timed_out`
       with `StaleBatchReleaserTest.a_batch_still_generating_past_the_minimum_age_should_be_failed_and_released`,
