@@ -2450,9 +2450,22 @@ that fix, which is now doubly stale — T045 owns it. `.claude/agents/spec-valid
 the reconciler in its read-these-files list and its outcome-is-learned rule (T044, Phase 9).
 `config/CourtRegisterProperties`, `application.yaml`'s `spring.jms` block and `docker-compose.yml`
 are in neither tree's explicit ownership list and are edited here as comment-only corrections to
-mechanisms 004 removed; the coordinator is still asked to assign them to 004. And the three
+mechanisms 004 removed; the coordinator is still asked to assign them to 004. `README.md`'s
+`## Status` section sits beside the same question: the increment-002 bullet edited here is in
+neither the generation nor the operations section the contract names. And the three
 in-flight age reads still have no caller until Phase 6's `BatchAgeSweep` — T028 renamed their
 fixtures off the retired mechanism but did not give them one.
+
+**And one document no task owns.** `.specify/memory/constitution.md` (3.2.0) still describes the
+retired mechanism as live in four places — the `runId` rule's "its grace-period reconciler",
+the eleven-lines narrative around `GenerationReconciler.reconcileScheduled()`, "reconciled once
+through the SDG query API and otherwise fails `GENERATION_TIMED_OUT`", and "the public.event
+listener with the query-API reconciler". The constitution wins where documents disagree, so this
+outranks the three document tasks Phase 9 already has (T041 `design_rules`, T044
+`spec-validator.md`, T045 the P2 cell) — and the file is on **004's must-not-touch list**, so this
+tree cannot amend it and has not. The coordinator is asked to assign the amendment (3.2.0 → 3.3.0,
+or a note that 004's retirement supersedes those passages) to whichever tree owns the file, to land
+alongside Phase 9's document tasks and before the increment gate.
 
 **Ownership, for the gate record.** `adapter/fileservice/FileServicePayloadStoreIT`,
 `adapter/report/EmailReportSinkStoreIT` and `config/TelemetryPrivacyTest` are all **004-owned**: the
@@ -2483,6 +2496,16 @@ gate round 3 and taken out of the branch's history at gate round 4.
   `ASSEMBLY_FAILED`, `PAYLOAD_STORE_UNAVAILABLE`, `RENDER_REQUEST_FAILED`,
   `RENDER_REQUEST_REJECTED` — and is still four. Neither is `V2__register_store.sql`'s "the other
   four reasons": it is an applied migration and its comment is a record of what V2 enumerated.
+
+**Re-gated after gate round 4** (`flock -w 7200 … ./gradlew jacocoTestReport build
+-Dtest.noFailFast=true`) → **BUILD SUCCESSFUL, exit 0, 4m 43s, 3648 tests over 578 suites, 0
+failures, 0 errors, 0 skipped**, `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and
+`jacocoTestCoverageVerification` all run and all green, none of them loosened. Coverage from that
+same run reads **LINE 6514/6717 = 0.9698 and BRANCH 1993/2196 = 0.9076** — identical to gate round
+3 in every digit, including both denominators, which is the round stating what it was: a history
+rebuild that changed no tree but one paragraph of this file, and four comment sentences. A round
+that moved a single covered line would be a round that had done something it did not say it was
+doing.
 
 ---
 
