@@ -1770,12 +1770,36 @@ values on every pass.
       but some elements were not expected: ["query"]") and
       `a_whole_generation_makes_no_request_to_the_document_endpoint`, failing on its second half
       with the same two-against-one comparison over `SystemDocGeneratorClient`'s published calls.
-- [ ] T026 [US4] `config/ConfigurationValidationTest` and `config/PublicEventsHealthIndicatorTest`
+- [X] T026 [US4] `config/ConfigurationValidationTest` and `config/PublicEventsHealthIndicatorTest`
       (both extend) — the completion mode's absence.
       `a_generation_enabled_context_subscribes_without_being_told_to`;
       `a_generation_enabled_context_without_the_broker_configuration_refuses_to_start`, now
       unconditional. Red: `PublicEventsConfig` still reads `completion` and the refusal is still
       conditional.
+
+      **No red was available, and the task is recorded as a characterisation.** The red the task
+      predicted had already been spent: `39b6aeaf` (Phase 1, T002) retired
+      `courtregister.generation.completion` from `GenerationProperties` and dropped the conjunct
+      from `PropertiesValidator`'s broker rule in the same commit that renamed the grace period, so
+      by the time this task opened neither half of the predicted failure could be produced without
+      first putting the setting back. Both cases are therefore green on introduction and are
+      asserted anyway, because what they state is what T027 must not undo: the subscription starts
+      on `courtregister.generation.enabled` and on nothing else, and the broker rule has one
+      antecedent.
+
+      `a_generation_enabled_context_subscribes_without_being_told_to` is stated over the
+      **container** the factory makes rather than over the flag it was handed — auto-startup is
+      what the container does, and a setter nothing reads is what survives a refactor — and it
+      carries both directions: a generating deployment's container auto-starts, an intake-only
+      one's does not, which is what makes it a claim about one setting rather than about a
+      constant. Its third assertion is the record having no `completion` component at all.
+
+      **Green** (`flock -w 7200 … ./gradlew test --tests '*PublicEventsHealthIndicatorTest*'
+      --tests '*ConfigurationValidationTest*' -Dtest.noFailFast=true`): BUILD SUCCESSFUL, **171
+      tests, 0 failures**. The one failure met on the way was the case's own scaffolding — a
+      `SimpleJmsListenerEndpoint` with no message listener raises `IllegalStateException: No
+      MessageListener set` when the factory creates a container from it — and not a claim about the
+      subject.
 
 ### Implementation
 

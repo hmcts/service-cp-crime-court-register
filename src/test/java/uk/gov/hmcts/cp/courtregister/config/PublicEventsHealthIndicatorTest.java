@@ -2,8 +2,11 @@ package uk.gov.hmcts.cp.courtregister.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.Mockito.mock;
 
+import jakarta.jms.ConnectionFactory;
 import java.io.IOException;
+import java.lang.reflect.RecordComponent;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -16,6 +19,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.Status;
+import org.springframework.boot.jms.autoconfigure.JmsProperties;
+import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
+import org.springframework.jms.config.SimpleJmsListenerEndpoint;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 
 /**
@@ -26,8 +32,8 @@ import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
  * <p><strong>It reports.</strong> A nightly flow whose outcomes arrive on somebody else's topic has
  * exactly one observable that says the arrangement is still working, and it is the age of the last
  * delivery. A subscription that is connected and has heard nothing since a run began is a broker
- * problem the reconciler is about to hide, and this component is where an operator sees it before
- * the reconciled count says the same thing an hour later.
+ * problem nothing else will report until the next run gives up on every batch at once, and this
+ * component is where an operator sees it the evening before rather than the morning after.
  *
  * <p><strong>It never gates readiness.</strong> A pod cannot heal a broker by restarting, so putting
  * the subscription in the readiness group converts a blip into a rolling restart of every replica
@@ -55,6 +61,9 @@ class PublicEventsHealthIndicatorTest {
      * carry for the broker to gate a pod.
      */
     private static final String COMPONENT = "publicEvents";
+
+    /** The estate's shared topic, which is what the subscription is over. */
+    private static final String TOPIC = "public.event";
 
     /** The two components the readiness group is allowed to name, from 001. */
     private static final String STORE_COMPONENT = "db";
@@ -91,8 +100,8 @@ class PublicEventsHealthIndicatorTest {
         running.set(false);
 
         assertThat(answer().getStatus())
-                .as("a subscription that is not running receives nothing, and the reconciler is a "
-                        + "safety net rather than a second delivery route")
+                .as("a subscription that is not running receives nothing, and nothing else "
+                        + "delivers an outcome: this is the only route there is")
                 .isEqualTo(Status.DOWN);
         assertThat(answer().getDetails()).containsEntry("subscription", "stopped");
     }
@@ -167,6 +176,75 @@ class PublicEventsHealthIndicatorTest {
                 .as("a health endpoint is scraped and indexed like any other surface "
                         + "(constitution Principle VII)")
                 .containsOnlyKeys("subscription", "lastDeliveryAt", "lastDeliveryAgeSeconds");
+    }
+
+    // --- the subscription it reports on -------------------------------------------------------
+
+    /**
+     * The subscription starts because the generation half is on, and for no other reason.
+     *
+     * <p>Its auto-startup used to carry a second conjunct: a deployment that said it learned
+     * outcomes by asking systemdocgenerator's query API subscribed to nothing, which was coherent
+     * only while the query existed to ask. It no longer does, so a pod in that shape would learn no
+     * outcome at all and re-render every court centre every night — strictly worse than refusing to
+     * start — and the setting was removed outright rather than pinned to its one legal value
+     * (FR-013).
+     *
+     * <p>What this component reports on is therefore a subscription nobody has to ask for: a
+     * generating deployment holds one, and there is no configuration that leaves it holding none
+     * while still generating. Asserted over the container the factory makes rather than over the
+     * flag it was handed, because auto-startup is what the container does and a setter nothing
+     * reads is exactly the sort of thing that survives a refactor.
+     */
+    @Test
+    @DisplayName("a generating deployment subscribes without being told to")
+    void a_generation_enabled_context_subscribes_without_being_told_to() {
+        final SimpleJmsListenerEndpoint endpoint = new SimpleJmsListenerEndpoint();
+        endpoint.setId(COMPONENT);
+        endpoint.setDestination(TOPIC);
+        endpoint.setMessageListener(message -> { });
+
+        assertThat(subscriptionFactoryFor(true).createListenerContainer(endpoint).isAutoStartup())
+                .as("the generation half is on, so the one route an outcome arrives by is up; "
+                        + "nothing else is asked and nothing else can say otherwise")
+                .isTrue();
+        assertThat(subscriptionFactoryFor(false).createListenerContainer(endpoint).isAutoStartup())
+                .as("and the other half of the claim, which is what makes it a claim about one "
+                        + "setting: an intake-only deployment holds no durable subscription, "
+                        + "because an unread one accumulates on the broker for ever")
+                .isFalse();
+        assertThat(GenerationProperties.class.getRecordComponents())
+                .as("and the setting that used to say otherwise is not a setting any more")
+                .extracting(RecordComponent::getName)
+                .doesNotContain("completion");
+    }
+
+    /**
+     * The container factory as {@link PublicEventsConfig} builds it.
+     *
+     * @param generationEnabled whether this deployment runs the downstream half
+     * @return the factory, over a connection nothing connects
+     */
+    private static DefaultJmsListenerContainerFactory subscriptionFactoryFor(
+            final boolean generationEnabled) {
+
+        return new PublicEventsConfig().publicEventListenerContainerFactory(
+                mock(ConnectionFactory.class), new JmsProperties(),
+                generationSettings(generationEnabled));
+    }
+
+    /**
+     * The downstream half's settings, at their defaults but for the master switch.
+     *
+     * @param enabled whether this deployment runs the downstream half
+     * @return the settings
+     */
+    private static GenerationProperties generationSettings(final boolean enabled) {
+        return new GenerationProperties(enabled, "0 0 18 * * MON-FRI",
+                GenerationProperties.COURTS_ZONE, false, Duration.ofMinutes(60),
+                Duration.ofMinutes(70), Duration.ofMinutes(30), Duration.ofMinutes(10),
+                GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE,
+                GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE);
     }
 
     // --- what it must never gate -------------------------------------------------------------

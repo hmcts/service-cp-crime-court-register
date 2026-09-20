@@ -1778,11 +1778,24 @@ class ConfigurationValidationTest {
 
         private static final String BATCH_AGE_REFRESH = "courtregister.generation.batch-age-refresh";
 
+        /**
+         * The refusal, and it is unconditional - there is no setting left that excuses it.
+         *
+         * <p>It used to have a conjunct: a deployment could say it learned outcomes by asking the
+         * query API instead, and the broker stopped being required of it. With the query gone that
+         * shape would mean "learn no outcome, fail every batch at the next run, and render every
+         * day twice", which is strictly worse than refusing to start, so the setting went rather
+         * than being pinned to its one remaining legal value (FR-013). What is left is a rule with
+         * one antecedent: the generation half is enabled, therefore a broker is named.
+         */
         @Test
-        void generation_without_a_broker_should_fail_startup() {
+        @DisplayName("a generating deployment with no broker refuses to start, unconditionally")
+        void a_generation_enabled_context_without_the_broker_configuration_refuses_to_start() {
             generating.withPropertyValues("spring.artemis.broker-url=").run(context -> {
                 assertThat(context).hasFailed();
                 assertThat(context.getStartupFailure())
+                        .as("there is one way a batch learns what became of its render, and it is "
+                                + "a durable subscription to a broker this deployment named")
                         .hasMessageContaining("spring.artemis.broker-url")
                         .hasMessageContaining("courtregister.generation.enabled");
             });
