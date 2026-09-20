@@ -2898,10 +2898,19 @@ VII.
       reads "`001-court-register-port` (complete) and `002-consolidate-progression-leg` (in
       progress)", which has been wrong since 003 shipped. It is outside this task's two named edits
       and outside every other task in the phase, so it is reported rather than fixed.)
-- [ ] T043 [P] `specs/002-consolidate-progression-leg/quickstart.md` and
+- [x] T043 [P] `specs/002-consolidate-progression-leg/quickstart.md` and
       `specs/003-exception-report/quickstart.md` — the WireMock line loses "query document"; the 003
       quickstart's sample exception event stops using the retired reason. Historical quickstarts are
       still runnable ones.
+      (The 002 line now reads *systemdocgenerator (command 202)*, which is what
+      `docker/wiremock/mappings/` holds — there has been no query mapping there since Phase 5. The
+      003 sample's `BATCH_FAILED` line carries `reason=GENERATION_FAILED`, a reason the store can
+      still hold, rather than the retired one.
+      **Two further words in that sample were made true rather than left runnable-but-wrong**: its
+      counts line now carries `batch_released=0`, because the command really does print one count
+      per kind and a walkthrough whose expected output is missing a key is one an operator reads as
+      a failure; and "the five kinds together are proved by" loses its number, which is the same
+      correction the suites took in Phase 7. Nothing else in either file is touched.)
 - [ ] T044 [P] `.claude/agents/{spec-validator,software-engineer,qa,code-reviewer}.md` — the scope
       paragraphs name **004-release-stale-batches** alongside the three complete increments;
       `spec-validator`'s generation-leg read list swaps `batch/GenerationReconciler` for

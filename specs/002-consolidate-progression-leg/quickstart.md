@@ -21,7 +21,7 @@ docker compose up -d postgres servicebus-emulator artemis fileservice-postgres w
 - `fileservice-postgres` - a Postgres on 5433 seeded with `docker/fileservice/init.sql`, which is
   the vendored file-service liquibase DDL
   (`specs/002-consolidate-progression-leg/contracts/fileservice/`, changesets 001–006) as plain DDL.
-- `wiremock` - on 8089: mappings for systemdocgenerator (command 202, query document),
+- `wiremock` - on 8089: mappings for systemdocgenerator (command 202),
   notificationnotify (202) and the App Configuration `kv` endpoint, with the flag ON by default.
   See `docker/wiremock/README.md`.
 
