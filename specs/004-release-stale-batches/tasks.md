@@ -933,7 +933,107 @@ regenerated in that same run and reads **LINE 6592/6799 = 0.9696 and BRANCH 1998
 against the unchanged gate of LINE 0.88 / BRANCH 0.85; it contains `failAndReleaseStale`, which is
 how a reader can tell it is this tree's report. The ratios are unchanged from gate 4's because the
 decision is a change to one statement's SQL rather than to any Java branch, and the three new cases
-cover code that was already covered.
+cover code that was already covered. **Which run left which artefact**: gate 5 read the report and
+the results this close left in `build/` and found them to be two runs of the same source - the
+coverage report from the run quoted here, and the test XMLs from a later run of the same suite,
+which answered identically at 3655 over 579 with 0 failures and 0 errors. Either describes the tree
+as committed, so the verdict above stands under both, and the third remediation below says the same
+about its own two runs.
+
+**Gate 5's two MEDIUM findings were closed in a third remediation.** Neither is a BLOCKER and
+neither changed what the operation does: one is a claim the suite was leaving to two random
+identities, and one is a promise the port's javadoc was making more widely than the statement kept
+it.
+
+* **The per-batch isolation was asserted at UUID's discretion** (MEDIUM at `qa`,
+  `StaleReleaseConcurrencyIT`). `a_batch_no_attempt_can_release_is_reported_while_the_others_are_released`
+  is the round that says the pass **goes on** to the batches after one it could not release - and it
+  stood both of its batches on the same day. `STALE_BATCHES` answers `ORDER BY register_date,
+  batch_id`, so which of the two was reached first was decided by two random identities, and a
+  regression that stopped the walk at a contended batch - an early return, a `break`, or an
+  exception on exhaustion - would have been caught only on the runs where the contended one
+  happened to be walked first.
+  Closed at `e4d1cf2` by standing the batch that must be released anyway on the **day after** the
+  contended one: `staleBatch` and `batchFor` take the register date the round wants, the second
+  court centre's registers are shared on `TUESDAY_SHARED`, and the walk therefore reaches it after
+  the contended batch on every run. Nothing else about the round changed.
+  Mutation-checked against the regression it is about - `eachStaleBatch` given a `break` as soon as
+  a batch comes back contended: `./gradlew test --tests '*StaleReleaseConcurrencyIT*'
+  -Dtest.noFailFast=true`, 7 tests, 1 failed, and that one failed on **3** assertions - the other
+  court centre's batch still `Ending[status=GENERATING, failureReason=null]` where
+  `FAILED/NOT_COMPLETED_BY_NEXT_RUN` was expected, its id absent from `released`, and `2L` registers
+  still stamped to it where `0L` was expected. **Three runs out of three**, which is the point: the
+  day is what makes the order a property rather than a coin. Mutation reverted; 7 of 7 green with
+  `checkstyleTest` and `pmdTest`.
+* **A refusal that is no key at all crossed the port as a Spring type** (MEDIUM at `code-reviewer`,
+  `RegisterStore` ~479). The port promised that no `org.springframework.dao` type reaches it, and
+  `attemptedRelease` translated only `DuplicateKeyException`: a `DataIntegrityViolationException`
+  that is not one - a CHECK the bounded reason does not satisfy, which is what a pod running against
+  a store `V6` never reached meets on **every** stale batch - was caught by nothing and crossed into
+  `batch/`, where Phase 3's pass may name no such type and could only have read it as
+  `RuntimeException`, the catch that swallows every programming error beside it.
+  Closed in two halves. The **translation** at `0e99ef1`: a second `catch` arm after the
+  `DuplicateKeyException` one hands the refusal to the same `unaccountedForRelease`, which now takes
+  the wider class, and it is not attempted again - a rule is not a race. Red at `9ee0d74` with
+  `RegisterStoreIT$StaleRelease.a_refusal_that_is_not_a_key_at_all_is_the_domains_own_class_too`,
+  which narrows a CHECK onto this case's court centre (`NOT VALID`, dropped in a `finally`, the
+  idiom `withOneUnbatchedRegisterAllowed` already uses) and asserts the class that escapes: 87 tests,
+  1 failed, **2** assertions, both of them assertions - `RegisterNotReleasedException` expected and
+  `DataIntegrityViolationException` was, and the same on the cause - while the other two claims
+  passed red, because one statement rolls back whole and the mark went down with the release either
+  way. Green at `0e99ef1`.
+  And the **claim itself**, in the same commit: the port now says that no *refusal* crosses as a
+  Spring type, and says what does - the store's own contention signal, a deadlock or a serialisation
+  failure, which `StoreOutage.translating` hands on unchanged from **every** method on this port and
+  which is the run's ordinary transient failure rather than anything this operation decides about.
+  That is the adapter's store-wide policy (`recordAndComplete` raises a `ConcurrencyFailureException`
+  of its own one operation above), and it is stated at the port so Phase 3 is not written against a
+  promise the package does not make. The `@throws` clause that had wrapped into a five-word column
+  is re-flowed in the same commit, which is gate 5's other cosmetic LOW.
+
+**Four of gate 5's LOW findings are closed beside them**; three are left open with their reasons.
+
+* `plan.md`'s inventory and test-matrix row said the fenced statement calls `attributionOf` with
+  `null`, which T009 found it does not: it writes `completed_by = NULL` directly and
+  `register_batch_completed_by_shape_chk` is what refuses an attribution. Both lines are re-pointed,
+  and the matrix row now names `the_failure_names_no_completion_mechanism` as the pin, the overtaken
+  share and gate 5's own two additions.
+* The two test-only commits that recorded no mutation now have one each.
+  **`e1ac365`** (the fixture settles the night, so the aggregate invariant is not vacuous): with
+  `settleTheNight` made to return at once, `a_render_acceptance_racing_the_release_leaves_no_stranded_register`,
+  `a_document_arrival_racing_the_release_leaves_no_stranded_register` and
+  `a_re_share_racing_the_release_is_superseded_rather_than_unstamped` all go red on the aggregate
+  assertion - "Expecting actual: [] to contain exactly (and in same order): [1L]" - 3 of 7 failed.
+  **The re-staged exhaustion round's trigger**: with its `WHEN` clause re-pointed at a hearing
+  nothing matches, so the trigger fires on nothing, the round goes red on **4** assertions -
+  `contended` empty where the batch was expected, its id in `released`, its ending
+  `FAILED/NOT_COMPLETED_BY_NEXT_RUN` where `GENERATING` was expected, and `0L` stamped registers
+  where `2L` were. So the trigger is what stages the refusal, and the round's own assertions are
+  what prove the exhaustion path is reached. Both mutations reverted.
+* **Left open, and why.** (1) *The lost-then-won retry leaves no trace* - `JdbcRegisterStore` has no
+  logger at all and is deliberately silent; giving one operation a log line is a change to the
+  package's shape rather than to this statement, and it belongs with whatever gives the whole
+  adapter a voice. (2) *Nothing pins that a `RegisterNotReleasedException` on one batch leaves the
+  batches released before it committed* - `RegisterStoreIT`'s fixtures are single-court-centre by
+  construction (`mine`, `mineReleased` and `mineContended` all filter on the case's own court
+  centre), so the case wants a second court centre read by hand, and the per-batch **transaction**
+  is the same property the concurrency suite's round now asserts deterministically on the ordinary
+  path. (3) The three LOW findings gate 4 left open are untouched, as before.
+
+**Green after the third remediation**: `flock -w 7200 … ./gradlew jacocoTestReport check
+-Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 10m 18s, **3656 tests over 579 suites, 0 failures,
+0 errors** — one more than the second remediation's close, being the refusal that is no key — with
+`checkstyleMain` and `checkstyleTest` at `maxWarnings = 0`, `pmdMain`, `pmdTest` and
+`jacocoTestCoverageVerification` all green and none of them loosened. The coverage report was
+regenerated in that same run and reads **LINE 6594/6801 = 0.9696 and BRANCH 1998/2220 = 0.9000**
+against the unchanged gate of LINE 0.88 / BRANCH 0.85; it contains `failAndReleaseStale`, which is
+how a reader can tell it is this tree's report. That run was made on the tree these commits produce,
+before this record was written into it, and it is the report it regenerated that is left in
+`build/`. `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` was then run against the tree
+**as committed** and answered identically - BUILD SUCCESSFUL, exit 0, 10m 10s, the same 3656 over
+579, 0 failures and 0 errors - and it is that run's XMLs that are left beside the report; `build`
+runs the coverage gate and not the report, so the ratios above are the first run's measurement of
+the same code.
 
 **The Codex leg is still owed and is still unmet.** Nothing in this remediation changes that: the
 whole-increment Codex gate has not run since gate 2, and **no Phase 2 close and no Phase 3 start may
