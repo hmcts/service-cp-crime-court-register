@@ -46,6 +46,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
+import uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 
 /**
@@ -1808,7 +1809,14 @@ public class JdbcRegisterStore implements RegisterStore {
      * {@code TransactionTemplate}.
      *
      * <p>A refusal on any other key is the store saying this write may never be made, which no
-     * retry changes; it is rethrown as itself.
+     * retry changes; it is raised, translated into this package's own
+     * {@link uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException} so that no
+     * {@code org.springframework.dao} type crosses the port into {@code batch/}, where the pass
+     * that calls this may name none (constitution Principle V). It is a fault in the schema or in
+     * this statement rather than a race, and it is allowed to end the run the way any programming
+     * error is: what FR-003a forbids is one batch's <em>ordinary</em> ending - a lost race for the
+     * day's key - taking the other court centres' releases with it, and that ending is the
+     * contended one above.
      */
     @Override
     public StaleReleaseOutcome failAndReleaseStale(final Instant scheduledCutoff,
@@ -1860,6 +1868,11 @@ public class JdbcRegisterStore implements RegisterStore {
      * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
      * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
      * @return this one batch's account: released by the winning attempt, or contended
+     * @throws uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException if the release was
+     *                                                                           refused by a key
+     *                                                                           this operation
+     *                                                                           does not account
+     *                                                                           for
      */
     private StaleReleaseOutcome attemptedRelease(final UUID batchId, final Instant scheduledCutoff,
             final Instant manualCutoff) {
@@ -1869,13 +1882,37 @@ public class JdbcRegisterStore implements RegisterStore {
                 released = release(batchId, scheduledCutoff, manualCutoff);
             } catch (DuplicateKeyException collision) {
                 if (!violates(collision, ACTIVE_ROW_KEY)) {
-                    throw collision;
+                    throw unaccountedForRelease(batchId, collision);
                 }
             }
         }
         return released == null
                 ? new StaleReleaseOutcome(List.of(), List.of(batchId))
                 : new StaleReleaseOutcome(released, List.of());
+    }
+
+    /**
+     * The refusal a release may never make again, in the vocabulary the pass can read.
+     *
+     * <p>The mirror of {@link #unaccountedFor(DistributionCommand, DuplicateKeyException)} one
+     * operation above, and for the same reason: the release knows one key it can act on, and a
+     * constraint outside it is a rule nobody wrote this statement against. Making the statement
+     * again would spend three attempts reaching the same refusal and then report the batch as
+     * contended, which says a hearing was re-shared at the wrong moment - and the next run, and
+     * every run after it, would say the same about a batch no run can ever release.
+     *
+     * <p>The message names the batch and nothing from a register; the constraint travels on the
+     * cause (constitution Principle VII).
+     *
+     * @param batchId   the batch whose release was refused
+     * @param collision the store's own refusal
+     * @return the failure to raise
+     */
+    private static RegisterNotReleasedException unaccountedForRelease(final UUID batchId,
+            final DuplicateKeyException collision) {
+        return new RegisterNotReleasedException("the release of a stale batch was refused by a "
+                + "unique key this store does not account for, so no attempt at it can be made "
+                + "again either; batchId=" + batchId, collision);
     }
 
     /**

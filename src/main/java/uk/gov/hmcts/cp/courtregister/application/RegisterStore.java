@@ -460,11 +460,25 @@ public interface RegisterStore {
      * defaults neither, and a pass that let the store decide what "too long" means would be a
      * setting nobody could change.
      *
+     * <p><strong>The one refusal that is still raised.</strong> The race for the day's key is the
+     * only refusal this operation knows what to do about. A release refused by any other unique
+     * key is a rule nobody wrote this statement against - the same row meets it on every attempt
+     * and on every run - so it is raised as
+     * {@link uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException}, a fault in the
+     * schema or in the statement rather than a race, and the pass may let it end the run as it
+     * lets any programming error end one. FR-003a is about a batch's <em>ordinary</em> ending, and
+     * that one is reported. No {@code org.springframework.dao} type reaches this port, so the pass
+     * never has to catch a bare {@code RuntimeException} to read a refusal (Principle V).
+     *
      * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
      * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
      * @return the batches this operation changed, oldest day first, each with the count of
      *         registers still that day's to render, and beside them the batches it left exactly as
      *         it found them because every attempt at them lost the same race for the day's key
+     * @throws uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException if a release was
+     *         refused by a unique key this operation does not account for
+     * @throws uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException if the store could not
+     *         be reached
      */
     StaleReleaseOutcome failAndReleaseStale(Instant scheduledCutoff, Instant manualCutoff);
 
