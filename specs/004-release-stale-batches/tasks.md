@@ -48,7 +48,7 @@ this increment, and it stops and asks.
 
 **One row is touched in one cell.** `P2`'s pinning-test list names
 `GenerationReconcilerTest.a_batch_nothing_can_be_learned_about_should_be_failed_generation_timed_out`,
-deleted with its class at T023. T042 re-points the cell at
+deleted with its class at T022. T045 re-points the cell at
 `StaleBatchReleaserTest.a_batch_still_generating_past_the_minimum_age_should_be_failed_and_released`
 and adds one dated sentence saying the mechanism changed in 004. The row's legacy behaviour, fixed
 behaviour, rationale and status are untouched. `RegisteredDefectFixes` and `DifferentialAuditTest`
@@ -1841,7 +1841,7 @@ values on every pass.
 - [X] T023 [US4] `batch/RunCorrelation.java`, `persistence/RegisterBatchRepository.java`,
       `application/{DocumentOutcomeSink,RegisterNotifierService,NotificationDisposition,NotificationSummary}.java`,
       `domain/{BatchStatus,RegisterBatch}.java`, `config/{SchedulingConfig,SchedulingInfrastructureConfig,
-      CliModeConfig,ProcessedLogConfig,CourtRegisterProperties}.java`,
+      ProcessedLogConfig,CourtRegisterProperties}.java`,
       `adapter/publicevents/DocumentEventListener.java` — **the javadoc and comment sweep**. Every
       place that names the reconciler, the grace period or the query now names what is there instead.
       `RunCorrelation`'s "two independently scheduled units … and the first calls into the second"
@@ -1876,7 +1876,20 @@ values on every pass.
       --tests '*LogStatementSweepTest*' -Dtest.noFailFast=true`): BUILD SUCCESSFUL both times, 0
       failures. Documentation-only within the loop's exemption, so no red is claimed: nothing here
       changes behaviour, and the two suites above are what stops a re-worded line escaping the
-      sweep.
+      sweep. **Two of the edits are not javadoc**: the `DocumentEventListener` WARN texts above are
+      runtime log output, and it is `LogStatementSweepTest` and `TelemetryPrivacyTest` — which
+      enumerate from the sources — that re-cover them, not the exemption. Recorded here rather than
+      argued, because the exemption as written covers comments.
+
+      **Gate round 2 took `config/CliModeConfig` back out of the list above.** Three reviewers read
+      the same finding: the file belongs to the 005 worktree under the coordination contract, and
+      the contract is about a rebase collision and not about how many lines an edit is. The hunk is
+      reverted to `3c0fbeb0` at `a71ab390`, which leaves that file naming the grace-period
+      reconciler and the three schedules until the owning tree applies the wording — the two
+      sentences are in the revert's commit body for it to take. `config/CourtRegisterProperties`
+      and the one `docker-compose.yml` comment are in neither tree's list; both are kept, because
+      the paragraphs they change are about the generation half's `stale-after` and the local stub
+      of the generation half, and the coordinator is asked to assign them to 004 (open point).
 - [X] T025 [US4] Delete `DocumentRenderer.query`, `SystemDocGeneratorClient.query` and its answer
       parsing, `StubDocumentRenderer.query` and `domain/DocumentStatus.java`; delete the
       `GET document/{id}` WireMock mapping and its line in `docker/wiremock/README.md`. Make T024
@@ -1979,6 +1992,47 @@ that writes either — T047-T050 retire them and narrow the three constraints un
 characterises the finished suite after that. `.claude/agents/spec-validator.md` still names the
 reconciler in its read-these-files list and in its outcome-is-learned rule; both are the agent's own
 scope and rule paragraphs, which this tree does not own, and T044 covers them in Phase 9.
+
+**Gate round 1 on this half (2026-09-20), and what it sent back.** Three reviewers read
+`3c0fbeb0..b3233ec8`. Seven findings were acted on and the rest are named below.
+
+1. **`config/CliModeConfig` is not this tree's to write in** (HIGH, all three reviewers). The T023
+   hunk is reverted at `a71ab390` and the wording handed to the 005 worktree in the revert's commit
+   body. The file therefore still names the grace-period reconciler and three schedules; that is
+   the ownership line's cost, carried as an open point. `CliModeConfigTest` keeps its edits: they
+   are T021's one-cron case and T027's removal of a property nothing binds, and reverting them
+   would delete a pinning test and put a dead property back into two `@SpringBootTest` lists.
+2. **The renderer client still opened on "two conversations"** (MEDIUM) — rewritten at `383d4d11`
+   as the one conversation it now has, with the same C3 sentence about the shared retry policy.
+3. **`RegisterBatchRepository` claimed a live publisher for the batch-age readings** (MEDIUM). The
+   three in-flight reads have had no caller since the reconciler went, so the class javadoc now
+   says so by name and says what takes them next (Phase 6's `BatchAgeSweep`) and why the three
+   gauges stay registered and unrefreshed in between. US4 scenario 5 is met at T029-T032 and not
+   at this boundary, which is the plan's own order.
+4. **The listener's last two silent drops are counted** (MEDIUM). A `document-available` with no
+   document or no instant, and a `generation-failed` with no instant, were acknowledged, dropped
+   and counted nowhere. Test-first at `ef4afda0` (red: `expected 1.0 but was -1.0`), green at
+   `3df47ef3`: one new bounded reason, `incomplete-outcome`, on
+   `courtregister_public_events_ignored_total`, with two cases beside the other five reasons in
+   `DocumentEventListenerTest`. It is **not** Phase 7's `terminal-batch`, which is the sink's
+   refused-transition drop; T033/T034 are untouched and still owe their own reason.
+5. **Comments the sweep missed** (LOW) — `docker-compose.yml`'s sdg-echo note and
+   `application.yaml`'s endpoints note both named the retired query or reconciler; reworded at
+   `383d4d11`, as is `RegisterStore.markFailed`'s javadoc, which now asks
+   `BatchFailureReason#isGeneratorAttributed` for the rule instead of counting reasons that T048 is
+   about to change.
+6. **Three inline fully-qualified names** (LOW) — imported and shortened at `e3cab4d6`.
+7. **The one-lock sweep read one directory and one type per file** (LOW) — it now walks the `batch`
+   sources, skips `cli` by path and collects nested types, at `3f6ccbe9`.
+
+**Left standing, with the reason.** The `spring.jms` `subscription-durable` comment still says "the
+reconciler is the safety net, not the transport": it is outside the two `application.yaml` blocks
+this tree owns and the reviewer that raised it asked for an owner rather than a silent fix.
+`config/CourtRegisterProperties` and `docker-compose.yml` are in neither tree's ownership list and
+their edits are kept - both paragraphs are about the generation half - with an assignment to 004
+asked of the coordinator. `doc/DEFECT-FIXES.md`'s P2 cell still names the deleted
+`GenerationReconcilerTest` case; T045 owns it, and the pointer to it two sections above this one
+said T042 and T023 where it meant T045 and T022, now corrected.
 
 ---
 
