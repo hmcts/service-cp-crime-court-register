@@ -146,7 +146,14 @@ if (a.resume) {
   }
   log(`resumed from HEAD ${String(implemented.head_before).slice(0, 7)} (tree ${implemented.tree_clean_before ? 'clean' : 'dirty'} at start)`)
 } else if (!implemented.tree_clean_before || !String(implemented.head_before).startsWith(String(a.baseCommit).slice(0, 7))) {
-  throw new Error(`phase-gate: tree not at base or not clean (head_before=${implemented.head_before}, clean=${implemented.tree_clean_before}); ${(implemented.open_points || []).join(' | ')}`)
+  // The harness can restart an agent mid-run (an account switch does it): the restarted implementer
+  // then finds its predecessor's commits and a dirty tree. If it verified the base is an ancestor
+  // and carried on, accept the result; only a tree on the wrong branch is fatal.
+  if (implemented.base_is_ancestor === true) {
+    log(`implementer found the tree past the base (head_before ${String(implemented.head_before).slice(0, 7)}, ${implemented.tree_clean_before ? 'clean' : 'dirty'}) and continued as a restart; accepted`)
+  } else {
+    throw new Error(`phase-gate: tree not at base or not clean (head_before=${implemented.head_before}, clean=${implemented.tree_clean_before}); ${(implemented.open_points || []).join(' | ')}`)
+  }
 }
 const commits = [...implemented.commits]
 log(`implemented ${implemented.tasks_done.length}/${TASKS.length} tasks in ${implemented.commits.length} commits; build exit ${implemented.build_exit_code}`)
