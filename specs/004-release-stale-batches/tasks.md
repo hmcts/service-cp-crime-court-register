@@ -1485,7 +1485,7 @@ numbers.
 
 ### Implementation
 
-- [ ] T016 [US1] `batch/RegisterGenerationJob.java` — make T015 green. `generate(tally)` calls
+- [x] T016 [US1] `batch/RegisterGenerationJob.java` — make T015 green. `generate(tally)` calls
       `tally.released(releaser.releaseStale())` as its **first** statement, before
       `store.activeUnbatched()`; the end-of-run `tally.chased(reconciler.reconcile())` is deleted;
       the field, the constructor parameter and both javadoc mentions of the reconciler go. The class
@@ -1493,6 +1493,12 @@ numbers.
       not" is replaced by what is true now: the release is the run's own first act, it happens on the
       nights the run happens, and a flag-OFF night releases nothing — which is the accepted cost
       FR-018 states.
+      **Green** (`flock -w 7200 … ./gradlew test --tests '*RegisterGenerationJobTest*'
+      -Dtest.noFailFast=true`): BUILD SUCCESSFUL, **67 of 67 over nine nested suites**, 0 failures
+      and 0 errors, the three red assertions among them. The tally keeps what the pass answered
+      from the moment it answers — the numbers are a diagnostic beside the night's two accounts and
+      are not folded into either — and `RunReport` still carries `reconciled`, which is T017/T018's
+      to move.
 - [ ] T018 [US4] `domain/RunReport.java`, `batch/RegisterGenerationJob.java`,
       `config/GenerationMetrics.java` — make T017 green. `reconciled` → `releasedBatches` and
       `releasedRegisters` on the record, in `RunTally` and in the `recorded(...)` format string, with

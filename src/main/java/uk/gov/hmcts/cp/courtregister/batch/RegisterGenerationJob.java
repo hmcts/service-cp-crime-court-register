@@ -54,13 +54,16 @@ import uk.gov.hmcts.cp.courtregister.domain.RunReport;
  * whatever the batch before it took; a batch it leaves no time for is left PENDING for the next run
  * rather than failed, because nothing has gone wrong with it.
  *
- * <p><strong>The reconciler runs whatever the night held, and on nights the run does not.</strong>
- * A run with nothing to assemble still chases the batches an earlier run is waiting on - which is
- * precisely the night on which the subscription is most likely to be the thing that is broken - and
- * the run report names what it had to fetch. But the safety net is not this class's to provide:
- * {@link GenerationReconciler} carries a schedule and a lock of its own, because a run the flag
- * stopped touches nothing at all and the batches an earlier ON night left GENERATING would
- * otherwise never be asked about.
+ * <p><strong>The release is the run's own first act.</strong> Before anything is read,
+ * {@link StaleBatchReleaser} fails every batch that was still awaiting its render when this run
+ * began and gives its registers back, so the assembly below picks them up and the court centre gets
+ * its document tonight. The order is the point: a pass after the assembly would release into a
+ * night that had already been decided. It happens on the nights the run happens and on no others -
+ * a run the flag stopped releases nothing, because a service that may not generate may not decide
+ * that a batch it would not be allowed to re-render has failed, and the batches an earlier ON night
+ * left in flight wait for the first night the flag says ON again (FR-005, FR-018). Nothing is asked
+ * of systemdocgenerator between runs: an outcome that was lost is not an outcome anybody can be
+ * asked for.
  *
  * <p>Every run produces a {@link RunReport}, the skipped ones included: a report that only appeared
  * when work happened would make "the flag is off" and "the job did not fire" the same silence, and
@@ -201,14 +204,14 @@ public class RegisterGenerationJob {
      * Runs one generation, from the flag read to the report.
      *
      * <p>The flag is read before anything else and its answer ends the run: a skipped run touches
-     * neither the store, the assembler, the service nor the reconciler, because a run that read the
+     * neither the releaser, the store, the assembler nor the service, because a run that read the
      * store first would already have stamped {@code batch_id} onto rows the flag says this service
      * may not generate - and getting them back is a person's decision about one batch at a time
      * (the release behind {@code generate-register}), not something a later run can undo.
      *
-     * <p><strong>A run that stops part way still reports.</strong> The store can go away between
-     * the read and the stamp and the reconciler's own query can fail, and a run that left through
-     * one of those without writing its line would be the one night that produced no report at all -
+     * <p><strong>A run that stops part way still reports.</strong> The store can go away under the
+     * release pass, and between the read and the stamp, and a run that left through one of those
+     * without writing its line would be the one night that produced no report at all -
      * the night that stamped batches and asked for renders and then said nothing about how far it
      * got, which is worse than the silence the report exists to abolish. So the line is written
      * from what the run had done and the failure is then rethrown: reported <em>and</em> rethrown,
@@ -282,15 +285,25 @@ public class RegisterGenerationJob {
     }
 
     /**
-     * The night the flag allowed: read, assemble, request one batch at a time, then chase.
+     * The night the flag allowed: release, read, assemble, then request one batch at a time.
      *
      * <p>Everything it learns goes into the tally as it learns it rather than into a report built
      * at the end, because a run that stopped half way through has still learned the first half and
      * the report is the only place that says so.
      *
+     * <p>The release is first and nothing is read before it. A batch still awaiting its render when
+     * this run began is failed and its registers are given back inside the pass, so the read below
+     * answers with them and the court centre day the assembler would otherwise have passed over is
+     * no longer in flight. A store lost under the pass ends the run the way a store lost anywhere
+     * else does - reported on the line and rethrown - and one batch the pass could not give back
+     * ends nothing at all, which is the store's own rule and is counted rather than raised
+     * (FR-003a).
+     *
      * @param tally what the run has done, filled in as it goes
      */
     private void generate(final RunTally tally) {
+        tally.released(releaser.releaseStale());
+
         final List<RegisterRecord> active = store.activeUnbatched();
         // The history the supplementary rule is decided from (design Q27): a key with a batch still
         // in flight is left waiting, and a key whose batches are all terminal may be followed by a
@@ -719,6 +732,17 @@ public class RegisterGenerationJob {
          */
         private final Map<UUID, Integer> registersByBatch = new LinkedHashMap<>();
 
+        /**
+         * What the run's first act gave back, and what it could not.
+         *
+         * <p>Held from the moment the pass answers rather than folded into the counts, because the
+         * three numbers are a diagnostic beside the night's two accounts and not part of either:
+         * the registers counted are re-batched by this same run and are therefore already inside
+         * its row totals (FR-009).
+         */
+        private StaleBatchReleaser.ReleaseTally releaseTally =
+                new StaleBatchReleaser.ReleaseTally(0, 0, 0);
+
         /** The registers the store called active, for the age of the oldest still waiting. */
         private List<RegisterRecord> activeRegisters = List.of();
 
@@ -827,6 +851,15 @@ public class RegisterGenerationJob {
         private void account(final BatchStatus status, final int registers) {
             outcomes.merge(status, 1, Integer::sum);
             rowOutcomes.merge(status, registers, Integer::sum);
+        }
+
+        /**
+         * Records what the run's first act came to.
+         *
+         * @param released what the pass released and what it could not release
+         */
+        private void released(final StaleBatchReleaser.ReleaseTally released) {
+            this.releaseTally = released;
         }
 
         private List<RegisterRecord> active() {
