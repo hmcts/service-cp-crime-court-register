@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.cp.courtregister.api.dto.BatchListingResponse;
 import uk.gov.hmcts.cp.courtregister.application.BatchListing;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 
 /**
  * The batch endpoints: what a register date holds, and - from a later task - what to do about it.
@@ -82,15 +84,14 @@ public class BatchesController {
      *
      * @param date the register date, as an ISO local date; required
      * @return the date's batches, or the bounded refusal that stopped the listing being made
+     * @throws RuntimeException any failure that is not the store being unreachable, which is a
+     *         defect in this service and is answered {@code 500} rather than being dressed up as
+     *         a dependency outage (FR-023)
      */
-    // PMD.AvoidCatchingGenericException: the store translates an outage into its own unchecked type
-    // and a statement can refuse with another; both mean the same thing here - this listing was not
-    // read - and the alternative is a 500 carrying a stack trace to an operator. The catch
-    // classifies and answers explicitly; it swallows nothing.
     // PMD.OnlyOneReturn: the four answers are the four things that can happen to the one argument,
     // each said where it is decided; one exit would carry a verdict past reads that must not be
     // made once the date has been refused.
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
+    @SuppressWarnings("PMD.OnlyOneReturn")
     @GetMapping(path = "/operations/batches", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Object> list(
             @RequestParam(name = DATE, required = false) final String date) {
@@ -106,7 +107,13 @@ public class BatchesController {
         }
         try {
             return ResponseEntity.ok(listed(registerDate));
-        } catch (RuntimeException notRead) {
+        } catch (StoreUnavailableException | DataAccessException notRead) {
+            // The two shapes an unreachable store has on this path, and only those two: the store
+            // translates its own outage into the first, and the two repositories behind the
+            // listing hand a statement's refusal out as the second. Anything else out of here is
+            // a defect in this service, and a defect answered 503 is a defect a runbook retries
+            // for ever - so it is left to reach the 500 the design rules' status map keeps for it,
+            // whose body OperationsErrorAttributes renders in the same bounded fields.
             LOG.error("The batches of one register date could not be read, so no listing is given "
                     + "for it. cause={}", notRead.getClass().getName());
             return refusal(HttpStatus.SERVICE_UNAVAILABLE, LISTING_FAILED, null);

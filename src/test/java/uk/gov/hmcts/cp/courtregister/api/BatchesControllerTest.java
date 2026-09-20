@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import uk.gov.hmcts.cp.courtregister.application.BatchListing;
@@ -182,6 +183,42 @@ class BatchesControllerTest {
                     .doesNotContain("ZQX7STOREWORDS")
                     .doesNotContain("SQLException")
                     .doesNotContain(PATH);
+        }
+
+        @Test
+        void a_statement_the_repository_did_not_translate_should_be_refused_the_same_way()
+                throws Exception {
+            when(listings.batchesOn(any())).thenThrow(
+                    new DataAccessResourceFailureException("ZQX7STOREWORDS"));
+
+            mvc.perform(get(PATH).param("date", TYPED_DATE))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.reason").value("listing-failed"));
+        }
+    }
+
+    /**
+     * A defect is not an outage, and must not be answered as one.
+     *
+     * <p>FR-023 and the design rules' status map keep {@code 503} for a dependency this endpoint
+     * exists to read being unavailable, and {@code 500} for an unexpected defect. The distinction
+     * is what a runbook acts on: a 503 is retried, and a defect retried is a defect retried for
+     * ever. So anything out of the listing that is not one of the store's two unreachable shapes
+     * leaves this controller untouched, and the container answers it under the body
+     * {@code OperationsErrorAttributes} renders.
+     */
+    @Nested
+    @DisplayName("a defect in the listing")
+    class ADefect {
+
+        @Test
+        void it_should_not_be_answered_as_the_store_being_unavailable() {
+            when(listings.batchesOn(any())).thenThrow(new IllegalStateException("ZQX7DEFECT"));
+
+            Assertions.assertThatThrownBy(() -> mvc.perform(get(PATH).param("date", TYPED_DATE)))
+                    .as("it reaches the container rather than being classified as an outage")
+                    .rootCause()
+                    .isInstanceOf(IllegalStateException.class);
         }
     }
 }

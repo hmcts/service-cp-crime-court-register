@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.cp.courtregister.api.dto.RecordedWhileOffResponse;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 
 /**
  * The register endpoints: what is waiting, and - from a later task - what a rollback may give up.
@@ -60,12 +62,12 @@ public class RegistersController {
      * The registers automatic batching passed over because the flag did not say ON.
      *
      * @return the waiting registers, or the bounded refusal that stopped the listing being made
+     * @throws RuntimeException any failure that is not the store being unreachable, which is a
+     *         defect in this service and is answered {@code 500} rather than being dressed up as
+     *         a dependency outage (FR-023)
      */
-    // PMD.AvoidCatchingGenericException: the store translates an outage into its own unchecked type
-    // and a statement can refuse with another; both mean the same thing here - this listing was not
-    // read. The catch classifies and answers explicitly; it swallows nothing.
     // PMD.OnlyOneReturn: the listing and the refusal are said where each is decided.
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
+    @SuppressWarnings("PMD.OnlyOneReturn")
     @GetMapping(path = "/operations/registers/recorded-while-off",
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Object> recordedWhileOff() {
@@ -77,7 +79,11 @@ public class RegistersController {
                                     record.flag()))
                             .toList();
             return ResponseEntity.ok(new RecordedWhileOffResponse(waiting));
-        } catch (RuntimeException notRead) {
+        } catch (StoreUnavailableException | DataAccessException notRead) {
+            // The two shapes an unreachable store has, and only those two - for the reason
+            // BatchesController states at the same catch. A defect answered 503 is a defect a
+            // runbook retries for ever, so anything else is left to reach the 500 the status map
+            // keeps for it.
             LOG.error("The registers recorded while the flag was off could not be read, so no "
                     + "listing is given. cause={}", notRead.getClass().getName());
             return refusal();
