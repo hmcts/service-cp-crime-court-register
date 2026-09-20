@@ -2727,11 +2727,28 @@ from being sent after something already put right.
       A redelivered `document-available` for a batch standing at GENERATED is therefore **not**
       counted - it is a batch mid-journey being told what it already knows, and nought is what
       this series must read on a healthy estate for an alert to be worth writing on it.)
-- [ ] T036 `domain/ExceptionKind.java`, `application/ExceptionReportService.java` — make T035 green.
+- [x] T036 `domain/ExceptionKind.java`, `application/ExceptionReportService.java` — make T035 green.
       Add `BATCH_RELEASED`, read over the window like the other failure kinds; derive it from the
       reason at the one place FAILED batches become entries; check the "four stages" text and any
       switch over kinds for exhaustiveness. The javadoc says what makes it different from the others:
       it is informational, because its registers were re-rendered the same night.
+      (green: `flock -w 7200 … ./gradlew test --tests '*ReportExceptionsCliTest*'
+      --tests '*ExceptionReportServiceTest*' checkstyleTest pmdTest -Dtest.noFailFast=true` →
+      **BUILD SUCCESSFUL**. The kind is derived at `kindOf(dead)`, the one place a FAILED batch
+      becomes an entry, from the bounded reason on its own row - one read answers for both kinds,
+      because one read is what the store holds and a second statement would have to keep this
+      one's window and order. `recursEveryRun()` puts it with the terminal kinds: a released batch
+      is a thing that happened once, so the report that leaves it out is the only report that
+      would ever have stated it.
+      **One file of the other tree's had to be touched, and it is named here rather than left to
+      the diff.** `batch/cli/ReportExceptionsCliTest`'s counts-line literal enumerates one number
+      per `ExceptionKind`, so a sixth kind makes it read
+      `… notification_failed=1 batch_released=0 window_from=…` and the case went red on production
+      code this task is required to write. The coordination contract puts `batch/cli` tests in the
+      005 tree and says to report a file that had to be touched; this is that report. The edit is
+      the literal and the two sentences around it and nothing else — no case added, none removed,
+      no behaviour asserted differently. T035's other CLI half, the case that says the table and
+      the CSV *carry* the new kind, is still owed and still 005's.)
 
 **Phase close**: `flock … ./gradlew build` green; review gate.
 
