@@ -1156,6 +1156,31 @@ BUILD SUCCESSFUL, exit 0, **3657 tests, 0 failures, 0 errors** — the same coun
 with `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification`
 all green, and `git status --porcelain` still empty after the build.
 
+## The two MEDIUM findings the Phase 2 gate left, closed before Phase 3 opened (2026-09-20)
+
+Neither is a BLOCKER and neither changes what the release is for. One is a refusal the translator
+does not know about, and one is a supersession the fenced statement learned at gate 4 and the two
+older statements beside it did not.
+
+* **A store lost between the read and a per-batch transaction escaped as a Spring type.**
+  `StoreOutage.translating` names `org.springframework.dao` classes only, and since the Codex
+  remediation each stale batch's release takes a `REQUIRES_NEW` boundary of its own *inside* that
+  translation. A store that goes away in the gap between the `STALE_BATCHES` read and an attempt's
+  `getTransaction` therefore refuses with
+  `org.springframework.transaction.CannotCreateTransactionException`, which is outside every branch
+  the translator lists: it crossed the port as itself, contrary to `failAndReleaseStale`'s own
+  `@throws StoreUnavailableException`, and reached a pass in `batch/` that may name no Spring type
+  at all (constitution Principle V) and could only have caught it as `RuntimeException`.
+  **Closed** by a fourth branch: a `TransactionException` is the store going away exactly as a
+  failure to acquire a connection is, so it becomes `StoreUnavailableException` carrying the
+  statement's own name and the cause, and none of the driver's words.
+  **Red** (`StoreOutageTest.a_transaction_that_cannot_be_begun_becomes_the_domains_own_signal`, a
+  `PlatformTransactionManager` whose `getTransaction` throws): `flock -w 7200 … ./gradlew test
+  --tests '*StoreOutageTest*' -Dtest.noFailFast=true` → **8 tests completed, 1 failed**, one
+  assertion and no compile error — "Expecting actual throwable to be an instance of:
+  uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException but was:
+  org.springframework.transaction.CannotCreateTransactionException".
+
 ---
 
 ## Phase 3: User Stories 1 and 2 — the pass and its cutoffs (Priority: P1) 🎯 MVP
