@@ -23,12 +23,11 @@ import org.junit.jupiter.params.provider.EnumSource;
  * here as a second answer to a question one place owns.
  *
  * <p>{@link BatchFailureReason#isGeneratorAttributed()} is the one place that says which endings
- * were reported by a mechanism outside this service, and three enforcements read it:
- * {@code JdbcRegisterStore.markFailed} refuses a mark that disagrees with it,
- * {@code register_batch_completed_by_shape_chk} enumerates the same two reasons for the writers
- * that do not go through the store, and the {@code reconciled} metric counts the rows it lets
- * through. A constant classified the wrong way is therefore not one wrong answer but a batch that
- * cannot be written at all, or one written crediting a decision nobody made.
+ * were reported by a mechanism outside this service, and two enforcements read it:
+ * {@code JdbcRegisterStore.markFailed} refuses a mark that disagrees with it, and
+ * {@code register_batch_completed_by_shape_chk} names the same reason for the writers that do not
+ * go through the store. A constant classified the wrong way is therefore not one wrong answer but
+ * a batch that cannot be written at all, or one written crediting a decision nobody made.
  *
  * <p><strong>The tables below are the specification and the enumeration is checked against
  * them</strong>, rather than the methods being read twice. Both are keyed by the constant's
@@ -49,20 +48,24 @@ class BatchFailureReasonTest {
     /**
      * Which endings somebody outside this service reported, written out one by one.
      *
-     * <p>GENERATION_FAILED is systemdocgenerator's own verdict about the render and
-     * GENERATION_TIMED_OUT is the reconciler's verdict about its silence: each arrived because
-     * something went and learned it, so each names the mechanism that did. The other five are this
-     * service's own verdict about a render it could not ask for, could not hear about, or stopped
-     * waiting for - the payload was never stored, the request was never delivered, it was refused,
-     * the batch could not be assembled at all, or the next run began and the answer still had not
-     * come - and nobody outside this service was ever in a position to answer.
+     * <p>GENERATION_FAILED is the only one left, and it is systemdocgenerator's own verdict about
+     * the render: it arrived because the renderer said so, so the row names the mechanism that
+     * carried it. The other five are this service's own verdict about a render it could not ask
+     * for, could not hear about, or stopped waiting for - the payload was never stored, the request
+     * was never delivered, it was refused, the batch could not be assembled at all, or the next run
+     * began and the answer still had not come - and nobody outside this service was ever in a
+     * position to answer.
+     *
+     * <p>There were two until the grace-period reconciler went. GENERATION_TIMED_OUT was its
+     * verdict about the renderer's silence, and it is a verdict nothing takes any more: a batch
+     * nothing was learned about is now failed NOT_COMPLETED_BY_NEXT_RUN by the next run, which is
+     * this service deciding for itself and therefore attributed to nobody.
      */
     private static final Map<String, Boolean> ATTRIBUTION = Map.of(
             "PAYLOAD_STORE_UNAVAILABLE", false,
             "RENDER_REQUEST_FAILED", false,
             "RENDER_REQUEST_REJECTED", false,
             "GENERATION_FAILED", true,
-            "GENERATION_TIMED_OUT", true,
             "ASSEMBLY_FAILED", false,
             STALE_RELEASE, false);
 
@@ -86,7 +89,6 @@ class BatchFailureReasonTest {
             "RENDER_REQUEST_FAILED", false,
             "RENDER_REQUEST_REJECTED", false,
             "GENERATION_FAILED", false,
-            "GENERATION_TIMED_OUT", false,
             "ASSEMBLY_FAILED", true,
             STALE_RELEASE, true);
 
@@ -102,8 +104,8 @@ class BatchFailureReasonTest {
     void every_reason_should_be_classified_the_way_the_attribution_table_says(
             final BatchFailureReason reason) {
         assertThat(ATTRIBUTION)
-                .as("a reason nobody has classified is a reason the store, the check constraint "
-                        + "and the reconciled metric would each answer for on their own")
+                .as("a reason nobody has classified is a reason the store and the check "
+                        + "constraint would each answer for on their own")
                 .containsKey(reason.name());
         assertThat(reason.isGeneratorAttributed())
                 .as("%s: whether the ending was reported by a mechanism outside this service, "
@@ -128,12 +130,31 @@ class BatchFailureReasonTest {
                 .containsExactlyInAnyOrderElementsOf(names());
     }
 
+    /**
+     * One ending, not two, and the narrowing is the point rather than a consequence.
+     *
+     * <p>The second was GENERATION_TIMED_OUT, the grace-period reconciler's verdict about the
+     * renderer's silence. Nothing goes and asks any more, so nothing learns that verdict, and an
+     * attributed reason nothing can produce is a row {@code register_batch_completed_by_shape_chk}
+     * would still admit - a FAILED batch naming a mechanism that no longer exists.
+     *
+     * <p>Asked of {@link BatchFailureReason#isGeneratorAttributed()} over the whole enumeration
+     * rather than of the table above, because the method is what the store and the constraint each
+     * enforce and the table is only this suite's specification of it. Stated as "these and no
+     * others" rather than as a probe of the one constant, since what makes the retirement complete
+     * is that there is nobody else left answering true.
+     */
     @Test
-    void exactly_the_two_endings_somebody_else_reported_should_be_attributed() {
+    void only_generation_failed_is_generator_attributed() {
+        assertThat(Arrays.stream(BatchFailureReason.values())
+                        .filter(BatchFailureReason::isGeneratorAttributed)
+                        .map(Enum::name))
+                .as("one of the six, and it is the renderer's own verdict; the other five are this "
+                        + "service answering for itself")
+                .containsExactly("GENERATION_FAILED");
         assertThat(ATTRIBUTION.entrySet().stream().filter(Map.Entry::getValue).map(Map.Entry::getKey))
-                .as("two of the seven, and the reconciled metric is the count of which one "
-                        + "delivered each; the other five are this service answering for itself")
-                .containsExactlyInAnyOrder("GENERATION_FAILED", "GENERATION_TIMED_OUT");
+                .as("and the specification above says the same, so neither can drift alone")
+                .containsExactly("GENERATION_FAILED");
     }
 
     /**
@@ -162,16 +183,36 @@ class BatchFailureReasonTest {
      * this case is the enumeration's own half of that statement.
      */
     @Test
-    void the_seven_reasons_are_the_bounded_set() {
+    void the_six_reasons_are_the_bounded_set() {
         assertThat(names())
                 .containsExactlyInAnyOrder(
                         "PAYLOAD_STORE_UNAVAILABLE",
                         "RENDER_REQUEST_FAILED",
                         "RENDER_REQUEST_REJECTED",
                         "GENERATION_FAILED",
-                        "GENERATION_TIMED_OUT",
                         "ASSEMBLY_FAILED",
                         STALE_RELEASE);
+    }
+
+    /**
+     * And the one that left, named so that its return would be noticed.
+     *
+     * <p>The reason is the grace-period reconciler's, and the reconciler is gone: nothing asks
+     * systemdocgenerator what became of a render, so nothing can conclude that it timed out. A
+     * batch nothing is learned about is failed {@link BatchFailureReason#NOT_COMPLETED_BY_NEXT_RUN}
+     * by the next scheduled run instead, which is a different claim made by a different mechanism -
+     * this service stopped waiting, rather than somebody outside it having answered.
+     *
+     * <p>Asserted by name over {@code values()} rather than by referring to the constant, because a
+     * case that referred to it could not compile once it had gone and would therefore be deleted
+     * with its subject. This one outlives the deletion, which is the only way an absence is pinned.
+     */
+    @Test
+    void generation_timed_out_is_no_longer_a_reason() {
+        assertThat(reasonNamed("GENERATION_TIMED_OUT"))
+                .as("the reconciler's verdict about the renderer's silence, and there is no "
+                        + "reconciler to reach it")
+                .isEmpty();
     }
 
     /**

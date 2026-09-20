@@ -332,7 +332,7 @@ class BatchStateTest {
         }
 
         /**
-         * Seven reasons, each a different investigation. The renderer's own {@code reason} is not
+         * Six reasons, each a different investigation. The renderer's own {@code reason} is not
          * one of them: it is another system's text about a document whose every defendant is a
          * child, and it is kept in {@code sdg_reason} where the batches counter cannot label a
          * series with it.
@@ -344,11 +344,13 @@ class BatchStateTest {
          * 07:00 report reads it. Both halves are the same statement made in two places, and the
          * hand-transcribed list this case used to carry could agree with neither - so the
          * constraint's own text is read, from the migrations as they stand, rather than copied. That
-         * is what makes a migration that widens the vocabulary provably complete here, and it is why
-         * this case goes red between the constant landing and its migration landing.
+         * is what makes a migration that changes the vocabulary provably complete here, and it is
+         * why this case goes red between a constant landing or leaving and its migration landing.
+         * It is red for exactly that reason between the two constants being removed from the
+         * enumeration and V7 narrowing the constraint they are still admitted by.
          */
         @Test
-        void the_failure_reasons_should_be_exactly_the_seven_the_schema_enumerates()
+        void the_failure_reasons_should_be_exactly_the_six_the_schema_enumerates()
                 throws IOException {
             assertThat(BatchFailureReason.values())
                     .extracting(Enum::name)
@@ -357,7 +359,6 @@ class BatchStateTest {
                             "RENDER_REQUEST_FAILED",
                             "RENDER_REQUEST_REJECTED",
                             "GENERATION_FAILED",
-                            "GENERATION_TIMED_OUT",
                             "ASSEMBLY_FAILED",
                             "NOT_COMPLETED_BY_NEXT_RUN");
             assertThat(schemaFailureReasons())
@@ -367,6 +368,35 @@ class BatchStateTest {
                             Arrays.stream(BatchFailureReason.values())
                                     .map(Enum::name)
                                     .toArray(String[]::new));
+        }
+
+        /**
+         * One mechanism, and the type is kept anyway.
+         *
+         * <p>There were two: EVENT, the {@code public.event} listener, and RECONCILER, the
+         * grace-period pass that asked systemdocgenerator what had become of a render. Nothing asks
+         * any more, so no outcome can be attributed to that mechanism, and a constant nothing can
+         * write is a value {@code register_batch.completed_by} would still admit and nobody could
+         * explain - support reading a row that names a component this repository no longer has.
+         *
+         * <p>{@code CompletedBy} does not collapse into a boolean with the second constant gone. It
+         * is an argument before it is a column, carried through {@code DocumentOutcomeSink} into the
+         * store's marks, and a second completion mechanism is exactly the kind of thing that comes
+         * back - a delivery callback, a supplementary render, a platform event this service does not
+         * consume yet. A boolean would have to be widened at every call site to admit one.
+         *
+         * <p>The database's own half of this is {@code SchemaMigrationV2IT}, which asks Postgres
+         * what {@code register_batch_completed_by_chk} admits: this constraint carries no IN list
+         * once V7 has narrowed it to a single equality, so it is not one the migration text can be
+         * read for here the way the failure reasons are.
+         */
+        @Test
+        void completed_by_has_one_constant() {
+            assertThat(CompletedBy.values())
+                    .extracting(Enum::name)
+                    .as("the mechanisms that can report a batch's outcome, and the reconciler is "
+                            + "not one of them any more")
+                    .containsExactly("EVENT");
         }
 
         /**

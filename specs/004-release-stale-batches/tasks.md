@@ -2052,7 +2052,7 @@ These four are the other half of the migration split (see "Decided" above Phase 
 of both retired values and removing them would either fail to compile or force a false `completed_by`
 claim. T028 runs after them, not before, so the suite it characterises is the finished one.
 
-- [ ] T047 [US4] `domain/BatchFailureReasonTest` and `domain/BatchStateTest` (both extend) — the
+- [X] T047 [US4] `domain/BatchFailureReasonTest` and `domain/BatchStateTest` (both extend) — the
       **deletion reds**. `the_seven_reasons_are_the_bounded_set` becomes
       `the_six_reasons_are_the_bounded_set`; `generation_timed_out_is_no_longer_a_reason`;
       `completed_by_has_one_constant`; `only_generation_failed_is_generator_attributed`; and the
@@ -2060,6 +2060,45 @@ claim. T028 runs after them, not before, so the suite it characterises is the fi
       what makes the retirement provably complete rather than merely started. Red: the enums still
       hold both constants. (Nothing here is new behaviour — these assertions were T003's in the
       pre-split list and have simply moved to where they can be true.)
+
+      **Every case here is keyed by a constant's name, and that is what lets a red exist at all.**
+      T003 made the same choice for the opposite reason - a reason can be specified before it
+      exists - and it is the only way a *removal* can be pinned either: a case that wrote
+      `BatchFailureReason.GENERATION_TIMED_OUT` would stop compiling in the commit that removed it
+      and would be deleted with its subject, which is an assertion that cannot outlive the deletion
+      it is about. `generation_timed_out_is_no_longer_a_reason` therefore asks `reasonNamed` for the
+      name and expects nothing, exactly as T021's `Class.forName` case does for the class.
+
+      `only_generation_failed_is_generator_attributed` is asked of
+      `isGeneratorAttributed()` over the whole enumeration **first** and of `ATTRIBUTION` second.
+      Written the other way round it was green on introduction: the table is this suite's own
+      specification, so narrowing the table is not a claim about the method the store and
+      `register_batch_completed_by_shape_chk` each enforce. The table assertion is kept beside it so
+      neither can drift alone.
+
+      The schema-vocabulary case is renamed
+      `the_failure_reasons_should_be_exactly_the_six_the_schema_enumerates` and **stays red past
+      T048**, deliberately: its second half reads the constraint's own text out of the migrations as
+      they stand, so it is red from the constants leaving the enumeration until V7 narrows the
+      constraint at T049. That is the same window T003 recorded from the other side, and it is what
+      makes each half of the retirement provably complete rather than merely started.
+
+      **Red** (`flock -w 7200 … ./gradlew test --tests '*BatchFailureReasonTest*' --tests
+      '*BatchStateTest*' -Dtest.noFailFast=true`): **53 tests completed, 9 failed**, every one an
+      assertion and none a compile error — `the_six_reasons_are_the_bounded_set` and
+      `the_failure_reasons_should_be_exactly_the_six_the_schema_enumerates` ("… to contain exactly
+      in any order: [six] but the following elements were unexpected: ["GENERATION_TIMED_OUT"]"),
+      `generation_timed_out_is_no_longer_a_reason` ("Expecting an empty Optional but was containing
+      value: GENERATION_TIMED_OUT"), `completed_by_has_one_constant` ("Expecting actual: ["EVENT",
+      "RECONCILER"] to contain exactly … ["EVENT"]"),
+      `only_generation_failed_is_generator_attributed`, the parameterised
+      `every_reason_should_be_classified_the_way_the_attribution_table_says` at `[5] reason =
+      GENERATION_TIMED_OUT`, the two table-direction cases, and
+      `an_attributed_reason_should_never_release_its_rows` ("[GENERATION_TIMED_OUT was reported
+      about a render that happened] Expecting actual not to be null" — the retired constant is
+      attributed and the narrowed release table no longer classifies it, which is the two tables
+      catching the same removal from opposite ends). `checkstyleTest` and `pmdTest` green in the
+      same round.
 - [ ] T048 [US4] `domain/BatchFailureReason.java`, `domain/CompletedBy.java` — make T047 green.
       Remove `GENERATION_TIMED_OUT`; narrow `isGeneratorAttributed()` to `GENERATION_FAILED`; remove
       `CompletedBy.RECONCILER`. `CompletedBy` stays a type with one constant, and its javadoc says
