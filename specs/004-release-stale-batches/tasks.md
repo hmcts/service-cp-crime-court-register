@@ -2884,9 +2884,20 @@ VII.
       `NOT_COMPLETED_BY_NEXT_RUN`; the state machine's last GENERATING arm is data-model.md's; and
       "The reconciler invents nothing" is now the rule that replaces it, which says the same thing
       about a mechanism that exists.)
-- [ ] T042 [P] `README.md` — the generation section's "with a grace-period reconciler for the
+- [x] T042 [P] `README.md` — the generation section's "with a grace-period reconciler for the
       outcomes that never arrive" becomes the release pass, and a Status entry for increment 004 in
       the shape 001–003 use.
+      (**The first half was already done, at Phase 5's gate, and deliberately in the other
+      direction.** That sentence is inside the *increment 002* Status bullet, which is a record of
+      what 002 shipped rather than a description of the code as it stands, so Phase 5 kept the
+      historical clause and appended "since retired by 004 in favour of the next run releasing a
+      stale batch". Rewriting it now would make the 002 bullet claim 002 shipped a mechanism it did
+      not. The release pass is stated where it belongs instead: in the new 004 entry, in the same
+      shape and at the same length as 001-003.
+      **One stale line is left alone and named here**: the Design table's Specifications row still
+      reads "`001-court-register-port` (complete) and `002-consolidate-progression-leg` (in
+      progress)", which has been wrong since 003 shipped. It is outside this task's two named edits
+      and outside every other task in the phase, so it is reported rather than fixed.)
 - [ ] T043 [P] `specs/002-consolidate-progression-leg/quickstart.md` and
       `specs/003-exception-report/quickstart.md` — the WireMock line loses "query document"; the 003
       quickstart's sample exception event stops using the retired reason. Historical quickstarts are
