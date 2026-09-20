@@ -22,10 +22,20 @@ package uk.gov.hmcts.cp.courtregister.domain;
  * <p><strong>It is not a store outage.</strong> {@link StoreUnavailableException} says the store
  * could not be reached; this says the store was reached and declined to hold this row.
  *
- * <p>The message names the statement and the batch's identity and nothing from a register: the
- * constraint travels on the cause, as it does for {@link RegisterNotRecordedException}, which is
- * the same refusal met by the write on the same table. Neither carries a defendant, a name or an
- * address (constitution Principle VII).
+ * <p><strong>The message is this repository's own words and the store's refusal is deliberately not
+ * attached</strong>, which is the same choice {@link StoreRefusedRowException} makes and for a
+ * sharper version of the same reason. The statement this refusal comes out of writes
+ * {@code processed_output}, and a {@code processed_output} row holds the register document itself -
+ * so Postgres reporting the refusal by quoting the row ({@code Failing row contains (...)} for a
+ * CHECK, {@code Key (...)=(...) already exists} for a unique index) puts a youth defendant's name
+ * and date of birth on the driver's message. A cause is how that message reaches a stack trace, and
+ * this failure is raised out of the nightly run and written at ERROR, which is an estate-wide log
+ * index (constitution Principle VII).
+ *
+ * <p>What a reader is given instead is bounded and written here: which <em>kind</em> of rule
+ * refused the write - a unique key, or an integrity rule that is no key at all - and the batch's
+ * own identity. That is the whole of what the pass or an on-call engineer can act on; which
+ * constraint it was is in the store's own log, where the row it quotes belongs.
  */
 public class RegisterNotReleasedException extends RuntimeException {
 
@@ -34,10 +44,10 @@ public class RegisterNotReleasedException extends RuntimeException {
     /**
      * Creates the failure.
      *
-     * @param detail a bounded description of the refusal; the statement, never a register
-     * @param cause  the store's own refusal
+     * @param detail a bounded description of the refusal - the kind of rule and the batch, never
+     *               the driver's words and never a value from a row
      */
-    public RegisterNotReleasedException(final String detail, final Throwable cause) {
-        super(detail, cause);
+    public RegisterNotReleasedException(final String detail) {
+        super(detail);
     }
 }

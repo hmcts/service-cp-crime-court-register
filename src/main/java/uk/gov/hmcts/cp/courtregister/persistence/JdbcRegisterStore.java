@@ -137,6 +137,20 @@ public class JdbcRegisterStore implements RegisterStore {
     /** V3's key on the day's active register: one RECORDED, unsuperseded, unbatched row per key. */
     private static final String ACTIVE_ROW_KEY = "idx_output_active_register_key";
 
+    /**
+     * The two kinds of rule a release refused by something it cannot retry is reported under.
+     *
+     * <p>A classification and not a constraint name, because the name is only in the driver's
+     * message and that message is where a refused row's values are - see
+     * {@link #unaccountedForRelease(UUID, DataIntegrityViolationException)}. Two values, both
+     * written here, so a reader is told whether a key or a plain rule said no without a word of
+     * the store's own travelling with it.
+     */
+    private static final String UNACCOUNTED_KEY = "a unique key";
+
+    /** The other one: a CHECK, a foreign key, a NOT NULL - anything that is no unique index. */
+    private static final String UNACCOUNTED_RULE = "an integrity rule that is no key";
+
     /** The four statuses the recorder writes, and the only ones a recorded register can be in. */
     private static final Set<String> RECORDER_STATUSES =
             Set.of("RECORDED", "SUPERSEDED", "GENERATED", "NOTIFIED");
@@ -1967,18 +1981,36 @@ public class JdbcRegisterStore implements RegisterStore {
      * untranslated could only be caught there as {@code RuntimeException}, which is the catch that
      * swallows every programming error beside it (constitution Principle V).
      *
-     * <p>The message names the batch and nothing from a register; the rule that refused the write
-     * travels on the cause (constitution Principle VII).
+     * <p><strong>The store's own refusal does not travel with it, and that is the difference from
+     * {@link #unaccountedFor(DistributionCommand, DuplicateKeyException)}.</strong> That one is
+     * raised out of an {@code INSERT} whose refusal Postgres reports against the row being
+     * inserted; this one is raised out of a statement that <em>updates</em>
+     * {@code processed_output}, and a {@code processed_output} row holds the register document -
+     * so a CHECK refusing it is reported with {@code Failing row contains (...)} and every column
+     * of that row behind it, a youth defendant's name and date of birth included. A cause is how
+     * that message reaches a stack trace, and this failure is raised out of the nightly run and
+     * written at ERROR into the estate's log index (constitution Principle VII). So the driver's
+     * words are dropped here, as they are for {@code StoreRefusedRowException}.
+     *
+     * <p>What is carried instead is bounded and written in this repository: which <em>kind</em> of
+     * rule refused the write, and the batch's identity. The constraint's own name is not among it,
+     * because the one idiom this class has for naming a constraint safely -
+     * {@link #violates(DuplicateKeyException, String)} - asks the driver whether the refusal is a
+     * key <em>this class already knows by name</em>, and a refusal that got this far is by
+     * construction none of them. Reading a name back out of the message would be reading the
+     * message, which is the thing that may not be kept.
      *
      * @param batchId the batch whose release was refused
-     * @param refusal the store's own refusal, whichever rule raised it
+     * @param refusal the store's own refusal, read for its kind and for nothing else
      * @return the failure to raise
      */
     private static RegisterNotReleasedException unaccountedForRelease(final UUID batchId,
             final DataIntegrityViolationException refusal) {
-        return new RegisterNotReleasedException("the release of a stale batch was refused by a "
-                + "rule this store does not account for, so no attempt at it can be made again "
-                + "either; batchId=" + batchId, refusal);
+        final String rule = refusal instanceof DuplicateKeyException
+                ? UNACCOUNTED_KEY : UNACCOUNTED_RULE;
+        return new RegisterNotReleasedException("the release of a stale batch was refused by "
+                + rule + " this store does not account for, so no attempt at it can be made again "
+                + "either; batchId=" + batchId);
     }
 
     /**
