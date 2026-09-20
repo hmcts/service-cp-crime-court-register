@@ -1358,6 +1358,85 @@ The pass is **not wired into the run**, which is Phase 4's T015-T020: it has no 
 constructor is untouched, and the only thing that constructs it outside its own suite is the
 telemetry drive. The reconciler is untouched too, which is Phase 5's.)
 
+## Review gate 8 — Phase 3's first round, remediated (2026-09-20)
+
+Two MEDIUM and four cheap LOW findings, no BLOCKER and no HIGH. Nothing here changes what the pass
+is for or what the store does about a batch; one of them narrows a branch the Phase 2 closure above
+made one class too wide.
+
+* **MEDIUM - the outage arm read the whole `TransactionException` family as a store that went
+  away.** The closure recorded above named `CannotCreateTransactionException` and caught its
+  supertype, which puts a propagation this code asked for and cannot have
+  (`IllegalTransactionStateException`) and a transaction a participant had already marked
+  rollback-only (`UnexpectedRollbackException`) on the transient side: the intake leg would abandon
+  and redeliver into the same defect on every delivery the broker allows, and the run would write a
+  nightly outage line about a run that was never near the store's health. It also contradicted the
+  class's own stated rule that the list is **named** rather than taken from a supertype.
+  **Closed** by naming two classes instead of the family - a transaction that could not be begun,
+  which is where a store lost before a `REQUIRES_NEW` boundary refuses, and
+  `TransactionSystemException`, which is where a store lost after the last statement refuses at
+  commit. The second is kept deliberately and has its own sentence in the javadoc: a write that
+  reached the commit is **ambiguous rather than lost**, and an ambiguous write is retried by
+  preference, because supersession absorbs a duplicate and nothing absorbs a silent loss.
+  Everything else in the family falls through to the arm that dead-letters with a reason.
+  **Red** (`StoreOutageTest.a_transaction_usage_fault_is_handed_on_unchanged`, over
+  `IllegalTransactionStateException` and `UnexpectedRollbackException`): `flock -w 7200 … ./gradlew
+  test --tests '*StoreOutageTest*' -Dtest.noFailFast=true` -> **10 tests completed, 1 failed**, one
+  assertion and no compile error - "Expecting actual: StoreUnavailableException … and actual:
+  IllegalTransactionStateException … to refer to the same object".
+  **Green** (`c620099`): the same command with `checkstyleMain` and `pmdMain` beside it, BUILD
+  SUCCESSFUL, **10 of 10**. A second WentAway case pins the commit-time arm, so both halves of the
+  narrowed rule have one.
+
+* **MEDIUM - the `overtaken` clause's negative arm was unpinned in `MARK_FAILED`.** The record above
+  says "a reason that keeps the stamp supersedes nothing", and the guard that makes it true is
+  `:releaseRows` on `stamped`; no case paired an earlier overtaken share with one of the four
+  reasons that keep the stamp, so the sentence rested on the guard being inherited rather than on an
+  assertion.
+  **Closed** by `Failure.a_failure_holding_the_stamp_should_leave_the_share_it_overtook_alone`
+  (`85ddaf9`): the batch is failed `GENERATION_FAILED` with systemdocgenerator's own word beside it,
+  the overtaken share's supersession pair is empty, both rows stay RECORDED, the stamp stays on, and
+  the day's one assemblable register is the overtaken share. It is a **characterisation** and passed
+  on its first run: the guard was already there, and what was missing was the case that says so.
+
+* **LOW, taken - the three keys of the pass's summary line, and the correlation it opens alone.**
+  `released_batches=`, `released_registers=` and `contended=` were asserted nowhere, though Phase 4
+  is to read them off that line; and "a pass driven outside a run opens a correlation of its own"
+  was asserted only by the removal afterwards, which a pass that opened none also satisfies. Both
+  are now cases in `StaleBatchReleaserTest` (`4f290cb`), on the quiet night and on the mixed one.
+
+* **LOW, taken - the account's two lists.** `StaleReleaseOutcome` had no compact constructor, so a
+  port implementation answering with a missing list turned the run's first act into an
+  `NullPointerException` reported as an unexpected failure rather than as the store's own signal.
+  It now copies both and refuses a missing one where the account is built (`5ad02ee`, `5278de0`),
+  pinned by `application/StaleReleaseOutcomeTest`.
+
+* **LOW, taken - the `successor_id IS NULL` guard on the two folded clauses.** Neither `MARK_FAILED`
+  nor `RELEASE_FAILED` had a case where the failing batch's register has **both** a later successor
+  and an earlier share beside it, which is the arrangement the guard exists for: a register that is
+  itself being superseded is leaving the active index as it goes, takes no key, and displaces
+  nobody. Both twins are added (`c1fa3b7`), and reaching the arrangement is itself the finding's
+  answer - `idx_register_batch_live_key` allows one live batch per court centre day, so the third
+  row only exists where the successor's own batch has already ended under a reason that keeps its
+  stamp.
+
+**Declined, with the reason.** `GenerationMetricsTest`'s TDD note ("the three counters landed
+implemented rather than as throwing seams") is recorded by its own reporter as needing no change
+this phase; the red is indirect through `StaleBatchReleaserTest`'s `NO_METER` sentinel and is
+recorded honestly at T011. And `support/GenerationLegs`' ownership is a note for the **coordination
+contract**, which lives outside this repository: `src/test/**/support/*` is edited by 004 alone in
+this range and should be written down as 004-owned before any 005 tree touches it.
+
+**Green after the remediation**: `flock -w 7200 … ./gradlew jacocoTestReport build
+-Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 10m 10s, **3678 tests over 581 suites, 0 failures,
+0 errors** — seven more than the phase close above, being `StoreOutageTest`'s two, `RegisterStoreIT`'s
+three and `StaleReleaseOutcomeTest`'s two — with `checkstyleMain`, `checkstyleTest`, `pmdMain`,
+`pmdTest` and `jacocoTestCoverageVerification` all green and none of them loosened. The coverage
+report regenerated in that same run reads **LINE 6645/6852 = 0.9698 and BRANCH 2009/2228 = 0.9017**
+against the unchanged gate of LINE 0.88 / BRANCH 0.85. No migration was added and no schema changed;
+the only production code that moved is the outage arm's class list and the account's compact
+constructor.
+
 ---
 
 ## Phase 4: User Stories 1, 2 and 4 — the run calls the pass and says so (Priority: P1) 🎯 MVP
