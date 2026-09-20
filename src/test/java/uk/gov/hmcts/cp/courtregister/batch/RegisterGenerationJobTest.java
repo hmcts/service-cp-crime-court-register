@@ -247,9 +247,10 @@ class RegisterGenerationJobTest {
      * asked the renderer for, the three states the requesting leg can leave a batch in and their
      * total, the court centre days the run passed over, how many registers ended the run under each
      * of those outcomes, what the store said tonight's batches had come to by the time the line was
-     * written, what its first act gave back and could not give back, and how long it took. Written out rather than asserted
-     * field by field because the claim is the whole line - a field dropped from it is a night an
-     * operator can no longer read, and a field renamed is an alert that stops firing.
+     * written, what its first act gave back and could not give back, and how long it took. Written
+     * out rather than asserted field by field because the claim is the whole line - a field dropped
+     * from it is a night an operator can no longer read, and a field renamed is an alert that stops
+     * firing.
      */
     private static final String THE_MIXED_NIGHTS_LINE = RUN_EVENT
             + NORMALISED_RUN_ID

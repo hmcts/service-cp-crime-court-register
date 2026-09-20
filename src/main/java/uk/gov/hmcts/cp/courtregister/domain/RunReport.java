@@ -127,12 +127,13 @@ public record RunReport(
      * <p><strong>A snapshot, and it says so in the name.</strong> The requesting leg ends when
      * systemdocgenerator has been asked (FR-008) and the outcome of a render is applied afterwards
      * by the event listener, so these four counts are read back out of {@code register_batch} at
-     * the moment the line is written rather than known by the leg that did the requesting. What they describe is therefore a night that may still be
-     * settling: a render accepted at 18:04 and marked at 18:04:30 is counted here and one accepted
-     * at 18:59 is not, and the same run reported a minute later would count more. It is not a final
-     * tally of the night and must not be read as one - what a night came to in the end is the rows
-     * themselves, and {@code courtregister_batches_total} by outcome is the estate's cumulative
-     * count across every night rather than an answer about this one.
+     * the moment the line is written rather than known by the leg that did the requesting. What
+     * they describe is therefore a night that may still be settling: a render accepted at 18:04 and
+     * marked at 18:04:30 is counted here and one accepted at 18:59 is not, and the same run
+     * reported a minute later would count more. It is not a final tally of the night and must not
+     * be read as one - what a night came to in the end is the rows themselves, and {@code
+     * courtregister_batches_total} by outcome is the estate's cumulative count across every night
+     * rather than an answer about this one.
      *
      * <p><strong>It is worth taking even so</strong>, which is what the reading it replaced got
      * wrong. That reading was that these counts are zero by construction, the requesting leg ending
