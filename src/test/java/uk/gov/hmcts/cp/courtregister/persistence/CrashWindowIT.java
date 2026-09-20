@@ -69,7 +69,7 @@ class CrashWindowIT {
     private final UUID courtCentre = UUID.randomUUID();
 
     private final RegisterStore store = new JdbcRegisterStore(
-            ProcessedLogTestSupport.jdbcClient(), ProcessedLogTestSupport.transactions());
+            ProcessedLogTestSupport.jdbcClient(), ProcessedLogTestSupport.transactionManager());
 
     private Row row() {
         return ProcessedLogTestSupport.requireRow(command.source(), command.requestId());

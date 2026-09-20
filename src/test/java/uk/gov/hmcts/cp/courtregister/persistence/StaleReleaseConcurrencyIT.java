@@ -192,7 +192,7 @@ class StaleReleaseConcurrencyIT {
 
     private final RegisterStore store =
             new JdbcRegisterStore(ProcessedLogTestSupport.jdbcClient(),
-                    ProcessedLogTestSupport.transactions());
+                    ProcessedLogTestSupport.transactionManager());
 
     private final TransactionOperations transactions = ProcessedLogTestSupport.transactions();
 

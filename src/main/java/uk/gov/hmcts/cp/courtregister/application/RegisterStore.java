@@ -438,6 +438,15 @@ public interface RegisterStore {
      * failure and the release of <em>that</em> batch still one act, which is what the requirement
      * was ever about.
      *
+     * <p><strong>A transaction of its own whoever calls this, and from where.</strong> The
+     * separation is the implementation's to enforce and not the caller's to remember: a caller
+     * already inside a transaction would otherwise have every attempt join it, the first refusal
+     * would abort it, and every batch released before that one would be rolled back at the end -
+     * the run-ending outcome again, reached by obeying the port rather than by breaking it. So
+     * each batch's release suspends whatever the caller had open and commits or rolls back by
+     * itself, and a caller may wrap this call in a transaction of its own without changing what
+     * any batch's ending means.
+     *
      * <p><strong>The key keeps one active register, in both directions.</strong> A hearing can hold
      * more than one register for a day, and the release decides between them the same way the
      * recorder does: the later share is the one the day is still to render. A register the estate

@@ -338,7 +338,7 @@ class RegisterStoreIT {
 
     private final RegisterStore store =
             new JdbcRegisterStore(ProcessedLogTestSupport.jdbcClient(),
-                    ProcessedLogTestSupport.transactions());
+                    ProcessedLogTestSupport.transactionManager());
 
     @BeforeAll
     static void migrate() {

@@ -100,10 +100,12 @@ public class ProcessedLogConfig {
      * {@code courtregister.output=record} always has the store its last stage writes through, and the
      * {@code progression-post} fallback simply never asks it for anything.
      *
-     * <p>The transaction template is built here rather than injected because the store needs the
-     * commit boundary to be over <em>this</em> data source: the file-service datasource is a second
-     * one, write-only and never transacted from here, and a manager bound to it would open a
-     * transaction none of the store's statements ever joins.
+     * <p>The manager is handed over rather than a template built from it, because the store needs
+     * two boundaries over it and only one of them is the ordinary kind: each stale batch's release
+     * is made {@code REQUIRES_NEW}, so a caller that happened to be inside a transaction cannot
+     * fold every court centre's release into one. Both are over <em>this</em> data source: the
+     * file-service datasource is a second one, write-only and never transacted from here, and a
+     * manager bound to it would open a transaction none of the store's statements ever joins.
      *
      * @param jdbcClient         the store
      * @param transactionManager the manager over the same data source the client issues against
@@ -112,7 +114,7 @@ public class ProcessedLogConfig {
     @Bean
     public RegisterStore registerStore(
             final JdbcClient jdbcClient, final PlatformTransactionManager transactionManager) {
-        return new JdbcRegisterStore(jdbcClient, new TransactionTemplate(transactionManager));
+        return new JdbcRegisterStore(jdbcClient, transactionManager);
     }
 
     /**

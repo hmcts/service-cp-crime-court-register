@@ -26,8 +26,11 @@ import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
@@ -1205,15 +1208,38 @@ public class JdbcRegisterStore implements RegisterStore {
     private final TransactionOperations transactions;
 
     /**
+     * The boundary each stale batch's release is made inside, whatever the caller had open.
+     *
+     * <p>{@code PROPAGATION_REQUIRES_NEW}, and that is the whole point of it being a second
+     * template. FR-003a says no single batch's outcome may end the run, and
+     * {@link #failAndReleaseStale(Instant, Instant)} keeps that promise by giving each batch its
+     * own statement, its own transaction and its own bounded retry - which is true only for as
+     * long as those attempts are not folded into somebody else's transaction. A caller inside one
+     * would have the first refusal abort it, every attempt after that made inside an aborted
+     * transaction, and every court centre already released rolled back at the end: the exact
+     * run-ending outcome the per-batch shape exists to prevent, reached without a line of this
+     * class changing. So the boundary is taken here rather than asked for in a javadoc: the
+     * caller's transaction is suspended for the length of an attempt and resumed after it.
+     */
+    private final TransactionOperations perBatchTransactions;
+
+    /**
      * Binds the store to this service's own Postgres.
      *
-     * @param jdbcClient   the client every statement in this class is issued through
-     * @param transactions the transaction {@link #assemble(RegisterBatch, List)} runs in, over the
-     *                     same data source as the client
+     * @param jdbcClient         the client every statement in this class is issued through
+     * @param transactionManager the manager over the same data source as the client, from which
+     *                           both of this class's boundaries are built - the one
+     *                           {@link #assemble(RegisterBatch, List)} and the recording run in,
+     *                           and the {@code REQUIRES_NEW} one each stale batch's release is
+     *                           made inside
      */
-    public JdbcRegisterStore(final JdbcClient jdbcClient, final TransactionOperations transactions) {
+    public JdbcRegisterStore(final JdbcClient jdbcClient,
+            final PlatformTransactionManager transactionManager) {
         this.jdbcClient = jdbcClient;
-        this.transactions = transactions;
+        this.transactions = new TransactionTemplate(transactionManager);
+        final TransactionTemplate perBatch = new TransactionTemplate(transactionManager);
+        perBatch.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.perBatchTransactions = perBatch;
         this.objectMapper = JacksonConfig.contractObjectMapper();
     }
 
@@ -1864,13 +1890,15 @@ public class JdbcRegisterStore implements RegisterStore {
      * still and untouched, so the next run reaches it again, and the 07:00 report names its court
      * centre day as a late batch every morning meanwhile.
      *
-     * <p><strong>Each attempt must be its own transaction, and this method is written to be called
-     * outside one.</strong> The statement is issued straight at the client, so an attempt commits
-     * or rolls back by itself. Wrapped in a caller's transaction the first refusal would abort that
-     * transaction, every retry would be made inside an aborted one and all three would fail - and
-     * the other batches would go down with them, which is the very thing the per-batch shape is
-     * for. So this call is not to be put behind an outer {@code @Transactional} or a
-     * {@code TransactionTemplate}.
+     * <p><strong>Each attempt is its own transaction, and this method takes that boundary rather
+     * than asking to be called outside one.</strong> Wrapped in a caller's transaction the first
+     * refusal would abort that transaction, every retry would be made inside an aborted one and
+     * all three would fail - and the other batches would go down with them, which is the very
+     * thing the per-batch shape is for. A precondition nothing enforces is a comment, so each
+     * attempt runs through {@link #perBatchTransactions} with
+     * {@code PROPAGATION_REQUIRES_NEW}: whatever the caller had open is suspended for the length
+     * of the attempt and resumed afterwards, and an attempt commits or rolls back by itself
+     * whoever called this and from where.
      *
      * <p>A refusal on any other rule - another unique key, or a constraint that is no key at all,
      * such as the bounded reason a store left short of {@code V6} does not admit - is the store
@@ -1943,7 +1971,8 @@ public class JdbcRegisterStore implements RegisterStore {
         List<ReleasedBatch> released = null;
         for (int attempt = 0; released == null && attempt < RECORD_ATTEMPTS; attempt++) {
             try {
-                released = release(batchId, scheduledCutoff, manualCutoff);
+                released = perBatchTransactions.execute(
+                        own -> release(batchId, scheduledCutoff, manualCutoff));
             } catch (DuplicateKeyException collision) {
                 if (!violates(collision, ACTIVE_ROW_KEY)) {
                     throw unaccountedForRelease(batchId, collision);
@@ -2014,7 +2043,7 @@ public class JdbcRegisterStore implements RegisterStore {
     }
 
     /**
-     * One attempt at one batch's release, which is one statement and therefore one transaction.
+     * One attempt at one batch's release, which is one statement inside a transaction of its own.
      *
      * @param batchId         the batch this attempt is about
      * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale

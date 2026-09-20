@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DelegatingDataSource;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.support.JdbcTransactionManager;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -45,6 +46,7 @@ public final class ReportReadsDatabase {
     private final DataSource dataSource;
     private final JdbcClient client;
     private final TransactionOperations transactionTemplate;
+    private final PlatformTransactionManager transactionManager;
 
     private ReportReadsDatabase(final String name, final String url) {
         this.databaseName = name;
@@ -53,7 +55,8 @@ public final class ReportReadsDatabase {
                 PostgresTestSupport.username(), PostgresTestSupport.password());
         this.dataSource = new RecordingDataSource(driver);
         this.client = JdbcClient.create(dataSource);
-        this.transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
+        this.transactionManager = new JdbcTransactionManager(dataSource);
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     /**
@@ -108,6 +111,18 @@ public final class ReportReadsDatabase {
      */
     public TransactionOperations transactions() {
         return transactionTemplate;
+    }
+
+    /**
+     * The manager those transactions are taken through, for a class that builds its own.
+     *
+     * <p>{@code JdbcRegisterStore} needs two boundaries over this one data source and only one of
+     * them is the ordinary kind, so it is handed the manager rather than a template.
+     *
+     * @return the transaction manager, over this fixture's data source and no other
+     */
+    public PlatformTransactionManager transactionManager() {
+        return transactionManager;
     }
 
     /**
