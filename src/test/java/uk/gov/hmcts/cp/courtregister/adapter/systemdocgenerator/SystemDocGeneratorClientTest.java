@@ -20,6 +20,8 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
@@ -30,6 +32,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -580,6 +583,54 @@ class SystemDocGeneratorClientTest {
             assertThat(refused).isInstanceOf(SubmissionFailedException.class);
             return ((SubmissionFailedException) refused).classification();
         }
+    }
+
+    /**
+     * FR-006 read off the wire: a generation asks for a render and asks nothing else.
+     *
+     * <p>Two halves, and neither is the other. The <strong>journal</strong> is what a generation
+     * actually did - every request this client made to systemdocgenerator over the whole of the one
+     * conversation a batch has with it - and it must hold POSTs to the command path and nothing
+     * else; a GET in it is a synchronous coupling to the renderer that the increment removed. The
+     * <strong>surface</strong> is what a generation could have done: a client still carrying a
+     * second method is a second request one line of a later change reintroduces, with the journal
+     * still empty because nothing called it yet.
+     *
+     * <p>The journal is read over {@code getAllServeEvents}, which is every request the server
+     * received rather than every request a stub was declared for: a call to a path nothing stubbed
+     * still appears there, which is exactly the call this case exists to catch.
+     */
+    @Test
+    @DisplayName("a whole generation makes no request to the document endpoint")
+    void a_whole_generation_makes_no_request_to_the_document_endpoint() {
+        commandAnswering(ACCEPTED);
+
+        render(CALLER);
+
+        assertThat(sdg.getAllServeEvents())
+                .as("everything a batch's generation asks of systemdocgenerator, and it is one "
+                        + "command (FR-006)")
+                .isNotEmpty()
+                .allSatisfy(event -> assertThat(event.getRequest().getUrl())
+                        .isEqualTo(COMMAND_PATH));
+        assertThat(publishedCallsOf(SystemDocGeneratorClient.class))
+                .as("and no second conversation to make a second request from: the query was the "
+                        + "flow's one synchronous coupling to the renderer, and a client that "
+                        + "still declared it is one line from making it again")
+                .containsExactly("requestRender");
+    }
+
+    /**
+     * The methods a class publishes, which is what a caller could reach.
+     *
+     * @param published the class under assertion
+     * @return the names of its public declared methods
+     */
+    private static List<String> publishedCallsOf(final Class<?> published) {
+        return Stream.of(published.getDeclaredMethods())
+                .filter(method -> Modifier.isPublic(method.getModifiers()))
+                .map(Method::getName)
+                .toList();
     }
 
     @Nested

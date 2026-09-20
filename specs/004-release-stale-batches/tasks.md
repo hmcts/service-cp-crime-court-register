@@ -1748,11 +1748,28 @@ values on every pass.
       not carry it (`courtregister.report.enabled` is unset in this pair, so `ReportSchedulingConfig`
       contributes nothing); the expectation was narrowed to the run's own cron, which is what "the
       generation half carries exactly one" means on this context.
-- [ ] T024 [US4] `application/DocumentRendererTest` (new, reflection) and
+- [X] T024 [US4] `application/DocumentRendererTest` (new, reflection) and
       `adapter/systemdocgenerator/SystemDocGeneratorClientTest` (extend) — the query's absence.
       `the_renderer_port_declares_one_method`, which is what stops the query being reintroduced
       quietly; `a_whole_generation_makes_no_request_to_the_document_endpoint`, over WireMock's
       journal. Red: two methods, and the client still has the call.
+
+      The journal case carries **two halves, and neither is the other**. The journal is what a
+      generation did — every request the client made over the one conversation a batch has with
+      systemdocgenerator, read off `getAllServeEvents` so that a call to a path nothing stubbed
+      still appears. The published surface is what a generation *could* have done: a client still
+      declaring a second method is one line of a later change from making a second request, with
+      the journal still clean because nothing has called it yet. A journal assertion on its own
+      would have been green against the code that still had the query, which is why the second
+      half is in the same case rather than trusted to the port's own suite.
+
+      **Red** (`flock -w 7200 … ./gradlew test --tests '*DocumentRendererTest*' --tests
+      '*SystemDocGeneratorClientTest*' -Dtest.noFailFast=true`): **45 tests completed, 2 failed**,
+      both assertions — `the_renderer_port_declares_one_method` ("Expecting actual:
+      ["requestRender", "query"] to contain exactly (and in same order): ["requestRender"]
+      but some elements were not expected: ["query"]") and
+      `a_whole_generation_makes_no_request_to_the_document_endpoint`, failing on its second half
+      with the same two-against-one comparison over `SystemDocGeneratorClient`'s published calls.
 - [ ] T026 [US4] `config/ConfigurationValidationTest` and `config/PublicEventsHealthIndicatorTest`
       (both extend) — the completion mode's absence.
       `a_generation_enabled_context_subscribes_without_being_told_to`;
