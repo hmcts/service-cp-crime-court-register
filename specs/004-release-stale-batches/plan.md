@@ -219,7 +219,12 @@ resources/db/migration/V7__retire_reconciler_vocabulary.sql (Phase 5: narrows, a
 **Deleted**
 
 ```text
-batch/GenerationReconciler.java        the class, its timer, its lock, its cadence
+batch/GenerationReconciler.java        the class, its lock and what is left of it; its
+                                       @Scheduled, its cadence constant and the two imports they
+                                       needed went early, at the Phase 4 gate, because a timer
+                                       firing every stale-after interval reached a stale batch
+                                       before the run's pass did and failed it under a reason that
+                                       releases nothing
 domain/DocumentStatus.java             the query's answer
 (and, from other files) DocumentRenderer.query, SystemDocGeneratorClient.query + parsing,
 StubDocumentRenderer.query, GenerationProperties.completion + its two constants,
@@ -270,8 +275,15 @@ application/ExceptionReportService.java   a FAILED batch under the new reason is
                                        check nameOf(dead) and the "four stages" text for
                                        exhaustive switches [review]
 config/GenerationProperties.java       staleAfter (30m), batchAgeRefresh (10m), - completion
-config/GenerationConfig.java           reconciler bean -> releaser + sweep
-config/SchedulingConfig.java           job wiring; the scheduler bean and constant unchanged
+config/GenerationConfig.java            generationReconciler bean deleted with the class (T022);
+                                       the sweep is BatchSweepConfig (Phase 6)
+config/SchedulingConfig.java           staleBatchReleaser bean beside the job, under both the
+                                       generation-enabled and the not-CLI conditions - the only
+                                       configuration carrying the pair the pass answers to (T020);
+                                       the job takes ObjectProvider<StaleBatchReleaser>; the
+                                       scheduler bean and constant unchanged, and its javadoc
+                                       stops describing two surfaces sharing it once the
+                                       reconciler's timer goes
 config/SchedulingInfrastructureConfig.java, config/CliModeConfig.java, config/ProcessedLogConfig.java,
 config/CourtRegisterProperties.java, config/PublicEventsConfig.java,
 config/PublicEventsHealthIndicator.java, config/PropertiesValidator.java,
@@ -308,7 +320,7 @@ docker/wiremock/README.md              loses the query line
 | The pass | `batch/StaleBatchReleaserTest` (new) | U | FR-001/002/003/017/020: both cutoffs computed from the clock and the settings; the manual cutoff is the longer of the two, asserted **each way round** so neither ordering of the two settings is assumed; the two numbers returned; one line per batch naming it by id; nothing else read. **P2's re-pointed pinning test lives here.** **Phase 3** adds two more: a batch the store reports on `contended()` is counted on `courtregister_generation_contended_total`, said once at WARN by identity, and the pass answers normally (FR-003a); and a store that went away leaves the pass as the port's own `StoreUnavailableException`, which is the per-method outage proof gate 4 deferred here from `RegisterStoreIT`. |
 | The statement | `persistence/RegisterStoreIT` (extended) | IT | The predicate: PENDING by `assembled_at`, GENERATING by `requested_at`, GENERATED never, `system_generated = false` on the longer cutoff, PENDING with a null `payload_file_id` included (FR-020); the mark and the release in one transaction; supersession against a later re-share and against the share the register coming back overtook; the failure names no completion mechanism — the statement writes `completed_by = NULL` and `register_batch_completed_by_shape_chk` is what refuses the contrary, pinned by `the_failure_names_no_completion_mechanism`; a refusal on a rule that is no key at all reaches the caller as the domain's own class [gate 5]; a batch that no longer matches yields zero rows and no error. |
 | Atomicity | `persistence/StaleReleaseConcurrencyIT` (new) | IT | **SC-009 [review]**: the pass raced against `markRequested` and against `markGenerated`, both winner orders, repeated; and against a re-share of one of the batch's own hearings, including one committed **inside the statement's own window**, where the snapshot cannot see it — no register ever stamped to a terminal batch, at most one live batch per key (a released day has none until it is re-assembled), exactly one notification aggregate, and nothing escaping the pass. **Gate 3**: and a batch whose every attempt is refused for the key is reported on `contended()` and left untouched while another court centre's stale batch is failed and released anyway. **Gate 4**: that refusal is now staged by a trigger scoped to the round's hearing, which takes the day's active register back inside every attempt — the refusal a re-share committing inside each window produces — because the out-of-order share it used to be staged with is one the release now decides, and the release supersedes it. **Gate 5**: the batch that must be released anyway stands on the **day after** the contended one, because the pass walks its batches by register date and then by batch id — so "the pass goes on to the batches after a contended one" is asserted on every run rather than on the runs where two random identities happen to fall the right way. |
-| The run | `batch/RegisterGenerationJobTest` (extended) | U | The `InOrder` gate → releaser → `activeUnbatched`; a skipped run releases nothing (FR-005/FR-018); `released_batches=` and `released_registers=` on the line, zero when none, `reconciled=` nowhere; a releaser that throws still writes a line and rethrows; **a batch that stops being stale does not stop the run** (FR-003a). |
+| The run | `batch/RegisterGenerationJobTest` (extended) | U | The `InOrder` gate → releaser → `activeUnbatched`; a skipped run releases nothing, driven over both `FLAG_OFF` and `FLAG_UNREADABLE` (FR-005/FR-018); `released_batches=`, `released_registers=` and `contended=` on the line, zero when none, `reconciled=` nowhere; a releaser that throws still writes a line and rethrows; **a batch the pass could not release does not stop the run** (FR-003a), as `a_batch_the_pass_could_not_release_should_not_stop_the_run`. |
 | The drop | `application/DocumentOutcomeSinkTest` (extended) | U | **FR-008 / SC-010 [review]**: `document-available` and `generation-failed` for a `NOT_COMPLETED_BY_NEXT_RUN` batch each move nothing, notify nobody, and **move the ignored counter under `terminal-batch`**; a redelivery is counted under the same reason and never as an unknown correlation. |
 | The schema | `persistence/SchemaMigrationV2IT` (extended) | IT | After **V6**: the new reason is admitted, still refuses an attribution, and the two retired values are still admitted (the widening widens only). After **V7**: both retired values are refused, and V7 refuses to apply at all to a store holding one. The enum and the constraint agree in **both** directions after each migration. |
 | The footprint | `persistence/SchemaMigrationV6IT` (new) | IT | What **V6** did to the store *besides* widening the list: two snapshots of one private database, pinned at **both** ends (`target("5")` then `target("6")`, never the head). Exactly one constraint definition changes, and it is `register_batch_failure_reason_chk`, the six plus the new reason; no column, table or index is added; every other constraint — including the two attribution ones on the very table V6 opens — survives byte-identical. The companion of `SchemaMigrationV4IT` and `SchemaMigrationV5IT`; **V7 narrows this same constraint and needs its own**. |
