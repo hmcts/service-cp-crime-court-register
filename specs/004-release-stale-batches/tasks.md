@@ -58,8 +58,10 @@ stay green throughout.
 `src/main/java/…`, tests under `src/test/java/…`. `*IT` suites need Docker and run inside
 `./gradlew test`. Conventional Commits on `004-release-stale-batches`; accepted types `feat`, `fix`,
 `chore`, `docs`, `test`, `refactor`, `build`, `ci`, `style`. No AI attribution anywhere. **Every phase
-ends with a green `./gradlew build`** — every `gradlew` behind the shared `flock`, never two Gradle
-builds at once — **and a review gate in a new session**, whose findings land as a red test commit
+ends with a green `./gradlew jacocoTestReport build`, in that order** — `build` does not produce a
+coverage report, only the gate that reads one, so a close that quotes ratios without asking for the
+report is quoting whatever report an earlier increment left on disk — every `gradlew` behind the
+shared `flock`, never two Gradle builds at once — **and a review gate in a new session**, whose findings land as a red test commit
 then an implementation commit before the next phase starts. **Never two committing agents at once in
 this tree.**
 
@@ -306,8 +308,11 @@ each of the four below is a blocking prerequisite for every user story.
 **Phase close**: `flock … ./gradlew build` green; review gate.
 (green at `20bab2b`: `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` BUILD SUCCESSFUL,
 exit 0, 3630 tests over 576 suites, 0 failures, 0 errors; `checkstyleMain` and `checkstyleTest` at
-`maxWarnings = 0`, `pmdMain` and `pmdTest`, and `jacocoTestCoverageVerification` at LINE 0.9690 /
-BRANCH 0.8986 against the unchanged gate of LINE 0.88 / BRANCH 0.85 — none of them loosened. The
+`maxWarnings = 0`, `pmdMain` and `pmdTest`, and `jacocoTestCoverageVerification` against the
+unchanged gate of LINE 0.88 / BRANCH 0.85 — none of them loosened. **No ratio is quoted for this
+tree, because none was measured on it**: `build` runs the gate and not the report, and the figures
+this close first carried were read off a report increment 003 had left in `build/`. What ran here
+is the gate, and it passed. The
 phase closes on the tree as committed, which is what the two commits beyond T004 and T006 were for:
 `290d898` pins `SchemaMigrationV5IT` to V5, and `20bab2b` moves `BatchStateTest`'s three
 migration-reading fields above the first method. Review gate to follow.)
@@ -500,18 +505,141 @@ Postgres. No pass, no run, no Spring context.
       the variant breaks in the render-acceptance race by failing a batch whose render had just been
       accepted. Mutation result: 2 tests, 2 failures, 3 and 4 failing assertions, all on the
       `TOGETHER` rounds. Reverted; green against the tree as committed. The variant is not
-      committed.)
+      committed.
+      Per-method outage translation for `failAndReleaseStale` is covered by `StoreOutageTest` plus
+      inspection of the call site rather than by a case of its own: the translator's seven cases
+      hold it to its own rules and name no store method, and every statement in this class is made
+      through `StoreOutage.translating`. A case over a closed `DataSource` would be the stronger
+      proof and is not here.)
 
-**Phase close**: `flock … ./gradlew build` green; review gate. **This gate is the one to read
-closely**: everything after it assumes the statement is atomic and fenced.
-(green at the tree carrying T008, T010 and T009: `flock -w 7200 … ./gradlew build
--Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 10m 5s, **3647 tests over 579 suites, 0 failures,
-0 errors** — thirteen more than review gate 1's 3634, being `RegisterStoreIT$StaleRelease`'s eleven
-and `StaleReleaseConcurrencyIT`'s two — with `checkstyleMain` and `checkstyleTest` at
+**Phase close**: `flock … ./gradlew jacocoTestReport build` green; review gate. **This gate is the
+one to read closely**: everything after it assumes the statement is atomic and fenced.
+(at the tree carrying T008, T010 and T009 — `e1ac365` — `flock -w 7200 … ./gradlew build
+-Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 10m 5s, 3647 tests over 579 suites, 0 failures,
+0 errors, `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and
+`jacocoTestCoverageVerification` all green and none of them loosened. No migration was added: the
+phase writes `NOT_COMPLETED_BY_NEXT_RUN`, which V6 already admits, and adds no column, table or
+index.
+**This close is superseded by review gate 2's, and it is worth saying why rather than quietly
+replacing it.** The tree it was taken on carried a production defect the suite did not yet ask
+about — the re-share race below — so a green suite was not evidence that the statement was fenced,
+only that nothing had asked. And the coverage ratios it quoted, LINE 0.9690 / BRANCH 0.8986, were
+read off a report increment 003 had left in `build/`: `build` runs the gate and not the report, so
+a close that quotes ratios without asking for one is quoting whatever is on disk. The close that
+counts is under review gate 2 below, and the convention at the top of this file now names
+`jacocoTestReport build`.)
+
+**Review gate 1 ran against the committed Phase 2 content** with three read-only reviewers plus
+Codex. What it found above LOW, and where each was closed:
+
+* `StaleReleaseConcurrencyIT`'s **notification invariant was vacuous in the rounds the pass won**.
+  A round the race left GENERATING had no half of the night left to run, so the day ended having
+  told nobody and "no Youth Offending Team holds two aggregates for one register date" was
+  satisfied by an empty list. Closed at `e1ac365`: the fixture now walks whatever the race left
+  owed — PENDING, GENERATING or holding a document — to its document and its one e-mail, exactly as
+  the renderer and the notifier do, and the invariant is read as the one aggregate SC-009 asks for.
+  The same commit corrects `escaping()`'s javadoc, which still named `assertInvariants` by a
+  signature that changed when the cutoff and the escapes became its arguments.
+* **The re-share race** (HIGH at Codex, MEDIUM at `code-reviewer`) was **not closed at this gate**.
+  It is closed at gate 2 below, where every reviewer re-raised it.
+
+**Review gate 2 ran against the same phase after that remediation**, three read-only reviewers plus
+Codex. What it found above LOW, and where each was closed:
+
+* **The re-share race** — BLOCKER at Codex, HIGH at all three reviewers, and the finding this gate
+  exists for. `failAndReleaseStale` is one statement and a statement reads one snapshot, so a
+  hearing re-shared after this one began is a successor the `stamped` search cannot find, however
+  plainly it is one by the time the write lands. The release then cleared the stale register's
+  stamp *beside* the replacement it could not see, `idx_output_active_register_key` refused the
+  second active row for the key, and the `DuplicateKeyException` escaped the pass — which, run
+  inline in the night's generation, costs every court centre its document (FR-003a) and rolls back
+  every other court centre's release with it.
+  Pinned first, at `98d8826`, by `StaleReleaseConcurrencyIT`'s third contender and its
+  `INSIDE_THE_WINDOW` round: the batch row the statement writes first is held `FOR UPDATE` by a
+  session of its own, which stops the statement after its snapshot and before its release; the
+  re-share is committed against the held statement and the row let go. Red on five assertions, all
+  on that round — the pass escapes rather than escaping nothing, the batch is left GENERATING
+  instead of FAILED under `NOT_COMPLETED_BY_NEXT_RUN`, the key holds three live registers rather
+  than two, the re-shared hearing holds two active registers rather than one, and one address holds
+  two notification aggregates.
+  Closed at `9811570` by the idiom `recordAndComplete` already uses for the same index one method
+  above: catch `DuplicateKeyException`, and where it `violates(…, ACTIVE_ROW_KEY)` make the whole
+  statement again on a fresh snapshot — which has the re-share in it and supersedes against it — up
+  to `RECORD_ATTEMPTS` times; a refusal on any other key is the store saying the write may never be
+  made and is rethrown as itself. Each attempt is its own transaction, which the javadoc states
+  along with the corollary that the call may not be put behind an outer transaction, or the first
+  refusal would abort it and all three attempts would fail inside it. Green: `StaleReleaseConcurrencyIT`
+  3 of 3, `RegisterStoreIT` 83 of 83.
+* **What escapes an exhausted retry** — the decision gate 1 was asked to re-judge, and the
+  reviewers split on it. Codex and `qa` accepted `ConcurrencyFailureException` provided the port
+  said so; `spec-validator` refused it, on the ground that the class which has to decide is Phase
+  3's `StaleBatchReleaser` in `batch/`, which may name no `org.springframework.dao` type
+  (constitution Principle V) and could therefore only catch it as `RuntimeException` — the catch
+  that swallows every programming error beside it. The narrower reading wins, because it is the one
+  that satisfies all three: exhaustion escapes as a new `domain/StoreContendedException`, beside
+  `StoreUnavailableException` and `StoreRefusedRowException`, and `RegisterStore`'s `@throws` says
+  what it is and that the **pass**, not the port, decides between reporting it as a pass that
+  released nothing and rethrowing it. `recordAndComplete` keeps `ConcurrencyFailureException`
+  deliberately: its contention is settled by the listener's `catch (RuntimeException)` and never
+  crosses into `batch/`.
+* **The coverage figures at both phase closes had never been measured on the trees they describe**
+  (MEDIUM at `code-reviewer`, `qa`, `spec-validator` and Codex). Phase 2's are requoted below from
+  a report regenerated by `jacocoTestReport build` on the tree that carries the fix. Phase 1's
+  cannot honestly be requoted — its tree is two remediations gone — so that close now states the
+  gate that actually ran, and no ratios. The convention at the top of this file names
+  `jacocoTestReport build`, in that order, so the trap does not recur.
+* **This range had no full-build evidence at all**: `build/` held one filtered red run and a report
+  from 2026-09-15. Closed by the run recorded below, whose XMLs are left in place.
+
+Six LOW findings were closed here as well, all of them raised by more than one reviewer:
+
+* `the_mark_and_the_release_are_one_transaction` accepted any `RuntimeException`. It now names
+  `DuplicateKeyException` **and the index that refused it**, which is also what pins the other half
+  of the retry: a refusal on a key other than the active-register one is rethrown as itself rather
+  than made again three times.
+* the inclusive `<=` staleness boundary the spec decides was asserted nowhere, because every case
+  ages a batch by a duration against a cutoff taken from its own clock and the two can never be the
+  same instant. A `stampBatch` fixture writes both in-flight stamps to an instant the case names,
+  and `a_batch_stamped_exactly_at_its_cutoff_is_stale` puts one batch on the cutoff and one a
+  second inside it.
+* "never matched" pinned GENERATED alone, while the predicate is PENDING and GENERATING and nothing
+  else. `no_batch_a_run_has_finished_with_is_ever_matched_at_any_age` stands an aged FAILED batch
+  and an aged NOTIFIED one beside the day still waiting: re-failing the first would overwrite the
+  reason support reads and hand back registers a resend may be about, and the second would say a
+  night that worked did not.
+  All three are at `2d2413c`, and all three are mutation-checked: widening the predicate to admit
+  FAILED and NOTIFIED and narrowing `<=` to `<` fails four cases, the two new ones among them.
+* `plan.md`'s Atomicity row said "exactly one live batch per key" where the suite asserts at most
+  one — a released day has none until it is re-assembled — and did not name the third contender.
+  Both corrected.
+* the hard ordering above read T008→T009→T010; the phase was executed, and had to be executed,
+  T008→T010→T009. Corrected.
+* T009's narrative now records that per-method outage translation for this method is covered by
+  `StoreOutageTest` plus inspection rather than by a case of its own.
+* `spec.md`'s FR-009 now carries the decision T009's narrative had been the only record of: the
+  registers counted are those still the day's to render, and one a re-share superseded during the
+  release is not among them because nothing will re-batch it.
+
+Two LOW findings are left, each with its reason, for the reviewers to re-judge: Codex's note that
+`COALESCE(requested_at, assembled_at)` leans on a timestamp/state shape neither the columns nor
+`RegisterBatchRepository.insert` enforce — latent, reachable only through a row no ordinary flow
+writes, and the fix is a constraint rather than a predicate, so it belongs with the schema work
+rather than inside this phase's statement; and Codex's note that
+`StaleReleaseConcurrencyIT`'s `allSatisfy` on the losing contender's escapes passes on an empty
+list and that live-batch uniqueness is read after settlement — both are about the two committed
+rounds' assertions rather than about the pass, and tightening them means teaching the fixture which
+contender was let go first, which is what `Order` deliberately does not decide for the `TOGETHER`
+rounds.
+
+**Green after the remediation**: `flock -w 7200 … ./gradlew jacocoTestReport build
+-Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 10m 14s, **3650 tests over 579 suites, 0 failures,
+0 errors** — three more than the superseded close, being `StaleReleaseConcurrencyIT`'s third case
+and `RegisterStoreIT$StaleRelease`'s two — with `checkstyleMain` and `checkstyleTest` at
 `maxWarnings = 0`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification` all green and none of
-them loosened; the coverage report reads LINE 0.9690 / BRANCH 0.8986 against the unchanged gate of
-LINE 0.88 / BRANCH 0.85. No migration was added: the phase writes `NOT_COMPLETED_BY_NEXT_RUN`, which
-V6 already admits, and adds no column, table or index. Review gate to follow.)
+them loosened. The coverage report was regenerated in that same run and reads **LINE 6572/6782 =
+0.9690 and BRANCH 1994/2218 = 0.8990** against the unchanged gate of LINE 0.88 / BRANCH 0.85; it
+contains `failAndReleaseStale`, which is how a reader can tell it is this tree's report and not an
+earlier increment's.
 
 ---
 
@@ -903,7 +1031,7 @@ Phase 8  (T037-T040)  the proof and the privacy sweep
 Phase 9  (T041-T046)  documents, the P2 cell, the gates
 ```
 
-**Hard orderings inside phases**: T001→T002, T003→T004, T005→T006 (pairs); T008→T009→T010;
+**Hard orderings inside phases**: T001→T002, T003→T004, T005→T006 (pairs); T008→T010→T009;
 T011→T012→T013→T014 (T013's red depends on T012 being minimal); T015→T016, T017→T018, T019→T020;
 T021→T022, T024→T025, T026→T027; then T047→T048 and T049 and T050, all of them after T022 and T025;
 T028 after every one of those, so the suite it characterises is the finished one;

@@ -403,7 +403,10 @@ with zero and with a negative value and confirm each refusal names the setting.
   **registers** came back with them, in place of the count of outcomes it used to fetch, and MUST
   state zero rather than nothing where it released none. The two released numbers are a diagnostic
   beside the night's accounts and are deliberately **not** a third sum: the registers they count are
-  re-batched by the same run and are therefore already inside that run's row totals.
+  re-batched by the same run and are therefore already inside that run's row totals. For the same
+  reason the registers counted are those still the day's to render: a register the estate re-shared
+  while the pass was giving it back is superseded rather than handed back, nothing will re-batch it,
+  and counting it would put a register in the run's diagnostic that is in none of its totals.
 - **FR-010**: The minimum age MUST be a configuration setting with a documented default of thirty
   minutes, and start-up MUST be refused, naming the setting, for a zero or negative value.
 - **FR-011**: The readings that say how long the oldest batch awaiting a render, the oldest batch that
