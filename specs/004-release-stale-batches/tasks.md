@@ -2151,7 +2151,7 @@ claim. T028 runs after them, not before, so the suite it characterises is the fi
       Postgres (`RegisterStoreIT`, `RegisterBatchRepositoryIT`, `EmailReportSinkStoreIT`,
       `FileServicePayloadStoreIT`) ran green over Testcontainers in the same round, **140 tests, 0
       failures**. `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` all green.
-- [ ] T049 [US4] `persistence/SchemaMigrationV2IT` (extend) and
+- [X] T049 [US4] `persistence/SchemaMigrationV2IT` (extend) and
       `src/main/resources/db/migration/V7__retire_reconciler_vocabulary.sql` — the narrowing, as a
       pair in one commit because the IT's red *is* the migration's absence. The test:
       `v7_refuses_the_retired_timeout_reason` and `v7_refuses_the_retired_attribution`; and
@@ -2159,6 +2159,53 @@ claim. T028 runs after them, not before, so the suite it characterises is the fi
       container and asserts the migration fails rather than silently dropping it — the one behaviour
       an operator has to know about, and therefore the one worth a test rather than a sentence. The
       migration: the three constraint rewrites `data-model.md` gives under V7, in that order.
+
+      **The migration is `data-model.md`'s three statements verbatim and in its order**, and the
+      shape constraint keeps its three-arm structure and its `COALESCE` — only its attributed list
+      narrows, from two reasons to one. A rewrite that collapsed the arms would stop covering the
+      seven states by construction and start covering them by omission.
+
+      **Three cases the narrowing took away were replaced rather than deleted.**
+      `v6_still_admits_the_retired_timeout_reason` and `v6_still_admits_the_retired_attribution`
+      were the assertion that V6 widened only, and V6's own footprint suite still makes it:
+      `SchemaMigrationV6IT` is pinned to `target("5")` and `target("6")` and says what V6 did
+      whatever V7 does afterwards. Against the shared head-migrated container the same two rows are
+      now refusals, which is what the two `v7_` cases assert.
+      `completed_by_shape_check_should_require_a_mechanism_on_a_timed_out_generation` becomes
+      `..._on_a_failed_generation`: with one attributed reason left, what that case now says is that
+      narrowing the attributed list to one did not narrow it to none, which is how a rewritten
+      three-arm CHECK goes wrong. And
+      `completed_by_check_should_name_exactly_the_two_completion_mechanisms` becomes
+      `..._the_one_completion_mechanism` and stops using `contains`: it reads the codes out of the
+      live definition and compares them as a set, because `contains` says every constant reaches the
+      database and nothing about a second code the column still admits — which is exactly what V7
+      exists to take away. `admittedCodesOf` reads the narrowed definition unchanged, the constraint
+      being a single equality rather than an `IN` list and the pattern reading quoted codes rather
+      than list syntax.
+
+      **`v7_refuses_the_retired_timeout_reason` seeds its row unattributed, and that is not a
+      detail.** Written attributed it failed green-side on
+      `register_batch_completed_by_shape_chk`: the retired reason is out of the shape constraint's
+      attributed list too, so such a row violates two constraints and Postgres names whichever it
+      reached — a refusal about the wrong rule. The sibling case makes the mirror-image choice for
+      the same reason, seeding its attribution on GENERATED rather than on FAILED.
+
+      **Red** (`flock -w 7200 … ./gradlew test --tests '*SchemaMigrationV2IT*'
+      -Dtest.noFailFast=true`): **79 tests completed, 5 failed**, every one an assertion — the two
+      `v7_` refusals on "Expecting code to raise a throwable", the two both-directions cases on the
+      retired value still being admitted, and
+      `v7_refuses_to_apply_to_a_store_holding_a_retired_row` on Flyway answering "No migration with
+      a target version 7 could be found" where the constraint's name was expected, which is the
+      migration's absence stated exactly.
+
+      **Green** (`flock -w 7200 … ./gradlew test --tests '*SchemaMigration*' --tests
+      '*BatchStateTest*' --tests '*BatchFailureReasonTest*' -Dtest.noFailFast=true`): BUILD
+      SUCCESSFUL, **187 tests, 0 failures** — and with it
+      `the_failure_reasons_should_be_exactly_the_six_the_schema_enumerates`, red since T048, which
+      is the retirement being provably complete in both directions: the constants are out of the
+      enumerations and out of the constraint, and each half is read from where it actually lives.
+      `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` green in the same round, after one
+      `CheckResultSet` violation on a `ResultSet.next()` asserted rather than branched on.
 - [ ] T050 [A] [US4] `docker/`, `specs/004-release-stale-batches/quickstart.md` — **[A]**, and this
       is T007 arriving where it belongs. Record that `docker compose down -v` is required before
       **V7** on any volume holding a pre-004 row, and confirm on a real local volume that the
