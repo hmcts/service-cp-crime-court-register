@@ -44,6 +44,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
@@ -3462,6 +3463,52 @@ class RegisterStoreIT {
         }
 
         @Test
+        void a_refusal_that_is_not_a_key_at_all_is_the_domains_own_class_too() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), UUID.randomUUID());
+                ageBatch(monday.batchId(), LAST_NIGHT);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            final AtomicReference<Throwable> refusal = new AtomicReference<>();
+            withThisCourtCentresFailureRefused(() -> refusal.set(catchThrowable(() ->
+                    store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)))));
+
+            softly.assertThat(refusal.get())
+                    .as("a unique key is not the only rule a store can refuse a write on: a CHECK "
+                            + "constraint the failure reason does not satisfy - which is what a "
+                            + "pod running against a store V6 never reached would meet on every "
+                            + "batch - is refused as a DataIntegrityViolationException that is no "
+                            + "DuplicateKeyException, and it is translated at the same boundary "
+                            + "for the same reason. The pass in batch/ may name no "
+                            + "org.springframework.dao type (Principle V), so a refusal that "
+                            + "crossed the port untranslated could only be read there as "
+                            + "RuntimeException")
+                    .isInstanceOf(RegisterNotReleasedException.class)
+                    .cause()
+                    .as("carrying the store's own refusal, which is where the constraint's name "
+                            + "is, and which is not the key race this operation retries: no fresh "
+                            + "snapshot changes a rule, so it is raised rather than attempted "
+                            + "three times and then reported contended")
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .isNotInstanceOf(DuplicateKeyException.class);
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("and the mark goes down with the release it was refused beside, exactly as "
+                            + "it does for a key: one statement, so there is no batch left FAILED "
+                            + "with its registers still stamped to it")
+                    .contains(new BatchOutcome(GENERATING, null, null));
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("with its register still its own, and still reachable by the run that "
+                            + "follows once the rule is put right")
+                    .isEqualTo(1);
+        }
+
+        @Test
         void the_failure_names_no_completion_mechanism() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
 
@@ -4745,6 +4792,37 @@ class RegisterStoreIT {
             refused.run();
         } finally {
             ProcessedLogTestSupport.jdbcClient().sql("DROP INDEX " + index).update();
+        }
+    }
+
+    /**
+     * Runs the body with a rule that is not a key refusing this court centre's batch failures.
+     *
+     * <p>The other half of {@link #withOneUnbatchedRegisterAllowed}: a unique index is one thing a
+     * store can refuse a write on, and a CHECK constraint is another - and Spring reports the two
+     * as different classes, only one of which is a {@code DuplicateKeyException}. A pod whose store
+     * never reached {@code V6} meets exactly this on every stale batch, because the bounded reason
+     * the pass writes is one {@code register_batch_failure_reason_chk} did not admit until then.
+     *
+     * <p>Narrowed to this case's court centre and added {@code NOT VALID}, so no row any other
+     * suite sharing the container holds is looked at, let alone refused; dropped whatever the body
+     * does, because a constraint left behind would refuse every failure after it.
+     *
+     * @param refused what is expected to meet the constraint
+     */
+    private void withThisCourtCentresFailureRefused(final Runnable refused) {
+        final String constraint = "test_only_no_failure_" + courtCentre.toString().replace("-", "");
+        ProcessedLogTestSupport.jdbcClient()
+                .sql("ALTER TABLE register_batch ADD CONSTRAINT " + constraint
+                        + " CHECK (court_centre_id <> '" + courtCentre + "'::uuid "
+                        + "OR failure_reason IS NULL) NOT VALID")
+                .update();
+        try {
+            refused.run();
+        } finally {
+            ProcessedLogTestSupport.jdbcClient()
+                    .sql("ALTER TABLE register_batch DROP CONSTRAINT " + constraint)
+                    .update();
         }
     }
 
