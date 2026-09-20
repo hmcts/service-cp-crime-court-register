@@ -2588,11 +2588,29 @@ whatever the last reconciliation saw and go on looking live.
 
 ### Implementation
 
-- [ ] T030 `batch/BatchAgeSweep.java` — make T029 green. The three reads, the three
+- [x] T030 `batch/BatchAgeSweep.java` — make T029 green. The three reads, the three
       `metrics.oldest…Age` calls, the parked-batch WARN and the one absorbed refusal with its
       counter. It holds a repository, the metrics and a clock, and no store, no renderer and no lock.
       `RunCorrelation.under(...)` **opens** an id of its own, because a sweep on its own schedule is
       a unit of work in its own right — unlike the releaser, which adopts the run's.
+      (green: `flock -w 7200 … ./gradlew test --tests '*BatchAgeSweepTest*' -Dtest.noFailFast=true`,
+      **9 tests, 2 failed**, 0 errors — T029's six are all green and the two left are T031's
+      annotation cases, which T032 makes green: `the_fixed_delay_reads_the_batch_age_refresh_key`
+      and `the_sweep_names_its_own_scheduler`, both still reading `null` off a method that carries
+      no `@Scheduled` yet. `checkstyleMain` and `pmdMain` green.
+      **The three reads take the clock itself as their cutoff.** The retired pass read
+      `now - gracePeriod` because it was about to ask systemdocgenerator about whatever it found;
+      a reading whose own meaning is "the oldest batch of this kind" has no window to take, and a
+      windowed read would make the series a step function keyed to a setting rather than a
+      continuous measurement. It is also what lets the sweep hold no `Duration` at all, which is
+      what `plan.md` says it holds.
+      **The minimum is taken rather than the first row.** All three reads return oldest first and
+      the retired pass relied on that; taking `min` instead means a read whose ordering changed
+      would move a reading rather than silently publish the wrong batch's age.
+      **The parked-batch WARN is carried over verbatim in substance** — the count, the oldest
+      stamp and the oldest batch id — with "through this pass" become "through this sweep", and
+      nothing follows it: the sweep holds no store, so the three reads are the whole of what it
+      asks of the database.)
 - [ ] T032 `config/BatchSweepConfig.java` (new), `batch/BatchAgeSweep.java`,
       `config/CliModeConfig.java` — make T031 green. The config declares `BATCH_SWEEP_SCHEDULER` and
       a single-threaded `TaskScheduler`, in the shape `IntakeSweepConfig` uses and for its reason: a
