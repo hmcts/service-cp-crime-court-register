@@ -2047,6 +2047,75 @@ class RegisterStoreIT {
         }
 
         /**
+         * All three rows at once, which is where the {@code overtaken} clause has to stand down.
+         *
+         * <p>The two cases above are each one row beside the failing batch's: a re-share that came
+         * after it, or a share it overtook. A day can hold both, though only by the route a live
+         * batch key leaves open - one batch per court centre day at a time, so the re-share's own
+         * batch has to have ended first. It ends under a reason that keeps its stamp, which leaves
+         * that register RECORDED and unsuperseded and therefore still a successor. The register
+         * this batch holds then arrives behind it, is recorded active because no unbatched row is
+         * there to weigh it against, and is assembled in its turn; and a share older than either
+         * arrives behind that, active for the same reason.
+         *
+         * <p>The two clauses are then asking opposite questions about one register, and only one of
+         * them may answer. {@code overtaken} is guarded on the successor search coming back empty
+         * for exactly this: a register that is itself being superseded is leaving the active index
+         * as it goes, so it takes no key and displaces nobody. Without the guard the older share
+         * would be superseded against a register this same statement is superseding - pointed at a
+         * row nothing will ever render - and the day would be left with no active register at all,
+         * which no later run and no {@code generate-register} could recover.
+         */
+        @Test
+        void a_failure_should_displace_nothing_where_the_register_is_itself_superseded() {
+            final DistributionCommand batched = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_OVERTAKEN);
+
+            softly.assertThatCode(() -> {
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch earlier = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(earlier.batchId(), SECOND_PAYLOAD_FILE_ID);
+                // A reason that keeps the stamp: the re-share stays RECORDED and unsuperseded, so
+                // it is still a successor, and its batch is terminal so the day may batch again.
+                store.markFailed(earlier.batchId(), BatchFailureReason.GENERATION_FAILED,
+                        SDG_REASON, CompletedBy.EVENT);
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                // Both of the key's other rows are stamped by now, so the late share meets no
+                // active unbatched incumbent and is recorded active itself.
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_OVERTAKEN), APPLICANT,
+                        RecordedFlagState.ON);
+                store.markFailed(monday.batchId(),
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(supersessionOf(batched).map(SupersessionPair::supersededBy))
+                    .as("the register the failing batch held is superseded against the one that "
+                            + "replaced it, exactly as it is when that register is the key's only "
+                            + "other row")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(supersessionOf(overtaken))
+                    .as("and the share it had overtaken is left alone: a register on its way out "
+                            + "of the active index takes no key, so there is nothing for it to "
+                            + "displace, and displacing it would point the older row at a row "
+                            + "nothing will render")
+                    .contains(new SupersessionPair(null, null));
+            softly.assertThat(activeUnbatched())
+                    .as("so the day keeps exactly one assemblable register - the late share, the "
+                            + "re-share still being stamped into the batch that failed holding it")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(overtaken).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("one SUPERSEDED and two RECORDED, of which only one is active: the "
+                            + "invariant is one active row per key, not one row")
+                    .containsExactlyInAnyOrder(SUPERSEDED, RECORDED, RECORDED);
+        }
+
+
+        /**
          * The pair the other way round, which is the arrangement the successor search can invert.
          *
          * <p>The case above fails the batch holding the <em>older</em> of the key's two rows, so
@@ -2648,6 +2717,75 @@ class RegisterStoreIT {
                     .extracting(RegisterRecord::outputId)
                     .containsExactly(outputIdOf(batched).orElse(null));
         }
+
+        /**
+         * All three rows at once, which is where the {@code overtaken} clause has to stand down.
+         *
+         * <p>The two cases above are each one row beside the released one: a re-share that came
+         * after it, or a share it overtook. A day can hold both. The batch fails on a reason that
+         * keeps its stamp, the hearing is re-shared and that re-share is assembled into a batch of
+         * its own, and only then does a share older than either arrive - recorded active, because
+         * by that point there is no active unbatched row for the recorder to weigh it against.
+         *
+         * <p>The two clauses are then asking opposite questions about one register, and only one of
+         * them may answer. {@code overtaken} is guarded on the successor search coming back empty
+         * for exactly this: a register that is itself being superseded is leaving the active index
+         * as it goes, so it takes no key and displaces nobody. Without that guard the older share
+         * would be superseded against a register the same statement is superseding - pointed at a
+         * row nothing will ever render - and the day would be left with no active register at all,
+         * which no run and no {@code generate-register} could recover.
+         */
+        @Test
+        void a_release_should_displace_nothing_where_the_register_is_itself_superseded() {
+            final DistributionCommand batched = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_OVERTAKEN);
+            final List<RegisterRecord> released = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch second = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(second.batchId(), SECOND_PAYLOAD_FILE_ID);
+                // Both of the key's other rows are stamped by now, so the late share meets no
+                // active unbatched incumbent and is recorded active itself.
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_OVERTAKEN), APPLICANT,
+                        RecordedFlagState.ON);
+                released.addAll(store.releaseFailed(monday.batchId()));
+            }).as(SEAM).doesNotThrowAnyException();
+
+            softly.assertThat(released)
+                    .as("nothing comes back: the register this batch held has been replaced, and "
+                            + "rendering the day from it would put a superseded document behind "
+                            + "the current one")
+                    .isEmpty();
+            softly.assertThat(supersessionOf(batched).map(SupersessionPair::supersededBy))
+                    .as("it is superseded against the register that replaced it, exactly as it is "
+                            + "when that register is the only other row of the key")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(supersessionOf(overtaken))
+                    .as("and the share it had overtaken is left alone: a register on its way out "
+                            + "of the active index takes no key, so there is nothing for it to "
+                            + "displace, and displacing it would point the older row at a row "
+                            + "nothing will render")
+                    .contains(new SupersessionPair(null, null));
+            softly.assertThat(activeUnbatched())
+                    .as("so the day keeps exactly one assemblable register - the late share, the "
+                            + "re-share being stamped into the batch in flight")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(overtaken).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("one SUPERSEDED and two RECORDED, of which only one is active: the "
+                            + "invariant is one active row per key, not one row")
+                    .containsExactlyInAnyOrder(SUPERSEDED, RECORDED, RECORDED);
+        }
+
 
         @Test
         void a_register_a_re_share_has_replaced_should_be_superseded_rather_than_given_back() {
