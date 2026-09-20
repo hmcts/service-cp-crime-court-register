@@ -717,8 +717,11 @@ green and none of them loosened. The coverage report was regenerated in that sam
 **LINE 6589/6796 = 0.9695 and BRANCH 1998/2220 = 0.9000** against the unchanged gate of LINE 0.88 /
 BRANCH 0.85; it contains `failAndReleaseStale`, which is how a reader can tell it is this tree's
 report. That run was made on the tree this gate's commits produce, before this record was written
-into it; the same command was then made again against the tree **as committed** and it is that
-second run's XMLs and report that are left in `build/` for the next gate to read.
+into it, and it is the report it regenerated that is left in `build/`. `flock -w 7200 … ./gradlew
+build -Dtest.noFailFast=true` was then run against the tree **as committed** and answered
+identically - BUILD SUCCESSFUL, exit 0, 10m 5s, the same 3652 over 579 - and it is that run's XMLs
+that are left beside the report; `build` runs the coverage gate and not the report, so the ratios
+above are the earlier run's measurement of the same code and are not requoted from a second one.
 
 ---
 
