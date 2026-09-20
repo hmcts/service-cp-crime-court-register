@@ -397,6 +397,18 @@ public interface RegisterStore {
     List<RegisterRecord> releaseFailed(UUID batchId);
 
     /**
+     * Fails every batch still awaiting its render past its cutoff, and gives its registers back.
+     *
+     * <p>The seam the stale-batch pass is written against. One operation rather than a read
+     * followed by a mark, and the rest of what that means is stated where the statement is.
+     *
+     * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
+     * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
+     * @return one record per batch this operation changed, oldest day first
+     */
+    List<ReleasedBatch> failAndReleaseStale(Instant scheduledCutoff, Instant manualCutoff);
+
+    /**
      * Settles the batch on its notification tally, and moves its rows to NOTIFIED.
      *
      * @param batchId the batch whose recipients have all been attempted

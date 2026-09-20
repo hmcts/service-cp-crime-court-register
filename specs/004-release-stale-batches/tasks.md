@@ -374,7 +374,7 @@ Postgres. No pass, no run, no Spring context.
 
 ### Tests first ⚠️
 
-- [ ] T008 [US1] `persistence/RegisterStoreIT` (extend) — the predicate and the write.
+- [x] T008 [US1] `persistence/RegisterStoreIT` (extend) — the predicate and the write.
       `a_generating_batch_past_its_cutoff_is_failed_and_its_registers_released`;
       `a_pending_batch_past_its_cutoff_is_failed_and_its_registers_released`;
       `a_pending_batch_with_no_payload_id_is_released_too` (FR-020 — the gap the retired reads left);
@@ -389,6 +389,32 @@ Postgres. No pass, no run, no Spring context.
       `RegisterStore.failAndReleaseStale` and the `ReleasedBatch` record, with the Jdbc
       implementation throwing `UnsupportedOperationException`. Red: a failing assertion on the first
       case.
+      (red: `./gradlew test --tests '*RegisterStoreIT*' -Dtest.noFailFast=true`, 83 tests,
+      **11 failures**, 0 errors - the eleven new cases and nothing else, every failure an assertion.
+      The first case's second failure is the property under test:
+      "Expecting actual: Optional[BatchOutcome[status=GENERATING, failureReason=null,
+      sdgReason=null]] to contain: BatchOutcome[status=FAILED,
+      failureReason=NOT_COMPLETED_BY_NEXT_RUN, sdgReason=null] but did not", and its third is
+      "expected: 0L but was: 2L" on the stamped rows - the mark and the release, each named
+      separately, because a mark without its release is the lost register this increment exists to
+      end. The seam refusal is recorded as each case's *first* soft failure rather than as a stack
+      trace out of the arrangement, which is what the suite's soft-assertion convention is for.
+      Seams: `application/ReleasedBatch` (new record), `RegisterStore.failAndReleaseStale`, and
+      `JdbcRegisterStore.failAndReleaseStale` throwing `UnsupportedOperationException`.
+      Three deviations from the task's letter, each because the property could not otherwise be
+      red. **The ages are written, not waited for**: `ageBatch` moves a batch's `assembled_at` and
+      `requested_at` back by the database's own clock, and every cutoff a case states is in the
+      **past** - a cutoff in the future would name every batch in the shared container, including
+      the ones another suite is holding. **The COALESCE direction is pinned inside the first case**
+      rather than as a case of its own: it ages `assembled_at` alone, asserts nothing matched, then
+      ages `requested_at` and asserts the release. **The transaction case refuses the release on
+      purpose**, under a partial unique index on this court centre that admits one unbatched
+      register, and then asserts the mark went down with it - a single-threaded case cannot
+      otherwise observe that there is no intermediate state, and the second half of the same case
+      (index dropped, the same call made again) is what is red against the seam.
+      `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` green; `pmdTest` needed the
+      fixture's row count taken out of the `if` as `ONE_BATCH`, in the constant block at the top of
+      the class, for the reason T003's three fields were moved there.)
 - [ ] T010 [US1] `persistence/StaleReleaseConcurrencyIT` (new) — **SC-009**, the reason the operation
       is fenced. `a_render_acceptance_racing_the_release_leaves_no_stranded_register` and
       `a_document_arrival_racing_the_release_leaves_no_stranded_register`, each run in **both**

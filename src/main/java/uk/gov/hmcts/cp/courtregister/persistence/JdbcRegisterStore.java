@@ -31,6 +31,7 @@ import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RecordedCompletion;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
@@ -925,6 +926,10 @@ public class JdbcRegisterStore implements RegisterStore {
     private static final Set<BatchFailureReason> RELEASING_REASONS = Set.of(
             BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, BatchFailureReason.ASSEMBLY_FAILED);
 
+    /** What the fenced release answers until T009 gives it a statement. */
+    private static final String STALE_SEAM =
+            "T009 implements the fenced stale release; this is its seam";
+
     /**
      * The connection every statement in this class is issued through.
      *
@@ -1572,6 +1577,12 @@ public class JdbcRegisterStore implements RegisterStore {
             throw new IllegalStateException(BATCH + batchId + " is " + current + " rather than "
                     + BatchStatus.FAILED + ", so its registers are not a person's to take back");
         }
+    }
+
+    @Override
+    public List<ReleasedBatch> failAndReleaseStale(final Instant scheduledCutoff,
+            final Instant manualCutoff) {
+        throw new UnsupportedOperationException(STALE_SEAM);
     }
 
     /**
