@@ -2025,6 +2025,15 @@ scope and rule paragraphs, which this tree does not own, and T044 covers them in
 7. **The one-lock sweep read one directory and one type per file** (LOW) — it now walks the `batch`
    sources, skips `cli` by path and collects nested types, at `3f6ccbe9`.
 
+**Re-gated after the remediation.** `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` →
+**BUILD SUCCESSFUL, exit 0, 10m 10s, 3648 tests over 576 suites, 0 failures, 0 errors** — two more
+cases than the close above, being the two the new bounded reason is pinned by. `flock -w 7200 …
+./gradlew jacocoTestReport check -Dtest.noFailFast=true` → BUILD SUCCESSFUL, exit 0, and the report
+from that run reads **LINE 6516/6719 = 0.9698 and BRANCH 1995/2198 = 0.9076** against the unchanged
+gate of LINE 0.88 / BRANCH 0.85. Four more lines in the codebase and four more covered, no branch
+either way: the counter's two call sites and the method they call are all reached by the two cases.
+Checkstyle, PMD and the coverage verification all ran; none was loosened.
+
 **Left standing, with the reason.** The `spring.jms` `subscription-durable` comment still says "the
 reconciler is the safety net, not the transport": it is outside the two `application.yaml` blocks
 this tree owns and the reviewer that raised it asked for an owner rather than a silent fix.
