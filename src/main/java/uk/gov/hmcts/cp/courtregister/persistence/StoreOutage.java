@@ -6,14 +6,15 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.dao.TransientDataAccessException;
+import org.springframework.transaction.TransactionException;
 import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 
 /**
  * Where "the store went away" stops being a JDBC fact and becomes a domain one.
  *
- * <p>Every statement this package makes is made through here, so the three Spring classes a dead
- * store actually produces become a single {@link StoreUnavailableException} at the boundary of the
+ * <p>Every statement this package makes is made through here, so the Spring classes a dead store
+ * actually produces become a single {@link StoreUnavailableException} at the boundary of the
  * package that owns the datasource. Above it, the application core and the transport adapter read
  * that signal and nothing else, and the core imports no {@code org.springframework.dao} type at all
  * (constitution Principle V). It also makes the rule single: the same three classes used to be
@@ -33,6 +34,17 @@ import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
  * for a key would be read as an outage and would stop intake - and a deadlock is the opposite of an
  * outage: it is the store answering, and it clears itself on the next delivery. Suspending the whole
  * queue for one contended row would stall every message behind it.
+ *
+ * <p><strong>A transaction that cannot be begun is the same outage one step earlier.</strong> Two
+ * statements here take a boundary of their own rather than joining whatever the caller had open -
+ * the stale-batch release takes a {@code REQUIRES_NEW} one per batch - and a store that has gone
+ * away refuses at {@code getTransaction} rather than at a statement, as
+ * {@link org.springframework.transaction.CannotCreateTransactionException}. That is a
+ * {@code org.springframework.transaction} class and so outside every branch above it, and a
+ * refusal to <em>start</em> work says exactly what a refusal to acquire a connection says. So
+ * {@link TransactionException} joins the outage arm: without it the store's own type crosses the
+ * port into {@code batch/}, where a pass may name no Spring type at all (constitution Principle V)
+ * and could only catch it as a bare {@code RuntimeException}.
  *
  * <p><strong>A row the store refused is translated too, and for the other reason.</strong> It is
  * still the store answering and it still may not stop the queue, but unlike a deadlock it arrives
@@ -72,7 +84,7 @@ final class StoreOutage {
             // is rather than stopping the queue.
             throw contention;
         } catch (TransientDataAccessException | RecoverableDataAccessException
-                | DataAccessResourceFailureException gone) {
+                | DataAccessResourceFailureException | TransactionException gone) {
             throw new StoreUnavailableException("the store could not be reached to " + statement,
                     gone);
         }

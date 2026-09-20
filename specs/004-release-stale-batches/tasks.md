@@ -1180,6 +1180,11 @@ older statements beside it did not.
   assertion and no compile error — "Expecting actual throwable to be an instance of:
   uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException but was:
   org.springframework.transaction.CannotCreateTransactionException".
+  **Green**: the same command with `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest`
+  beside it, BUILD SUCCESSFUL, **8 of 8**, all four analysis tasks green. The branch is the outage
+  arm rather than one of its own, because a store that will not begin a transaction has said the
+  same thing as a store that will not give a connection; `translatingWrite`'s refusal arm is
+  untouched, and no other suite in this repository names a `org.springframework.transaction` type.
 
 ---
 
