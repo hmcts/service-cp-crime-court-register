@@ -133,7 +133,7 @@ It must exit 0 (suite, Checkstyle, PMD, JaCoCo gate). If it does not, fix it bef
 ${RULES}
 Return: head_before, tree_clean_before and base_is_ancestor; the commits you made (sha + subject, oldest first); the task ids
 completed (in resume mode, include the range's tasks that were already committed before you started); the exact build command you ran, its exit code and a two-line summary (tests run / failed,
-coverage line+branch); git status --porcelain after your last commit; open_points for anything unsettled.
+coverage line+branch); git status --porcelain after your last commit (the literal output, empty when clean); open_points for anything unsettled.
 `, { label: `implement ${first}-${last}`, phase: 'Implement', model: 'opus', agentType: 'general-purpose', schema: WORK })
 
 if (!implemented) throw new Error('phase-gate: the implementer returned nothing')
@@ -156,7 +156,8 @@ function incomplete(work) {
   const done = new Set((work.tasks_done || []).flatMap(x => String(x).match(/T\d{3}/g) || []))
   const missing = TASKS.filter(t => !done.has(t))
   if (missing.length) out.push(synthetic('BLOCKER', `tasks not completed: ${missing.join(', ')}`, 'complete every task in the range'))
-  if (String(work.git_status_after || '').trim()) out.push(synthetic('HIGH', 'the tree was left dirty after the last commit', 'commit or remove the leftover files; never leave stray files'))
+  const status = String(work.git_status_after || '').trim()
+  if (status && !/^\(?(clean|none|empty|nothing)\)?\.?$/i.test(status)) out.push(synthetic('HIGH', 'the tree was left dirty after the last commit', 'commit or remove the leftover files; never leave stray files'))
   return out
 }
 
