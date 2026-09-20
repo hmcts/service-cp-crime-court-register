@@ -109,6 +109,29 @@ proposal) is in `spec.md`; step 2 (the bump) is commit `d73ef50`; step 3 is this
       switch, Principle III nor a constitution version — grepped read-only in the main checkout,
       zero hits. Metrics: 49 functional requirements, 12 success criteria, 60 tasks; 0 ambiguities,
       0 duplications, 1 critical issue, closed by the plan rewrite two commits later.)
+      (**Re-run at gate round 4, for the 5.0.0 → 5.0.1 clarification**, which names the audit
+      transport key beside the HTTP filter's in condition (b). Scoped to what the bump touches, as
+      the three runs above were. Findings — the same drift in four places, all closed in the three
+      commits around the bump: `spec.md`'s FR-045, assumption 9 and deployment gate 5 said a
+      deployment that says nothing is *audited* where the shipped `cp.audit.enabled` default makes
+      it authorised and unaudited (HIGH); `plan.md`'s settings table read `cp.audit.enabled: true
+      deployed` of a tree that ships `${CP_AUDIT_ENABLED:false}`, and its Constitution Check row
+      named the two switch defaults as the whole of (b) (HIGH); `design_rules.md`'s operations
+      bullet said the same (MEDIUM); and `application.yaml`'s own comment called the two switches
+      "the whole of how conditions (a) and (b) are carried" (MEDIUM). FR-053's first bullet was
+      corrected with them: it required the OpenAPI key "wherever `audit.http.enabled` is on", where
+      the rule is — and must be — gated on both switches, because that is where the parser that
+      globs is built (LOW, spec-validator).
+      Coverage after the clarification: FR-045 is carried by T004/T005 (the defaults, the pod that
+      starts with both switches off, and the start-up WARN that names the unaudited combination)
+      and by T013/T043 (the two yaml blocks); FR-053 is unchanged. No requirement loses its task
+      and no task loses its requirement.
+      **No conflict with 004**: re-grepped read-only in the main checkout for either filter, either
+      switch, Principle III and a constitution version. One hit, and it is not one:
+      `specs/004-release-stale-batches/contracts/README.md:5` cites Principle III to say 004 has no
+      inbound message, no REST surface and no event of its own — which the clarification leaves
+      exactly as it was. Metrics: 49 functional requirements, 12 success criteria, 60 tasks; 0 ambiguities,
+      0 duplications, 0 critical issues.)
 
 ---
 
@@ -259,6 +282,16 @@ refusal in this repository is.
       message naming `courtregister.operations.enabled` where their own setting was expected, the
       two shipped-default cases on *`expected: "true" but was: null`*, and the five pre-existing
       cases the widened base runner had been propping up.)
+      (**Extended at gate round 4**, with the pair of cases that pin what the defaults leave
+      unsaid: `an_audit_filter_over_a_transport_that_is_off_should_say_so_at_start_up` and
+      `a_pod_that_publishes_its_audit_events_should_say_nothing_about_them`. The shipped
+      configuration puts the HTTP audit filter on over a transport that ships off, which is a pod
+      serving the operations API unaudited — not refused, because the switches are configuration,
+      and not visible either, because the filter that would have published is never constructed and
+      the one that is swallows its own publishing failures. Captured with `support/CapturedLog`
+      over `PropertiesValidator`'s own logger.
+      red: 180 tests, 1 failed, an assertion — *"Expecting any element of: [] to satisfy the given
+      assertions requirements but none did"*.)
 - [x] **T005** [US1] `config/OperationsProperties` and `config/PropertiesValidator` — the record
       bound at `@ConfigurationProperties(prefix = "courtregister.operations")` with its
       `@DefaultValue`s, following `GenerationProperties`' style, and T004's refusals written as the
@@ -297,6 +330,16 @@ refusal in this repository is.
       green: `ConfigurationValidationTest`, `OperationsPropertiesTest`, `AuditComponentScanTest`,
       `TestProfileContextTest` and `HttpSurfaceTest`, 193 tests, 0 failures; Checkstyle and PMD
       clean on main and test.)
+      (**Extended at gate round 4.** `PropertiesValidator` gains `sayWhereNothingIsPublished`, the
+      one thing the class says rather than refuses: one WARN naming `audit.http.enabled` and
+      `cp.audit.enabled` where the first is on and the second is not. It is not a cross-field
+      refusal and does not become one — the pod comes up exactly as before — and it exists because
+      condition (b) of Principle III takes a key this repository cannot set: `cp.audit.enabled`
+      ships `${CP_AUDIT_ENABLED:false}` so a laptop with no audit broker starts, and the deployed
+      values file carries the rest of (b) (constitution 5.0.1, spec FR-045, deployment gate 5). The
+      line names settings only — no caller input, no Key Vault value, no attached throwable.
+      green: `ConfigurationValidationTest`, `TestProfileContextTest` and `AuditComponentScanTest`,
+      187 tests, 0 failures; Checkstyle and PMD clean on main and test.)
 - [x] **T006** [P] [US1] `config/PublicEventsFactoryTest` (new) — **the listener container is built
       on the public-event connection factory, not the audit one** (research R8: the audit starter's
       `auditConnectionFactory` and `auditJmsTemplate` are `@Primary`, and `PublicEventsConfig`
