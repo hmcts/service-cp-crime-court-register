@@ -2223,6 +2223,35 @@ claim. T028 runs after them, not before, so the suite it characterises is the fi
       enumerations and out of the constraint, and each half is read from where it actually lives.
       `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` green in the same round, after one
       `CheckResultSet` violation on a `ResultSet.next()` asserted rather than branched on.
+
+      **Added at gate round 3: `persistence/SchemaMigrationV7IT`, V7's footprint suite.** T049 as
+      first landed said what V7's three constraints now admit and refuse; nothing said what V7 did
+      to the store *besides* that, which is the question `SchemaMigrationV6IT` was written to ask of
+      V6 and which V7 needs more, not less: V6 was one `DROP`/`ADD` pair, V7 is three, and the third
+      rewrites a five-clause boolean whose arms cover all seven batch statuses. The suite is the
+      `SchemaMigrationV4IT`/`V5IT`/`V6IT` shape — a private database of its own, migrated to
+      `target("6")` and snapshotted (tables, columns, constraint definitions, index definitions),
+      migrated to `target("7")` and snapshotted again — and **both ends are pinned**, so a V8 finds
+      it already saying what it meant to say. Five cases: exactly three definitions appear and
+      exactly three disappear and all six are one of the three named constraints; every other
+      constraint is byte-identical across the migration, the subtracted set found **by name** rather
+      than by the diff (subtracting the diff from both sides leaves two sets equal by construction);
+      the narrowed reason list holds the six that stay and not the retired one; the attribution is
+      `EVENT` alone and the shape's attributed arm is `GENERATION_FAILED` alone; and no column,
+      table or index is added **or dropped**, stated as set equality so it covers both directions.
+
+      **Red** (V7 mutated with `ALTER TABLE register_batch ADD COLUMN mutation_probe TEXT` and a
+      fourth constraint, `register_batch_attempts_chk`, dropped and re-added with a different
+      definition; `flock -w 7200 … ./gradlew test --tests '*SchemaMigrationV7IT*'
+      -Dtest.noFailFast=true`): **5 tests completed, 3 failed**, every one an assertion — the
+      count case on "Expected size: 3 but was: 4", the byte-identical case on the attempts
+      definition differing between the two snapshots, and the column case on
+      `register_batch.mutation_probe` being in the later set and not the earlier. The mutation was
+      reverted, not edited around: the re-add was deliberately given a *different* definition,
+      because a constraint dropped and re-added byte-identically is invisible to a snapshot
+      comparison and would have recorded a red the suite had not actually earned.
+
+      **Green** (the mutation reverted, same command): BUILD SUCCESSFUL, **5 tests, 0 failures**.
 - [X] T050 [A] [US4] `docker/`, `specs/004-release-stale-batches/quickstart.md` — **[A]**, and this
       is T007 arriving where it belongs. Record that `docker compose down -v` is required before
       **V7** on any volume holding a pre-004 row, and confirm on a real local volume that the
