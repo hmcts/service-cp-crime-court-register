@@ -2752,6 +2752,20 @@ from being sent after something already put right.
 
 **Phase close**: `flock … ./gradlew build` green; review gate.
 
+**Phase 7 closed (2026-09-21).** `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` →
+**BUILD SUCCESSFUL, exit 0, 4m 27s, 3666 tests over 580 suites, 0 failures, 0 errors, 0 skipped**,
+with `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification`
+all run and all green.
+
+**One commit of T036's belongs to the record rather than to the diff.** The sixth `ExceptionKind`
+made three suites red that name every kind by hand — `domain/ExceptionReportModelTest`'s counts
+map, `adapter/report/EmailReportSinkTest`'s personalisation keys and
+`config/ProcessingMetricsTest`'s series list — and each was enumerating five. They are this tree's
+own files and the edit is the enumeration plus the sentences that said "five", landed as
+`test: carry the sixth exception kind through the suites that enumerate the kinds`; no case was
+added, none removed and no behaviour is asserted differently. The sentences now say "one per kind"
+rather than a number, so the next kind corrects a list and not a count as well.
+
 ---
 
 ## Phase 8: The proof and the privacy sweep
