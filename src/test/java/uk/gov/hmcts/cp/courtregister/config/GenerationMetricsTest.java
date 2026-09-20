@@ -25,6 +25,7 @@ import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision.Unreadable;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision.UnreadableReason;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
+import uk.gov.hmcts.cp.courtregister.domain.SweepFailureReason;
 
 /**
  * One case per instrument of the downstream half: the name, the type, the label set and the
@@ -572,6 +573,7 @@ class GenerationMetricsTest {
                             GenerationMetrics.PENDING_AFTER_DEADLINE,
                             GenerationMetrics.DEFERRED_KEYS,
                             GenerationMetrics.DEFERRED_REGISTERS,
+                            GenerationMetrics.BATCH_SWEEP_FAILURES,
                             GenerationMetrics.FLAG_READ_OK);
         }
 
@@ -670,6 +672,7 @@ class GenerationMetricsTest {
             metrics.pendingAfterDeadline(1);
             metrics.deferredKeys(1);
             metrics.deferredRegisters(1);
+            metrics.batchSweepFailure(SweepFailureReason.STORE_UNAVAILABLE);
             metrics.flagRead(FlagDecision.OFF);
         }
     }

@@ -2517,7 +2517,7 @@ whatever the last reconciliation saw and go on looking live.
 
 ### Tests first ⚠️
 
-- [ ] T029 `batch/BatchAgeSweepTest` (new) — the readings.
+- [x] T029 `batch/BatchAgeSweepTest` (new) — the readings.
       `the_three_gauges_report_the_age_of_the_oldest_of_each_kind`;
       `a_kind_with_nothing_in_flight_reads_zero`, which is what brings a gauge back down;
       `a_batch_holding_a_document_nobody_was_told_about_is_named_and_settled_nothing`, the WARN the
@@ -2526,6 +2526,32 @@ whatever the last reconciliation saw and go on looking live.
       refusal — telemetry may not cost a Youth Offending Team its e-mail — asserting the WARN names
       the failure **by class**, the counter moves, and nothing is rethrown. Seam: the class with
       `sweep()` throwing `UnsupportedOperationException`. Red: a failing assertion on the first case.
+      (red: `flock -w 7200 … ./gradlew test --tests '*BatchAgeSweepTest*'
+      --tests '*GenerationMetricsTest*' -Dtest.noFailFast=true`, **53 tests, 6 failed**, 0 errors —
+      the six are every case of the new suite and every failure is an assertion, the seam's refusal
+      recorded as each case's *first* soft failure in the convention `StaleBatchReleaserTest` uses
+      rather than as a stack trace out of the arrangement. The first case's remaining three failures
+      are the properties under test: "expected: 5400.0 but was: 0.0" for the GENERATING reading and
+      the same shape for the other two, nought being what a gauge registered from construction and
+      never published to reads.
+      **Six cases, not four, and one of them is an instrument.** The two beyond T029's list are
+      `a_read_that_refuses_for_any_other_reason_is_counted_unexpected` — the second half of the
+      absorbed refusal, which the named case cannot reach, and which is the reason the total catch
+      does not hide a bug of ours inside an outage of theirs — and
+      `the_sweep_opens_its_own_run_id_and_removes_it`, which is T030's `RunCorrelation.under(...)`
+      stated as a case rather than as a sentence. The instrument is
+      `courtregister_batch_sweep_failures_total{reason}` on `GenerationMetrics`, which a test cannot
+      name before it exists: the generation half's twin of
+      `courtregister_intake_sweep_failures_total`, its own series because a pod with the generation
+      half switched off publishes one of them and not the other. `GenerationMetricsTest`'s two
+      surface cases gain the name in the same commit, so "exercising everything registers exactly
+      the documented instruments" stays a claim about all of them.
+      **The three reads are taken with the clock itself as the cutoff**, not with a grace period:
+      the retired pass read `now - gracePeriod` because it was about to ask systemdocgenerator about
+      what it found, and the gauges' own documented meaning is the oldest batch of each kind. With
+      nothing to ask, the reading is the whole purpose, so `plan.md`'s "holds a repository, the
+      metrics and a clock" is met literally — the sweep takes no `Duration` at all.
+      `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` green.)
 - [ ] T031 `batch/BatchAgeSweepTest` (extend), `config/ReportSchedulingConfigTest` and
       `config/CliModeConfigTest` (both extend) — the schedule it is on.
       `the_fixed_delay_reads_the_batch_age_refresh_key`, a reflection case over the annotation

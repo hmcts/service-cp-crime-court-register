@@ -13,6 +13,7 @@ import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision.Unreadable;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
+import uk.gov.hmcts.cp.courtregister.domain.SweepFailureReason;
 
 /**
  * The instrument surface of the downstream half, declared in one place.
@@ -68,6 +69,8 @@ public class GenerationMetrics {
             "courtregister_public_events_ignored_total";
     public static final String GENERATION_UNRECORDED =
             "courtregister_generation_unrecorded_total";
+    public static final String BATCH_SWEEP_FAILURES =
+            "courtregister_batch_sweep_failures_total";
     public static final String OLDEST_RECORDED_UNBATCHED_AGE =
             "courtregister_oldest_recorded_unbatched_age";
     public static final String OLDEST_GENERATING_AGE = "courtregister_oldest_generating_age";
@@ -385,6 +388,27 @@ public class GenerationMetrics {
      */
     public void staleBatchesContended(final int batches) {
         counter(RELEASE_CONTENDED).increment(batches);
+    }
+
+    /**
+     * Counts a batch-age refresh that could not be taken, under the reason it refused.
+     *
+     * <p>The generation half's copy of {@link ProcessingMetrics#intakeSweepFailure}, and its twin
+     * for the same reason: the three readings are telemetry, and a round-trip reading that cannot
+     * be taken may not cost a Youth Offending Team its e-mail, so the refusal stops where it
+     * happens. This counter is what makes that an absorption rather than a swallow - the gauges
+     * keep their last reading rather than dropping to a zero the store never said, and this series
+     * says how long ago that reading was true.
+     *
+     * <p>Its own series and not the intake sweep's, because the two describe different halves of
+     * the service running in different pods: a deployment with the generation half switched off
+     * publishes one of them and not the other, and one counter for both would make a generating
+     * pod's outage indistinguishable from an intake pod's.
+     *
+     * @param reason the bounded code this refresh is counted under
+     */
+    public void batchSweepFailure(final SweepFailureReason reason) {
+        counter(BATCH_SWEEP_FAILURES, REASON_TAG, code(reason)).increment();
     }
 
     /**
