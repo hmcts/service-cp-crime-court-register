@@ -2821,14 +2821,33 @@ VII.
       every suite in the JVM, so this day's own deferral is read from its rows and the report is
       asserted only to have said that something was passed over - which is the claim that would
       fail if a run stopped counting deferrals at all.)
-- [ ] T039 `config/TelemetryPrivacyTest` (extend) — the privacy sweep over the two new classes.
+- [x] T039 `config/TelemetryPrivacyTest` (extend) — the privacy sweep over the two new classes.
       `GenerationLegs` drives `StaleBatchReleaser` and `BatchAgeSweep` and no longer names
       `GenerationReconciler`; every line they produce carries only a batch id, a count and a bounded
       code, and no throwable this service did not write. Red: the drive names a class that no longer
       exists and does not name the two that do.
-- [ ] T040 Make T039 green: update `support/GenerationLegs`'s drive and fix any line the sweep
+- [x] T040 Make T039 green: update `support/GenerationLegs`'s drive and fix any line the sweep
       rejects. **A line that has to be changed to pass is a privacy finding** and is called one in the
       commit body, not a test adjustment.
+      (green: `flock -w 7200 … ./gradlew test --tests '*TelemetryPrivacyTest*'
+      -Dtest.noFailFast=true` → **BUILD SUCCESSFUL**, the new case among them, followed by
+      `checkstyleMain checkstyleTest pmdMain` → BUILD SUCCESSFUL.
+      **T040's work had already landed, and Phase 6's close is where it is recorded.** The drive was
+      not updated here because it could not wait until here: the moment `BatchAgeSweep` existed,
+      `TelemetryPrivacyTest`'s standing claim that the drive moves every meter the downstream half
+      can publish went red on `courtregister_batch_sweep_failures_total`, and that is an existing
+      assertion failing at the arrival of production code rather than a task deferred. So Phase 6
+      gave `GenerationLegs` `theBatchAgeRefresh()`, put `BatchAgeSweep` into `THE_LEGS` and added
+      `SweepFailureReason`'s two codes to the bounded vocabulary, and said so in its close.
+      **No line was rejected by the sweep, at that phase's close or at this one**, so there is no
+      privacy finding to call one: every line the two classes write carries a batch id, a count, a
+      court centre and register date, or a bounded code, and none of them attaches a throwable -
+      which the whole-of-`src/main` attachment case enforces anyway.
+      **What T039 adds is the claim the two phases left implicit**: that the enumeration bounding
+      every claim in that group names both classes, that it names the retired reconciler nowhere,
+      and that each of the two really brought statements with it. Without the last of those, a class
+      added to `THE_LEGS` that declares no line widens the list and not the claim - which is exactly
+      the failure `THE_REPORT` has its own assertion for.
 
 **Phase close**: `flock … ./gradlew build` green; review gate.
 

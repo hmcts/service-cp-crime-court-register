@@ -71,8 +71,10 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmission;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.application.SubmissionReceipt;
+import uk.gov.hmcts.cp.courtregister.batch.BatchAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
+import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
 import uk.gov.hmcts.cp.courtregister.batch.cli.Args;
 import uk.gov.hmcts.cp.courtregister.batch.cli.CheckFlagCli;
 import uk.gov.hmcts.cp.courtregister.batch.cli.CliMain;
@@ -1059,6 +1061,45 @@ class TelemetryPrivacyTest {
                     .as("a statement the drive never reached is a statement outside every claim "
                             + "above; each needs a case in GenerationLegs.driveEverything")
                     .isEmpty();
+        }
+
+        /**
+         * Which classes the enumeration names, asked of the two this increment added.
+         *
+         * <p>Every claim in this group is bounded by {@link GenerationLegs#THE_LEGS}: a line
+         * written by a class the list does not name is outside the reach assertion, outside the
+         * label sweep and outside the statement scan, with this suite green. So the list itself is
+         * asserted, and asserted the way the report's four classes are - by name <em>and</em> by
+         * the statements each brought with it, because a class added to the list that declares no
+         * line widens the enumeration without widening a single claim.
+         *
+         * <p><strong>And the one that is no longer there.</strong> The retired reconciler took the
+         * three in-flight age readings and the grace-period sweep with it (FR-006); what replaced
+         * them is the run's first act and a sweep of its own, and a list that still named the
+         * deleted class would not compile while a list that named neither of the new ones would
+         * quietly cover nothing they write. The absence is asserted by name rather than by type
+         * for exactly that reason: a type that does not exist cannot be written down here at all.
+         */
+        @Test
+        @DisplayName("[A] and the enumeration names 004's two classes, with the lines they write")
+        void should_enumerate_the_release_pass_and_the_batch_age_sweep() throws Exception {
+            assertThat(GenerationLegs.THE_LEGS)
+                    .as("the two classes this increment added to the generation half; a line "
+                            + "either of them writes is inside every claim above only while the "
+                            + "list names it")
+                    .contains(StaleBatchReleaser.class, BatchAgeSweep.class);
+            assertThat(GenerationLegs.THE_LEGS.stream().map(Class::getSimpleName).toList())
+                    .as("and the mechanism they replaced is named nowhere: the grace-period "
+                            + "reconciler is gone, and a sweep that still expected its lines would "
+                            + "be describing a night this service no longer has")
+                    .doesNotContain("GenerationReconciler");
+            assertThat(List.of(StaleBatchReleaser.class, BatchAgeSweep.class))
+                    .allSatisfy(added -> assertThat(LogStatement.everyOneIn(List.of(added)))
+                            .as("the statements %s declares; asked of each class rather than of "
+                                    + "the pair, because one of them writing three lines satisfies "
+                                    + "a claim about both while the other is covered by nothing",
+                                    added.getSimpleName())
+                            .isNotEmpty());
         }
 
         /**
