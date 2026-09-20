@@ -243,7 +243,7 @@ from under an unmerged branch and loses both edits.
   transport's and the operations API's **value** refusals. Different methods, one file: expect a
   textual conflict on the rebase and resolve it by keeping both. 005's edit is **not** confined to
   one added method, and the rebase should know it: the constructor gains a parameter, the class
-  gains two fields, a pattern and a range constant and four private helpers, `afterPropertiesSet`
+  gains two fields, a pattern and a range constant and seven private helpers, `afterPropertiesSet`
   gains a call and `@EnableConfigurationProperties` an entry. What the agreement was protecting is
   intact — the static `validate(...)` is byte-identical to the base — so the resolution is to keep
   both sides of the constructor and annotation hunks rather than to take either whole.
