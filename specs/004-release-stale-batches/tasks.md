@@ -1230,7 +1230,7 @@ durations and a clock. No Spring context, no Docker.
 
 ### Tests first ⚠️
 
-- [ ] T011 [US1] `batch/StaleBatchReleaserTest` (new) — the call and the account.
+- [x] T011 [US1] `batch/StaleBatchReleaserTest` (new) — the call and the account.
       `a_batch_still_generating_past_the_minimum_age_should_be_failed_and_released` (**P2's
       re-pointed pinning test**, driven through the store mock);
       `the_two_numbers_are_batches_and_registers`;
@@ -1241,6 +1241,34 @@ durations and a clock. No Spring context, no Docker.
       account the pass keeps has a third number and the pass returns normally with it);
       `the_pass_adopts_the_runs_correlation`. Seam: the class with `releaseStale()` throwing
       `UnsupportedOperationException`. Red: a failing assertion on the first case.
+      (red: `flock -w 7200 … ./gradlew test --tests '*StaleBatchReleaserTest*'
+      -Dtest.noFailFast=true`, **7 tests, 7 failed**, 0 errors — every failure an assertion, the
+      seam's refusal recorded as each case's *first* soft failure in the convention `RegisterStoreIT`
+      uses rather than as a stack trace out of the arrangement. The first case's second failure is
+      the property under test: "expected: ReleaseTally[batches=1, registers=2, contended=0] but was:
+      ReleaseTally[batches=-1, registers=-1, contended=-1]", the sentinel being what a pass that
+      answered nothing reads as.
+      **Seven cases, not six**: `a_store_that_cannot_be_reached_leaves_the_pass` is the seventh, and
+      it is the per-method outage proof review gate 4 deferred from `RegisterStoreIT` to this suite.
+      A store that went away is the *run's* failure and not one batch's, so it leaves the pass as the
+      port's own `StoreUnavailableException` - asserted `isSameAs`, so a pass that wrapped or
+      swallowed it fails - and nothing is counted for a pass that learned nothing.
+      **Three seams, and one of them is an instrument.** `batch/StaleBatchReleaser` with
+      `releaseStale()` refusing and the nested `ReleaseTally(batches, registers, contended)` record;
+      and `GenerationMetrics`' three counters, which a test cannot name before they exist. The seam
+      class deliberately holds **no fields**: five fields nothing reads is five `pmdMain` violations,
+      so the constructor takes its five collaborators and T012 lands the fields with the code that
+      reads them. `GenerationMetricsTest`'s two surface cases gain the three names in the same
+      commit, so "exercising everything registers exactly the documented instruments" stays a claim
+      about all of them.
+      **The third counter is a deviation from the letter of T012's "two counters" and is recorded
+      as one.** FR-003a says a contended batch is "counted by the pass's line and its counter", and
+      the design rules say a path that leaves something undone moves one; `data-model.md`'s
+      instrument table named only the two released totals. So
+      `courtregister_generation_contended_total` is added beside them, unlabelled - a batch id may
+      never be a series (cardinality, and privacy on a register whose every defendant is a child) -
+      and `data-model.md` gains its row at T012.
+      `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` green.)
 - [ ] T013 [US2] `batch/StaleBatchReleaserTest` (extend) — the two cutoffs, which T012's minimal
       implementation is deliberately allowed not to compute.
       `the_scheduled_cutoff_is_the_clock_minus_the_minimum_age`;

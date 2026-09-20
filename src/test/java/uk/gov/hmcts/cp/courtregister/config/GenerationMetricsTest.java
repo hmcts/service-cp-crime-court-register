@@ -530,6 +530,9 @@ class GenerationMetricsTest {
                             GenerationMetrics.GENERATION_REQUEST,
                             GenerationMetrics.GENERATION_LATENCY,
                             GenerationMetrics.GENERATION_RECONCILED,
+                            GenerationMetrics.RELEASED_BATCHES,
+                            GenerationMetrics.RELEASED_REGISTERS,
+                            GenerationMetrics.RELEASE_CONTENDED,
                             GenerationMetrics.GENERATION_SKIPPED,
                             GenerationMetrics.NOTIFICATIONS,
                             GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE,
@@ -589,6 +592,9 @@ class GenerationMetricsTest {
             metrics.generationRequested(202);
             metrics.generationLatency(Duration.ofSeconds(30));
             metrics.reconciled();
+            metrics.staleBatchesReleased(1);
+            metrics.staleRegistersReleased(2);
+            metrics.staleBatchesContended(1);
             metrics.runSkipped(FlagDecision.OFF);
             metrics.notificationSettled(NotificationStatus.ACCEPTED, 202);
             metrics.oldestRecordedUnbatchedAge(Duration.ofHours(1));

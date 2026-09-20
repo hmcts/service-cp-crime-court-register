@@ -57,6 +57,10 @@ public class GenerationMetrics {
     public static final String GENERATION_REQUEST = "courtregister_generation_request_total";
     public static final String GENERATION_LATENCY = "courtregister_generation_latency";
     public static final String GENERATION_RECONCILED = "courtregister_generation_reconciled_total";
+    public static final String RELEASED_BATCHES = "courtregister_generation_released_batches_total";
+    public static final String RELEASED_REGISTERS =
+            "courtregister_generation_released_registers_total";
+    public static final String RELEASE_CONTENDED = "courtregister_generation_contended_total";
     public static final String GENERATION_SKIPPED = "courtregister_generation_skipped_total";
     public static final String NOTIFICATIONS = "courtregister_notifications_total";
     public static final String NOTIFICATIONS_IGNORED =
@@ -328,6 +332,50 @@ public class GenerationMetrics {
      */
     public void reconciled() {
         counter(GENERATION_RECONCILED).increment();
+    }
+
+    /**
+     * Counts the batches one run gave up on and released.
+     *
+     * <p>The night's account of what it had to undo: a batch counted here is a court centre day
+     * whose render outcome never arrived, and a series that is flat at zero is a topic delivering
+     * every outcome it should. Every run moves it, by nought where it released nothing, so the
+     * series exists to be alerted on from the first night rather than appearing the first time
+     * something goes wrong.
+     *
+     * @param batches how many batches this run failed and released
+     */
+    public void staleBatchesReleased(final int batches) {
+        counter(RELEASED_BATCHES).increment(batches);
+    }
+
+    /**
+     * Counts the registers that came back with those batches.
+     *
+     * <p>Its own series rather than a label on the one above, because a batch is one document and
+     * one e-mail while a register is one hearing's youth defendants: the count of batches says how
+     * much of the estate a lost outcome cost and this says how many children's registers were in
+     * it. Neither is added to the run's own row totals - the same run re-batches these registers,
+     * so they are already inside them (FR-009).
+     *
+     * @param registers how many released registers are still the day's to render
+     */
+    public void staleRegistersReleased(final int registers) {
+        counter(RELEASED_REGISTERS).increment(registers);
+    }
+
+    /**
+     * Counts the batches a run could not release, having lost the day's key on every attempt.
+     *
+     * <p>A path that leaves something undone moves a counter: the batch is stale still and
+     * untouched, the run goes on to assemble, and without this series the only trace of a court
+     * centre day nothing can give back would be a WARN in the log index. Nought is the expected
+     * reading, and anything that stays above it across runs is a day a person has to decide about.
+     *
+     * @param batches how many batches the pass left exactly as it found them
+     */
+    public void staleBatchesContended(final int batches) {
+        counter(RELEASE_CONTENDED).increment(batches);
     }
 
     /**
