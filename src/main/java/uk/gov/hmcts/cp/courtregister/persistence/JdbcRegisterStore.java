@@ -661,6 +661,27 @@ public class JdbcRegisterStore implements RegisterStore {
      * column at seven statuses, this store writes four of them and SUPERSEDED is the one of those
      * four that is by definition not live, and PENDING, POSTED and FAILED are 001's.
      *
+     * <p><strong>And the same ordering read the other way, which is {@code overtaken}.</strong> The
+     * key can also hold a share the batched register <em>overtook</em>: a delivery that arrived
+     * behind the register it belongs in front of is recorded active and unbatched, because the
+     * recorder's incumbent search is over unbatched rows and a batched register is not its to
+     * supersede. The register being given back is then the later of the two, so it supersedes that
+     * earlier row rather than being handed back beside it - the mirror of what
+     * {@link #RECORD_REGISTER} does when it is the recorder that meets the pair, and the rule
+     * {@link #FAIL_AND_RELEASE_STALE} keeps for the same index. Without it the key holds two active
+     * rows the moment the stamp is cleared, the index refuses the write, and this statement's
+     * failure mark goes down with the release it is a branch of.
+     *
+     * <p>It is guarded by {@code :releaseRows} through {@code stamped}, which already carries that
+     * guard: a reason that keeps the stamp releases nothing and therefore displaces nothing. It runs
+     * only where the register being given back has no successor of its own, because a register that
+     * is itself being superseded is leaving the index as it goes and takes no key. And it is
+     * <strong>chained ahead of</strong> {@code released}, as {@link #RECORD_REGISTER} chains
+     * {@code replaced} ahead of its insert: the row being superseded holds the key until its update
+     * takes it out of the index, so a release issued first would collide with the very row it is
+     * about to supersede, and Postgres does not otherwise say which clause of one statement runs
+     * first.
+     *
      * <p>{@code completed_by} is written here for the same reason it is written by statement 6, and
      * it is null for most of these endings: only a {@code generation-failed} event and a reconciled
      * query are somebody else's answer about the render. The other five are this service's own
@@ -681,6 +702,11 @@ public class JdbcRegisterStore implements RegisterStore {
                 RETURNING batch_id
             ), stamped AS (
                 SELECT recorded.output_id,
+                       recorded.hearing_id,
+                       recorded.court_centre_id,
+                       recorded.register_date,
+                       recorded.register_time,
+                       recorded.created_at,
                        (SELECT successor.output_id
                           FROM processed_output successor
                          WHERE successor.hearing_id = recorded.hearing_id
@@ -701,6 +727,24 @@ public class JdbcRegisterStore implements RegisterStore {
                   JOIN failed ON failed.batch_id = recorded.batch_id
                  WHERE recorded.status = 'RECORDED'
                    AND CAST(:releaseRows AS boolean)
+            ), overtaken AS (
+                UPDATE processed_output earlier
+                   SET status = 'SUPERSEDED',
+                       superseded_at = now(),
+                       superseded_by = stamped.output_id,
+                       updated_at = now()
+                  FROM stamped
+                 WHERE stamped.successor_id IS NULL
+                   AND earlier.hearing_id = stamped.hearing_id
+                   AND earlier.court_centre_id = stamped.court_centre_id
+                   AND earlier.register_date = stamped.register_date
+                   AND earlier.output_id <> stamped.output_id
+                   AND earlier.status = 'RECORDED'
+                   AND earlier.superseded_at IS NULL
+                   AND earlier.batch_id IS NULL
+                   AND (earlier.register_time, earlier.created_at, earlier.output_id)
+                       < (stamped.register_time, stamped.created_at, stamped.output_id)
+                RETURNING earlier.output_id
             ), released AS (
                 UPDATE processed_output recorded
                    SET batch_id = NULL,
@@ -710,7 +754,8 @@ public class JdbcRegisterStore implements RegisterStore {
                                             THEN NULL ELSE now() END,
                        superseded_by = stamped.successor_id,
                        updated_at = now()
-                  FROM stamped
+                  FROM stamped,
+                       (SELECT count(*) FROM overtaken) AS chained(overtaken_rows)
                  WHERE recorded.output_id = stamped.output_id
                 RETURNING recorded.output_id
             )
@@ -796,10 +841,35 @@ public class JdbcRegisterStore implements RegisterStore {
      * register that replaced it, and {@code idx_output_active_register_key} refuses the write - so
      * the whole regeneration fails on a key nothing said was wrong. The identity stays as the last
      * tie-break, for two rows the database clock could not separate.
+     *
+     * <p><strong>And the same ordering read the other way, which is {@code overtaken}.</strong> The
+     * key can hold a share the batched register <em>overtook</em> just as easily as one that
+     * replaced it: a delivery that arrived behind the register it belongs in front of is recorded
+     * active and unbatched, because the recorder's incumbent search is over unbatched rows and a
+     * batched register is not its to supersede. The register coming back is then the later of the
+     * two, so this statement supersedes that earlier row against it - the same rule
+     * {@link #FAIL_AND_RELEASE_STALE} keeps, and the mirror of {@link #RECORD_REGISTER}'s own. Read
+     * one way only, an operator's release would clear the stamp beside the earlier active row,
+     * {@code idx_output_active_register_key} would refuse the second active row for the day, and
+     * the command would fail on a key nothing said was wrong - for ever, because no re-run removes
+     * a row committed before it.
+     *
+     * <p>It runs only where the released register has no successor of its own: a register that is
+     * itself being superseded is leaving the index as it goes, so it takes no key and displaces
+     * nothing. And it is <strong>chained ahead of</strong> {@code released}, as
+     * {@link #RECORD_REGISTER} chains {@code replaced} ahead of its insert and for the same index -
+     * the row being superseded holds the key until its update takes it out, so a release issued
+     * first would collide with the very row it is about to supersede, and Postgres does not
+     * otherwise order the clauses of one statement.
      */
     private static final String RELEASE_FAILED = """
             WITH stamped AS (
                 SELECT recorded.output_id,
+                       recorded.hearing_id,
+                       recorded.court_centre_id,
+                       recorded.register_date,
+                       recorded.register_time,
+                       recorded.created_at,
                        (SELECT successor.output_id
                           FROM processed_output successor
                          WHERE successor.hearing_id = recorded.hearing_id
@@ -821,6 +891,24 @@ public class JdbcRegisterStore implements RegisterStore {
                  WHERE failed.batch_id = :batchId
                    AND failed.status = 'FAILED'
                    AND recorded.status = 'RECORDED'
+            ), overtaken AS (
+                UPDATE processed_output earlier
+                   SET status = 'SUPERSEDED',
+                       superseded_at = now(),
+                       superseded_by = stamped.output_id,
+                       updated_at = now()
+                  FROM stamped
+                 WHERE stamped.successor_id IS NULL
+                   AND earlier.hearing_id = stamped.hearing_id
+                   AND earlier.court_centre_id = stamped.court_centre_id
+                   AND earlier.register_date = stamped.register_date
+                   AND earlier.output_id <> stamped.output_id
+                   AND earlier.status = 'RECORDED'
+                   AND earlier.superseded_at IS NULL
+                   AND earlier.batch_id IS NULL
+                   AND (earlier.register_time, earlier.created_at, earlier.output_id)
+                       < (stamped.register_time, stamped.created_at, stamped.output_id)
+                RETURNING earlier.output_id
             ), released AS (
                 UPDATE processed_output recorded
                    SET batch_id = NULL,
@@ -830,7 +918,8 @@ public class JdbcRegisterStore implements RegisterStore {
                                             THEN NULL ELSE now() END,
                        superseded_by = stamped.successor_id,
                        updated_at = now()
-                  FROM stamped
+                  FROM stamped,
+                       (SELECT count(*) FROM overtaken) AS chained(overtaken_rows)
                  WHERE recorded.output_id = stamped.output_id
                 RETURNING recorded.output_id, recorded.hearing_id, recorded.hearing_date,
                           recorded.court_centre_id, recorded.register_date,

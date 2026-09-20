@@ -1210,6 +1210,14 @@ older statements beside it did not.
   - and the five after it are the properties the refusal takes with it: the batch left GENERATING or
   its release answering with nothing, the overtaken share's `superseded_by` empty, the key holding two
   RECORDED rows, the stamp still in place, and the wrong register left assemblable.
+  **Green**: `flock -w 7200 … ./gradlew test --tests '*RegisterStoreIT*' --tests
+  '*StaleReleaseConcurrencyIT*' checkstyleMain pmdMain checkstyleTest pmdTest
+  -Dtest.noFailFast=true` BUILD SUCCESSFUL, **97 tests, 0 failures, 0 errors** — `RegisterStoreIT`
+  89 of 89 and `StaleReleaseConcurrencyIT` 8 of 8 — with all four analysis tasks green.
+  `stamped` gains the five columns the clause matches on in both statements, which is the whole of
+  the change beside the clause itself; nothing else about either statement moved, and the eleven
+  existing supersession cases across `Failure` and `Releasing` pass unchanged, which is what says
+  the later-stamped direction is untouched.
 
 ---
 
