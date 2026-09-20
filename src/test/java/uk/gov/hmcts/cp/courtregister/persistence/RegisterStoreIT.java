@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.awaitility.Awaitility.await;
 
@@ -11,6 +12,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -39,8 +42,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DuplicateKeyException;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RecordedCompletion;
@@ -260,6 +265,12 @@ class RegisterStoreIT {
     private static final String GENERATED = "GENERATED";
     private static final String NOTIFIED = "NOTIFIED";
     private static final String FAILED = "FAILED";
+
+    /** The status a batch is assembled into, spelled out because {@code PENDING} is taken here. */
+    private static final String PENDING_STATUS = "PENDING";
+
+    /** The index one hearing's active register is kept unique by, named where a case asserts it. */
+    private static final String ACTIVE_REGISTER_KEY = "idx_output_active_register_key";
 
     /** The state increment 001 writes an output row in before it POSTs the register. */
     private static final String POST_PENDING = "PENDING";
@@ -3243,6 +3254,104 @@ class RegisterStoreIT {
         }
 
         @Test
+        void a_batch_stamped_exactly_at_its_cutoff_is_stale() {
+            final DistributionCommand monday = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand tuesday = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+            final Instant exactly = cutoff(STALE_AFTER).truncatedTo(ChronoUnit.MILLIS);
+            final AtomicReference<List<ReleasedBatch>> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(tuesday, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> active = mine(store.activeUnbatched());
+                final RegisterBatch onIt = assembled(MONDAY, recordsOn(active, MONDAY));
+                final RegisterBatch justInside = assembled(TUESDAY, recordsOn(active, TUESDAY));
+                stampBatch(onIt.batchId(), exactly);
+                stampBatch(justInside.batchId(), exactly.plusSeconds(1));
+                released.set(store.failAndReleaseStale(exactly, exactly));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("a batch stamped at exactly the cutoff is stale: the rule is at or before "
+                            + "it, so the batch that has waited precisely the minimum age is the "
+                            + "first one the pass is for, not the last one it misses")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+            softly.assertThat(batchOn(TUESDAY))
+                    .as("and one second the younger side of it is not, which is the other half of "
+                            + "the same boundary")
+                    .contains(new BatchOutcome(PENDING_STATUS, null, null));
+            softly.assertThat(mineReleased(released.get()))
+                    .as("so the run is told about the one day and not the other")
+                    .extracting(ReleasedBatch::registerDate)
+                    .containsExactly(MONDAY);
+        }
+
+        @Test
+        void no_batch_a_run_has_finished_with_is_ever_matched_at_any_age() {
+            final AtomicReference<UUID> failed = new AtomicReference<>();
+            final AtomicReference<UUID> notified = new AtomicReference<>();
+            final AtomicReference<UUID> waiting = new AtomicReference<>();
+            final AtomicReference<List<ReleasedBatch>> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(seededCommand(HEARING_ONE, MONDAY_SHARED),
+                        document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch generationFailed =
+                        assembled(MONDAY, mine(store.activeUnbatched()));
+                failed.set(generationFailed.batchId());
+                store.markRequested(generationFailed.batchId(), UUID.randomUUID());
+                store.markFailed(generationFailed.batchId(), BatchFailureReason.GENERATION_FAILED,
+                        SDG_REASON, CompletedBy.EVENT);
+
+                record(seededCommand(HEARING_TWO, MONDAY_RESHARED),
+                        document(HEARING_TWO, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch sent = assembled(MONDAY, mine(store.activeUnbatched()));
+                notified.set(sent.batchId());
+                walkedToNotified(sent, UUID.randomUUID(), UUID.randomUUID());
+
+                record(seededCommand(HEARING_THREE, TUESDAY_SHARED),
+                        document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch stillWaiting =
+                        assembled(TUESDAY, mine(store.activeUnbatched()));
+                waiting.set(stillWaiting.batchId());
+
+                ageBatch(generationFailed.batchId(), LAST_NIGHT);
+                ageBatch(sent.batchId(), LAST_NIGHT);
+                ageBatch(stillWaiting.batchId(), LAST_NIGHT);
+                released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(outcomeOf(failed.get()))
+                    .as("PENDING and GENERATING is the whole of the predicate, and a batch already "
+                            + "FAILED is not in it at any age: re-failing it would overwrite the "
+                            + "reason support is reading and hand back registers a person may have "
+                            + "asked for on the resend surface")
+                    .contains(new BatchOutcome(FAILED, "GENERATION_FAILED", SDG_REASON));
+            softly.assertThat(stampedWith(failed.get()))
+                    .as("so its register keeps the stamp that reason leaves it, untouched by this "
+                            + "pass")
+                    .isEqualTo(1);
+            softly.assertThat(outcomeOf(notified.get()))
+                    .as("and a batch whose Youth Offending Teams have been told is no more in it "
+                            + "than a GENERATED one: there is nothing left to give back, and a "
+                            + "failure written over it would say a night that worked did not")
+                    .contains(new BatchOutcome(NOTIFIED, null, null));
+            softly.assertThat(outcomeOf(waiting.get()))
+                    .as("while the day of the very same age that was still waiting for its render "
+                            + "is the one the pass is about")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+            softly.assertThat(mineReleased(released.get()))
+                    .as("which is the only day the run is told it released")
+                    .extracting(ReleasedBatch::registerDate)
+                    .containsExactly(TUESDAY);
+        }
+
+        @Test
         void the_mark_and_the_release_are_one_transaction() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
@@ -3259,13 +3368,22 @@ class RegisterStoreIT {
                 batchId.set(monday.batchId());
             }).as(WALKED).doesNotThrowAnyException();
 
-            withOneUnbatchedRegisterAllowed(() ->
-                    softly.assertThatThrownBy(() ->
-                                    store.failAndReleaseStale(cutoff(STALE_AFTER),
-                                            cutoff(STALE_AFTER)))
-                            .as("the release meets an index it cannot satisfy, and the refusal is "
-                                    + "not swallowed")
-                            .isInstanceOf(RuntimeException.class));
+            final AtomicReference<Throwable> refusal = new AtomicReference<>();
+            withOneUnbatchedRegisterAllowed(() -> refusal.set(catchThrowable(() ->
+                    store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)))));
+
+            softly.assertThat(refusal.get())
+                    .as("the release meets an index it cannot satisfy, and the refusal is not "
+                            + "swallowed - as the store's own refusal, rather than as whatever "
+                            + "class a later change happens to leave escaping")
+                    .isInstanceOf(DuplicateKeyException.class)
+                    .hasMessageContaining(testOnlyUnbatchedIndex())
+                    .as("named by the index that refused it and not by the active-register key, "
+                            + "which is the difference the pass acts on: a refusal on a rule this "
+                            + "operation does not account for is the store saying the write may "
+                            + "never be made, and no fresh snapshot changes that, so it is "
+                            + "rethrown as itself rather than made again three times")
+                    .hasMessageNotContaining(ACTIVE_REGISTER_KEY);
 
             softly.assertThat(batchOn(MONDAY))
                     .as("and the mark goes down with it. A mark that survived its own release "
@@ -4357,6 +4475,64 @@ class RegisterStoreIT {
     }
 
     /**
+     * Writes a batch's in-flight stamps to an exact instant, so a cutoff can be put on the boundary.
+     *
+     * <p>{@link #ageBatch} moves a stamp by a duration, which is what a case about "a night old"
+     * wants and is no use at all to a case about "at exactly the cutoff": the two instants would
+     * differ by however long the fixture itself took. Here the case names one instant and both the
+     * stamp and the cutoff are it. It is truncated to the millisecond by the caller, because the
+     * column keeps microseconds and would round a nanosecond-precision instant either way.
+     *
+     * <p>{@code requested_at} is written only where it is not null, so a PENDING batch stays the
+     * {@code COALESCE}'s other case rather than being quietly turned into a GENERATING one's shape.
+     *
+     * @param batchId the batch to stamp
+     * @param stamp   the instant both of its in-flight stamps are written to
+     * @throws IllegalStateException if there was no batch to stamp, since a fixture that quietly
+     *                               does nothing would turn a case green for the wrong reason
+     */
+    private void stampBatch(final UUID batchId, final Instant stamp) {
+        final int stamped = ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        UPDATE register_batch
+                           SET assembled_at = :stamp,
+                               requested_at = CASE WHEN requested_at IS NULL THEN NULL
+                                                   ELSE :stamp END
+                         WHERE batch_id = :batchId
+                        """)
+                .param("stamp", stamp.atOffset(ZoneOffset.UTC))
+                .param(BATCH_ID, batchId)
+                .update();
+        if (stamped != ONE_BATCH) {
+            throw new IllegalStateException(
+                    "expected one batch to stamp for " + batchId + ", stamped " + stamped);
+        }
+    }
+
+    /**
+     * A batch's outcome read by its identity, for a case holding more than one batch on a day.
+     *
+     * <p>{@link #batchOn(LocalDate)} reads by the day, which a case that fails a batch and then
+     * assembles another for the same day cannot use - the day holds two rows and the read would
+     * refuse them both.
+     *
+     * @param batchId the batch to read
+     * @return its status and the two reason columns, or nothing where there is no such batch
+     */
+    private static Optional<BatchOutcome> outcomeOf(final UUID batchId) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT status, failure_reason, sdg_reason
+                          FROM register_batch
+                         WHERE batch_id = :batchId
+                        """)
+                .param(BATCH_ID, batchId)
+                .query((rs, rowNumber) -> new BatchOutcome(rs.getString("status"),
+                        rs.getString("failure_reason"), rs.getString("sdg_reason")))
+                .optional();
+    }
+
+    /**
      * The released batches of this case's court centre, and none of another suite's.
      *
      * <p>The operation answers for the whole store, as the pass needs it to; a case asserts on its
@@ -4387,7 +4563,7 @@ class RegisterStoreIT {
      * @param refused what is expected to meet the index
      */
     private void withOneUnbatchedRegisterAllowed(final Runnable refused) {
-        final String index = "test_only_unbatched_" + courtCentre.toString().replace("-", "");
+        final String index = testOnlyUnbatchedIndex();
         ProcessedLogTestSupport.jdbcClient()
                 .sql("CREATE UNIQUE INDEX " + index + " ON processed_output (court_centre_id) "
                         + "WHERE batch_id IS NULL AND court_centre_id = '" + courtCentre + "'")
@@ -4397,6 +4573,19 @@ class RegisterStoreIT {
         } finally {
             ProcessedLogTestSupport.jdbcClient().sql("DROP INDEX " + index).update();
         }
+    }
+
+    /**
+     * The name {@link #withOneUnbatchedRegisterAllowed} gives its index, so a case may name it too.
+     *
+     * <p>A case that asserts <em>which</em> rule refused a write has to know what that rule is
+     * called. Derived here rather than written down twice, because the two spellings drifting apart
+     * would leave the assertion passing against a refusal it was never about.
+     *
+     * @return the index name, unique to this case's court centre
+     */
+    private String testOnlyUnbatchedIndex() {
+        return "test_only_unbatched_" + courtCentre.toString().replace("-", "");
     }
 
     /** The moment a batch's render was asked for, read back out of {@code register_batch}. */
