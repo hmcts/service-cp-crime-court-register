@@ -1877,11 +1877,52 @@ values on every pass.
       failures. Documentation-only within the loop's exemption, so no red is claimed: nothing here
       changes behaviour, and the two suites above are what stops a re-worded line escaping the
       sweep.
-- [ ] T025 [US4] Delete `DocumentRenderer.query`, `SystemDocGeneratorClient.query` and its answer
+- [X] T025 [US4] Delete `DocumentRenderer.query`, `SystemDocGeneratorClient.query` and its answer
       parsing, `StubDocumentRenderer.query` and `domain/DocumentStatus.java`; delete the
       `GET document/{id}` WireMock mapping and its line in `docker/wiremock/README.md`. Make T024
       green. `docker/sdg-echo/sdg-echo.py` is **not** touched — it implements no query endpoint.
       `DocumentRenderer`'s javadoc drops its "two conversations" paragraph.
+
+      Gone with them: `SystemDocGeneratorClient`'s `QUERY_PATH`, `DOCUMENT_MEDIA_TYPE`, the four
+      answer-field names, `answerAbout`, `documentStatus` and the three optional-field readers;
+      `SystemDocGeneratorClientTest`'s whole `Query` nested class and its five helpers;
+      `support/GenerationLegs`'s six query arrangements, its two stubs and `refusedDocument()`;
+      `support/GenerationStackSupport`'s `sdgQueryAnswersDocument`, `sdgQueryKnowsNothing` and the
+      query path builder; and `docker-compose.yml`'s "command + query" comment beside the stub
+      container.
+
+      **Two suites had to be re-pointed, and the second is the interesting one.**
+      `StubGenerationAdaptersTest.the_stubbed_renderer_should_report_no_verdict_rather_than_invent_a_
+      document` was a call to a method that no longer exists; it becomes
+      `..._should_declare_no_way_of_inventing_a_document`, over the stand-in's declared methods,
+      which is the same claim made where it can still be made (synthetics filtered — JaCoCo's
+      `$jacocoInit` is on every instrumented class).
+
+      `TelemetryPrivacyTest.should_keep_the_generator_s_own_words_below_info` asserted that
+      systemdocgenerator's words appear **somewhere** below INFO, as its guard against passing
+      vacuously. That is no longer true of anything: the retired client's DEBUG line was the one
+      place those words were ever written, and with it gone they reach **no** line at any level and
+      live only in `sdg_reason`. The case now says exactly that, and its vacuity guard moves to
+      where the words land — `GenerationLegs.generatorWordsReachedTheStore()`, read at the moment
+      the refusal is applied rather than at the end of the drive, because `reset` clears a mock's
+      recorded invocations and several later arrangements reset the store. The class javadoc's
+      paragraph explaining why the sweep is scoped to INFO and above is restated in terms of the
+      rule rather than of the one line that used to depend on it.
+
+      **`.claude/agents/spec-validator.md` was not touched.** Contract row 3 carries no
+      query-endpoint mention to remove — it already names the command and the two public events and
+      nothing else. The file's two other reconciler mentions (the read-these-files list at line 49,
+      and the outcome-is-learned rule at line 102) are the agent's scope and rule paragraphs, which
+      this tree's coordination contract assigns elsewhere and T044 covers in Phase 9. Carried as an
+      open point rather than fixed here.
+
+      **Green** (`flock -w 7200 … ./gradlew test --tests '*DocumentRendererTest*' --tests
+      '*SystemDocGeneratorClientTest*' --tests '*StubGenerationAdaptersTest*' --tests
+      '*TelemetryPrivacyTest*' -Dtest.noFailFast=true`): BUILD SUCCESSFUL, **86 tests, 0
+      failures** — `the_renderer_port_declares_one_method` and
+      `a_whole_generation_makes_no_request_to_the_document_endpoint` both green. `pmdMain`,
+      `pmdTest`, `checkstyleMain` and `checkstyleTest` green in the same round, after the eight
+      imports the deletion orphaned and one javadoc the edit had left above the wrong method.
 - [ ] T027 [US4] `config/PublicEventsConfig.java`, `config/PropertiesValidator.java` — make T026
       green. Subscribe on `generation.enabled` alone; the broker rule loses its conjunct;
       `PublicEventsConfig`'s javadoc drops the `poll-only` sentence.

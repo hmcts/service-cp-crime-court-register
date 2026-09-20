@@ -1,7 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.support;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
-import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
@@ -295,10 +294,6 @@ public final class GenerationLegs implements AutoCloseable {
     /** Any generate-document command, which is one path and takes no parameter. */
     private static final String ANY_RENDER_COMMAND = SystemDocGeneratorClient.COMMAND_PATH;
 
-    /** Any document query, whatever payload is asked about. */
-    private static final String ANY_DOCUMENT_QUERY = SystemDocGeneratorClient.QUERY_PATH
-            .replace("{payloadFileId}", "[^/]+");
-
     /** Any send-email-notification, whatever identity it was made under. */
     private static final String ANY_EMAIL_COMMAND = NotificationNotifyClient.COMMAND_PATH
             .replace("{notificationId}", "[^/]+");
@@ -366,6 +361,9 @@ public final class GenerationLegs implements AutoCloseable {
 
     private final IntakeAgeSweep sweep;
 
+    /** Whether the refusal the drive applied carried systemdocgenerator's words into the store. */
+    private boolean generatorWordsKept;
+
     private GenerationLegs(final WireMockServer wireMock, final MeterRegistry registry) {
         this.contexts = wireMock;
         this.metrics = new GenerationMetrics(registry);
@@ -409,6 +407,25 @@ public final class GenerationLegs implements AutoCloseable {
     @Override
     public void close() {
         contexts.stop();
+    }
+
+    /**
+     * Whether the drive handed systemdocgenerator's own words to something that keeps them.
+     *
+     * <p>The vacuity guard for the privacy case that now says those words reach <em>no</em> line at
+     * any level. They used to be allowed one: the retired query client wrote them into a DEBUG slot,
+     * and the sweep proved it had carried one by finding it there. With the query gone the words
+     * arrive on the public-event topic and go to {@code sdg_reason}, which is a column - so the
+     * proof that the drive carried them has to be taken where they land, which is the store.
+     *
+     * <p>Read at the moment the call is made rather than at the end of the drive, because
+     * {@code reset} clears a mock's recorded invocations and several arrangements after that one
+     * reset the store.
+     *
+     * @return whether the refusal the drive applied carried the marker into the store
+     */
+    public boolean generatorWordsReachedTheStore() {
+        return generatorWordsKept;
     }
 
     /**
@@ -596,23 +613,6 @@ public final class GenerationLegs implements AutoCloseable {
         renderCommandAnswering(HttpStatus.SERVICE_UNAVAILABLE.value());
         whateverItAnswers(this::askForARender);
 
-        queryAnswering(HttpStatus.NOT_FOUND.value(), "");
-        whateverItAnswers(this::askAboutTheDocument);
-
-        queryAnswering(HttpStatus.SERVICE_UNAVAILABLE.value(), "");
-        whateverItAnswers(this::askAboutTheDocument);
-
-        queryAnswering(HttpStatus.BAD_REQUEST.value(), "");
-        whateverItAnswers(this::askAboutTheDocument);
-
-        queryAnswering(HttpStatus.OK.value(), "{ this is not an answer");
-        whateverItAnswers(this::askAboutTheDocument);
-
-        queryAnswering(HttpStatus.OK.value(), refusedDocument());
-        whateverItAnswers(this::askAboutTheDocument);
-
-        queryFaulting();
-        whateverItAnswers(this::askAboutTheDocument);
     }
 
     // --- the topic listener ----------------------------------------------------------------------
@@ -745,6 +745,9 @@ public final class GenerationLegs implements AutoCloseable {
                 .thenReturn(Optional.of(refused()));
         whateverItAnswers(() -> sink.generationFailed(BATCH_ID, PAYLOAD_FILE_ID,
                 PersonalDataMarkers.GENERATOR_REASON, AT, CompletedBy.EVENT));
+        generatorWordsKept = org.mockito.Mockito.mockingDetails(store).getInvocations().stream()
+                .flatMap(invocation -> Stream.of(invocation.getArguments()))
+                .anyMatch(PersonalDataMarkers.GENERATOR_REASON::equals);
     }
 
     /**
@@ -956,21 +959,6 @@ public final class GenerationLegs implements AutoCloseable {
                 .willReturn(aResponse().withFault(Fault.EMPTY_RESPONSE)));
     }
 
-    private void queryAnswering(final int status, final String body) {
-        contexts.resetAll();
-        contexts.stubFor(get(urlPathMatching(ANY_DOCUMENT_QUERY))
-                .willReturn(aResponse()
-                        .withStatus(status)
-                        .withHeader("Content-Type", SystemDocGeneratorClient.DOCUMENT_MEDIA_TYPE)
-                        .withBody(body)));
-    }
-
-    private void queryFaulting() {
-        contexts.resetAll();
-        contexts.stubFor(get(urlPathMatching(ANY_DOCUMENT_QUERY))
-                .willReturn(aResponse().withFault(Fault.EMPTY_RESPONSE)));
-    }
-
     private void emailCommandAnswering(final int status) {
         contexts.resetAll();
         contexts.stubFor(post(urlPathMatching(ANY_EMAIL_COMMAND))
@@ -989,11 +977,6 @@ public final class GenerationLegs implements AutoCloseable {
         renderer.requestRender(
                 new uk.gov.hmcts.cp.courtregister.domain.RenderRequest(PAYLOAD_FILE_ID, BATCH_ID,
                         "OEE_Layout5", "pdf", DocumentEventListener.ORIGINATING_SOURCE),
-                uk.gov.hmcts.cp.courtregister.domain.CallerIdentity.SYSTEM);
-    }
-
-    private void askAboutTheDocument() {
-        renderer.query(PAYLOAD_FILE_ID,
                 uk.gov.hmcts.cp.courtregister.domain.CallerIdentity.SYSTEM);
     }
 
@@ -1447,15 +1430,6 @@ public final class GenerationLegs implements AutoCloseable {
         org.mockito.Mockito.doThrow(new StoreRefusedRowException(
                         "a notification row for this batch and address is already held"))
                 .when(notifications).insert(any(RegisterNotification.class));
-    }
-
-    /** The query answer that says the render was refused, in systemdocgenerator's own words. */
-    private static String refusedDocument() {
-        return """
-                {
-                  "failedTime": "2026-03-02T18:06:23.004+00:00",
-                  "reason": "%s"
-                }""".formatted(PersonalDataMarkers.GENERATOR_REASON);
     }
 
     private static String generationFailedPayload() {

@@ -21,7 +21,6 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -43,7 +42,7 @@ import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
  * Everything the nightly run talks to, for the two end-to-end suites that drive it.
  *
  * <p>The run has five outsides and this fixture is four of them: App Configuration, from which the
- * one lever is read; systemdocgenerator's command and query APIs; notificationnotify's command API,
+ * one lever is read; systemdocgenerator's command API; notificationnotify's command API,
  * which is where a generated register turns into the e-mails the Youth Offending Teams are told by;
  * and the framework file service's own database, which the payload is written into and which nothing
  * in this service migrates. The fifth is the broker, and each suite owns that itself because whether
@@ -95,10 +94,6 @@ public final class GenerationStackSupport implements AutoCloseable {
      */
     private static final String ANY_NOTIFICATION_PATH = NotificationNotifyClient.COMMAND_PATH
             .replace("{notificationId}", "[^/]+");
-
-    /** Any document query, whatever payload the reconciler asks about. */
-    private static final String ANY_DOCUMENT_QUERY_PATH = SystemDocGeneratorClient.QUERY_PATH
-            .replace("{payloadFileId}", "[^/]+");
 
     /**
      * The precedence a stub about one recipient is registered at.
@@ -287,42 +282,6 @@ public final class GenerationStackSupport implements AutoCloseable {
                 .toList();
     }
 
-    /**
-     * systemdocgenerator's query API says it rendered the document, for one payload.
-     *
-     * <p>What the reconciler reads where the topic delivered nothing: the same two components the
-     * event carries, because an id without an instant is a row systemdocgenerator opened and has not
-     * filled in and the client is required to tell those apart.
-     *
-     * @param payloadFileId  the payload the render was asked for, which the query is keyed on
-     * @param documentFileId the document it says it produced
-     * @param generatedAt    when it says it finished
-     */
-    public void sdgQueryAnswersDocument(final UUID payloadFileId, final UUID documentFileId,
-            final Instant generatedAt) {
-
-        contexts.stubFor(get(urlEqualTo(documentQueryPathFor(payloadFileId)))
-                .atPriority(ONE_RECIPIENT)
-                .willReturn(aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", SystemDocGeneratorClient.DOCUMENT_MEDIA_TYPE)
-                        .withBody("{\"documentFileServiceId\":\"" + documentFileId
-                                + "\",\"generatedTime\":\"" + generatedAt + "\"}")));
-    }
-
-    /**
-     * systemdocgenerator's query API has no record of a payload at all.
-     *
-     * <p>Registered behind {@link #sdgQueryAnswersDocument} so a suite can leave every other batch's
-     * payload unknown - which is what a shared store needs, because the reconciler's read is over
-     * the table and not over one suite's rows.
-     */
-    public void sdgQueryKnowsNothing() {
-        contexts.stubFor(get(urlPathMatching(ANY_DOCUMENT_QUERY_PATH))
-                .atPriority(EVERY_RECIPIENT)
-                .willReturn(aResponse().withStatus(404)));
-    }
-
     // --- notificationnotify ----------------------------------------------------------------------
 
     /** notificationnotify accepts every e-mail, which is the one success the contract has. */
@@ -383,17 +342,6 @@ public final class GenerationStackSupport implements AutoCloseable {
     public static String notificationPathFor(final UUID notificationId) {
         return NotificationNotifyClient.COMMAND_PATH
                 .replace("{notificationId}", notificationId.toString());
-    }
-
-    /**
-     * The path one payload's render is asked about under.
-     *
-     * @param payloadFileId the payload the render was requested for
-     * @return the query path carrying it
-     */
-    private static String documentQueryPathFor(final UUID payloadFileId) {
-        return SystemDocGeneratorClient.QUERY_PATH
-                .replace("{payloadFileId}", payloadFileId.toString());
     }
 
     /**

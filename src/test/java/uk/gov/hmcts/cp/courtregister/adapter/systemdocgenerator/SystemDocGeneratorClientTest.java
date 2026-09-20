@@ -2,8 +2,6 @@ package uk.gov.hmcts.cp.courtregister.adapter.systemdocgenerator;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
-import static com.github.tomakehurst.wiremock.client.WireMock.get;
-import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
@@ -12,8 +10,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
-import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.spi.ILoggingEvent;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.http.Fault;
 import java.io.IOException;
@@ -31,7 +27,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.AfterEach;
@@ -51,23 +46,20 @@ import uk.gov.hmcts.cp.courtregister.adapter.progression.ProgressionCommandGatew
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
-import uk.gov.hmcts.cp.courtregister.domain.DocumentStatus;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.GenerationFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.RenderRequest;
 import uk.gov.hmcts.cp.courtregister.domain.SubmissionFailedException;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
-import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
 /**
- * The two conversations this service has with systemdocgenerator, against a real socket.
+ * The one conversation this service has with systemdocgenerator, against a real socket.
  *
- * <p>Both are somebody else's contract and neither is negotiable, so both are asserted on the wire
- * rather than against a mock that would agree with whatever the client did. The vendored schemas in
- * {@code specs/002-consolidate-progression-leg/contracts/systemdocgenerator/} are read by this suite
- * rather than quoted in a comment: the body this service sends is held to the properties the command
- * schema declares, and the answer it reads is held to the properties the query schema declares, so a
- * re-vendoring that changes either shows up here rather than at 18:00.
+ * <p>It is somebody else's contract and it is not negotiable, so it is asserted on the wire rather
+ * than against a mock that would agree with whatever the client did. The vendored schema in
+ * {@code specs/002-consolidate-progression-leg/contracts/systemdocgenerator/} is read by this suite
+ * rather than quoted in a comment: the body this service sends is held to the properties the
+ * command schema declares, so a re-vendoring that changes it shows up here rather than at 18:00.
  *
  * <p><strong>The command's body is five fields and two of them are why it exists.</strong>
  * {@code sourceCorrelationId} is the batch id, and it is the only thing that correlates an outcome
@@ -89,14 +81,6 @@ import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
  * {@code DocumentRenderer.requestRender} is not told what is left of it.
  * {@code RegisterGenerationService} holds the deadline and therefore holds the loop (T039).
  *
- * <p><strong>The query is the reconciler's alone</strong> and this suite maps its four optional
- * fields without deciding what their combination means. A generated time with an id is a document
- * and a failed time with a reason is a refusal, but a batch that has neither is only a batch with no
- * verdict yet, and whether that is a timeout depends on the grace period, which this client does not
- * know (T038). Its {@code reason} is systemdocgenerator's own free text about a document whose every
- * defendant is a child, so it is carried to {@code sdg_reason} and never written above DEBUG
- * (constitution Principle VII).
- *
  * @see <a href="file:../../../../../../../../../specs/002-consolidate-progression-leg/contracts/README.md">the
  *     vendored systemdocgenerator contracts</a>
  */
@@ -110,14 +94,6 @@ class SystemDocGeneratorClientTest {
     /** The command's vendor media type; the framework routes on it, so it is not a formality. */
     private static final String COMMAND_MEDIA_TYPE =
             "application/vnd.systemdocgenerator.generate-document+json";
-
-    /** The query's path, one payload id short of complete. */
-    private static final String QUERY_PATH_PREFIX =
-            "/systemdocgenerator-query-api/query/api/rest/systemdocgenerator/document/";
-
-    /** The query's vendor media type, sent as {@code Accept}. */
-    private static final String QUERY_MEDIA_TYPE =
-            "application/vnd.systemdocgenerator.query.document+json";
 
     /** The CPP identity header. Its value is a secret or a user, and neither is ever logged. */
     private static final String IDENTITY_HEADER = "CJSCPPUID";
@@ -140,10 +116,6 @@ class SystemDocGeneratorClientTest {
 
     /** The batch the render is for, which travels as {@code sourceCorrelationId}. */
     private static final UUID BATCH_ID = UUID.fromString("8a1d5e73-40b2-4c96-8f1e-3d7a9c05b264");
-
-    /** The document systemdocgenerator says it rendered, in the query's answer. */
-    private static final UUID DOCUMENT_FILE_ID =
-            UUID.fromString("f0b23c8d-5a49-4e71-b6c2-9d10e485a37f");
 
     /** The identity a run that names no user is made under; a configured secret, never logged. */
     private static final String SYSTEM_USER_ID = "b6c8b0a4-1f2e-4a3b-9c4d-5e6f70819234";
@@ -210,19 +182,8 @@ class SystemDocGeneratorClientTest {
                 MAPPER);
     }
 
-    private static String queryPath(final UUID payloadFileId) {
-        return QUERY_PATH_PREFIX + payloadFileId;
-    }
-
     private void commandAnswering(final int status) {
         sdg.stubFor(post(urlEqualTo(COMMAND_PATH)).willReturn(aResponse().withStatus(status)));
-    }
-
-    private void queryAnswering(final int status, final String body) {
-        sdg.stubFor(get(urlEqualTo(queryPath(PAYLOAD_FILE_ID))).willReturn(aResponse()
-                .withStatus(status)
-                .withHeader("Content-Type", QUERY_MEDIA_TYPE)
-                .withBody(body)));
     }
 
     /**
@@ -236,16 +197,6 @@ class SystemDocGeneratorClientTest {
         assertThatCode(() -> client().requestRender(REQUEST, caller))
                 .as("systemdocgenerator answered 202, which is the contract's one success")
                 .doesNotThrowAnyException();
-    }
-
-    /** The same, for the query: the answer is returned once it is established there was one. */
-    private Optional<DocumentStatus> answerAbout(final UUID payloadFileId) {
-        final AtomicReference<Optional<DocumentStatus>> answer =
-                new AtomicReference<>(Optional.empty());
-        assertThatCode(() -> answer.set(client().query(payloadFileId, CALLER)))
-                .as("the reconciler's query was answered rather than refused")
-                .doesNotThrowAnyException();
-        return answer.get();
     }
 
     /** The body the command actually carried, parsed. */
@@ -281,16 +232,6 @@ class SystemDocGeneratorClientTest {
         schema.get("properties").get(property).get("enum").forEach(
                 value -> values.add(value.stringValue()));
         return values;
-    }
-
-    /** A query answer carrying the four fields the schema requires, plus whatever a case adds. */
-    private static String queryAnswerWith(final String optionalFields) {
-        return "{\"payloadFileServiceId\":\"" + PAYLOAD_FILE_ID + "\","
-                + "\"templateIdentifier\":\"" + TEMPLATE + "\","
-                + "\"conversionFormat\":\"" + FORMAT + "\","
-                + "\"requestedTime\":\"" + REQUESTED_TIME + "\""
-                + optionalFields
-                + "}";
     }
 
     @Nested
@@ -631,130 +572,5 @@ class SystemDocGeneratorClientTest {
                 .filter(method -> Modifier.isPublic(method.getModifiers()))
                 .map(Method::getName)
                 .toList();
-    }
-
-    @Nested
-    @DisplayName("the query, which is the reconciler's alone")
-    class Query {
-
-        @Test
-        @DisplayName("carries the contract path, accept header and identity")
-        void the_query_carries_the_contract_path_accept_and_identity() {
-            queryAnswering(200, queryAnswerWith(""));
-
-            answerAbout(PAYLOAD_FILE_ID);
-
-            sdg.verify(getRequestedFor(urlEqualTo(queryPath(PAYLOAD_FILE_ID)))
-                    .withHeader("Accept", equalTo(QUERY_MEDIA_TYPE))
-                    .withHeader(IDENTITY_HEADER, equalTo(SHARING_USER)));
-        }
-
-        @Test
-        @DisplayName("maps a generated document as the document it is")
-        void the_query_maps_a_generated_document() {
-            queryAnswering(200, queryAnswerWith(
-                    ",\"documentFileServiceId\":\"" + DOCUMENT_FILE_ID + "\","
-                            + "\"generatedTime\":\"" + GENERATED_TIME + "\""));
-
-            assertThat(answerAbout(PAYLOAD_FILE_ID))
-                    .contains(new DocumentStatus(DOCUMENT_FILE_ID, GENERATED_TIME, null, null));
-        }
-
-        @Test
-        @DisplayName("maps a refusal with the time and systemdocgenerator's own reason")
-        void the_query_maps_a_refusal_with_its_reason() {
-            queryAnswering(200, queryAnswerWith(
-                    ",\"failedTime\":\"" + FAILED_TIME + "\","
-                            + "\"reason\":\"" + SDG_TEXT_MARKER + "\""));
-
-            assertThat(answerAbout(PAYLOAD_FILE_ID))
-                    .contains(new DocumentStatus(null, null, FAILED_TIME, SDG_TEXT_MARKER));
-        }
-
-        /**
-         * The answer with no verdict in it, which is a real answer and not an absent one:
-         * systemdocgenerator has the payload and has not finished with it. Whether that is a
-         * timeout is the reconciler's judgement, because the grace period is the reconciler's.
-         */
-        @Test
-        @DisplayName("maps an answer with no verdict as an answer with no verdict")
-        void the_query_maps_an_answer_with_no_verdict() {
-            queryAnswering(200, queryAnswerWith(""));
-
-            assertThat(answerAbout(PAYLOAD_FILE_ID))
-                    .contains(new DocumentStatus(null, null, null, null));
-        }
-
-        @Test
-        @DisplayName("answers nothing about a payload systemdocgenerator has no record of")
-        void a_payload_systemdocgenerator_has_no_record_of_answers_nothing() {
-            queryAnswering(404, "");
-
-            assertThat(answerAbout(PAYLOAD_FILE_ID))
-                    .as("nothing to say is not the same as a render that failed")
-                    .isEmpty();
-        }
-
-        /**
-         * The four this service reads are exactly the four the vendored schema leaves optional, so a
-         * fifth optional field appearing upstream is a decision somebody has to make rather than a
-         * value silently dropped.
-         */
-        @Test
-        @DisplayName("reads the four optional fields the vendored query schema declares")
-        void the_four_optional_fields_are_the_ones_the_vendored_schema_declares() {
-            final JsonNode schema = vendoredSchema("systemdocgenerator.query.document.json");
-            final List<String> optional = new ArrayList<>(declaredProperties(schema));
-            optional.removeAll(requiredProperties(schema));
-
-            assertThat(optional).containsExactlyInAnyOrder(
-                    "documentFileServiceId", "generatedTime", "failedTime", "reason");
-        }
-
-        /**
-         * A query that could not be answered is not a generation that failed. The batch stays
-         * GENERATING and the reconciler decides what to do about a renderer that will not answer;
-         * what this client owes is the classification and the status, and no verdict of its own.
-         */
-        @Test
-        @DisplayName("a query that could not be answered is not a generation that failed")
-        void a_query_that_could_not_be_answered_is_not_a_generation_that_failed() {
-            queryAnswering(503, "");
-
-            assertThat(catchThrowable(() -> client().query(PAYLOAD_FILE_ID, CALLER)))
-                    .isInstanceOf(GenerationFailedException.class)
-                    .asInstanceOf(InstanceOfAssertFactories.type(GenerationFailedException.class))
-                    .satisfies(failure -> {
-                        assertThat(failure.classification())
-                                .isEqualTo(FailureClassification.TRANSIENT);
-                        assertThat(failure.responseCode()).isEqualTo(OptionalInt.of(503));
-                    });
-        }
-
-        /**
-         * systemdocgenerator's {@code reason} is another system's free text about a document whose
-         * every defendant is a child. It is carried to {@code sdg_reason}, where support can read
-         * it, and it is never written to a log index (constitution Principle VII).
-         */
-        @Test
-        @DisplayName("never writes systemdocgenerator's own words above DEBUG")
-        void systemdocgenerators_own_words_are_never_written_above_debug() {
-            queryAnswering(200, queryAnswerWith(
-                    ",\"failedTime\":\"" + FAILED_TIME + "\","
-                            + "\"reason\":\"" + SDG_TEXT_MARKER + "\""));
-
-            try (CapturedLog log = CapturedLog.capturing(SystemDocGeneratorClient.class)) {
-                assertThat(answerAbout(PAYLOAD_FILE_ID))
-                        .as("the reason reaches sdg_reason, which is where support reads it")
-                        .contains(new DocumentStatus(null, null, FAILED_TIME, SDG_TEXT_MARKER));
-
-                assertThat(log.events().stream()
-                        .filter(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
-                        .map(ILoggingEvent::getFormattedMessage)
-                        .toList())
-                        .as("a log line reaches an index the whole estate can read")
-                        .noneMatch(line -> line.contains(SDG_TEXT_MARKER));
-            }
-        }
     }
 }

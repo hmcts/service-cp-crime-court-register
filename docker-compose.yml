@@ -215,7 +215,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # systemdocgenerator (command + query), notificationnotify and the Azure App Configuration
+  # systemdocgenerator (the one command), notificationnotify and the Azure App Configuration
   # data-plane read, all on one port. The mappings and the flag switch are documented in
   # docker/wiremock/README.md. PINNED for the same reason the emulator is: a moved tag on a stub
   # server can change matching behaviour under a green build.

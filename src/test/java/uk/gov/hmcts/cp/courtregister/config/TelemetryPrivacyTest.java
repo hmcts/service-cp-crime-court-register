@@ -819,11 +819,15 @@ class TelemetryPrivacyTest {
         /** The instruments the drive moved, on the registry the service would export from. */
         private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
+        /** Whether the drive handed systemdocgenerator's own words to the store, which keeps them. */
+        private boolean carriedTheGeneratorsWords;
+
         @BeforeAll
         void driveTheTwoLegs() throws Exception {
             try (CapturedLog log = CapturedLog.everything();
                     GenerationLegs legs = GenerationLegs.overMarkedRecipients(meters)) {
                 legs.driveEverything();
+                carriedTheGeneratorsWords = legs.generatorWordsReachedTheStore();
                 written.addAll(log.events());
             }
         }
@@ -858,11 +862,11 @@ class TelemetryPrivacyTest {
          * writes.
          *
          * <p><strong>INFO and above, which is the scope Principle VII governs and not a
-         * convenience.</strong> {@code SystemDocGeneratorClient} writes the generator's own words
-         * into a reason slot at DEBUG deliberately - that is the diagnostic the case above keeps
-         * <em>below</em> INFO rather than removes - so a sweep over every level would forbid the
-         * one place those words are allowed to be. The estate's index is the thing being protected,
-         * and free text below INFO does not reach it.
+         * convenience.</strong> The rule this sweep enforces is about the estate's index, which is
+         * what INFO and above reaches; a slot below it is a diagnostic. Nothing writes the
+         * generator's own words into one any more - the retired query client's DEBUG line was the
+         * one place they were allowed, and it went with the query - but the scope is stated in
+         * terms of the rule rather than of what happens to exist.
          */
         @Test
         @DisplayName("writes a bounded code into every reason slot, on both legs")
@@ -893,9 +897,14 @@ class TelemetryPrivacyTest {
                             + "defendant is a child; it goes to sdg_reason, not to the index")
                     .noneMatch(line -> line.contains(PersonalDataMarkers.GENERATOR_REASON));
             assertThat(renderings())
-                    .as("and it is kept at DEBUG deliberately, so a sweep that found it nowhere at "
-                            + "all would be passing because the drive never carried one")
-                    .anyMatch(line -> line.contains(PersonalDataMarkers.GENERATOR_REASON));
+                    .as("and now the query is gone they are in no line at any level: the one place "
+                            + "they were allowed was the retired client's own DEBUG slot, and what "
+                            + "keeps them is sdg_reason, which is a column")
+                    .noneMatch(line -> line.contains(PersonalDataMarkers.GENERATOR_REASON));
+            assertThat(carriedTheGeneratorsWords)
+                    .as("a sweep that found them nowhere would be passing because the drive never "
+                            + "carried any, so the proof is taken where they land")
+                    .isTrue();
         }
 
         @Test
