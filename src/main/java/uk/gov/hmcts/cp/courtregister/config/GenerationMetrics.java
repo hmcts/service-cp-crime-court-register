@@ -444,6 +444,23 @@ public class GenerationMetrics {
     }
 
     /**
+     * Counts an outcome of ours that is missing the thing it is an outcome about.
+     *
+     * <p>The correlation is this service's own and the payload cross-checks, so there is nothing
+     * wrong with the announcement's addressing: what is absent is the document, or the instant the
+     * batch's ending would be stamped with. It is dropped like the other two absences and counted
+     * under a reason of its own, because the fault is systemdocgenerator publishing an incomplete
+     * event and not a correlation this service lost.
+     *
+     * <p>Without the series the batch's whole story would be a WARN and a silence: the next run
+     * gives the batch back under NOT_COMPLETED_BY_NEXT_RUN, and nothing anywhere would say that an
+     * outcome for it had arrived and could not be used.
+     */
+    public void incompleteOutcomeIgnored() {
+        counter(PUBLIC_EVENTS_IGNORED, REASON_TAG, INCOMPLETE_OUTCOME).increment();
+    }
+
+    /**
      * Counts a delivery whose body could not be parsed at all.
      *
      * <p>The four readings above are taken from an envelope this service read; this one is taken
