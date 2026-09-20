@@ -415,7 +415,7 @@ Postgres. No pass, no run, no Spring context.
       `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` green; `pmdTest` needed the
       fixture's row count taken out of the `if` as `ONE_BATCH`, in the constant block at the top of
       the class, for the reason T003's three fields were moved there.)
-- [ ] T010 [US1] `persistence/StaleReleaseConcurrencyIT` (new) — **SC-009**, the reason the operation
+- [x] T010 [US1] `persistence/StaleReleaseConcurrencyIT` (new) — **SC-009**, the reason the operation
       is fenced. `a_render_acceptance_racing_the_release_leaves_no_stranded_register` and
       `a_document_arrival_racing_the_release_leaves_no_stranded_register`, each run in **both**
       winner orders and repeated, asserting after every round that no `register_record` is stamped to
@@ -425,6 +425,29 @@ Postgres. No pass, no run, no Spring context.
       not**, and the task records that staged failure as its red, because the assertion being made is
       about the shape of the operation and a test that cannot fail against the wrong shape proves
       nothing. The staged variant is not committed.
+      (red: `./gradlew test --tests '*StaleReleaseConcurrencyIT*' -Dtest.noFailFast=true`, 2 tests,
+      **2 failures**, 0 errors, **7 failing assertions each** - six rounds' "the loser of a race is
+      refused by the state machine and by nothing else" ("Expecting actual throwable to be an
+      instance of: java.lang.IllegalStateException but was:
+      java.lang.UnsupportedOperationException"), plus the staged first round's ending: "expected:
+      Ending[status=FAILED, failureReason=NOT_COMPLETED_BY_NEXT_RUN] but was:
+      Ending[status=GENERATED, failureReason=null]".
+      **The staged read-then-mark variant is T009's, not this task's, and the task text is amended
+      to say so.** The variant cannot be staged before the statement it is a mutation of exists:
+      there is nothing to take apart at this point in the phase. The red recorded here is therefore
+      the seam's, captured as an assertion rather than as a thrown refusal - the contenders' results
+      are collected by `escaping(...)`, which is what the suite is about anyway, since the loser of
+      a race is refused and that refusal is the subject. The mutation that proves the suite can
+      fail against the wrong *shape* is run at T009 and recorded in its narrative, in the shape
+      review gate 1 used for `SchemaMigrationV6IT`.
+      Each round mints its own court centre and every cutoff stated is in the past, so no round can
+      reach a batch another suite sharing the container is holding; `settleTheNight` then runs the
+      rest of the night - a GENERATED batch is notified once, registers the pass gave back are
+      assembled, rendered and notified - so the "one notification aggregate per key and address"
+      invariant has rows to count rather than being an assertion about an empty table.
+      `checkstyleTest` and `pmdTest` green: `concurrently` holds its pool in a try-with-resources
+      (`CloseResource`) and `escaping` uses AssertJ's `catchThrowable` rather than a
+      `catch (RuntimeException)` (`AvoidCatchingGenericException`, `OnlyOneReturn`).)
 
 ### Implementation
 
