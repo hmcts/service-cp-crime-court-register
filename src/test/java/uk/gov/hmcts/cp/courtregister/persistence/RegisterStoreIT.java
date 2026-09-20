@@ -1944,6 +1944,66 @@ class RegisterStoreIT {
                     .containsExactly(outputIdOf(batched).orElse(null));
         }
 
+        /**
+         * The same arrangement under a reason that keeps the stamp, where the release does nothing.
+         *
+         * <p>The negative arm of the clause above, and it is a case rather than an inference: the
+         * {@code overtaken} clause is guarded by {@code :releaseRows} through {@code stamped}, so
+         * four of the seven reasons displace nothing at all. That guard is what makes the two
+         * halves of statement 9 one rule - a reason that keeps the stamp keeps the register too,
+         * and a register still in its batch has overtaken nobody's key. Superseding the earlier
+         * share here would withdraw the day's one assemblable register for a document that may yet
+         * arrive, and leave the court centre with neither.
+         *
+         * <p>{@code GENERATION_FAILED} because it is the reason a person is most likely to meet the
+         * pair under: systemdocgenerator answered about the render, the batch keeps its rows
+         * pending a decision somebody makes through the operations CLI, and the hearing was shared
+         * again in the meantime.
+         */
+        @Test
+        void a_failure_holding_the_stamp_should_leave_the_share_it_overtook_alone() {
+            final DistributionCommand batched = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_OVERTAKEN);
+
+            softly.assertThatCode(() -> {
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                // The hearing's earlier share arrives behind the register already in the batch, so
+                // the recorder writes it active: a batched register is not its to supersede.
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_OVERTAKEN), APPLICANT,
+                        RecordedFlagState.ON);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the batch is failed under the reason the event named, and systemdocgenerator's "
+                            + "own word for it is kept beside it")
+                    .contains(new BatchOutcome(FAILED, "GENERATION_FAILED", SDG_REASON));
+            softly.assertThat(supersessionOf(overtaken))
+                    .as("and the earlier share is not touched: nothing was given back, so nothing "
+                            + "overtook it, and superseding it would withdraw the day's one "
+                            + "assemblable register for a document that may yet arrive")
+                    .contains(new SupersessionPair(null, null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("both rows stay RECORDED, which is the arrangement the failure found: one "
+                            + "the batch is still holding and one the day is still to render")
+                    .containsExactly(RECORDED, RECORDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("the stamp stays on, because a reason that keeps it is a reason a document "
+                            + "may yet exist under, and re-rendering that day is a decision a "
+                            + "person makes through the operations CLI")
+                    .isEqualTo(1);
+            softly.assertThat(activeUnbatched())
+                    .as("so the register the next run picks up is the overtaken share alone, the "
+                            + "batched one being neither active nor unbatched")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(overtaken).orElse(null));
+        }
+
+
         @Test
         void a_failure_that_never_left_should_supersede_a_register_a_re_share_has_replaced() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
