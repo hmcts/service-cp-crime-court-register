@@ -21,10 +21,11 @@ import uk.gov.hmcts.cp.courtregister.domain.RenderRequest;
 /**
  * The renderer port, wired to systemdocgenerator's command API.
  *
- * <p>Two conversations over one {@code RestClient}, both carrying the caller identity as
- * {@code CJSCPPUID} and both using the shared {@code adapter/http/RetryPolicy}, so this client
- * cannot hold a different opinion about what is worth asking again than the two clients 001 already
- * built (defect fix C3).
+ * <p>One conversation over one {@code RestClient}, carrying the caller identity as
+ * {@code CJSCPPUID} and using the shared {@code adapter/http/RetryPolicy}, so this client cannot
+ * hold a different opinion about what is worth asking again than the two clients 001 already built
+ * (defect fix C3). The service asks systemdocgenerator for a render and learns what became of it
+ * from the public events; it asks it nothing else.
  *
  * <p>The command is {@code POST {SDG}/systemdocgenerator-command-api/command/api/rest/
  * systemdocgenerator/generate-document} with media type

@@ -34,10 +34,17 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
  * <p><strong>The single-table half of the batch's life.</strong> {@link JdbcRegisterStore} owns the
  * writes that have to move {@code processed_output} in the same statement - assembly and every
  * {@code mark} - because those are atomic or they are wrong. What is left is what the other
- * collaborators need and can do alone: the three in-flight reads the batch-age readings are taken
- * from, the read by the identity every outcome is attributed by, the operations CLI's own
+ * collaborators need and can do alone: the three in-flight reads the batch-age readings will be
+ * taken from, the read by the identity every outcome is attributed by, the operations CLI's own
  * assembly, and the whole-row compare-and-set a caller that read a batch and decided about it
  * writes it back through.
+ *
+ * <p><strong>Three of those reads have no caller at this commit.</strong> The retired reconciler
+ * took them on its way past, and {@code batch/BatchAgeSweep} (Phase 6) is what takes them next:
+ * until it lands, {@code courtregister_oldest_generating_age}, {@code _pending_age} and
+ * {@code _generated_age} are registered and unrefreshed. They are kept here rather than deleted
+ * with their old caller because the readings are what FR-011 asks for, and a gauge that appeared
+ * only after the sweep landed would be a gauge nobody could alert on in between.
  *
  * <p><strong>A batch is read by its identity and by nothing else.</strong> There is no read by the
  * payload a batch was rendered from, because there is no caller for one: the sink finds a batch by

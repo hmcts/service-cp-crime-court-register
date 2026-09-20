@@ -410,8 +410,8 @@ courtregister:
 
   endpoints:
     # The internal mesh hosts of the two downstreams. HOSTS ONLY: each client appends its own
-    # contract path (systemdocgenerator's command generate-document and query document/{id};
-    # notificationnotify's send-email-notification), so a path written here would be appended to.
+    # contract path (systemdocgenerator's one command, generate-document; notificationnotify's
+    # send-email-notification), so a path written here would be appended to.
     # Empty by default rather than pointed at localhost: an endpoint this service invents is an
     # endpoint a deployment can forget to set and still start. With generation enabled, startup
     # refuses without them.

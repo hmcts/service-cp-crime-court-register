@@ -149,9 +149,9 @@ class DocumentEventListenerTest {
      * The vendored contracts, with their provenance, read from the file this repository holds them
      * in.
      *
-     * <p>The same directory {@code SystemDocGeneratorClientTest} reads the command and query schemas
-     * from, and for the same reason: the vendored copy is the thing that has to be right, so a
-     * re-vendoring that changes either event shows up here rather than at 18:00.
+     * <p>The same directory {@code SystemDocGeneratorClientTest} reads the command schema from, and
+     * for the same reason: the vendored copy is the thing that has to be right, so a re-vendoring
+     * that changes either event shows up here rather than at 18:00.
      */
     private static final Path VENDORED = Path.of(
             "specs", "002-consolidate-progression-leg", "contracts", "systemdocgenerator");

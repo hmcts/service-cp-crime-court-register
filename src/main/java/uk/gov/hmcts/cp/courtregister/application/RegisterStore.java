@@ -292,11 +292,14 @@ public interface RegisterStore {
     /**
      * Fails the batch under a bounded reason, leaving its rows where the reason says they belong.
      *
-     * <p>{@code completedBy} is nullable here and only here: all but one of the reasons are this
-     * service's own verdict about a render it could not ask for, could not get an answer about, or
-     * stopped waiting for, and naming a completion mechanism for those would credit a decision
-     * nobody outside this service made. The one that is somebody's answer - a
-     * {@code generation-failed} event - carries EVENT.
+     * <p>{@code completedBy} is nullable here and only here: most of the reasons are this service's
+     * own verdict about a render it could not ask for, could not get an answer about, or stopped
+     * waiting for, and naming a completion mechanism for those would credit a decision nobody
+     * outside this service made. The reasons that are somebody's answer - the ones
+     * {@link uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason#isGeneratorAttributed()} names
+     * - carry the mechanism that brought it, which for the one this service still writes, a
+     * {@code generation-failed} event, is EVENT. The rule is asked of the enum rather than restated
+     * here, so this port cannot drift from what the store enforces.
      *
      * <p>Where the reason releases the rows, a row the hearing has since been re-shared for is
      * superseded against the re-share as its stamp is cleared, exactly as {@link #releaseFailed}
