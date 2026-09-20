@@ -722,7 +722,7 @@ not there to switch them off.
 
 ---
 
-## Phase 10: Remove the CLI (6 tasks)
+## Phase 10: Remove the CLI (7 tasks)
 
 **Purpose**: the deletion, last, after every endpoint that replaces a command has a passing test
 (FR-051). At no commit is there neither surface. The deletion tasks carry the mechanical exemption:
@@ -775,6 +775,22 @@ a deletion has no red run, and its evidence is the green build with the replaced
       grep for `batch/cli`, `CliModeConfig`, `courtregister.cli`, `startup.sh <command>` and the six
       command names: nothing outside this spec, the constitution's history and the earlier
       increments' own records (SC-007). **README's generation section is 004's — do not touch it.**
+- [ ] **T061** [US5] `README.md` — an **Operations API** section (design owner, 2026-09-20), placed
+      where the CLI paragraphs were, that a support engineer can work from without the spec: one
+      table row per endpoint with method, path, request body fields, the 2xx answer and every
+      refusal code it can return (`FLAG_OFF`, `FLAG_UNREADABLE`, `OVERRIDE_REQUIRES_BATCH`,
+      `SCHEDULE_RUNNING`, `EMAIL_OUTPUT_DISABLED`, …) with its HTTP status; the caller group
+      ("Second Line Support") and how identity reaches the pod (`CJSCPPUID` injected by the gateway,
+      never trusted from a client); what is audited and what never appears in a response (Principle
+      VII); the flag rule per endpoint (generate's single-batch override, supersede only while OFF
+      with `dryRun`, the max age); a `curl` example per endpoint against the local compose stack;
+      and the five deployment gates with the sentence that the service has no operational surface
+      until they land. `CLAUDE.md` — the Message-Contract Rule names the operations API and
+      `src/main/resources/openapi.yaml` as the third owned contract, the "exposes NO REST API"
+      sentences are gone, and the Deployment section names `AUTHZ_HTTP_ENABLED` /
+      `HTTP_AUDIT_ENABLED` (default true, switched off only by local and test configuration).
+      Markdown only; exempt from the build loop but reviewed by the gate for accuracy against the
+      controllers and `openapi.yaml`.
 
 ---
 
