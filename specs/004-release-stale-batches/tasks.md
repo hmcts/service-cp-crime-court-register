@@ -639,7 +639,11 @@ and `RegisterStoreIT$StaleRelease`'s two — with `checkstyleMain` and `checksty
 them loosened. The coverage report was regenerated in that same run and reads **LINE 6572/6782 =
 0.9690 and BRANCH 1994/2218 = 0.8990** against the unchanged gate of LINE 0.88 / BRANCH 0.85; it
 contains `failAndReleaseStale`, which is how a reader can tell it is this tree's report and not an
-earlier increment's.
+earlier increment's. That run was made on the tree this gate's five commits produce, before this
+record was written into it; the same command was then made again against the tree **as committed**
+and answered identically — BUILD SUCCESSFUL, exit 0, 10m 19s, the same 3650 over 579 and the same
+two counters — and it is that second run's XMLs and report that are left in `build/` for the next
+gate to read.
 
 ---
 
