@@ -39,8 +39,10 @@ learning an outcome that no longer exists. `BatchFailureReason.GENERATION_TIMED_
 Two small things replace what the removal would otherwise take with it:
 
 - **`batch/StaleBatchReleaser`** — the pass. Two cutoffs from the clock and the settings, one call to
-  `failAndReleaseStale`, one line per released batch, two counters, two numbers back to the run. No
-  schedule, no lock, no renderer, no HTTP client.
+  `failAndReleaseStale`, one line per released batch, **three** counters and three numbers back to
+  the run — the two released ones the line carries, and the batches the store could not release,
+  which FR-003a asks be counted and which the design rules ask of any path that leaves something
+  undone. No schedule, no lock, no renderer, no HTTP client.
 - **`batch/BatchAgeSweep`** — the three readings the retired timer took on its way past
   (`courtregister_oldest_generating_age`, `_pending_age`, `_generated_age`) plus the "this batch holds
   a document nobody was told about" WARN, on its own lockless fixed delay in every non-command JVM
@@ -67,7 +69,8 @@ Three further consequences the reviews surfaced, each now a requirement:
 
 The run report's `reconciled` becomes **two** numbers, `released_batches` and `released_registers`
 **[review]**, and `courtregister_generation_reconciled_total` is retired in favour of
-`courtregister_generation_released_batches_total` and `_released_registers_total`.
+`courtregister_generation_released_batches_total` and `_released_registers_total`, beside
+`courtregister_generation_contended_total` for the batches a run could not give back.
 `courtregister.generation.grace-period` becomes `courtregister.generation.stale-after` (default `10m`
 → `30m`), and `courtregister.report.batch-generated-within` stops resolving from it and takes its own
 `@DefaultValue("10m")`.
@@ -299,7 +302,7 @@ docker/wiremock/README.md              loses the query line
 
 | Area | Suite | Kind | What it holds |
 |---|---|---|---|
-| The pass | `batch/StaleBatchReleaserTest` (new) | U | FR-001/002/003/017/020: both cutoffs computed from the clock and the settings; the manual cutoff is the longer of the two; the two numbers returned; one line per batch naming it by id; nothing else read. **P2's re-pointed pinning test lives here.** |
+| The pass | `batch/StaleBatchReleaserTest` (new) | U | FR-001/002/003/017/020: both cutoffs computed from the clock and the settings; the manual cutoff is the longer of the two, asserted **each way round** so neither ordering of the two settings is assumed; the two numbers returned; one line per batch naming it by id; nothing else read. **P2's re-pointed pinning test lives here.** **Phase 3** adds two more: a batch the store reports on `contended()` is counted on `courtregister_generation_contended_total`, said once at WARN by identity, and the pass answers normally (FR-003a); and a store that went away leaves the pass as the port's own `StoreUnavailableException`, which is the per-method outage proof gate 4 deferred here from `RegisterStoreIT`. |
 | The statement | `persistence/RegisterStoreIT` (extended) | IT | The predicate: PENDING by `assembled_at`, GENERATING by `requested_at`, GENERATED never, `system_generated = false` on the longer cutoff, PENDING with a null `payload_file_id` included (FR-020); the mark and the release in one transaction; supersession against a later re-share and against the share the register coming back overtook; the failure names no completion mechanism — the statement writes `completed_by = NULL` and `register_batch_completed_by_shape_chk` is what refuses the contrary, pinned by `the_failure_names_no_completion_mechanism`; a refusal on a rule that is no key at all reaches the caller as the domain's own class [gate 5]; a batch that no longer matches yields zero rows and no error. |
 | Atomicity | `persistence/StaleReleaseConcurrencyIT` (new) | IT | **SC-009 [review]**: the pass raced against `markRequested` and against `markGenerated`, both winner orders, repeated; and against a re-share of one of the batch's own hearings, including one committed **inside the statement's own window**, where the snapshot cannot see it — no register ever stamped to a terminal batch, at most one live batch per key (a released day has none until it is re-assembled), exactly one notification aggregate, and nothing escaping the pass. **Gate 3**: and a batch whose every attempt is refused for the key is reported on `contended()` and left untouched while another court centre's stale batch is failed and released anyway. **Gate 4**: that refusal is now staged by a trigger scoped to the round's hearing, which takes the day's active register back inside every attempt — the refusal a re-share committing inside each window produces — because the out-of-order share it used to be staged with is one the release now decides, and the release supersedes it. **Gate 5**: the batch that must be released anyway stands on the **day after** the contended one, because the pass walks its batches by register date and then by batch id — so "the pass goes on to the batches after a contended one" is asserted on every run rather than on the runs where two random identities happen to fall the right way. |
 | The run | `batch/RegisterGenerationJobTest` (extended) | U | The `InOrder` gate → releaser → `activeUnbatched`; a skipped run releases nothing (FR-005/FR-018); `released_batches=` and `released_registers=` on the line, zero when none, `reconciled=` nowhere; a releaser that throws still writes a line and rethrows; **a batch that stops being stale does not stop the run** (FR-003a). |
