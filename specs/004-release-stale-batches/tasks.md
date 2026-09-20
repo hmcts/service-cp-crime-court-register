@@ -1655,6 +1655,36 @@ the run stopped calling `reconcile()` at T016 — which is the gap FR-011 names 
 a register stranded in a dead batch is a court centre that never gets its document, so the trade is
 the right way round and it is named here so Phase 6 does not have to rediscover it.
 
+**Gate round 1 (2026-09-20)** — what the three reviewers sent back and what was done:
+
+* **The reconciler's timer (MEDIUM).** Removed, as above. Two cases in
+  `GenerationReconcilerTest.ItsOwnSchedule` that asserted the schedule now assert its absence, and
+  `SchedulingConfig`'s prose about two surfaces sharing `GENERATION_SCHEDULER` follows.
+* **`spec.md` FR-009 (MEDIUM).** Amended to name all three run-line keys, to say that none of them
+  is a third sum and why, and to tie `contended=` to `courtregister_generation_contended_total`,
+  citing the coordinator's decision of 2026-09-20 as `data-model.md` does. The ambiguity-scan answer
+  it belongs to carries the same note. The decision had been recorded in `plan.md` and
+  `data-model.md` only, so the document the increment treats as outliving the decision disagreed
+  with both the code and the plan.
+* **The retired series (MEDIUM).** `GenerationMetricsTest.Surface`
+  `no_series_should_be_named_for_the_retired_reconciler`, recorded under T018 above and run
+  subtractively.
+* **The incomplete-context branch (LOW).** `GenerationWiringContextTest.AnIncompleteContext`, two
+  `[A]` cases driving `SchedulingConfig.registerGenerationJob` over providers: a context holding
+  everything but the pass contributes no run and names `releaser=false` without accusing the four
+  that were present, and the WARN line names no reconciler. The branch was reachable from no test,
+  there being no set of properties that produces it.
+* **Both skipped nights, and the contended one (LOW).**
+  `a_skipped_run_does_not_release_anything` is parameterised over `FLAG_OFF` and `FLAG_UNREADABLE`,
+  so FR-018's fail-closed night is asserted rather than inferred from the shared `Skipped` branch;
+  and `a_batch_the_pass_could_not_release_should_not_stop_the_run` gives FR-003a the case the plan's
+  matrix claimed for this suite. Both `[A]`.
+* **Two ragged rewraps (LOW).** `RunReport`'s `Settled` javadoc and the test's whole-line constant
+  re-flowed at the 100 columns the rest of both files wrap at.
+* **`plan.md`'s inventory (LOW).** The releaser bean moved to the `SchedulingConfig` line with
+  T020's reasoning, the `GenerationConfig` line reworded, the deletion line noting that the timer
+  went early, and the run suite's matrix row naming the FR-003a case and the two skip reasons.
+
 ---
 
 ## Phase 5: User Story 4 — the removal, then the vocabulary retirement
