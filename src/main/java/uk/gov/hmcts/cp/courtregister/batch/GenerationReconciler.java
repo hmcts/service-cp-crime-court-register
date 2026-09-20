@@ -11,12 +11,10 @@ import java.util.function.Function;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.scheduling.annotation.Scheduled;
 import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
 import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
-import uk.gov.hmcts.cp.courtregister.config.SchedulingConfig;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
@@ -135,16 +133,6 @@ public class GenerationReconciler {
      * tens of batches costs and less than the ten-minute grace period the schedule below runs at.
      */
     public static final String LOCK_AT_MOST_FOR = "PT5M";
-
-    /**
-     * The setting the schedule is written as, so the cadence and the grace period cannot drift.
-     *
-     * <p>An annotation attribute has to be a constant, and what this class is asked at is exactly
-     * how long a batch is given before it counts as overdue: reading the same key the grace period
-     * is configured under means a deployment that lengthens the grace lengthens the interval with
-     * it, rather than leaving a batch overdue for nine minutes out of every ten.
-     */
-    private static final String GRACE_PERIOD = "${courtregister.generation.stale-after}";
 
     /**
      * What a batch systemdocgenerator answered about without a verdict is ended as.
@@ -295,22 +283,23 @@ public class GenerationReconciler {
     }
 
     /**
-     * The schedule's own pass, every grace period, under a lock of its own.
+     * The pass with its answer dropped, under a correlation of its own - and nothing fires it.
+     *
+     * <p><strong>The timer is gone, and that is the point of the increment.</strong> This pass and
+     * the nightly run's first act decided the same thing about the same overdue batches from the
+     * same cutoff, and a timer that fires every staleness interval reaches them before a run that
+     * fires once a night. It ends them {@code GENERATION_TIMED_OUT}, which is not one of the
+     * reasons that give a batch's registers back, so a batch it got to first left its registers
+     * stamped to a dead batch and its court centre waiting another day - the outcome the run's
+     * pass exists to end. FR-007 leaves the generation half exactly one schedule, the run's, and
+     * this method is now called by nothing until T022 deletes the class.
      *
      * <p><strong>{@code void}, and that is ShedLock's rule rather than a preference.</strong> Its
      * interceptor refuses to lock a method returning a primitive - {@code
-     * LockingNotSupportedException}, raised on every call through the proxy, the run's own
-     * included - so the annotations cannot live on {@link #reconcile()}. A schedule has nobody to
-     * return a count to in any case: the count is for the run report, and the run asks for it
-     * directly.
-     *
-     * <p>The cadence is the grace period, written as the same property key so a deployment that
-     * lengthens the one lengthens the other; the first pass waits one interval, because a pod that
-     * has only just started has a database that may not be migrated yet and a batch that became
-     * overdue during the restart is overdue for a while longer.
+     * LockingNotSupportedException}, raised on every call through the proxy - so the lock cannot
+     * live on {@link #reconcile()}. The lock is kept while the class is, because it is a name the
+     * morning report's lock is still asserted to differ from.
      */
-    @Scheduled(initialDelayString = GRACE_PERIOD, fixedDelayString = GRACE_PERIOD,
-            scheduler = SchedulingConfig.GENERATION_SCHEDULER)
     @SchedulerLock(name = LOCK_NAME, lockAtMostFor = LOCK_AT_MOST_FOR)
     public void reconcileScheduled() {
         RunCorrelation.under(this::reconcileUnderItsOwnCorrelation);

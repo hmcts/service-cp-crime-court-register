@@ -1568,10 +1568,11 @@ numbers.
       generation-enabled condition but **not** `CliModeConfig`'s, so a `staleBatchReleaser`
       declared there would be held by a command JVM and T019's second case could not be true;
       `SchedulingConfig` carries both, which is exactly the pair of conditions the pass answers to.
-      And this phase's own close says the reconciler is left "dead code with a timer still on it,
-      which the next phase removes" — true only while its bean exists, so `generationReconciler`
-      is untouched here and T022 deletes it with the class. The job bean no longer asks for it: the
-      completeness check names the releaser in its place, and so does its WARN line.
+      `generationReconciler` is untouched here and T022 deletes it with the class. The job bean no
+      longer asks for it: the completeness check names the releaser in its place, and so does its
+      WARN line. **Its timer went in gate round 1** (see the phase close): the bean is still
+      contributed, but nothing fires it, so the run's pass is the only thing that decides a stale
+      batch.
       **Green** (`flock -w 7200 … ./gradlew test --tests '*GenerationWiringContextTest*' --tests
       '*CliModeConfigTest*' -Dtest.noFailFast=true`): BUILD SUCCESSFUL, **25 tests, 0 failures, 0
       errors** over the three contexts — the generating pod, the command JVM and
@@ -1579,7 +1580,31 @@ numbers.
       on the command one.
 
 **Phase close**: `flock … ./gradlew build` green; review gate. The new behaviour is live from here;
-the reconciler is dead code with a timer still on it, which the next phase removes.
+the reconciler is dead code, its bean still contributed and its timer removed, which the next phase
+deletes outright.
+
+**The wording this replaces was wrong, and gate round 1 caught it.** The close first said the
+reconciler was left "dead code with a timer still on it, which the next phase removes", as though a
+timer on dead code cost nothing. It was not dead while the timer was on it: `@Scheduled` fires every
+`stale-after` interval in every generating pod, reads the same overdue batches from the same cutoff
+as the run's pass, and therefore reached almost every stale batch first — a run fires once a night
+and the sweep fires all night. What it did to them is the defect this increment exists to end:
+`GENERATION_TIMED_OUT` is not one of `JdbcRegisterStore.RELEASING_REASONS`, so the batch was FAILED
+with its registers still stamped to it and the court centre waited another day. So the timer is
+removed here rather than at T022, which is the smallest change that makes the pass the only thing
+that fails a stale batch and leaves Phase 4 safe to merge on its own. FR-007 asks for exactly one
+schedule on the generation half; from here there is exactly one.
+
+**Red** (`flock -w 7200 … ./gradlew test --tests '*GenerationReconcilerTest*'
+-Dtest.noFailFast=true`): **45 tests completed, 2 failed**, both assertions and neither a compile
+error — `the_reconciler_should_carry_no_timer_of_its_own` ("expected: null but was:
+@org.springframework.scheduling.annotation.Scheduled(scheduler=\"registerGenerationScheduler\",
+… fixedDelayString=\"${courtregister.generation.stale-after}\")") and
+`no_method_on_the_reconciler_should_be_scheduled` ("Expecting empty but was:
+[\"reconcileScheduled\"]"). **Green** (the same command plus `*CliModeConfigTest*`,
+`*ReportSchedulingConfigTest*` and `*GenerationWiringContextTest*`): BUILD SUCCESSFUL, 0 failures —
+the ordinary pod still schedules the run, the command JVM still schedules nothing, and the
+reconciler bean is still on the generating context and still absent from the command one.
 
 **Phase 4 closed (2026-09-20).** `flock -w 7200 … ./gradlew jacocoTestReport build
 -Dtest.noFailFast=true` → **BUILD SUCCESSFUL, exit 0, 10m 25s, 3689 tests over 583 suites, 0
@@ -1606,9 +1631,16 @@ Two things the range met on the way that are worth the next phase knowing:
 
 **For T022**: `GenerationReconciler.settle` still counts its completions into a local that only its
 own answer reads, under a comment naming this; `GenerationConfig.generationReconciler` is still a
-bean and still carries `@Scheduled`, which is what keeps the timer on until the class goes; and
+bean, though nothing fires it any more — its `@Scheduled`, its `GRACE_PERIOD` constant and the two
+imports they needed went in gate round 1, and `@SchedulerLock` is kept only because
+`ExceptionReportJobTest` still asserts the report's lock differs from `LOCK_NAME`; and
 `GenerationReconcilerTest` keeps four cases renamed to what they now claim, the counter assertions
-having gone with the series.
+having gone with the series. **Its two gauges are now set by nothing between runs** —
+`courtregister_oldest_generating_age` and `_oldest_generated_age` were refreshed by the timer and
+the run stopped calling `reconcile()` at T016 — which is the gap FR-011 names and Phase 6's
+`BatchAgeSweep` (T024-T026) closes. A gauge that stands still is a reading nobody is owed tonight;
+a register stranded in a dead batch is a court centre that never gets its document, so the trade is
+the right way round and it is named here so Phase 6 does not have to rediscover it.
 
 ---
 

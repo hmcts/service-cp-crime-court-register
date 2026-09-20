@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -41,7 +42,6 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
 import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
-import uk.gov.hmcts.cp.courtregister.config.SchedulingConfig;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
@@ -770,83 +770,73 @@ class GenerationReconcilerTest {
     }
 
     /**
-     * When it runs, and why that cannot be "whenever the flag let a run happen".
+     * When it runs, now that the run's own first act is what fails a stale batch.
      *
-     * <p>Reconciliation is about batches this service already owns. Whether it may generate tonight
-     * is a different question with a different answer, and hanging the safety net off the flag gate
-     * costs a night in both directions: a batch requested at 18:00 is first asked about at 18:01,
-     * inside its own grace period, and then not again until the next evening - so a lost public
-     * event costs about twenty-four hours rather than the ten minutes the grace period configures;
-     * and on a night the flag reads OFF or unreadable the run touches nothing at all, so a batch
-     * left GENERATING by an earlier ON night is never asked about again.
+     * <p><strong>It does not run on a timer any more.</strong> The grace-period sweep and the
+     * 18:00 pass decided the same thing about the same batches from the same cutoff, and the sweep
+     * won the race in a deployed pod almost every time - it fires every {@code stale-after}
+     * interval and the run fires once a night. The batch it failed was failed under
+     * {@code GENERATION_TIMED_OUT}, which is not one of the reasons that release a batch's
+     * registers, so the registers stayed stamped to a dead batch and the court centre waited
+     * another day: the stranded-register outcome this increment exists to end, arrived at by the
+     * mechanism it is replacing. FR-007 says the generation half carries exactly one schedule, and
+     * from here it does.
      *
-     * <p>Hence a schedule of its own, on the same single thread the run uses, with a lock of its
-     * own: two replicas asking systemdocgenerator about one batch would apply one outcome twice,
-     * and the second application is what {@code BatchStatus} refuses rather than absorbs.
-     *
-     * <p>The gauge belongs here for the same reason. {@code courtregister_oldest_generating_age} is
-     * declared by T010 and set by nothing, so the one reading that says "a batch has been waiting
-     * for its document since before anybody was worried" has never moved off zero.
+     * <p>What is left is a class nothing fires, kept compiling until T022 deletes it. Its lock name
+     * stays because the report's lock is still asserted to differ from it, and its entry points
+     * still do what they did when something called them.
      */
     @Nested
     @DisplayName("when it runs, and what it leaves on the dashboard")
     class ItsOwnSchedule {
 
+        /**
+         * No timer on the class, and that is the whole of it.
+         *
+         * <p>Asserted on the method rather than on a context, because a bean that is still
+         * contributed is still post-processed: while the annotation is there the sweep fires every
+         * {@code stale-after} interval in any generating pod, reaches the same overdue batches from
+         * the same cutoff as the run's pass, and gets to them first on every night but the one
+         * where 18:00 happens to fall inside an interval. What it does to them is what the pass
+         * exists to stop: {@code GENERATION_TIMED_OUT} is not a releasing reason, so the batch is
+         * FAILED and its registers are still stamped to it.
+         */
         @Test
-        void reconciliation_is_scheduled_independently_of_the_flag_gate()
-                throws NoSuchMethodException {
+        void the_reconciler_should_carry_no_timer_of_its_own() throws NoSuchMethodException {
             final Method scheduled =
                     GenerationReconciler.class.getDeclaredMethod("reconcileScheduled");
-            final Scheduled schedule = scheduled.getAnnotation(Scheduled.class);
-            final SchedulerLock lock = scheduled.getAnnotation(SchedulerLock.class);
 
             softly.assertThat(scheduled.getReturnType())
                     .as("void, and not the count: ShedLock's interceptor refuses to lock a method "
                             + "returning a primitive - LockingNotSupportedException, raised on "
-                            + "every call including the run's own - and a schedule has nobody to "
-                            + "return a count to anyway")
+                            + "every call including the run's own")
                     .isEqualTo(void.class);
-            softly.assertThat(schedule)
-                    .as("the run calls this too, so its report can name what it fetched - but a "
-                            + "safety net that only runs when the flag said the service may "
-                            + "generate is no net on the nights the flag says it may not")
+            softly.assertThat(scheduled.getAnnotation(Scheduled.class))
+                    .as("the run's first act decides a stale batch now, and two mechanisms "
+                            + "deciding one batch from one cutoff is a race the one that releases "
+                            + "nothing wins (FR-007: exactly one schedule on the generation half)")
+                    .isNull();
+            softly.assertThat(scheduled.getAnnotation(SchedulerLock.class))
+                    .as("the lock is kept while the class is, so the morning report's lock is "
+                            + "still asserted against a name that exists")
                     .isNotNull();
-            softly.assertThat(schedule == null ? null : schedule.fixedDelayString())
-                    .as("a cadence of the staleness threshold, so a batch is asked about within "
-                            + "one threshold of becoming overdue instead of within one day")
-                    .isEqualTo("${courtregister.generation.stale-after}");
-            softly.assertThat(lock)
-                    .as("two replicas asking systemdocgenerator about one batch would apply one "
-                            + "outcome twice, and the second application is refused rather than "
-                            + "absorbed")
-                    .isNotNull();
-            softly.assertThat(lock == null ? null : lock.name())
-                    .as("its own lock and not the run's: a reconciliation waiting on the lock a "
-                            + "sixty-minute run holds is a reconciliation that never happens")
-                    .isNotBlank()
-                    .isNotEqualTo(RegisterGenerationJob.LOCK_NAME);
         }
 
         /**
-         * And it names the scheduler it shares with the run, rather than relying on there being
-         * only one.
+         * And no other entry point grew one in its place.
          *
-         * <p>The reconciler has always run on the generation scheduler and goes on doing so; what
-         * changes is that the routing is stated. With three {@code TaskScheduler} beans on the
-         * context and no attribute, Spring resolves one of them for every {@code @Scheduled}
-         * method in the service - so the grace-period sweep could end up on the report's thread
-         * or the sweep's, and the separation SC-008 rests on would hold by accident.
+         * <p>A timer moved from one method to another is the same timer. The claim is about the
+         * class: nothing on it is fired by the scheduler any more.
          */
         @Test
-        void the_sweep_names_the_generation_scheduler() throws NoSuchMethodException {
-            final Scheduled schedule =
-                    GenerationReconciler.class.getDeclaredMethod("reconcileScheduled")
-                            .getAnnotation(Scheduled.class);
-
-            softly.assertThat(schedule == null ? null : schedule.scheduler())
-                    .as("the same bean the run names: the two generation surfaces share one "
-                            + "scheduler exactly as they do today, and no bean moves")
-                    .isEqualTo(SchedulingConfig.GENERATION_SCHEDULER);
+        void no_method_on_the_reconciler_should_be_scheduled() {
+            softly.assertThat(Arrays.stream(GenerationReconciler.class.getDeclaredMethods())
+                            .filter(method -> method.getAnnotation(Scheduled.class) != null)
+                            .map(Method::getName)
+                            .toList())
+                    .as("the generation half carries exactly one schedule, and it is the nightly "
+                            + "run's")
+                    .isEmpty();
         }
 
         /**
