@@ -438,6 +438,15 @@ public interface RegisterStore {
      * failure and the release of <em>that</em> batch still one act, which is what the requirement
      * was ever about.
      *
+     * <p><strong>The key keeps one active register, in both directions.</strong> A hearing can hold
+     * more than one register for a day, and the release decides between them the same way the
+     * recorder does: the later share is the one the day is still to render. A register the estate
+     * replaced while the batch was in flight supersedes the one being given back; a share the
+     * batched register <em>overtook</em> - a delivery that arrived behind the register it belongs in
+     * front of, and was recorded active because a batched register is not the recorder's to
+     * supersede - is superseded by it. Neither is handed back beside the other, and a batch whose
+     * key holds such a share is released like any other rather than contended for ever.
+     *
      * <p><strong>What a re-share can do, and what the caller is told about it.</strong> One thing a
      * staleness predicate cannot fence is a register re-shared while the operation is running: the
      * replacement is not in the snapshot the operation reads, so the release would give the

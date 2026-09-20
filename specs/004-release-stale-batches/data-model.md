@@ -109,7 +109,8 @@ failure this increment exists to end.
 is atomic in the wrong unit: a refusal met on one court centre's registers rolls back every other
 court centre's release with it, so one hearing shared at the wrong moment costs the whole country its
 documents. And exhaustion is **reported, never thrown**: a batch whose every attempt met the same
-refusal — a re-share, or a share delivered out of order, holding the day's active-register key — is
+refusal — a re-share that commits inside each attempt's own window, and so holds the day's
+active-register key against every snapshot the operation reads — is
 left exactly as it was found, named on `StaleReleaseOutcome.contended()`, counted by the pass, and
 the operation goes on to the batches after it and answers normally. No single batch's outcome may end
 the run (FR-003a). A contended batch is stale still and untouched, so the next run reaches it again,
@@ -141,6 +142,28 @@ The write, in the same statement's scope: `status = 'FAILED'`,
 and supersession branch of `MARK_FAILED` (the one `:releaseRows` selects) applied to the matched
 batch's registers. `NOT_COMPLETED_BY_NEXT_RUN` joins `JdbcRegisterStore.RELEASING_REASONS`, so a
 per-batch `markFailed` — which the operations surface may still make — releases on it too.
+
+**The key keeps one active register, in both directions [gate 4].** The release reads the total
+order `(register_time, created_at, output_id)` over a key's registers the same way the recorder
+does, and both ways round:
+
+| What the key also holds | What the release does with it |
+|---|---|
+| a **later** active register — the estate re-shared the hearing while the batch was in flight | the register being given back is superseded against it, and is not counted among the registers the day is still to render |
+| an **earlier** active, unbatched, RECORDED register — a share the batched register overtook, recorded active because a batched register is not the recorder's to supersede | it is superseded against the register being given back, in the same statement (`superseded_by` = the register coming back), which then goes back active |
+
+The second row is the one gate 4 added, and it is a correctness requirement rather than a tidiness
+one: the earlier row holds `idx_output_active_register_key` for the day, no fresh snapshot removes a
+row committed before the statement began, and the recorder will not supersede a batched register on
+its behalf — so without it that batch is reported **contended by every run for ever** and its court
+centre day is never rendered. It applies only where the given-back register has no successor of its
+own; a register that is itself being superseded takes no key and displaces nothing.
+
+The supersession of the earlier row is **chained ahead of** the release in the statement, exactly as
+`RECORD_REGISTER` chains `replaced` ahead of its insert and for the same index: the row being
+superseded holds the key until its update takes it out of the index, so a release issued first
+collides with the row it is about to supersede. Postgres does not otherwise order the clauses of one
+statement, so the release's source counts the supersession's rows.
 
 ## Vocabulary
 

@@ -357,6 +357,15 @@ with zero and with a negative value and confirm each refusal names the setting.
   in-flight batch.
 - **A stale batch whose registers a later re-share has superseded.** The existing supersession order
   decides, and it already covers exactly this case for the two reasons that release today.
+- **A stale batch whose registers a re-share has been overtaken by** — a share of the hearing
+  delivered *behind* the register the batch already holds, which a broker that redelivers produces.
+  It is recorded active and unbatched, because a batched register is not the recorder's to supersede,
+  so it holds the day's active-register key against the release. **The same supersession order
+  decides it, read the other way [gate 4]**: the register coming back is the later of the two, so the
+  release supersedes the overtaken share against it in the same statement and the key keeps exactly
+  one active row. Without that the batch is refused by the key on every attempt and reported
+  contended by every run for ever, because no fresh snapshot removes a row committed before the
+  statement began and the recorder will not supersede a batched register on its behalf.
 - **Two pods.** Only one runs the nightly run; the pass is inside it and inherits its lock. The
   in-flight age readings are per pod, as every gauge in this service is, and an alert aggregates them
   with `max()`.
