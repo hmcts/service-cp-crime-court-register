@@ -603,7 +603,8 @@ command printed.
 - **FR-045**: `authz.http.enabled` and `audit.http.enabled` are **ordinary configuration an
   operator may set**, and both MUST default to `true` in `application.yaml`
   (`${AUTHZ_HTTP_ENABLED:true}` and `${HTTP_AUDIT_ENABLED:true}`), so that a deployment which says
-  nothing is authorised and audited. Switching either off is a deliberate act recorded in that
+  nothing is authorised, and is audited wherever the audit transport is on beside them (the
+  paragraph below). Switching either off is a deliberate act recorded in that
   environment's own configuration: the local loop does it in the compose environment and the `test`
   profile does it in `application-test.yaml`, each with the reason written beside it.
   **Condition (b) needs the audit transport with it.** `audit.http.enabled` switches on a filter
