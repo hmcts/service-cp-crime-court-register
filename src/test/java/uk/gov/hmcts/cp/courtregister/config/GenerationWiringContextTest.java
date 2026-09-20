@@ -131,6 +131,9 @@ class GenerationWiringContextTest {
     /** The same package, as a binary name prefix. */
     private static final String BATCH_PACKAGE = "uk.gov.hmcts.cp.courtregister.batch.";
 
+    /** The one sub-package the sweep leaves out: a command holds no scheduler and takes no lock. */
+    private static final Path CLI_SOURCES = BATCH_SOURCES.resolve("cli");
+
     /** The extension a source of it carries, named so the sweep carries no literal. */
     private static final String JAVA = ".java";
 
@@ -283,13 +286,21 @@ class GenerationWiringContextTest {
      * to keep asserting about. {@code batch/cli} is left out on purpose - a command holds no
      * scheduler and therefore takes no lock, which {@link CliModeConfigTest} is what asserts.
      *
+     * <p><strong>It walks, and it looks inside.</strong> The sources are read recursively and every
+     * nested type is collected with its enclosing one, because a lock is a lock wherever it is
+     * written: a second schedule declared on a nested class, or in a sub-package somebody adds
+     * beside {@code cli}, is exactly the arrangement FR-007 says this half may not have, and a
+     * sweep that read only the top-level type of each file in one directory would let it through.
+     *
      * @return the lock names, in no particular order
      * @throws IOException if the package's sources cannot be read
      */
     private static List<String> schedulerLockNames() throws IOException {
-        try (Stream<Path> sources = Files.list(BATCH_SOURCES)) {
-            return sources.filter(source -> source.getFileName().toString().endsWith(JAVA))
+        try (Stream<Path> sources = Files.walk(BATCH_SOURCES)) {
+            return sources.filter(source -> !source.startsWith(CLI_SOURCES))
+                    .filter(source -> source.getFileName().toString().endsWith(JAVA))
                     .map(GenerationWiringContextTest::loaded)
+                    .flatMap(GenerationWiringContextTest::withNested)
                     .flatMap(declaring -> Stream.of(declaring.getDeclaredMethods()))
                     .map(method -> method.getAnnotation(SchedulerLock.class))
                     .filter(lock -> lock != null)
@@ -306,14 +317,29 @@ class GenerationWiringContextTest {
      */
     private static Class<?> loaded(final Path source) {
         final String simple = source.getFileName().toString();
-        final String binary =
-                BATCH_PACKAGE + simple.substring(0, simple.length() - JAVA.length());
+        final String relative = BATCH_SOURCES.relativize(source.getParent()).toString();
+        final String subPackage = relative.isEmpty() ? ""
+                : relative.replace(source.getFileSystem().getSeparator(), ".") + ".";
+        final String binary = BATCH_PACKAGE + subPackage
+                + simple.substring(0, simple.length() - JAVA.length());
         try {
             return Class.forName(binary);
         } catch (ClassNotFoundException notCompiled) {
             throw new AssertionError(binary
                     + " is a source in the batch package that no class answers to", notCompiled);
         }
+    }
+
+    /**
+     * A class and every type declared inside it, however deeply.
+     *
+     * @param declaring the class read off a source file
+     * @return that class and its nested types
+     */
+    private static Stream<Class<?>> withNested(final Class<?> declaring) {
+        return Stream.concat(Stream.of(declaring),
+                Stream.of(declaring.getDeclaredClasses())
+                        .flatMap(GenerationWiringContextTest::withNested));
     }
 
 
