@@ -664,14 +664,21 @@ exception report has the widest refusal set of any endpoint.
       name for an offending argument and bounded extras - never a value the caller supplied. The
       command's window reading is duplicated rather than moved, because `ReportExceptionsCli` is
       deleted whole in Phase 10 and delegating it first would churn a suite that is about to go.)
-- [ ] **T022** [P] [US6] `api/ExceptionReportsControllerTest` (new) — `@WebMvcTest`. Cases: the
+- [x] **T022** [P] [US6] `api/ExceptionReportsControllerTest` (new) — `@WebMvcTest`. Cases: the
       `200` shape of data-model §7, entries and counts and truncation and per-sink delivery and the
       run id and the duration; an empty window answers `entries: []` and the counts, never silence;
       `409 email-output-disabled`; `409 email-output-not-wired`; `400 unreadable-argument` with
       `argument: since` and no echo of the value; `500 report-not-built`; `500
       report-not-delivered` carrying which sink refused. Seams: the controller and its dtos.
       Red: the body shape.
-- [ ] **T023** [US6] `api/ExceptionReportsController` and its dtos. Every entry field is an
+      (Landed with T023 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. 9 tests, 0 failures: the §7 shape field by field including the three identifiers a
+      failed request does not have asserted **absent** rather than null; an empty window answering
+      `entries: []` and zero-filled counts; the two arguments passed through; no body at all read
+      as the default window; both e-mail refusals; the unreadable window asserted against the whole
+      response text, not just the fields, so an echo anywhere fails it; `report-not-built`; and
+      `report-not-delivered` carrying `delivered` and the run id.)
+- [x] **T023** [US6] `api/ExceptionReportsController` and its dtos. Every entry field is an
       identifier, a bounded code or a count, and absent fields are **omitted** rather than rendered
       — the same rule `ReportExceptionsCli.carried` applied. Green: T022.
 - [ ] **T024** [P] [US4] `api/OperationsExceptionHandlerTest` (new) — **the status map and the

@@ -95,7 +95,8 @@ class HttpSurfaceTest {
      * that stops caring how many controllers there are.
      */
     private static final List<String> OPERATIONS_CONTROLLERS =
-            List.of("flagController", "batchesController", "registersController");
+            List.of("flagController", "batchesController", "registersController",
+                    "exceptionReportsController");
 
     private final MockMvc mockMvc;
 

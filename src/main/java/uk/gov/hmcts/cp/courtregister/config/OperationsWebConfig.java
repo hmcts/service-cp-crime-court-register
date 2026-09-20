@@ -1,5 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
+import java.time.Clock;
+import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -9,6 +11,9 @@ import org.springframework.core.Ordered;
 import uk.gov.hmcts.cp.courtregister.api.OperationsActionFilter;
 import uk.gov.hmcts.cp.courtregister.api.OperationsErrorAttributes;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
+import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
+import uk.gov.hmcts.cp.courtregister.application.OnDemandExceptionReportService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
@@ -100,5 +105,40 @@ public class OperationsWebConfig {
             final RegisterNotificationRepository notificationRepository,
             final RegisterStore registerStore) {
         return new BatchListingService(batchRepository, notificationRepository, registerStore);
+    }
+
+    /**
+     * The exception report an operator asks for now, over the same reads the 07:00 run takes.
+     *
+     * <p>Behind the operations switch and the {@code !test} profile for the reason the listings
+     * are: the reads it is built from are declared {@code !test}, and the switch that withdraws the
+     * operator's paths must withdraw what serves them too.
+     *
+     * <p><strong>Not behind {@code courtregister.report.enabled}.</strong> That switch decides
+     * whether the 07:00 run happens, and an incident does not wait for morning: a pod with the
+     * schedule off still holds the reads and the log sink, so it can still answer what is wrong
+     * with what it recorded. Nor is it behind {@code courtregister.generation.enabled}, because the
+     * report is on no cutover circuit and reads the flag nowhere.
+     *
+     * <p>The schedule and the e-mail switch are handed in as values rather than as the properties
+     * record, exactly as {@link ExceptionReportService}'s limits are: the application layer takes a
+     * cron, a zone and a boolean, not the shape of a configuration file.
+     *
+     * @param reporting the reads and the delivery, shared with the 07:00 run
+     * @param sinks     every report sink this context holds
+     * @param report    the report's own settings, for the schedule and the e-mail switch
+     * @param clock     the one clock the window, the snapshot and the duration are taken from
+     * @return the on-demand report
+     */
+    @Bean
+    @Profile("!test")
+    @ConditionalOnProperty(prefix = "courtregister.operations", name = "enabled",
+            havingValue = "true", matchIfMissing = true)
+    public OnDemandExceptionReportService onDemandExceptionReportService(
+            final ExceptionReportService reporting, final List<ExceptionReportSink> sinks,
+            final ReportProperties report, final Clock clock) {
+
+        return new OnDemandExceptionReportService(reporting, sinks, report.cron(), report.zone(),
+                report.email().enabled(), clock);
     }
 }
