@@ -2,6 +2,7 @@ package uk.gov.hmcts.cp.courtregister.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.Arrays;
@@ -218,6 +219,78 @@ class HttpSurfaceTest {
                             + "add no endpoint, and a new one appearing here is a surface change "
                             + "nobody asked for")
                     .isEqualTo(PERMITTED_ENDPOINTS);
+        }
+    }
+
+    /**
+     * The same pod with no generation half at all (T040/T041, 2026-09-21).
+     *
+     * <p>The decision this case exists for: {@code GET /operations/flag} is served on
+     * <strong>every</strong> pod, including one with {@code courtregister.generation.enabled=false}.
+     * "Which implementation is live" is not a property of the replica an operator happened to
+     * reach, so answering {@code 501 command-not-wired} on a non-rendering pod would make the
+     * lever's state look like one. The bean that had to move for it is {@code FeatureFlagReader}'s:
+     * it used to be contributed only behind the generation switch, and it is now contributed
+     * wherever the service runs, keeping its {@code !test} profile gating and its LIVE/STUB mode
+     * selection exactly as they were.
+     *
+     * <p><strong>And no App Configuration endpoint is configured here on purpose.</strong> That is
+     * the shape a pod with no nightly job is deployed in - {@code PropertiesValidator} asks for the
+     * endpoint and the label only once generation is on - so the credential has no store to be
+     * built against and the three workload-identity variables a deployed pod is given are absent.
+     * The pod must start anyway, and the reading must be {@code UNREADABLE} with its own cause on
+     * it rather than a refusal.
+     *
+     * <p>The two estate filters are off: what they do has suites of its own, and this case is about
+     * which beans a pod holds and what the endpoint answers.
+     */
+    @Nested
+    @NestedTestConfiguration(NestedTestConfiguration.EnclosingConfiguration.OVERRIDE)
+    @SpringBootTest(properties = {
+        "courtregister.generation.enabled=false",
+        "courtregister.payload.mode=STUB",
+        "courtregister.referencedata.mode=STUB",
+        "courtregister.consumer.enabled=false",
+        "authz.http.enabled=false",
+        "audit.http.enabled=false",
+        "cp.audit.enabled=false"})
+    @AutoConfigureMockMvc
+    @DisplayName("with no generation half")
+    class OnAPodThatRendersNothing {
+
+        /** The flag reader's bean, by the name its factory method gives it. */
+        private static final String FLAG_READER = "featureFlagReader";
+
+        private final MockMvc mockMvc;
+
+        private final ApplicationContext context;
+
+        @Autowired
+        OnAPodThatRendersNothing(final MockMvc mockMvc, final ApplicationContext context) {
+            this.mockMvc = mockMvc;
+            this.context = context;
+        }
+
+        @Test
+        @DisplayName("the pod starts and still holds the flag reader")
+        void the_generation_switch_should_not_take_the_flag_reader_with_it() {
+            assertThat(context.containsBean(FLAG_READER))
+                    .as("the flag endpoint is served on every pod, so the reader behind it exists "
+                            + "on every pod - and a pod with no store configured must start "
+                            + "without the three variables only a deployed pod is given")
+                    .isTrue();
+            assertThat(controllerBeans(context))
+                    .containsExactlyInAnyOrderElementsOf(Stream.concat(
+                            OPERATIONS_CONTROLLERS.stream(), Stream.of(ERROR_FALLBACK)).toList());
+        }
+
+        @Test
+        @DisplayName("the flag endpoint answers, and says it cannot see the flag")
+        void the_flag_endpoint_should_answer_on_a_pod_that_renders_nothing() throws Exception {
+            mockMvc.perform(get("/operations/flag"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.flag").value("UNREADABLE"))
+                    .andExpect(jsonPath("$.reason").value("unreadable-not-configured"));
         }
     }
 

@@ -27,12 +27,20 @@ import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
  * what comes back, so the store's words about itself reach an operator's terminal no more than they
  * reach the log (constitution Principle VII).
  *
- * <p>Conditional on the generation half being switched on, because that is the only place
- * {@link FeatureFlagReader} is contributed and it is exactly where {@code check-flag} answered "not
- * wired" - the pod that renders nothing has no 18:00 read to describe. <strong>And on the profile
- * for the same reason</strong>: both configurations that contribute a reader, live and stub, are
- * declared {@code !test}, so a {@code test}-profile context with generation switched on has the
- * switch without the bean - which is the exact shape four of this repository's context suites run
+ * <p><strong>Served on every pod, generation half or no generation half</strong> (T040/T041,
+ * 2026-09-21). An earlier draft made it conditional on {@code courtregister.generation.enabled},
+ * because that was where {@link FeatureFlagReader} was contributed; the decision went the other
+ * way, and the reader is the thing that moved. This is the endpoint an operator checks a cutover
+ * with, and "which implementation is live" is not a question only a rendering pod can be asked -
+ * answering {@code 501 command-not-wired} on the pod somebody happened to reach would make the
+ * lever's state look like a property of the replica. The reader is contributed wherever the
+ * service runs, and on a pod with no App Configuration endpoint it answers
+ * {@code UNREADABLE unreadable-not-configured}, which is a reading with a cause on it rather than
+ * a refusal.
+ *
+ * <p><strong>Conditional on the profile</strong>, because both configurations that contribute a
+ * reader, live and stub, are declared {@code !test} - so a {@code test}-profile context has the
+ * switch without the bean, which is the exact shape four of this repository's context suites run
  * in.
  *
  * <p><strong>And on {@code courtregister.operations.enabled}, the switch that decides whether this
@@ -43,7 +51,6 @@ import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
  */
 @RestController
 @Profile("!test")
-@ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
 @ConditionalOnProperty(prefix = "courtregister.operations", name = "enabled",
         havingValue = "true", matchIfMissing = true)
 public class FlagController {

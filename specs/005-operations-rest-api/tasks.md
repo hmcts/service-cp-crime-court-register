@@ -811,6 +811,29 @@ of them.
       What is left for T041 is the generation-property half: the not-wired fallback, and folding
       the ad-hoc `@Profile("!test")` on the two listing controllers into the same gating.
 
+      **The flag endpoint's conflict is decided, ahead of the task (design call, 2026-09-21).**
+      T040 names "the three endpoints that need those beans (generate, notify, the batch listing),
+      and the other four served normally" — but `FlagController` was carrying
+      `@ConditionalOnProperty(courtregister.generation.enabled)` too, because that was the only
+      place a `FeatureFlagReader` was contributed. Those two cannot both be true. The decision is
+      T040's wording: **`GET /operations/flag` is served on every pod**, including one with the
+      generation half off. Which implementation is live is not a property of the replica an
+      operator happened to reach, and answering `501 command-not-wired` there would make the
+      lever's state look like one.
+      What moved for it is the reader, not the endpoint: `config/LiveFeatureFlagConfig` no longer
+      carries the class-level `courtregister.generation.enabled` condition (its `!test` profile
+      gating and its LIVE/STUB mode selection are untouched, and `StubGenerationConfig`'s bean
+      already had no such condition), and the workload identity is built only where an endpoint
+      names a store — a pod with no nightly job is deployed with no App Configuration endpoint,
+      `PropertiesValidator` asks for one only once generation is on, and refusing to start for want
+      of a credential to read a store nobody configured would have cost every non-generating pod
+      its start-up. Such a pod answers `UNREADABLE unreadable-not-configured`, a reading with a
+      cause on it rather than a refusal. Pinned by `HttpSurfaceTest.OnAPodThatRendersNothing`.
+      This is the one `config/` change outside `api/` the increment's coordination contract
+      permits, and it is spent here.
+      T041 therefore keeps its not-wired fallback for **generate, notify and the batch listing**
+      only.
+
 ---
 
 ## Phase 8: The contract, the audit facts, and the real filter (7 tasks)
