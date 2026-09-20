@@ -67,8 +67,10 @@ Three further consequences the reviews surfaced, each now a requirement:
   same night and reporting them beside real failures sends support after something already fixed
   (FR-019).
 
-The run report's `reconciled` becomes **two** numbers, `released_batches` and `released_registers`
-**[review]**, and `courtregister_generation_reconciled_total` is retired in favour of
+The run report's `reconciled` becomes **three** numbers - `released_batches`, `released_registers`
+and, by the coordinator's decision of 2026-09-20 taken at Phase 4, `contended` for the batches the
+pass could not give back, which are a night's undone work and must not be silent on the line that
+describes the night - and `courtregister_generation_reconciled_total` is retired in favour of
 `courtregister_generation_released_batches_total` and `_released_registers_total`, beside
 `courtregister_generation_contended_total` for the batches a run could not give back.
 `courtregister.generation.grace-period` becomes `courtregister.generation.stale-after` (default `10m`
@@ -243,6 +245,7 @@ domain/BatchFailureReason.java         + NOT_COMPLETED_BY_NEXT_RUN, - GENERATION
 domain/CompletedBy.java                - RECONCILER (one constant left, and it stays a type)
 domain/BatchStatus.java, RegisterBatch.java   javadoc naming the reconciler
 domain/RunReport.java                  reconciled -> releasedBatches + releasedRegisters
+                                       + contended [Phase 4 decision]
 domain/ExceptionKind.java              + BATCH_RELEASED [review]
 ```
 

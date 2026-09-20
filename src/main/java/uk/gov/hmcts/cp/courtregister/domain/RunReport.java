@@ -25,12 +25,12 @@ import java.util.Map;
  * <p><strong>What the run asked for is not what came of it, and this reports both.</strong>
  * {@link #requested} counts the batches whose payload was written and whose render was asked for,
  * which is where the nightly job's leg ends: the outcome of a render arrives afterwards, on the
- * public-event topic. It is counted at the call rather than off
- * the verdict, so a batch whose render left and whose mark the store then refused is still one
- * render here - and is in none of the {@link #outcomes}, which is a divergence to be read rather
- * than a total that does not add up. {@link #settled} is the other side of
- * that, and it is read rather than reasoned about - see {@link Settled}, which says exactly what
- * its four counts are and, as importantly, what they are not.
+ * public-event topic. It is counted at the call rather than off the verdict, so a batch whose
+ * render left and whose mark the store then refused is still one render here - and is in none of
+ * the {@link #outcomes}, which is a divergence to be read rather than a total that does not add up.
+ * {@link #settled} is the other side of that, and it is read rather than reasoned about - see
+ * {@link Settled}, which says exactly what its four counts are and, as importantly, what they are
+ * not.
  *
  * <p><strong>And three numbers that are a diagnostic rather than an account.</strong>
  * {@link #releasedBatches} and {@link #releasedRegisters} are what the run's first act gave back -
@@ -63,24 +63,24 @@ import java.util.Map;
  * own series on {@code courtregister_generation_skipped_total}, which is where
  * {@link uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate} already puts them.
  *
- * @param gateDecision what the gate decided from its one read of the flag, which is the first thing
- *                     a run does and the reason a skipped run is a success
- * @param outcomes     how many batches ended in each state; empty for a skipped run
- * @param requested    how many batches this run asked systemdocgenerator to render - the payload
- *                     written and the request away - whatever the renderer then answered and
- *                     whatever the run afterwards managed to write down about it; zero for a
- *                     skipped run
- * @param rowOutcomes  how many registers this run stamped into a batch, under the state that
- *                     batch's requesting leg ended in; empty for a skipped run
- * @param deferredKeys how many court-centre days the assembler passed over because a batch of
- *                     theirs is still in flight ({@link BatchAssembly#deferred()}); zero for a
- *                     skipped run, and the count of the court centres this run knowingly left for
- *                     the next one
- * @param deferredRows how many registers are waiting under those days, which is what the deferral
- *                     costs measured in hearings rather than in court centres
- * @param settled      what the store said tonight's batches had come to at the moment this report
- *                     was made, which is a snapshot of a night that may still be settling and not
- *                     a final tally ({@link Settled})
+ * @param gateDecision      what the gate decided from its one read of the flag, which is the first
+ *                          thing a run does and the reason a skipped run is a success
+ * @param outcomes          how many batches ended in each state; empty for a skipped run
+ * @param requested         how many batches this run asked systemdocgenerator to render - the
+ *                          payload written and the request away - whatever the renderer then
+ *                          answered and whatever the run afterwards managed to write down about it;
+ *                          zero for a skipped run
+ * @param rowOutcomes       how many registers this run stamped into a batch, under the state that
+ *                          batch's requesting leg ended in; empty for a skipped run
+ * @param deferredKeys      how many court-centre days the assembler passed over because a batch of
+ *                          theirs is still in flight ({@link BatchAssembly#deferred()}); zero for a
+ *                          skipped run, and the count of the court centres this run knowingly left
+ *                          for the next one
+ * @param deferredRows      how many registers are waiting under those days, which is what the
+ *                          deferral costs measured in hearings rather than in court centres
+ * @param settled           what the store said tonight's batches had come to at the moment this
+ *                          report was made, which is a snapshot of a night that may still be
+ *                          settling and not a final tally ({@link Settled})
  * @param releasedBatches   how many batches the run's first act failed and released, having found
  *                          them still awaiting a render this service can no longer ask about;
  *                          nought for a skipped run, which does not run the pass at all
@@ -126,9 +126,8 @@ public record RunReport(
      *
      * <p><strong>A snapshot, and it says so in the name.</strong> The requesting leg ends when
      * systemdocgenerator has been asked (FR-008) and the outcome of a render is applied afterwards
-     * by the event listener, so these four counts are
-     * read back out of {@code register_batch} at the moment the line is written rather than known
-     * by the leg that did the requesting. What they describe is therefore a night that may still be
+     * by the event listener, so these four counts are read back out of {@code register_batch} at
+     * the moment the line is written rather than known by the leg that did the requesting. What they describe is therefore a night that may still be
      * settling: a render accepted at 18:04 and marked at 18:04:30 is counted here and one accepted
      * at 18:59 is not, and the same run reported a minute later would count more. It is not a final
      * tally of the night and must not be read as one - what a night came to in the end is the rows

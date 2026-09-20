@@ -314,3 +314,14 @@ row outcomes; the two numbers are a diagnostic about what the night had to undo,
 accounts the report already claims add up. `RunReport`'s javadoc says so where it says what does add
 up, because a number on a line of totals that is not part of any total has to say so or it will be
 added to one.
+
+**And a third key, `contended=`** (coordinator's decision, 2026-09-20, taken at Phase 4). The pass
+answers with three numbers and the batches it could not give back are work the night left undone:
+they are stale still and untouched, so the next run reaches them again and the 07:00 report names
+their court centre days every morning meanwhile. A run line that carried the two released numbers
+and said nothing about those would describe as complete a night that had left a court centre
+without its document, which is the silence this service exists to end. So `RunReport` carries
+`contended` beside the two released numbers, the line carries `contended=`, and the accounting
+paragraph names all three as being in neither of the night's totals. It is the same number
+`courtregister_generation_contended_total` already carries — the line and the counter say one thing,
+as they do for every other reading a run publishes.

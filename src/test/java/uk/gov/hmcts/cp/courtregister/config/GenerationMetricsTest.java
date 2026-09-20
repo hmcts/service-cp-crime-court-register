@@ -232,6 +232,61 @@ class GenerationMetricsTest {
     }
 
     /**
+     * The three counters that say what a night's first act had to give back.
+     *
+     * <p><strong>[A]</strong> - characterisations of the series Phase 3 landed, asserted here
+     * because this suite is where the published surface is held: the names are what dashboards and
+     * alert rules are written against, and a batch id may never be a label on any of them. They
+     * stand where {@code courtregister_generation_reconciled_total} stood, which said how much of
+     * a night the grace-period query had to fetch and now describes a mechanism that does not
+     * exist.
+     *
+     * <p>Three series rather than one with a label, because a batch is one document and one e-mail
+     * while a register is one hearing's youth defendants, and a batch nothing could be given back
+     * from is neither: it is a night's undone work, and nought is the expected reading.
+     */
+    @Nested
+    @DisplayName("the released and contended counters")
+    class Released {
+
+        @Test
+        void what_a_run_gave_back_should_count_on_two_series_of_its_own() {
+            metrics.staleBatchesReleased(2);
+            metrics.staleRegistersReleased(7);
+
+            assertThat(counter(GenerationMetrics.RELEASED_BATCHES))
+                    .as("the batches, which is how much of the estate a lost outcome cost")
+                    .isEqualTo(2);
+            assertThat(counter(GenerationMetrics.RELEASED_REGISTERS))
+                    .as("and the registers inside them, which no count of batches can answer for")
+                    .isEqualTo(7);
+        }
+
+        @Test
+        void what_a_run_could_not_give_back_should_count_on_a_third() {
+            metrics.staleBatchesContended(1);
+
+            assertThat(counter(GenerationMetrics.RELEASE_CONTENDED))
+                    .as("a path that leaves something undone moves a counter, and without this the "
+                            + "only trace of a court centre day nothing can give back is a WARN")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void none_of_the_three_should_carry_a_label() {
+            metrics.staleBatchesReleased(1);
+            metrics.staleRegistersReleased(1);
+            metrics.staleBatchesContended(1);
+
+            assertThat(tagKeysOf(GenerationMetrics.RELEASED_BATCHES)).isEmpty();
+            assertThat(tagKeysOf(GenerationMetrics.RELEASED_REGISTERS)).isEmpty();
+            assertThat(tagKeysOf(GenerationMetrics.RELEASE_CONTENDED))
+                    .as("a batch id is an identifier and identifiers are never a label here")
+                    .isEmpty();
+        }
+    }
+
+    /**
      * The counter that says why a night generated nothing.
      *
      * <p>An off flag is the legacy generating, which is the cutover working. An unreadable flag is
