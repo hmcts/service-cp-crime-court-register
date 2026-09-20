@@ -50,6 +50,7 @@ import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RecordedCompletion;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
@@ -3041,8 +3042,8 @@ class RegisterStoreIT {
         void a_generating_batch_past_its_cutoff_is_failed_and_its_registers_released() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
-            final AtomicReference<List<ReleasedBatch>> measured = new AtomicReference<>();
-            final AtomicReference<List<ReleasedBatch>> released = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> measured = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
 
             softly.assertThatCode(() -> {
                 record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
@@ -3145,7 +3146,7 @@ class RegisterStoreIT {
         void a_generated_batch_is_never_matched_at_any_age() {
             final DistributionCommand monday = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final DistributionCommand tuesday = seededCommand(HEARING_THREE, TUESDAY_SHARED);
-            final AtomicReference<List<ReleasedBatch>> released = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
 
             softly.assertThatCode(() -> {
                 record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
@@ -3184,8 +3185,8 @@ class RegisterStoreIT {
         void a_manually_generated_batch_uses_the_longer_cutoff() {
             final DistributionCommand monday = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final DistributionCommand tuesday = seededCommand(HEARING_THREE, TUESDAY_SHARED);
-            final AtomicReference<List<ReleasedBatch>> first = new AtomicReference<>();
-            final AtomicReference<List<ReleasedBatch>> second = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> first = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> second = new AtomicReference<>();
 
             softly.assertThatCode(() -> {
                 record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
@@ -3220,7 +3221,7 @@ class RegisterStoreIT {
         void a_batch_inside_its_cutoff_is_not_matched() {
             final DistributionCommand monday = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final DistributionCommand tuesday = seededCommand(HEARING_THREE, TUESDAY_SHARED);
-            final AtomicReference<List<ReleasedBatch>> released = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
 
             softly.assertThatCode(() -> {
                 record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
@@ -3257,7 +3258,7 @@ class RegisterStoreIT {
             final DistributionCommand monday = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final DistributionCommand tuesday = seededCommand(HEARING_THREE, TUESDAY_SHARED);
             final Instant exactly = cutoff(STALE_AFTER).truncatedTo(ChronoUnit.MILLIS);
-            final AtomicReference<List<ReleasedBatch>> released = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
 
             softly.assertThatCode(() -> {
                 record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
@@ -3292,7 +3293,7 @@ class RegisterStoreIT {
             final AtomicReference<UUID> failed = new AtomicReference<>();
             final AtomicReference<UUID> notified = new AtomicReference<>();
             final AtomicReference<UUID> waiting = new AtomicReference<>();
-            final AtomicReference<List<ReleasedBatch>> released = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
 
             softly.assertThatCode(() -> {
                 record(seededCommand(HEARING_ONE, MONDAY_SHARED),
@@ -3441,7 +3442,7 @@ class RegisterStoreIT {
         void a_release_supersedes_against_a_later_re_share() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
-            final AtomicReference<List<ReleasedBatch>> released = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
 
             softly.assertThatCode(() -> {
                 record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
@@ -3484,7 +3485,7 @@ class RegisterStoreIT {
         @Test
         void a_batch_that_no_longer_matches_yields_zero_rows_and_no_error() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
-            final AtomicReference<List<ReleasedBatch>> released = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
 
             softly.assertThatCode(() -> {
                 record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
@@ -3494,13 +3495,17 @@ class RegisterStoreIT {
                 released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
             }).as(WALKED).doesNotThrowAnyException();
 
-            softly.assertThat(released.get())
+            softly.assertThat(mineReleased(released.get()))
                     .as("a batch that is not stale is a batch the operation did not change, which "
                             + "is a number and not an error (FR-003a). A read-then-mark shape would "
                             + "instead be refused by the state machine and throw out of the run, "
                             + "and one batch that came good in the wrong second would cost every "
                             + "court centre its document that night")
-                    .isNotNull()
+                    .isEmpty();
+            softly.assertThat(mineContended(released.get()))
+                    .as("and it is not reported as contended either: contention is a race for the "
+                            + "day's active-register key that every attempt lost, and a batch "
+                            + "nothing was attempted against lost nothing")
                     .isEmpty();
             softly.assertThat(batchOn(MONDAY))
                     .as("nothing about it is written, so nothing about it has to be undone")
@@ -3515,7 +3520,7 @@ class RegisterStoreIT {
             final DistributionCommand mondayFirst = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final DistributionCommand mondaySecond = seededCommand(HEARING_TWO, MONDAY_SHARED);
             final DistributionCommand tuesdayFirst = seededCommand(HEARING_THREE, TUESDAY_SHARED);
-            final AtomicReference<List<ReleasedBatch>> released = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
             final AtomicReference<UUID> monday = new AtomicReference<>();
             final AtomicReference<UUID> tuesday = new AtomicReference<>();
 
@@ -3547,6 +3552,11 @@ class RegisterStoreIT {
                     .containsExactly(
                             tuple(monday.get(), courtCentre, MONDAY, 2),
                             tuple(tuesday.get(), courtCentre, TUESDAY, 1));
+            softly.assertThat(mineContended(released.get()))
+                    .as("and neither of them is reported as contended, because every batch the "
+                            + "operation looked at is accounted for in exactly one of the two "
+                            + "lists: a released day is not also a day the pass could not release")
+                    .isEmpty();
         }
     }
 
@@ -4542,10 +4552,36 @@ class RegisterStoreIT {
      * @param released what the operation answered with, or {@code null} where it refused
      * @return the records naming this case's court centre, in the order they came back
      */
-    private List<ReleasedBatch> mineReleased(final List<ReleasedBatch> released) {
-        return released == null ? List.of() : released.stream()
+    private List<ReleasedBatch> mineReleased(final StaleReleaseOutcome release) {
+        return release == null ? List.of() : release.released().stream()
                 .filter(batch -> courtCentre.equals(batch.courtCentreId()))
                 .toList();
+    }
+
+    /**
+     * The contended batches of this case's court centre, and none of another suite's.
+     *
+     * <p>Contention is reported by identity alone, so the court centre is read back out of the row
+     * rather than carried on the answer - which is the same filter {@link #mineReleased} makes, for
+     * the same reason: the operation answers for the whole store and a case may only speak for its
+     * own court centre.
+     *
+     * @param release what the operation answered with, or {@code null} where it refused
+     * @return the contended batches of this case's court centre, in the order they came back
+     */
+    private List<UUID> mineContended(final StaleReleaseOutcome release) {
+        return release == null ? List.of() : release.contended().stream()
+                .filter(batchId -> courtCentre.equals(courtCentreOf(batchId)))
+                .toList();
+    }
+
+    /** The court centre a batch was assembled for, read straight out of {@code register_batch}. */
+    private UUID courtCentreOf(final UUID batchId) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("SELECT court_centre_id FROM register_batch WHERE batch_id = :batchId")
+                .param(BATCH_ID, batchId)
+                .query(UUID.class)
+                .single();
     }
 
     /**

@@ -456,11 +456,12 @@ public interface RegisterStore {
      * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
      * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
      * @return one record per batch this operation changed, oldest day first, each with the count of
-     *         registers still that day's to render; empty where nothing was stale
+     *         registers still that day's to render, and beside them the batches it could not
+     *         release; empty where nothing was stale
      * @throws StoreContendedException if a register was re-shared inside the operation's own window
      *                                 on every attempt it makes, so nothing was released
      */
-    List<ReleasedBatch> failAndReleaseStale(Instant scheduledCutoff, Instant manualCutoff);
+    StaleReleaseOutcome failAndReleaseStale(Instant scheduledCutoff, Instant manualCutoff);
 
     /**
      * Settles the batch on its notification tally, and moves its rows to NOTIFIED.

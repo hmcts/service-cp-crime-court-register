@@ -32,6 +32,7 @@ import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RecordedCompletion;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
@@ -1761,10 +1762,11 @@ public class JdbcRegisterStore implements RegisterStore {
      *                                 re-shared inside the statement's own window
      */
     @Override
-    public List<ReleasedBatch> failAndReleaseStale(final Instant scheduledCutoff,
+    public StaleReleaseOutcome failAndReleaseStale(final Instant scheduledCutoff,
             final Instant manualCutoff) {
         return StoreOutage.translating("fail and release the stale batches",
-                () -> attemptedRelease(scheduledCutoff, manualCutoff));
+                () -> new StaleReleaseOutcome(attemptedRelease(scheduledCutoff, manualCutoff),
+                        List.of()));
     }
 
     /**

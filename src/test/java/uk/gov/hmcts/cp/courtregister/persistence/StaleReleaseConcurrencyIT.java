@@ -20,6 +20,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
@@ -30,6 +31,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.transaction.support.TransactionOperations;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDefendant;
@@ -129,6 +132,14 @@ class StaleReleaseConcurrencyIT {
 
     /** The single row a fixture ageing a batch is expected to touch. */
     private static final int ONE_BATCH = 1;
+
+    /**
+     * How much earlier than the register it would have to replace the held share is stamped.
+     *
+     * <p>Small enough to leave the share on the same register date, because it is the ordering and
+     * not the day that makes the key unreleasable.
+     */
+    private static final Duration EARLIER_SHARE = Duration.ofHours(1);
 
     /** How often the staged window asks whether the pass has reached the row it is held at. */
     private static final int POLL_MILLIS = 20;
@@ -299,6 +310,196 @@ class StaleReleaseConcurrencyIT {
                         + "means the passage of time, and the register it held is accounted for by "
                         + "supersession rather than by being handed back beside its replacement")
                 .containsOnly(new Ending("FAILED", NOT_COMPLETED));
+    }
+
+    /**
+     * The batch no attempt can release, beside a batch that is released anyway.
+     *
+     * <p>The other end of the retry the round above is about. A re-share that lands inside one
+     * attempt's window is a race the attempt after it wins, because that attempt reads a fresh
+     * snapshot with the re-share in it. This round holds the key against <em>every</em> attempt, so
+     * no fresh snapshot helps, and what the store does then is the whole of FR-003a: the batch is
+     * left exactly as it was found and <strong>reported</strong> as contended, beside the batches
+     * that were released.
+     *
+     * <p><strong>How the key is held against every attempt, without a stopwatch.</strong> A share
+     * of the same hearing that is <em>stamped earlier</em> than the register the stale batch holds
+     * is recorded active and unbatched - the recorder's incumbent search is over unbatched rows and
+     * the batch's register is batched, so there is nothing for it to supersede. The release's
+     * successor search is the mirror of that and is ordered: it looks for a register stamped
+     * <em>later</em> than the one it is giving back, and this one is not. So the release hands its
+     * register back beside a row the key already has, {@code idx_output_active_register_key}
+     * refuses the second active row, and it refuses it on every attempt because the row is
+     * committed and going nowhere. That is a share delivered out of order, which a broker that
+     * redelivers produces, and it is staged as data rather than as timing precisely so that the
+     * property is pinned by the assertion and not by which thread won.
+     *
+     * <p><strong>Why the second court centre is here.</strong> It is the isolation itself. One
+     * statement over every stale batch takes the other court centre's release down with the refusal
+     * it met on this one - so one hearing shared out of order would cost every court centre in the
+     * country its document that night. Each batch is its own statement, its own transaction and its
+     * own bounded retry, so the ending of one says nothing about the ending of another.
+     *
+     * <p>And nothing escapes. The pass runs inline in the night's generation, so an exhaustion
+     * raised out of the store would end the run before it assembled anything - the same cost by a
+     * different route. The contended batch simply waits: it is stale still, the next run reaches it
+     * again, and the 07:00 report names its court centre day as a late batch every morning until it
+     * is released.
+     */
+    @Test
+    void a_batch_no_attempt_can_release_is_reported_while_the_others_are_released() {
+        final UUID contendedCentre = UUID.randomUUID();
+        final UUID otherCentre = UUID.randomUUID();
+        final UUID heldKey = UUID.randomUUID();
+        final RegisterBatch contended =
+                staleBatch(contendedCentre, heldKey, UUID.randomUUID(), true);
+        final RegisterBatch other = staleBatch(otherCentre, true);
+        record(contendedCentre, heldKey, MONDAY_SHARED.minus(EARLIER_SHARE));
+        final Instant cutoff = cutoff();
+        final AtomicReference<StaleReleaseOutcome> answered = new AtomicReference<>();
+
+        final List<Throwable> escaped =
+                escaping(() -> answered.set(store.failAndReleaseStale(cutoff, cutoff)));
+
+        softly.assertThat(escaped)
+                .as("nothing escapes the pass, whatever became of any one batch (FR-003a). An "
+                        + "exhaustion raised out of the store would end the night's generation "
+                        + "before a single court centre had been assembled")
+                .isEmpty();
+        softly.assertThat(contendedOf(answered.get()))
+                .as("the batch every attempt lost the key race for is reported instead, so the "
+                        + "pass counts it and says so rather than the run failing over it")
+                .contains(contended.batchId())
+                .doesNotContain(other.batchId());
+        softly.assertThat(releasedOf(answered.get()))
+                .as("and it is reported in the other list from the batches that were released, "
+                        + "because a batch the pass could not release is not a batch it released")
+                .doesNotContain(contended.batchId())
+                .contains(other.batchId());
+        softly.assertThat(endingOf(contended.batchId()))
+                .as("the contended batch is left exactly as it was found - still awaiting its "
+                        + "render, still stale, and reachable by the run that follows. A batch "
+                        + "failed without its registers coming back is the stranded register this "
+                        + "increment exists to end")
+                .isEqualTo(new Ending("GENERATING", null));
+        softly.assertThat(stampedTo(contended.batchId()))
+                .as("so both of its registers are still its own, rather than one of them given "
+                        + "back and the other kept")
+                .isEqualTo(2L);
+        softly.assertThat(endingOf(other.batchId()))
+                .as("while the other court centre's day is failed anyway, under the one bounded "
+                        + "reason that means the passage of time")
+                .isEqualTo(new Ending("FAILED", NOT_COMPLETED));
+        softly.assertThat(stampedTo(other.batchId()))
+                .as("and its registers are back, which is what puts them in tonight's batch")
+                .isZero();
+        softly.assertThat(strandedRegisters(contendedCentre))
+                .as("no register of the contended day is left awaiting a document while stamped "
+                        + "to a batch nothing will finish, because nothing about that batch moved")
+                .isZero();
+        softly.assertThat(strandedRegisters(otherCentre))
+                .as("nor any of the released day's, because its failure and its release were one "
+                        + "act")
+                .isZero();
+
+        letTheKeyGo(contendedCentre, heldKey);
+    }
+
+    /**
+     * Gives the held key up, because the operation under test answers for the whole store.
+     *
+     * <p>A batch nothing can release stays stale for ever, and every other suite sharing this
+     * container calls the same operation - so a key left held here would have each of them spend
+     * its three attempts on this round's batch at every call. The share is superseded the way a
+     * later share would have superseded it, and the batch is then released like any other; what the
+     * round proved is already asserted above, and this only stops it being asserted again, by
+     * accident, in somebody else's suite.
+     *
+     * @param courtCentre this round's court centre
+     * @param hearingId   the hearing whose out-of-order share held the key
+     */
+    private void letTheKeyGo(final UUID courtCentre, final UUID hearingId) {
+        ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        UPDATE processed_output
+                           SET superseded_at = now(), updated_at = now()
+                         WHERE court_centre_id = :courtCentre
+                           AND hearing_id = :hearingId
+                           AND batch_id IS NULL
+                           AND superseded_at IS NULL
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("hearingId", hearingId)
+                .update();
+        store.failAndReleaseStale(cutoff(), cutoff());
+    }
+
+    /**
+     * The same race lost once, which is the race the attempt that follows wins.
+     *
+     * <p>The other half of the retry, asserted on the answer rather than on the rows: one window,
+     * one refusal, and the attempt after it reads a snapshot the re-share is in and supersedes
+     * against it. The batch is released and nothing is reported contended - a batch that took two
+     * attempts is not a batch the pass could not release.
+     */
+    @Test
+    void a_batch_contended_once_is_released_by_the_attempt_that_follows() {
+        final UUID courtCentre = UUID.randomUUID();
+        final UUID reshared = UUID.randomUUID();
+        final Instant cutoff = cutoff();
+        final RegisterBatch batch = staleBatch(courtCentre, reshared, UUID.randomUUID(), true);
+        final AtomicReference<StaleReleaseOutcome> answered = new AtomicReference<>();
+
+        final Escapes escaped = insideTheWindow(batch.batchId(),
+                () -> answered.set(store.failAndReleaseStale(cutoff, cutoff)),
+                () -> record(courtCentre, reshared));
+
+        softly.assertThat(escaped.release())
+                .as("nothing escapes the pass here either")
+                .isEmpty();
+        softly.assertThat(contendedOf(answered.get()))
+                .as("one lost race is not contention: contention is every attempt losing, and the "
+                        + "attempt after this one reads a snapshot the re-share is in")
+                .doesNotContain(batch.batchId());
+        softly.assertThat(releasedOf(answered.get()))
+                .as("so the batch is released, by the attempt that followed the refusal")
+                .contains(batch.batchId());
+        softly.assertThat(endingOf(batch.batchId()))
+                .as("and it ends where every stale batch ends")
+                .isEqualTo(new Ending("FAILED", NOT_COMPLETED));
+        softly.assertThat(activeRegistersOf(courtCentre, reshared))
+                .as("with the re-shared hearing holding exactly one register the day is still to "
+                        + "render: the stale one was superseded against its replacement rather "
+                        + "than handed back beside it")
+                .isEqualTo(1L);
+    }
+
+    /** The batches an answer named as released, or nothing where the operation refused. */
+    private static List<UUID> releasedOf(final StaleReleaseOutcome answered) {
+        return answered == null ? List.of()
+                : answered.released().stream().map(ReleasedBatch::batchId).toList();
+    }
+
+    /**
+     * The batches an answer named as contended, or nothing where the operation refused.
+     *
+     * <p>Null is answered as nothing rather than thrown on, so a red run reports the assertion that
+     * was being made and not the seam that had not been implemented yet.
+     *
+     * @param answered what the operation answered with, or {@code null} where it refused
+     * @return the contended batches it named
+     */
+    private static List<UUID> contendedOf(final StaleReleaseOutcome answered) {
+        return answered == null ? List.of() : answered.contended();
+    }
+
+    /** How many registers are still stamped to a batch, which is what a release clears. */
+    private long stampedTo(final UUID batchId) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("SELECT count(*) FROM processed_output WHERE batch_id = :batchId")
+                .param("batchId", batchId)
+                .query(Long.class)
+                .single();
     }
 
     /**
@@ -777,21 +978,39 @@ class StaleReleaseConcurrencyIT {
 
     /** One hearing's register, recorded the way the pipeline records it. */
     private void record(final UUID courtCentre, final UUID hearingId) {
+        record(courtCentre, hearingId, MONDAY_SHARED);
+    }
+
+    /**
+     * The same, where a round has to say when the estate stamped the share.
+     *
+     * <p>{@code register_time} is the results' own moment and the order the store's supersession is
+     * decided by, so a share stamped before the register a batch already holds is a share delivered
+     * out of order - recorded active, because the batched register is not the recorder's to
+     * supersede, and never a successor, because the release's search is the mirror of the same
+     * ordering.
+     *
+     * @param courtCentre  this round's court centre
+     * @param hearingId    the hearing the share is of
+     * @param registerTime the moment the estate stamped it, which decides both orderings
+     */
+    private void record(final UUID courtCentre, final UUID hearingId, final Instant registerTime) {
         final DistributionCommand command = new DistributionCommand(
                 ProcessedLogTestSupport.SOURCE, UUID.randomUUID(), hearingId,
-                LocalDate.ofInstant(MONDAY_SHARED, LONDON), MONDAY_SHARED, "Hearing_Resulted");
+                LocalDate.ofInstant(registerTime, LONDON), registerTime, "Hearing_Resulted");
         ProcessedLogTestSupport.repository(LEASE).insertNew(command,
                 RequestFingerprint.of(command),
                 new RunClaim(command.source(), command.requestId(), "runner-1", UUID.randomUUID(),
                         "msg-1"));
-        store.recordAndComplete(command, document(courtCentre, hearingId), OU_CODE, APPLICANT,
-                RecordedFlagState.ON,
+        store.recordAndComplete(command, document(courtCentre, hearingId, registerTime), OU_CODE,
+                APPLICANT, RecordedFlagState.ON,
                 () -> new GuardDecision.Complete(ReasonCode.RUN_COMPLETED));
     }
 
-    private CourtRegisterDocument document(final UUID courtCentre, final UUID hearingId) {
+    private CourtRegisterDocument document(final UUID courtCentre, final UUID hearingId,
+            final Instant registerTime) {
         return new CourtRegisterDocument(
-                MONDAY_SHARED.toString(),
+                registerTime.toString(),
                 HEARING_DATE.toString(),
                 hearingId.toString(),
                 courtCentre.toString(),
