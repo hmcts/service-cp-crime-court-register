@@ -2210,7 +2210,8 @@ VII.
       endpoint; and the package-structure list's `batch/` line swaps the reconciler for
       `StaleBatchReleaser` and `BatchAgeSweep`. The "one absorbed refusal" clause gains the sweep
       beside `IntakeAgeSweep`, and the "every drop is counted under a bounded reason" rule gains
-      `terminal-batch`. Nothing else on the page is touched.
+      `terminal-batch` and `incomplete-outcome` (the latter landed in Phase 5's gate round).
+      Nothing else on the page is touched.
 - [ ] T042 [P] `README.md` — the generation section's "with a grace-period reconciler for the
       outcomes that never arrive" becomes the release pass, and a Status entry for increment 004 in
       the shape 001–003 use.

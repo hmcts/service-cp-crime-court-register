@@ -284,11 +284,18 @@ config/SchedulingConfig.java           staleBatchReleaser bean beside the job, u
                                        scheduler bean and constant unchanged, and its javadoc
                                        stops describing two surfaces sharing it once the
                                        reconciler's timer goes
-config/SchedulingInfrastructureConfig.java, config/CliModeConfig.java, config/ProcessedLogConfig.java,
+config/SchedulingInfrastructureConfig.java, config/ProcessedLogConfig.java,
 config/CourtRegisterProperties.java, config/PublicEventsConfig.java,
 config/PublicEventsHealthIndicator.java, config/PropertiesValidator.java,
 config/GenerationMetrics.java, config/ReportProperties.java
-adapter/publicevents/DocumentEventListener.java   comments only
+                                       config/CliModeConfig.java is the 005 worktree's and was
+                                       taken back out in gate round 1; its two sentences are
+                                       handed over rather than written here
+adapter/publicevents/DocumentEventListener.java   comments, and the one counter gate round 1 asked
+                                       for: the two incomplete-outcome drops now move
+                                       courtregister_public_events_ignored_total under the bounded
+                                       reason incomplete-outcome (GenerationMetrics with it), pinned
+                                       by two cases in DocumentEventListenerTest
 resources/application.yaml             the four sites
 docker/wiremock/README.md              loses the query line
 ```
