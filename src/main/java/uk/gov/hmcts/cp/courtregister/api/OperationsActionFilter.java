@@ -26,6 +26,13 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * <em>written</em>: the request is wrapped so the server's value is what
  * {@code getHeader("CPP-ACTION")} answers, whatever arrived on the wire (research R2).
  *
+ * <p><strong>And the two priorities above that one are media types.</strong> The resolver reads
+ * {@code getContentType()} and then {@code Accept} before it reads {@code CPP-ACTION} at all, so a
+ * caller could name an action in either of them and be authorised against it while being served
+ * the endpoint their path and method actually reach. On this service's own paths the wrapper
+ * therefore answers a vendor media type as {@code application/json}, which leaves the resolver with
+ * no vendor token to find and the derived name as the only action there is.
+ *
  * <p>The filter sits at {@link org.springframework.core.Ordered#HIGHEST_PRECEDENCE}, ahead of the
  * authorisation filter at {@code +30} and the audit filter at {@code +50}, because both of those
  * read the action this one derives.
@@ -67,12 +74,16 @@ public class OperationsActionFilter extends OncePerRequestFilter {
     /** The action a notify request is. */
     private static final String NOTIFY_ACTION = PREFIX + "notify-register";
 
+    /** The root every path this service serves sits under, and nothing else of the pod's does. */
+    private static final String OURS = "/operations";
+
     @Override
     protected void doFilterInternal(final HttpServletRequest request,
             final HttpServletResponse response, final FilterChain chain)
             throws ServletException, IOException {
-        final String action = actionFor(request.getMethod(), pathOf(request));
-        chain.doFilter(new ActionRequestWrapper(request, action), response);
+        final String path = pathOf(request);
+        final String action = actionFor(request.getMethod(), path);
+        chain.doFilter(new ActionRequestWrapper(request, action, ours(path)), response);
     }
 
     /**
@@ -98,6 +109,22 @@ public class OperationsActionFilter extends OncePerRequestFilter {
             return NOTIFY_ACTION;
         }
         return null;
+    }
+
+    /**
+     * Whether a path is one of this service's own, and so one a vendor media type is stripped on.
+     *
+     * <p>By path alone rather than by the derived action, so that a method one of these endpoints
+     * does not answer is covered too: the resolver reads {@code Content-Type} and {@code Accept}
+     * ahead of the header this filter writes, and a {@code HEAD} on a path served for {@code GET}
+     * reaches a handler with no action derived for it.
+     *
+     * @param path the request's path, without the context path
+     * @return {@code true} where the path is {@code /operations} or sits beneath it
+     */
+    private static boolean ours(final String path) {
+        return path != null
+                && (OURS.equals(path) || path.startsWith(OURS + '/'));
     }
 
     /**

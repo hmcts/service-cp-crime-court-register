@@ -40,6 +40,22 @@ class OperationsActionFilterTest {
     private final OperationsActionFilter filter = new OperationsActionFilter();
 
     /**
+     * Runs one request through the filter and reports the request the chain was handed.
+     *
+     * @param request the request as it arrived
+     * @return the request the next filter in the chain would read
+     * @throws Exception where the filter or the chain refuses, which no case here expects
+     */
+    private HttpServletRequest wrapped(final MockHttpServletRequest request) throws Exception {
+        final FilterChain chain = mock(FilterChain.class);
+        filter.doFilter(request, new MockHttpServletResponse(), chain);
+        final ArgumentCaptor<HttpServletRequest> passed =
+                ArgumentCaptor.forClass(HttpServletRequest.class);
+        verify(chain).doFilter(passed.capture(), any());
+        return passed.getValue();
+    }
+
+    /**
      * Runs one request through the filter and reports the action the chain was handed.
      *
      * @param method  the request's method
@@ -124,6 +140,123 @@ class OperationsActionFilterTest {
             verify(chain).doFilter(passed.capture(), any());
             final List<String> names = Collections.list(passed.getValue().getHeaderNames());
             assertThat(names).anySatisfy(name -> assertThat(name).isEqualToIgnoringCase(ACTION));
+        }
+    }
+
+    @Nested
+    @DisplayName("a forged vendor media type")
+    class AVendorMediaType {
+
+        /** What a caller would forge: the cheapest action, in the shape the resolver looks for. */
+        private static final String FORGED = "application/vnd.courtregister-operations.check-flag+json";
+
+        /** What every one of these endpoints actually speaks. */
+        private static final String PLAIN_JSON = "application/json";
+
+        @ParameterizedTest
+        @CsvSource({
+            "GET,  /operations/flag,                             check-flag",
+            "GET,  /operations/batches,                          list-batches",
+            "GET,  /operations/registers/recorded-while-off,     list-recorded-while-off",
+            "POST, /operations/batches/generate,                 generate-register",
+            "POST, /operations/batches/3f2504e0-4f89-11d3-9a0c-0305e82c3301/notify, notify-register",
+            "POST, /operations/registers/supersede,              supersede-before",
+            "POST, /operations/exception-reports,                report-exceptions",
+        })
+        void a_content_type_naming_another_action_should_be_answered_as_plain_json(
+                final String method, final String path, final String verb) throws Exception {
+
+            final MockHttpServletRequest request = new MockHttpServletRequest(method, path);
+            request.setContentType(FORGED);
+
+            final HttpServletRequest seen = wrapped(request);
+
+            assertThat(seen.getContentType())
+                    .as("the resolver reads the content type before CPP-ACTION, so a vendor token "
+                            + "left here is an action the caller named")
+                    .isEqualTo(PLAIN_JSON);
+            assertThat(seen.getHeader("Content-Type")).isEqualTo(PLAIN_JSON);
+            assertThat(Collections.list(seen.getHeaders("content-type")))
+                    .containsExactly(PLAIN_JSON);
+            assertThat(seen.getHeader(ACTION)).isEqualTo(PREFIX + verb);
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+            "GET,  /operations/flag,                             check-flag",
+            "GET,  /operations/batches,                          list-batches",
+            "GET,  /operations/registers/recorded-while-off,     list-recorded-while-off",
+            "POST, /operations/batches/generate,                 generate-register",
+            "POST, /operations/batches/3f2504e0-4f89-11d3-9a0c-0305e82c3301/notify, notify-register",
+            "POST, /operations/registers/supersede,              supersede-before",
+            "POST, /operations/exception-reports,                report-exceptions",
+        })
+        void an_accept_naming_another_action_should_be_answered_as_plain_json(
+                final String method, final String path, final String verb) throws Exception {
+
+            final MockHttpServletRequest request = new MockHttpServletRequest(method, path);
+            request.addHeader("Accept", FORGED + ", application/json");
+
+            final HttpServletRequest seen = wrapped(request);
+
+            assertThat(seen.getHeader("Accept")).isEqualTo(PLAIN_JSON);
+            assertThat(Collections.list(seen.getHeaders("accept"))).containsExactly(PLAIN_JSON);
+            assertThat(seen.getHeader(ACTION)).isEqualTo(PREFIX + verb);
+        }
+
+        @Test
+        void a_method_the_path_does_not_answer_should_lose_the_token_too() throws Exception {
+            final MockHttpServletRequest request =
+                    new MockHttpServletRequest("HEAD", "/operations/batches");
+            request.setContentType(FORGED);
+
+            final HttpServletRequest seen = wrapped(request);
+
+            assertThat(seen.getContentType())
+                    .as("no action is derived for it, so a vendor token left here would be the "
+                            + "only name the resolver could find")
+                    .isEqualTo(PLAIN_JSON);
+            assertThat(seen.getHeader(ACTION)).isNull();
+        }
+
+        @Test
+        void a_media_type_carrying_no_vendor_token_should_arrive_exactly_as_it_was_sent()
+                throws Exception {
+            final MockHttpServletRequest request =
+                    new MockHttpServletRequest("POST", "/operations/registers/supersede");
+            request.setContentType("application/json;charset=UTF-8");
+            request.addHeader("Accept", "*/*");
+
+            final HttpServletRequest seen = wrapped(request);
+
+            assertThat(seen.getContentType()).isEqualTo("application/json;charset=UTF-8");
+            assertThat(seen.getHeader("Accept")).isEqualTo("*/*");
+        }
+
+        @Test
+        void a_path_that_is_not_ours_should_keep_its_own_vendor_negotiation() throws Exception {
+            final MockHttpServletRequest request =
+                    new MockHttpServletRequest("GET", "/actuator/health");
+            request.addHeader("Accept", "application/vnd.spring-boot.actuator.v3+json");
+
+            final HttpServletRequest seen = wrapped(request);
+
+            assertThat(seen.getHeader("Accept"))
+                    .as("the actuator is not this service's surface and negotiates for itself")
+                    .isEqualTo("application/vnd.spring-boot.actuator.v3+json");
+        }
+
+        @Test
+        void every_other_header_should_be_left_alone() throws Exception {
+            final MockHttpServletRequest request =
+                    new MockHttpServletRequest("GET", "/operations/flag");
+            request.addHeader("CJSCPPUID", "3f2504e0-4f89-11d3-9a0c-0305e82c3301");
+            request.setContentType(FORGED);
+
+            final HttpServletRequest seen = wrapped(request);
+
+            assertThat(seen.getHeader("CJSCPPUID"))
+                    .isEqualTo("3f2504e0-4f89-11d3-9a0c-0305e82c3301");
         }
     }
 
