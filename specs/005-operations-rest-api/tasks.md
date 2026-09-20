@@ -798,6 +798,19 @@ of them.
       whole set conditional on `courtregister.operations.enabled`. **Reads the generation property;
       does not change it** (004 owns that block). Green: T040.
 
+      **Half of this landed in gate round 1's remediation**, because it was not a shape improvement
+      but a crash: `courtregister.operations.enabled=false` withdrew the only `BatchListingService`
+      bean while the controllers went on being component-scanned, so the switch could not be turned
+      off without an `UnsatisfiedDependencyException` at refresh, and `FlagController` went on
+      serving `/operations/flag` whatever it said. The three controllers, the action filter and the
+      listing bean now all carry
+      `@ConditionalOnProperty(courtregister.operations.enabled, matchIfMissing = true)`;
+      `OperationsErrorAttributes` deliberately does not, because a pod with the surface off still
+      answers whatever an operator tried and Boot's own body for that echoes the path they typed.
+      `HttpSurfaceTest.WithTheOperationsApiSwitchedOff` is the context case over the real scan.
+      What is left for T041 is the generation-property half: the not-wired fallback, and folding
+      the ad-hoc `@Profile("!test")` on the two listing controllers into the same gating.
+
 ---
 
 ## Phase 8: The contract, the audit facts, and the real filter (7 tasks)

@@ -6,6 +6,7 @@ import java.time.format.DateTimeParseException;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -34,9 +35,17 @@ import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
  * two repositories are declared `!test` in the processed-log configuration, that profile has no
  * database at all, and a controller over readers that do not exist is a context that will not
  * refresh.
+ *
+ * <p><strong>And the same condition the listings carry</strong>, because
+ * {@code courtregister.operations.enabled=false} is what stops this service answering the
+ * operator's paths at all (FR-044). The switch withdraws the listings; a controller left scanned
+ * over a listing nothing contributes is a pod that will not start, which is the one thing a
+ * deployment shape setting may not do.
  */
 @RestController
 @Profile("!test")
+@ConditionalOnProperty(prefix = "courtregister.operations", name = "enabled",
+        havingValue = "true", matchIfMissing = true)
 public class BatchesController {
 
     /** An instance that names nowhere, which is how the field is kept out of the body. */

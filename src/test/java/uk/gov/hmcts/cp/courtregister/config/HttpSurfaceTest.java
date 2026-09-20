@@ -222,6 +222,107 @@ class HttpSurfaceTest {
     }
 
     /**
+     * The same pod with the operations API switched off (FR-044).
+     *
+     * <p>{@code courtregister.operations.enabled} is deployment shape rather than a cutover lever,
+     * so it has one obligation above every other: <strong>turning it off must cost the pod
+     * nothing</strong>. The controllers, the action filter and the listings they call go away
+     * together; a controller left behind over a listing nothing contributes would be an
+     * {@code UnsatisfiedDependencyException} at refresh, and a switch that crashes the pod is not a
+     * switch.
+     *
+     * <p>Asserted over the real component scan and on a real profile, because that is the only
+     * shape the crash has: a slice test that never scans the controllers, and the {@code test}
+     * profile on which they are not registered at all, are both blind to it.
+     *
+     * <p>The error body is asserted too. The bounded error attributes are deliberately
+     * <em>not</em> conditional: a pod that serves none of the seven paths still answers whatever an
+     * operator tried, and Boot's own body for a 404 echoes the path they typed (FR-025, FR-027).
+     */
+    @Nested
+    @NestedTestConfiguration(NestedTestConfiguration.EnclosingConfiguration.OVERRIDE)
+    @ExtendWith(WorkloadIdentityStub.class)
+    @SpringBootTest(properties = {
+        "courtregister.operations.enabled=false",
+        "courtregister.generation.enabled=true",
+        "courtregister.generation.completion=event",
+        "courtregister.generation.sdg-mode=LIVE",
+        "courtregister.generation.nn-mode=LIVE",
+        "courtregister.generation.fileservice-mode=LIVE",
+        "courtregister.generation.flag-mode=LIVE",
+        "courtregister.fileservice.url=jdbc:postgresql://fileservice.internal:5432/fileservice",
+        "courtregister.feature.endpoint=https://appconfig.internal",
+        "courtregister.feature.label=ste86",
+        "courtregister.endpoints.systemdocgenerator=http://systemdocgenerator.internal:8080",
+        "courtregister.endpoints.notificationnotify=http://notificationnotify.internal:8080",
+        "courtregister.endpoints.system-user-id=00000000-0000-4000-8000-000000000000",
+        "courtregister.email.templates.cr_standard=5c9a0e21-3d47-4f18-9b62-0a71c4e8d530",
+        "courtregister.payload.mode=STUB",
+        "courtregister.referencedata.mode=STUB",
+        "courtregister.consumer.enabled=false",
+        "spring.artemis.broker-url=tcp://localhost:61616",
+        "spring.artemis.embedded.enabled=true",
+        "spring.artemis.embedded.queues=public.event"})
+    @AutoConfigureMockMvc
+    @DisplayName("with the operations API switched off")
+    class WithTheOperationsApiSwitchedOff {
+
+        /** The bean that registers the action filter, by the name its factory method gives it. */
+        private static final String ACTION_FILTER = "operationsActionFilter";
+
+        /** The bean that renders every body this service does not write itself. */
+        private static final String ERROR_ATTRIBUTES = "operationsErrorAttributes";
+
+        private final MockMvc mockMvc;
+
+        private final ApplicationContext context;
+
+        @Autowired
+        WithTheOperationsApiSwitchedOff(final MockMvc mockMvc, final ApplicationContext context) {
+            this.mockMvc = mockMvc;
+            this.context = context;
+        }
+
+        @Test
+        @DisplayName("the pod starts and holds no operations controller")
+        void the_switch_should_take_the_controllers_away_without_taking_the_pod_down() {
+            assertThat(controllerBeans(context))
+                    .as("the context refreshed at all, which is the first half of the assertion, "
+                            + "and what is left of our HTTP surface is nothing")
+                    .containsExactly(ERROR_FALLBACK);
+        }
+
+        @Test
+        @DisplayName("the action filter goes with them and the bounded error body stays")
+        void the_switch_should_withdraw_the_filter_and_keep_the_error_body() {
+            assertThat(context.containsBean(ACTION_FILTER))
+                    .as("a pod that answers none of the seven paths has no action to name")
+                    .isFalse();
+            assertThat(context.containsBean(ERROR_ATTRIBUTES))
+                    .as("a 404 is still answered, and Boot's own body for one echoes the path the "
+                            + "caller typed")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("an operations path is refused in bounded fields, echoing nothing")
+        void an_operations_path_should_be_refused_without_echoing_what_was_asked_for()
+                throws Exception {
+            final String body = mockMvc.perform(get("/operations/flag"))
+                    .andExpect(status().isUnauthorized())
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(body)
+                    .as("nothing of ours is mapped there any more and no action is derived for it, "
+                            + "so the authorisation filter refuses an unidentified caller before "
+                            + "the container gets as far as saying nothing is served - and "
+                            + "whatever comes back, none of it is what the caller asked for. What "
+                            + "the bounded body itself carries is OperationsErrorAttributesTest's")
+                    .doesNotContain("/operations");
+        }
+    }
+
+    /**
      * Every bean that serves HTTP, by the two annotations that make one.
      *
      * <p>{@code @RestController} carries {@code @Controller}, so the first name would find both;

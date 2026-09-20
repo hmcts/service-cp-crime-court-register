@@ -27,15 +27,21 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * of {@code cp-audit-filter-springboot} (fixed at {@code +50}), because both of them read the
  * action name this one derives (research R11).
  *
- * <p>Registered only where the endpoints are served. {@code courtregister.operations.enabled} is
- * deployment shape and not a cutover lever (FR-044): it decides whether this service answers the
- * operator's seven paths at all, and a pod that does not answer them has no action to name. The
- * default is <strong>on</strong>, here as on {@link OperationsProperties}, so a deployment that
- * says nothing gets the filter.
+ * <p><strong>The switch is on the beans, not on the class.</strong>
+ * {@code courtregister.operations.enabled} is deployment shape and not a cutover lever (FR-044):
+ * it decides whether this service answers the operator's seven paths at all, and a pod that does
+ * not answer them has no action to name - so the filter and the listings it would call are
+ * conditional. The error attributes are <em>not</em>, because a pod with the surface switched off
+ * still answers a 404 to whatever an operator tried, and Boot's own body for one echoes the path
+ * they typed (FR-025, FR-027). The default is <strong>on</strong>, here as on
+ * {@link OperationsProperties}, so a deployment that says nothing gets the filter.
+ *
+ * <p>Switching it off must never cost the pod its start-up, which is why the three controllers
+ * carry the same condition: a controller left scanned over a listing that is no longer contributed
+ * is an {@code UnsatisfiedDependencyException} at refresh, and a switch that crashes the pod is not
+ * a switch.
  */
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnProperty(prefix = "courtregister.operations", name = "enabled",
-        havingValue = "true", matchIfMissing = true)
 public class OperationsWebConfig {
 
     /**
@@ -48,6 +54,8 @@ public class OperationsWebConfig {
      * @return the registration, ordered ahead of both estate filters
      */
     @Bean
+    @ConditionalOnProperty(prefix = "courtregister.operations", name = "enabled",
+            havingValue = "true", matchIfMissing = true)
     public FilterRegistrationBean<OperationsActionFilter> operationsActionFilter() {
         final FilterRegistrationBean<OperationsActionFilter> registration =
                 new FilterRegistrationBean<>(new OperationsActionFilter());
@@ -86,6 +94,8 @@ public class OperationsWebConfig {
      */
     @Bean
     @Profile("!test")
+    @ConditionalOnProperty(prefix = "courtregister.operations", name = "enabled",
+            havingValue = "true", matchIfMissing = true)
     public BatchListingService batchListingService(final RegisterBatchRepository batchRepository,
             final RegisterNotificationRepository notificationRepository,
             final RegisterStore registerStore) {

@@ -34,10 +34,18 @@ import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
  * declared {@code !test}, so a {@code test}-profile context with generation switched on has the
  * switch without the bean - which is the exact shape four of this repository's context suites run
  * in.
+ *
+ * <p><strong>And on {@code courtregister.operations.enabled}, the switch that decides whether this
+ * service answers the operator's paths at all</strong> (FR-044). Without it this endpoint went on
+ * serving {@code /operations/flag} on a pod whose operations API had been switched off - a surface
+ * the switch was supposed to have taken away, and one the action filter is no longer registered in
+ * front of.
  */
 @RestController
 @Profile("!test")
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
+@ConditionalOnProperty(prefix = "courtregister.operations", name = "enabled",
+        havingValue = "true", matchIfMissing = true)
 public class FlagController {
 
     /** The one lever's reader, asked once per call and never remembered. */

@@ -4,6 +4,7 @@ import java.net.URI;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -24,10 +25,15 @@ import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
  * would leave every one waiting for somebody to find it.
  *
  * <p>{@code @Profile("!test")} for the reason {@link BatchesController} carries it: the store is
- * declared `!test` in the processed-log configuration and that profile has no database.
+ * declared `!test` in the processed-log configuration and that profile has no database. And
+ * {@code courtregister.operations.enabled} for the reason it carries that: the switch that stops
+ * this service answering the operator's paths withdraws the listings too, and a controller left
+ * scanned over one that is gone is a pod that will not start (FR-044).
  */
 @RestController
 @Profile("!test")
+@ConditionalOnProperty(prefix = "courtregister.operations", name = "enabled",
+        havingValue = "true", matchIfMissing = true)
 public class RegistersController {
 
     /** An instance that names nowhere, which is how the field is kept out of the body. */
