@@ -131,6 +131,23 @@ public class GenerationMetrics {
     public static final String PAYLOAD_MISMATCH = "payload-mismatch";
 
     /**
+     * The {@code reason} label of an outcome of ours that is missing what it is an outcome about.
+     *
+     * <p>A {@code document-available} that names no document or no instant, and a
+     * {@code generation-failed} that names no instant. Both identifiers are there and both check
+     * out, so it is neither {@link #UNKNOWN_CORRELATION} nor {@link #MISSING_PAYLOAD_ID}: what is
+     * missing is the announcement's own subject, which is a renderer or a broker to look at rather
+     * than a correlation to go chasing. One reason for both shapes because they are one fault, with
+     * the event's name on the WARN beside it for whoever reads further.
+     *
+     * <p>It reads nought on a healthy estate and it is the reading that says a batch went nowhere
+     * for a reason nobody would otherwise see: nothing re-asks systemdocgenerator about a batch any
+     * more, so an incomplete announcement is the whole of what was ever said about that render, and
+     * the batch waits for the next run to give it back.
+     */
+    public static final String INCOMPLETE_OUTCOME = "incomplete-outcome";
+
+    /**
      * The {@code reason} label of a delivery whose body would not parse at all.
      *
      * <p>The four readings above are all taken from an envelope this service read: they say what a

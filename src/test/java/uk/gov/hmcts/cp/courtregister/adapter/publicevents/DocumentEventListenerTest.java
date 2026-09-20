@@ -352,8 +352,8 @@ class DocumentEventListenerTest {
     /**
      * A document this service asked for, which is the only kind that moves a batch.
      *
-     * <p>Both outcomes go to the same port naming EVENT, because the reconciler will apply the same
-     * two answers naming RECONCILER and there is exactly one code path for what an outcome means.
+     * <p>Both outcomes go to the same port naming EVENT, which is the one way an outcome is
+     * learned: the topic is the whole of what this service hears about a render it asked for.
      */
     @Nested
     @DisplayName("a document this service asked for")
@@ -440,6 +440,61 @@ class DocumentEventListenerTest {
                             + "batch, and a reading that says otherwise sends support after a "
                             + "correlation that was never lost")
                     .isEqualTo(ABSENT);
+        }
+
+        /**
+         * The third absence: an outcome of ours that names both identifiers and leaves out the
+         * thing it is an outcome about.
+         *
+         * <p>A {@code document-available} with no document or no instant, and a
+         * {@code generation-failed} with no instant, are applied nowhere for the same reason as the
+         * two above - there is nothing to apply - and until now they were the only drops on this
+         * listener that moved no counter. That mattered more once the grace-period reconciler went:
+         * nothing re-asks about such a batch any more, so the whole of what happens to it is the
+         * next run giving it back, and the only trace of the announcement that went nowhere was a
+         * WARN in the log index. A path that drops something moves a counter.
+         *
+         * <p>One bounded reason for both shapes, because they are one fault - systemdocgenerator
+         * announced an outcome without the fields that outcome consists of - and because the event
+         * name is on the line beside it for whoever reads further. It is not
+         * {@link GenerationMetrics#MISSING_PAYLOAD_ID}: that reading is about the cross-check going
+         * missing from an otherwise complete announcement, and this one is about the announcement
+         * itself being incomplete, which is a renderer to look at rather than a correlation.
+         */
+        @Test
+        void a_document_available_with_no_document_should_be_counted_under_its_own_reason()
+                throws JMSException {
+            listener.onPublicEvent(message(DocumentEventListener.DOCUMENT_AVAILABLE,
+                    documentAvailableWithoutTheDocument()));
+
+            verifyNoInteractions(sink);
+            assertThat(ignored(GenerationMetrics.INCOMPLETE_OUTCOME))
+                    .as("an announcement missing the document it announces is dropped, and a drop "
+                            + "that moves no counter is an outcome that vanished between the "
+                            + "renderer and the register")
+                    .isEqualTo(1);
+            assertThat(ignored(GenerationMetrics.MISSING_PAYLOAD_ID))
+                    .as("and it is not the missing-payload-id reading: this event carried its "
+                            + "cross-check and left out its subject")
+                    .isEqualTo(ABSENT);
+        }
+
+        /**
+         * The same fault on the other event. A refusal with no {@code failedTime} cannot be applied
+         * either - the instant is what the batch's ending is stamped with - so it is dropped, and
+         * counted under the same reason as the document that announced no document.
+         */
+        @Test
+        void a_generation_failed_with_no_instant_should_be_counted_under_the_same_reason()
+                throws JMSException {
+            listener.onPublicEvent(message(DocumentEventListener.GENERATION_FAILED,
+                    generationFailedWithoutInstant()));
+
+            verifyNoInteractions(sink);
+            assertThat(ignored(GenerationMetrics.INCOMPLETE_OUTCOME))
+                    .as("both shapes of an outcome that is missing what it is about are one fault, "
+                            + "counted on one series, with the event name on the line beside it")
+                    .isEqualTo(1);
         }
 
         /**
@@ -841,6 +896,21 @@ class DocumentEventListenerTest {
                 }"""
                 .formatted(DocumentEventListener.GENERATION_FAILED, BATCH_ID, PAYLOAD_FILE_ID,
                         SDG_REASON, BATCH_ID, originatingSource);
+    }
+
+    /**
+     * A {@code generation-failed} for a document this service asked for, with {@code failedTime}
+     * taken out.
+     *
+     * <p>The schema requires the member, so this is not a refusal systemdocgenerator publishes; it
+     * is the one the guard in the listener exists for. Without the instant there is nothing to
+     * stamp the batch's ending with, so the event is applied nowhere and counted.
+     *
+     * @return the envelope as text, one required member short
+     */
+    private static String generationFailedWithoutInstant() {
+        return generationFailed(DocumentEventListener.ORIGINATING_SOURCE)
+                .replace("  \"failedTime\": \"2026-09-05T18:06:23.004+01:00\",\n", "");
     }
 
     /**
