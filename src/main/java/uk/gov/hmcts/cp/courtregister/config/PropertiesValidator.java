@@ -316,11 +316,12 @@ public class PropertiesValidator implements InitializingBean {
     private final OperationsProperties operations;
 
     /**
-     * The resolved environment, kept because two of the operations refusals are about settings this
-     * service does not own and therefore does not bind: {@code audit.http.*} belongs to
-     * {@code cp-audit-filter-springboot} and {@code cp.audit.*} to its transport. Re-declaring
-     * either under a {@code courtregister.} key would give a deployment two places to set one
-     * thing, which is the same argument {@link #brokerUrl} below is read from here for.
+     * The resolved environment, kept because most of the operations refusals are about settings
+     * this service does not own and therefore does not bind: {@code authz.http.*} belongs to
+     * {@code cp-auth-rules-filter}, {@code audit.http.*} to {@code cp-audit-filter-springboot} and
+     * {@code cp.audit.*} to its transport. Re-declaring any of them under a
+     * {@code courtregister.} key would give a deployment two places to set one thing, which is the
+     * same argument {@link #brokerUrl} below is read from here for.
      */
     private final Environment environment;
 
@@ -342,8 +343,8 @@ public class PropertiesValidator implements InitializingBean {
      * @param feature     where the one lever is read from
      * @param report      the morning exception report's settings
      * @param operations  the operations API's settings
-     * @param environment the resolved environment, for Spring's own broker key and for the two
-     *                    audit libraries' keys
+     * @param environment the resolved environment, for Spring's own broker key and for the
+     *                    authorisation and audit libraries' keys
      */
     public PropertiesValidator(final CourtRegisterProperties properties,
                                final GenerationProperties generation,
@@ -376,7 +377,8 @@ public class PropertiesValidator implements InitializingBean {
      *
      * @param operations  the operations API's settings
      * @param properties  the bound settings, for the deployed/local discriminator alone
-     * @param environment the resolved environment, for the two audit libraries' own keys
+     * @param environment the resolved environment, for the authorisation and audit libraries'
+     *                    own keys
      * @throws IllegalStateException if any rule is broken
      */
     /* default */ static void validateOperations(final OperationsProperties operations,
