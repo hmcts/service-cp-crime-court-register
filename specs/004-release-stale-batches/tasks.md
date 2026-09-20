@@ -1344,6 +1344,19 @@ durations and a clock. No Spring context, no Docker.
       decide from `system_generated`, in the statement's own predicate.)
 
 **Phase close**: `flock … ./gradlew build` green; review gate.
+(at the tree carrying T011, T012, T013, T014 and the two Phase 2 gate closures before them,
+`flock -w 7200 … ./gradlew jacocoTestReport build -Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0,
+10m 24s, **3671 tests over 580 suites, 0 failures, 0 errors** — fourteen more than gate 7's close,
+being `StaleBatchReleaserTest`'s eleven, `StoreOutageTest`'s one and `RegisterStoreIT`'s two twins —
+with `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification`
+all green and none of them loosened. The coverage report was regenerated in that same run and reads
+**LINE 6642/6849 = 0.9698 and BRANCH 2009/2228 = 0.9017** against the unchanged gate of LINE 0.88 /
+BRANCH 0.85; it contains `releaseStale`, which is how a reader can tell it is this tree's report.
+No migration was added and no schema changed: the phase adds one class, three counters and one
+clause to two existing statements.
+The pass is **not wired into the run**, which is Phase 4's T015-T020: it has no bean, the job's
+constructor is untouched, and the only thing that constructs it outside its own suite is the
+telemetry drive. The reconciler is untouched too, which is Phase 5's.)
 
 ---
 
