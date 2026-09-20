@@ -196,8 +196,9 @@ class GenerationWiringContextTest {
                 .as("the requesting leg the run asks once per batch")
                 .isNotEmpty();
         assertThat(context.getBeanNamesForType(GenerationReconciler.class))
-                .as("the safety net, which carries a schedule of its own and therefore has to be a "
-                        + "bean for that schedule to be seen at all")
+                .as("the retired safety net, kept as a bean until T022 deletes the class; its "
+                        + "timer is gone, so the run's first act is the only thing that decides a "
+                        + "stale batch")
                 .isNotEmpty();
         assertThat(context.getBeanNamesForType(PdfPayloadMapper.class))
                 .as("progression's payload generator, which the requesting leg maps every batch "

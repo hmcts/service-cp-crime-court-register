@@ -40,8 +40,9 @@ import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
  * enabled context now - this one, the report's and the intake sweep's - and each scheduled method
  * names the one it belongs on, so the run still cannot land on a thread anything else is using. One
  * thread, because the run is sequential by design and a pool would only make it look otherwise. The
- * transitional grace-period reconciler shares this scheduler and always has; what changed is that
- * it says so.
+ * run is now the only thing on this scheduler: the grace-period reconciler shared it until its timer
+ * was removed, and the pass that replaced it is the run's own first statement rather than a
+ * schedule.
  *
  * <p><strong>Only where the downstream half is deployed.</strong> The whole of this is conditional
  * on {@code courtregister.generation.enabled}, so an intake-only pod holds no lock, keeps no
@@ -64,13 +65,14 @@ import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
 public class SchedulingConfig {
 
     /**
-     * The bean name of the scheduler the two generation surfaces run on.
+     * The bean name of the scheduler the nightly run happens on.
      *
      * <p>The name of the bean {@link #registerGenerationScheduler()} already declares, published so
-     * that {@code @Scheduled(scheduler = ...)} on {@code RegisterGenerationJob.run} and
-     * {@code GenerationReconciler.reconcileScheduled} names a constant rather than a string spelled
-     * twice. No bean is added, renamed or moved by it: the two surfaces go on sharing one scheduler
-     * exactly as they do today, and only the routing stops being implicit.
+     * that {@code @Scheduled(scheduler = ...)} on {@code RegisterGenerationJob.run} names a constant
+     * rather than a string spelled twice. Two surfaces named it until the reconciler's timer was
+     * removed and now one does; no bean was added, renamed or moved by either change, and the
+     * routing stays explicit because a method naming no scheduler is routed to whichever of the
+     * three Spring resolves for the context as a whole.
      */
     public static final String GENERATION_SCHEDULER = "registerGenerationScheduler";
 
@@ -80,11 +82,11 @@ public class SchedulingConfig {
     private static final Logger LOG = LoggerFactory.getLogger(SchedulingConfig.class);
 
     /**
-     * The executor the run and the grace-period reconciler happen on.
+     * The executor the nightly run happens on.
      *
-     * <p>Named by {@link #GENERATION_SCHEDULER}, which both of their {@code @Scheduled} methods
-     * carry: with three schedulers on the context, a method that named none would be routed to
-     * whichever one Spring resolved for the context as a whole.
+     * <p>Named by {@link #GENERATION_SCHEDULER}, which the run's {@code @Scheduled} method carries:
+     * with three schedulers on the context, a method that named none would be routed to whichever
+     * one Spring resolved for the context as a whole.
      *
      * @return a single-threaded scheduler named for the run it carries
      */
