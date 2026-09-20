@@ -384,7 +384,7 @@ the same application services the CLI called:
   into a response.
 - **Both filters are on by default, and the pod always starts.** `authz.http.enabled` and
   `audit.http.enabled` read `true` in `application.yaml` against library defaults of off, so a
-  deployment that says nothing is authorised and audited (FR-045, constitution 5.0.0). They are
+  deployment that says nothing is authorised (FR-045, constitution 5.0.1). They are
   ordinary configuration: an operator may turn either off, the compose environment and the `test`
   profile do exactly that with the reason written beside them, and **start-up never refuses on the
   combination** — no cross-field rule against `courtregister.operations.enabled`, no
@@ -392,6 +392,15 @@ the same application services the CLI called:
   refused is a **value** that cannot mean what it says (FR-053): an audit transport switched on with
   no host or a port outside 1..65535, an audit filter switched on with no OpenAPI document to
   resolve, and an unusable `supersede-max-age` or `lock-wait`.
+- **Being audited takes the transport key as well, and that one is the deployment's.**
+  `audit.http.enabled` builds nothing on its own: every `audit.http.*` bean the starter declares
+  sits inside the `@AutoConfiguration` class `cp.audit.enabled` gates, and this service ships
+  `cp.audit.enabled: ${CP_AUDIT_ENABLED:false}` so a laptop with no audit broker starts. Condition
+  (b) is therefore met by a deployed values file setting `CP_AUDIT_ENABLED=true` with the broker's
+  connection from Key Vault — a values file without it serves the operations API **unaudited**.
+  Nothing refuses that combination, so the pod **says** it: one WARN at start-up naming both
+  settings, because the filter that would have published was never constructed and the one that is
+  swallows its own publishing failures.
 - **Actuator is not part of this surface** and is not behind these filters.
 
 ## Idempotency and Supersession

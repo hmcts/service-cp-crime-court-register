@@ -551,11 +551,21 @@ courtregister:
 # resolves the caller's usersgroups membership against the allow rules, and
 # `cp-audit-filter-springboot` publishes a request and a response event for every call.
 #
-# BOTH DEFAULT ON, and that is the whole of how conditions (a) and (b) of constitution Principle III
-# are carried (5.0.0, 2026-09-20). Each library's own auto-configuration is
+# BOTH DEFAULT ON, and that is how conditions (a) and (b) of constitution Principle III are carried
+# (5.0.1, 2026-09-20). Each library's own auto-configuration is
 # `@ConditionalOnProperty(havingValue = "true")` with no `matchIfMissing`, so a deployment that said
 # nothing would get no authorisation filter and no audit publisher; these two lines reverse that, so
-# a deployment that says nothing is authorised and audited.
+# a deployment that says nothing is authorised.
+#
+# AUDITED TAKES ONE MORE KEY, AND IT IS NOT THIS FILE'S. `audit.http.enabled` builds no filter on
+# its own: every `audit.http.*` bean the starter declares sits inside the `@AutoConfiguration` class
+# `cp.audit.enabled` gates, and that one is `false` below so a laptop with no audit broker starts.
+# Condition (b) is completed by the deployed values file setting `CP_AUDIT_ENABLED=true` with the
+# broker's connection from Key Vault (spec FR-045, deployment gate 5). A pod with this switch on
+# over a transport that is off serves the operations API UNAUDITED; nothing refuses it - the
+# switches are configuration - so `PropertiesValidator` says it at WARN once, at start-up, because
+# the filter that would have published was never constructed and the one that is swallows every
+# publishing failure.
 #
 # They are ordinary configuration, not a start-up condition. An operator may turn either off -
 # `AUTHZ_HTTP_ENABLED=false`, `HTTP_AUDIT_ENABLED=false` - and the pod comes up: there is no
@@ -584,11 +594,13 @@ audit:
 # that said nothing would be a service that would not start on a laptop.
 #
 # Off unless an environment says otherwise, therefore, and every environment that serves the
-# operations API says otherwise: the hosts, port, credentials and TLS material arrive from Key Vault
-# through the CSI driver, and none of them is ever a value in this file. `audit.http.*` - the HTTP
-# half, which is what actually publishes an operations call - is the separate block above, and
-# every bean it gates lives inside the auto-configuration class this key gates, so the HTTP half on
-# over a transport that is off publishes nothing and traps nothing.
+# operations API MUST say otherwise: this key is the second half of Principle III's condition (b),
+# and a values file without `CP_AUDIT_ENABLED=true` serves the operations API unaudited. The hosts,
+# port, credentials and TLS material arrive from Key Vault through the CSI driver, and none of them
+# is ever a value in this file. `audit.http.*` - the HTTP half, which is what actually publishes an
+# operations call - is the separate block above, and every bean it gates lives inside the
+# auto-configuration class this key gates, so the HTTP half on over a transport that is off
+# publishes nothing and traps nothing - which is the state the start-up WARN names.
 #
 # Switched ON, this key is what makes `cp.audit.hosts` and `cp.audit.port` required: startup refuses
 # a transport that names no broker or a port outside 1..65535, because the audit filter swallows
