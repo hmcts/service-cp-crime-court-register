@@ -142,12 +142,12 @@ class StaleReleaseConcurrencyIT {
     private static final int ONE_BATCH = 1;
 
     /**
-     * How much earlier than the register it would have to replace the held share is stamped.
+     * How much later than the register it replaces the re-share held against the key is stamped.
      *
      * <p>Small enough to leave the share on the same register date, because it is the ordering and
-     * not the day that makes the key unreleasable.
+     * not the day that decides which of two shares of one hearing the day is still to render.
      */
-    private static final Duration EARLIER_SHARE = Duration.ofHours(1);
+    private static final Duration LATER_SHARE = Duration.ofHours(1);
 
     /** How often the staged window asks whether the pass has reached the row it is held at. */
     private static final int POLL_MILLIS = 20;
@@ -450,17 +450,25 @@ class StaleReleaseConcurrencyIT {
      * left exactly as it was found and <strong>reported</strong> as contended, beside the batches
      * that were released.
      *
-     * <p><strong>How the key is held against every attempt, without a stopwatch.</strong> A share
-     * of the same hearing that is <em>stamped earlier</em> than the register the stale batch holds
-     * is recorded active and unbatched - the recorder's incumbent search is over unbatched rows and
-     * the batch's register is batched, so there is nothing for it to supersede. The release's
-     * successor search is the mirror of that and is ordered: it looks for a register stamped
-     * <em>later</em> than the one it is giving back, and this one is not. So the release hands its
-     * register back beside a row the key already has, {@code idx_output_active_register_key}
-     * refuses the second active row, and it refuses it on every attempt because the row is
-     * committed and going nowhere. That is a share delivered out of order, which a broker that
-     * redelivers produces, and it is staged as data rather than as timing precisely so that the
-     * property is pinned by the assertion and not by which thread won.
+     * <p><strong>How the key is taken again inside every attempt, without a stopwatch.</strong>
+     * There is no arrangement of <em>rows</em> that can do it any more, and that is a property of
+     * the statement rather than a gap in this suite: a share of the key committed before the
+     * statement begins is in its snapshot, so the release either supersedes it - where the register
+     * being given back is the later one - or is superseded against it, and either way the key ends
+     * with one active row. The only refusal left is a share that commits <em>after</em> the
+     * snapshot and before the write, on every one of the three attempts, and chaining three of
+     * those windows by timing was built and abandoned at review gate 3: the gap between a refused
+     * attempt's rollback and the next holder taking the row cannot be closed from the test.
+     *
+     * <p>So it is staged by the database instead. An {@code AFTER UPDATE} trigger, scoped by
+     * {@code WHEN} to this round's hearing and dropped in a {@code finally}, takes the day's active
+     * register back the moment the release gives it up - an existing superseded share of the same
+     * key, invisible to the statement's snapshot, made active again inside the attempt's own
+     * transaction. Every attempt therefore meets {@code idx_output_active_register_key} on the day's
+     * key, and rolls back with the share it met, which is exactly what a re-share committing inside
+     * each window would produce and exactly the refusal the retry is bounded for. What is staged is
+     * the refusal; what is asserted is what the operation does with a batch it cannot release, and
+     * that is the contract this round is for.
      *
      * <p><strong>Why the second court centre is here.</strong> It is the isolation itself. One
      * statement over every stale batch takes the other court centre's release down with the refusal
@@ -479,14 +487,13 @@ class StaleReleaseConcurrencyIT {
         final UUID contendedCentre = UUID.randomUUID();
         final UUID otherCentre = UUID.randomUUID();
         final UUID heldKey = UUID.randomUUID();
-        try {
-            final RegisterBatch contended =
-                    staleBatch(contendedCentre, heldKey, UUID.randomUUID(), true);
-            final RegisterBatch other = staleBatch(otherCentre, true);
-            record(contendedCentre, heldKey, MONDAY_SHARED.minus(EARLIER_SHARE));
-            final Instant cutoff = cutoff();
-            final AtomicReference<StaleReleaseOutcome> answered = new AtomicReference<>();
+        final RegisterBatch contended =
+                staleBatch(contendedCentre, heldKey, UUID.randomUUID(), true);
+        final RegisterBatch other = staleBatch(otherCentre, true);
+        final Instant cutoff = cutoff();
+        final AtomicReference<StaleReleaseOutcome> answered = new AtomicReference<>();
 
+        withTheKeyTakenBackInsideEveryAttempt(contendedCentre, heldKey, () -> {
             final List<Throwable> escaped =
                     escaping(() -> answered.set(store.failAndReleaseStale(cutoff, cutoff)));
 
@@ -532,45 +539,83 @@ class StaleReleaseConcurrencyIT {
                     .as("nor any of the released day's, because its failure and its release "
                             + "were one act")
                     .isZero();
+        });
+    }
+
+    /**
+     * Runs the body with the day's active register taken back inside every attempt at it.
+     *
+     * <p>A re-share of the hearing is recorded and then superseded by hand, so the statement's
+     * snapshot sees a key with one active row and nothing to decide; an {@code AFTER UPDATE}
+     * trigger then makes that share active again the moment the release clears the stamp of the
+     * register it is giving back, inside the attempt's own transaction. The second active row is
+     * refused by {@code idx_output_active_register_key}, the attempt rolls back with the share it
+     * met, and the next attempt - a fresh snapshot, and the same trigger - meets it again.
+     *
+     * <p><strong>Scoped by {@code WHEN} to this round's hearing</strong>, so the several suites
+     * sharing this container are untouched by it, and <strong>dropped in a {@code finally}</strong>,
+     * because a trigger left behind would refuse the release of any batch holding a register of
+     * that hearing for every suite after it. Nothing is left held once it is gone: the share is
+     * superseded still, so the batch is releasable by the next run like any other.
+     *
+     * @param courtCentre this round's court centre
+     * @param hearingId   the hearing whose key is taken back, and the only rows the trigger sees
+     * @param refused     the pass, which is expected to meet the refusal on every attempt
+     */
+    private void withTheKeyTakenBackInsideEveryAttempt(final UUID courtCentre, final UUID hearingId,
+            final Runnable refused) {
+        record(courtCentre, hearingId, MONDAY_SHARED.plus(LATER_SHARE));
+        final UUID share = supersededByHand(courtCentre, hearingId);
+        final String name = "test_only_retake_" + courtCentre.toString().replace("-", "");
+        ProcessedLogTestSupport.jdbcClient()
+                .sql("CREATE FUNCTION " + name + "() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                        + "BEGIN UPDATE processed_output SET status = 'RECORDED', "
+                        + "superseded_at = NULL, superseded_by = NULL, updated_at = now() "
+                        + "WHERE output_id = '" + share + "'; RETURN NULL; END; $$")
+                .update();
+        ProcessedLogTestSupport.jdbcClient()
+                .sql("CREATE TRIGGER " + name + " AFTER UPDATE ON processed_output FOR EACH ROW "
+                        + "WHEN (OLD.batch_id IS NOT NULL AND NEW.batch_id IS NULL "
+                        + "AND NEW.hearing_id = '" + hearingId + "') "
+                        + "EXECUTE FUNCTION " + name + "()")
+                .update();
+        try {
+            refused.run();
         } finally {
-            letTheKeyGo(contendedCentre, heldKey);
+            ProcessedLogTestSupport.jdbcClient()
+                    .sql("DROP TRIGGER " + name + " ON processed_output")
+                    .update();
+            ProcessedLogTestSupport.jdbcClient().sql("DROP FUNCTION " + name + "()").update();
         }
     }
 
     /**
-     * Gives the held key up, because the operation under test answers for the whole store.
+     * Supersedes the share just recorded, so the statement's snapshot has nothing to decide.
      *
-     * <p>A batch nothing can release stays stale for ever, and every other suite sharing this
-     * container calls the same operation - so a key left held here would have each of them spend
-     * its three attempts on this round's batch at every call. The share is superseded the way a
-     * later share would have superseded it, and the batch is then released like any other; what the
-     * round proved is already asserted above, and this only stops it being asserted again, by
-     * accident, in somebody else's suite.
-     *
-     * <p><strong>Called from a {@code finally}</strong>, because the blast radius is the whole
-     * container and not this round. Soft assertions mean a failed assertion still reaches the end
-     * of the round, but a read that throws - a database that went away mid-round, a fixture that
-     * did not find what it looked for - would not, and the key would be left held for every suite
-     * after it. The cost of giving it up twice is nothing; the cost of not giving it up once is
-     * every other suite's stale release.
+     * <p>Written by hand rather than by a later re-share, because a re-share would supersede it
+     * <em>against</em> a successor and the trigger would then make a superseded row active beside
+     * one - a key with two active rows before the pass had done anything, which is not the
+     * arrangement being staged.
      *
      * @param courtCentre this round's court centre
-     * @param hearingId   the hearing whose out-of-order share held the key
+     * @param hearingId   the hearing whose active share is put out of the way
+     * @return the share, which is what the trigger takes the key back with
      */
-    private void letTheKeyGo(final UUID courtCentre, final UUID hearingId) {
-        ProcessedLogTestSupport.jdbcClient()
+    private UUID supersededByHand(final UUID courtCentre, final UUID hearingId) {
+        return ProcessedLogTestSupport.jdbcClient()
                 .sql("""
                         UPDATE processed_output
-                           SET superseded_at = now(), updated_at = now()
+                           SET status = 'SUPERSEDED', superseded_at = now(), updated_at = now()
                          WHERE court_centre_id = :courtCentre
                            AND hearing_id = :hearingId
                            AND batch_id IS NULL
                            AND superseded_at IS NULL
+                        RETURNING output_id
                         """)
                 .param("courtCentre", courtCentre)
                 .param("hearingId", hearingId)
-                .update();
-        store.failAndReleaseStale(cutoff(), cutoff());
+                .query(UUID.class)
+                .single();
     }
 
     /**

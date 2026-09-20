@@ -3041,6 +3041,14 @@ class RegisterStoreIT {
         /** The bounded code the pass writes, as the column holds it. */
         private static final String NOT_COMPLETED = "NOT_COMPLETED_BY_NEXT_RUN";
 
+        /**
+         * A share of the hearing stamped before the register the batch already holds.
+         *
+         * <p>Earlier than {@code MONDAY_SHARED} and on the same register date, because it is the
+         * ordering and not the day that decides which of two shares of one hearing is current.
+         */
+        private static final Instant MONDAY_OVERTAKEN = Instant.parse("2026-08-24T07:15:00Z");
+
         @Test
         void a_generating_batch_past_its_cutoff_is_failed_and_its_registers_released() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
@@ -3521,6 +3529,77 @@ class RegisterStoreIT {
                             + "run report reads as registers it re-batched must not include it")
                     .extracting(ReleasedBatch::registerDate, ReleasedBatch::releasedRegisters)
                     .containsExactly(tuple(MONDAY, 0));
+        }
+
+        /**
+         * The mirror of the case above: the share the batched register overtook.
+         *
+         * <p>A share delivered out of order - a redelivery that arrived behind the register it
+         * belongs in front of - is recorded <strong>active</strong>, because the recorder's
+         * incumbent search is over unbatched rows and the register the batch holds is batched, so
+         * there was nothing for it to supersede. The key then has an active row that is
+         * <em>earlier</em> than the register the release has to give back, and handing that
+         * register back beside it is the second active row {@code idx_output_active_register_key}
+         * refuses.
+         *
+         * <p>So the release decides it, the same way and in the same direction the recorder
+         * decides it: the later share wins. The register being given back is the later one, so the
+         * release supersedes the earlier row against it in the same statement. Latest share wins in
+         * both directions, and neither a recorder nor a release ever leaves a key with two active
+         * rows.
+         *
+         * <p>Without this the batch is contended on every run for ever: no fresh snapshot removes
+         * the earlier row, and the recorder will not supersede a batched register on its behalf, so
+         * the court centre day waits for a release no run can make.
+         */
+        @Test
+        void a_release_supersedes_the_share_it_overtook() {
+            final DistributionCommand batched = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_OVERTAKEN);
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), UUID.randomUUID());
+                // The hearing's earlier share is delivered after the later one is already in the
+                // batch, so the recorder writes it active: a batched register is not its to
+                // supersede.
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_OVERTAKEN), APPLICANT,
+                        RecordedFlagState.ON);
+                ageBatch(monday.batchId(), LAST_NIGHT);
+                released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the batch is released like any other: a key the release cannot decide is "
+                            + "a court centre day contended on every run for ever, because no "
+                            + "fresh snapshot removes a row that was committed before the "
+                            + "statement began")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+            softly.assertThat(mineContended(released.get()))
+                    .as("so it is not reported as contended, which is what it was while the "
+                            + "release could only supersede in one direction")
+                    .isEmpty();
+            softly.assertThat(supersessionOf(overtaken).map(SupersessionPair::supersededBy))
+                    .as("and the earlier share is superseded against the register being given "
+                            + "back, which is the same ordering the recorder applies when it is "
+                            + "the one that meets the two: the later share wins")
+                    .contains(outputIdOf(batched).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("so the key keeps exactly one active row, as it does after every other "
+                            + "write in this store")
+                    .containsExactlyInAnyOrder(RECORDED, SUPERSEDED);
+            softly.assertThat(activeUnbatched())
+                    .as("and the register the day is still to render is the one that came back, "
+                            + "rather than the share it had already overtaken")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(batched).orElse(null));
+            softly.assertThat(mineReleased(released.get()))
+                    .as("which is the one register the run is told it gave back")
+                    .extracting(ReleasedBatch::registerDate, ReleasedBatch::releasedRegisters)
+                    .containsExactly(tuple(MONDAY, 1));
         }
 
         @Test
