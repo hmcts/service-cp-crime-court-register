@@ -159,10 +159,12 @@ it — `409 email-output-disabled` if that output is switched off in this enviro
 curl -s localhost:8082/operations/flag
 ```
 
-Locally `authz.http.enabled` and `cp.audit.enabled` are off, so no identity header is needed and
-nothing is published to an audit broker. That is a **local** convenience and is not how any
-deployed environment is configured: a deployed pod refuses to start with the operations API enabled
-and HTTP audit off.
+The compose environment switches `authz.http.enabled`, `audit.http.enabled` and `cp.audit.enabled`
+off, so no identity header is needed and nothing is published to an audit broker. All three default
+to secure — `true` for the two filters in `application.yaml` — and the compose file overrides them
+deliberately, with the reason beside each. That is a **local** convenience and is not how any
+deployed environment is configured; a deployed pod that had them off would still start, so what
+keeps them on there is the values file and the deployment review, not a refusal.
 
 ## What is gone
 

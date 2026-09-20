@@ -1,7 +1,60 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 4.0.0 → 4.1.0
+Version change: 4.1.0 → 5.0.0
+Bump rationale: MAJOR - Principle III's conditions (a) and (b) are redefined
+                (2026-09-20, design owner). 4.1.0 made them start-up refusals:
+                a pod that set `courtregister.servicebus.namespace` MUST refuse
+                to start with the operations API enabled and either
+                `authz.http.enabled` or the audit path off. 5.0.0 says the pod
+                starts. The two switches are ordinary configuration an operator
+                may turn on or off, and what carries the conditions instead is
+                the DEFAULT: both are `true` in `application.yaml` and in every
+                deployed values file, which is the opposite of the two
+                libraries' own defaults and is the half of the old rule that
+                was load-bearing.
+
+                MAJOR and not MINOR: relaxing a NON-NEGOTIABLE condition is a
+                redefinition. A deployed environment may now do something it
+                could not do before - start with a filter switched off - and a
+                reader of 4.1.0 would get that wrong. The local-loop exemption
+                4.1.0 added is REMOVED rather than widened, because what it was
+                an exemption from no longer exists; so is the
+                `courtregister.servicebus.namespace` discriminator, which made
+                a laptop and a deployed pod two different products.
+
+                Why the conditions survive the relaxation: a deployment that
+                says nothing about either switch is authorised and audited, the
+                deployment gates in the increment's spec still require the audit
+                connection in STE, and every endpoint is still reviewed for its
+                allow rule and its audit coverage. What is gone is a pod that
+                would not come up on a configuration an operator had chosen
+                deliberately - which is not a security control, it is a service
+                that cannot be operated.
+
+Proposed in: specs/005-operations-rest-api/spec.md, the amendment section's
+third proposal, and FR-045/FR-053. Pinned by
+`ConfigurationValidationTest.OperationsSettings`, whose cases are the defaults
+being true, a pod with both switches off starting, and the value-shape refusals
+that remain.
+
+Modified sections (this amendment): Principle III - conditions (a) and (b) are
+restated as default-on configuration, and the "Where (a) and (b) are enforced"
+paragraph and the local-loop exemption paragraph are removed with the refusal
+they described. Nothing else changes; Principles I, II, IV-VIII untouched.
+
+Templates / guidance reviewed:
+  - .claude/rules/design_rules.md            ⚠ UPDATED - the operations-API
+      section's "Both filters are enforced at start-up" bullet described the
+      refusal and is rewritten to the defaults.
+  - specs/005-operations-rest-api/quickstart.md ⚠ UPDATED - its "Local" section
+      said a deployed pod refuses to start.
+  - CLAUDE.md, .claude/rules/{workflow,technical-rules}.md,
+    .claude/agents/*.md                      ✅ compatible - none of them
+      states a start-up refusal for either switch.
+  - .specify/templates/*                     ✅ compatible - no change.
+
+Previous amendment (4.0.0 → 4.1.0):
 Bump rationale: MINOR - conditions (a) and (b) of Principle III's operations
                 API gain the environment they are enforced in, and a named
                 local exemption (2026-09-20). 4.0.0 wrote both as obligations
@@ -448,6 +501,12 @@ Modified principles (this amendment):
     DEFECT-FIXES.md with polarity flipped.
 
 History:
+  - 5.0.0 (2026-09-20) Principle III's conditions (a) and (b) redefined: the
+    filters are enabled by DEFAULT in this service's configuration and in every
+    deployed values file, and switching either off is a deliberate
+    configuration act of the operator. The start-up refusal 4.1.0 introduced,
+    its `courtregister.servicebus.namespace` discriminator and the local-loop
+    exemption it needed are all removed; the pod always starts.
   - 4.1.0 (2026-09-20) Principle III's conditions (a) and (b) gain the
     environment they are enforced in - a start-up refusal wherever the service
     is deployed, on the `courtregister.servicebus.namespace` discriminator -
@@ -709,14 +768,22 @@ Rules:
     currently the usersgroups group "Second Line Support" and no other, with
     identity taken from the `CJSCPPUID` header. There is no default-allow: an
     action with no rule is refused, and a rule that names no group is a bug.
-    Enforced where the service is deployed, as a start-up refusal — see
-    "Where (a) and (b) are enforced" below.
+    The filter MUST be enabled **by default** — `authz.http.enabled` reads
+    `true` in this service's own configuration and in every deployed values
+    file, against a library default of off. Switching it off is a deliberate
+    configuration act of the operator, recorded in that environment's
+    configuration; it is never a code default and is never inferred from the
+    environment the service happens to be running in.
   - **(b) Audited.** Behind `cp-audit-filter-springboot`, so every request and
     every response is published as an audit event to the audit context. An
     endpoint that is reachable without an audit event is worse than the
     `kubectl exec` it replaced, which at least left a cluster audit record.
-    Enforced where the service is deployed, as a start-up refusal — see
-    "Where (a) and (b) are enforced" below.
+    The publisher MUST be enabled **by default** on the same terms as (a):
+    `audit.http.enabled` reads `true` in this service's own configuration and
+    in every deployed values file, and switching it off is a deliberate
+    configuration act of the operator, recorded in that environment's
+    configuration — never a code default, never inferred from the
+    environment.
   - **(c) Flag-gated at least as strictly as its command was.** An endpoint
     reads the `CourtRegisterService` flag where the CLI command it replaces
     read it, and MUST NOT read it more permissively or omit the read the
@@ -736,25 +803,23 @@ Rules:
     **no operator input echoed back**: a refusal names the argument, never the
     value that was typed.
 
-  **Where (a) and (b) are enforced** (amended 2026-09-20). Both are obligations
-  on every **deployed** environment, and both are enforced there as start-up
-  refusals rather than left to a library default: a pod that sets
-  `courtregister.servicebus.namespace` — the discriminator this service already
-  draws deployment on, because a namespace means workload identity — MUST
-  refuse to start with the operations API enabled and either filter off, naming
-  the setting that is off. A deployed environment that wants the endpoints
-  unguarded has exactly one supported way to have them: switch the endpoints
-  off. Conditions (c) and (d) are unconditional, because they are this
-  service's own code rather than a library it has to be given.
-
-  The **local loop is the one exemption**, and it is stated here rather than in
-  a spec because a spec may not grant itself one: `cp-auth-rules-filter` needs
-  usersgroups to resolve a caller's groups and `cp-audit-filter-springboot`
-  needs an Artemis audit broker to publish to, and a laptop has neither. On a
-  developer machine or in CI — no namespace, a local credential source — the
-  endpoints are served with both filters off, reaching only a local store.
-  That, and nothing wider, is what the exemption covers; it is not available
-  to any environment a register could reach an operator from.
+  **How (a) and (b) are carried** (amended 2026-09-20, superseding the start-up
+  refusal 4.1.0 described). By the **defaults above and nothing else**. The
+  service MUST NOT refuse to start on the combination of the operations API
+  being enabled and either filter being off, and MUST NOT decide such a rule
+  from a discriminator such as `courtregister.servicebus.namespace`: a pod
+  configured that way comes up and serves what it was configured to serve. An
+  operator who turns a filter off has said what they meant, their environment's
+  configuration records it, and a service that will not start on a choice its
+  operator made is a service that cannot be operated. What a deployment review
+  checks is that no deployed values file turns either switch off — not that the
+  pod would have refused if one had. Conditions (c) and (d) remain
+  unconditional, because they are this service's own code rather than a library
+  it has to be given, and what a **value** may say is still refused at start-up:
+  an audit transport switched on with no host or an impossible port, and an
+  audit filter switched on with no OpenAPI document to resolve, are refusals
+  about a value that cannot mean what it says, not about one switch given
+  another.
 
   A new endpoint that is not one of those actions, or an existing one that
   stops satisfying (a)–(d), requires a constitution amendment and not just a
@@ -1200,4 +1265,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 4.1.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-20
+**Version**: 5.0.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-20

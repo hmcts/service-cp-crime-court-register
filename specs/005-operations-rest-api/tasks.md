@@ -89,6 +89,26 @@ proposal) is in `spec.md`; step 2 (the bump) is commit `d73ef50`; step 3 is this
       without saying they are a startup refusal. No conflict with 004: the amendment touches
       nothing 004 relies on. Metrics: 49 functional requirements, 12 success criteria, 60 tasks;
       0 ambiguities, 0 duplications, 0 critical issues.)
+      (**Re-run at gate round 3, for the 4.1.0 → 5.0.0 amendment**, which relaxes conditions (a)
+      and (b) from a start-up refusal to a secure default. Scoped to what the bump touches, as the
+      two runs above were. Findings — the same drift in eight places, all closed on this branch in
+      the two commits after the bump: `plan.md`'s Constitution Check row still names 4.1.0 and the
+      refusal (**CRITICAL**, because a plan may not contradict the constitution); its settings
+      table still carries `audit.http.enabled: ${HTTP_AUDIT_ENABLED:false}` against FR-045's `true`
+      (HIGH); its source-structure note and its test-matrix row still describe the refusal and the
+      discriminator's two "should start" counterparts (MEDIUM); risk 3 and the Complexity Tracking
+      row still lean on the refusal as half of what closes condition (b) (HIGH); and in `tasks.md`
+      T004/T005's narratives, T013's ⚠ note and T043's `${HTTP_AUDIT_ENABLED:false}` say the same
+      (HIGH). `design_rules.md`'s operations bullet and `quickstart.md`'s Local section were closed
+      in the bump's own commit.
+      Coverage after the rewrite: FR-045 is carried by T004/T005 (the defaults, and the pod that
+      starts with both switches off) and by T013/T043 (the two yaml blocks); FR-053 by T004/T005
+      (the value-shape refusals, including the corrected port range) and T043. No requirement loses
+      its task and no task loses its requirement.
+      **No conflict with 004**: `specs/004-release-stale-batches` mentions neither filter, neither
+      switch, Principle III nor a constitution version — grepped read-only in the main checkout,
+      zero hits. Metrics: 49 functional requirements, 12 success criteria, 60 tasks; 0 ambiguities,
+      0 duplications, 1 critical issue, closed by the plan rewrite two commits later.)
 
 ---
 
