@@ -75,7 +75,7 @@ public class OperationsActionFilter extends OncePerRequestFilter {
     private static final String NOTIFY_ACTION = PREFIX + "notify-register";
 
     /** The root every path this service serves sits under, and nothing else of the pod's does. */
-    private static final String OURS = "/operations";
+    private static final String OPERATIONS_ROOT = "/operations";
 
     @Override
     protected void doFilterInternal(final HttpServletRequest request,
@@ -124,7 +124,7 @@ public class OperationsActionFilter extends OncePerRequestFilter {
      */
     private static boolean ours(final String path) {
         return path != null
-                && (OURS.equals(path) || path.startsWith(OURS + '/'));
+                && (OPERATIONS_ROOT.equals(path) || path.startsWith(OPERATIONS_ROOT + '/'));
     }
 
     /**

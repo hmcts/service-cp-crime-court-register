@@ -103,7 +103,7 @@ import java.util.regex.Pattern;
         if (OperationsActionFilter.ACTION_HEADER.equalsIgnoreCase(name)) {
             return action;
         }
-        if (aMediaTypeHeader(name)) {
+        if (namesAMediaType(name)) {
             return withoutVendorToken(super.getHeader(name));
         }
         return super.getHeader(name);
@@ -116,7 +116,7 @@ import java.util.regex.Pattern;
         if (OperationsActionFilter.ACTION_HEADER.equalsIgnoreCase(name)) {
             return Collections.enumeration(action == null ? List.of() : List.of(action));
         }
-        if (aMediaTypeHeader(name)) {
+        if (namesAMediaType(name)) {
             final List<String> answered = new ArrayList<>();
             for (final String value : Collections.list(super.getHeaders(name))) {
                 answered.add(withoutVendorToken(value));
@@ -142,7 +142,7 @@ import java.util.regex.Pattern;
      * @param name the header name, in whatever case it was asked for
      * @return {@code true} for {@code Content-Type} and {@code Accept}
      */
-    private static boolean aMediaTypeHeader(final String name) {
+    private static boolean namesAMediaType(final String name) {
         return CONTENT_TYPE.equalsIgnoreCase(name) || ACCEPT.equalsIgnoreCase(name);
     }
 
