@@ -67,6 +67,7 @@ import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
+import uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 import uk.gov.hmcts.cp.courtregister.domain.RequestFingerprint;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
@@ -3374,16 +3375,22 @@ class RegisterStoreIT {
 
             softly.assertThat(refusal.get())
                     .as("the release meets an index it cannot satisfy, and the refusal is not "
-                            + "swallowed - as the store's own refusal, rather than as whatever "
-                            + "class a later change happens to leave escaping")
-                    .isInstanceOf(DuplicateKeyException.class)
-                    .hasMessageContaining(testOnlyUnbatchedIndex())
+                            + "swallowed - as this package's own translation of the store's "
+                            + "refusal, rather than as whatever class a later change happens to "
+                            + "leave escaping. The class that has to read it is the pass in "
+                            + "batch/, which may name no org.springframework.dao type, so an "
+                            + "untranslated refusal could only be caught there as RuntimeException "
+                            + "- the catch that swallows every programming error beside it")
+                    .isInstanceOf(RegisterNotReleasedException.class)
+                    .hasMessageNotContaining(ACTIVE_REGISTER_KEY)
+                    .cause()
                     .as("named by the index that refused it and not by the active-register key, "
                             + "which is the difference the pass acts on: a refusal on a rule this "
                             + "operation does not account for is the store saying the write may "
-                            + "never be made, and no fresh snapshot changes that, so it is "
-                            + "rethrown as itself rather than made again three times")
-                    .hasMessageNotContaining(ACTIVE_REGISTER_KEY);
+                            + "never be made, and no fresh snapshot changes that, so it is raised "
+                            + "rather than made again three times and then reported contended")
+                    .isInstanceOf(DuplicateKeyException.class)
+                    .hasMessageContaining(testOnlyUnbatchedIndex());
 
             softly.assertThat(batchOn(MONDAY))
                     .as("and the mark goes down with it. A mark that survived its own release "
