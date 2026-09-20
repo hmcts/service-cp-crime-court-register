@@ -337,6 +337,7 @@ class GenerationWiringContextTest {
             return new DefaultListableBeanFactory().getBeanProvider(type);
         }
     }
+
     /**
      * A JVM started to run one operations command must not hold the pass.
      *
