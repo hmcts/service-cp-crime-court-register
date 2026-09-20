@@ -6,7 +6,8 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.dao.TransientDataAccessException;
-import org.springframework.transaction.TransactionException;
+import org.springframework.transaction.CannotCreateTransactionException;
+import org.springframework.transaction.TransactionSystemException;
 import uk.gov.hmcts.cp.courtregister.domain.StoreRefusedRowException;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 
@@ -39,12 +40,26 @@ import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
  * statements here take a boundary of their own rather than joining whatever the caller had open -
  * the stale-batch release takes a {@code REQUIRES_NEW} one per batch - and a store that has gone
  * away refuses at {@code getTransaction} rather than at a statement, as
- * {@link org.springframework.transaction.CannotCreateTransactionException}. That is a
- * {@code org.springframework.transaction} class and so outside every branch above it, and a
- * refusal to <em>start</em> work says exactly what a refusal to acquire a connection says. So
- * {@link TransactionException} joins the outage arm: without it the store's own type crosses the
- * port into {@code batch/}, where a pass may name no Spring type at all (constitution Principle V)
- * and could only catch it as a bare {@code RuntimeException}.
+ * {@link CannotCreateTransactionException}. That is a {@code org.springframework.transaction} class
+ * and so outside every branch above it, and a refusal to <em>start</em> work says exactly what a
+ * refusal to acquire a connection says. Without it the store's own type crosses the port into
+ * {@code batch/}, where a pass may name no Spring type at all (constitution Principle V) and could
+ * only catch it as a bare {@code RuntimeException}.
+ *
+ * <p><strong>And a transaction that cannot be committed is the same outage one step later.</strong>
+ * A store lost between the release's last statement and its commit refuses at {@code doCommit}, as
+ * {@link TransactionSystemException}, and a write that reached that point is ambiguous rather than
+ * lost: it is retried by preference, because supersession absorbs a duplicate and nothing absorbs a
+ * silent loss (design rules, idempotency and supersession).
+ *
+ * <p><strong>Those two and not the family, which is why they are named one at a time.</strong> The
+ * rest of {@code org.springframework.transaction} is configuration or a programming fault -
+ * {@link org.springframework.transaction.IllegalTransactionStateException} is a propagation this
+ * code asked for and cannot have, {@link org.springframework.transaction.UnexpectedRollbackException}
+ * is a transaction some participant had already marked rollback-only - and calling one of those an
+ * outage would abandon the message and redeliver it into the same defect on every delivery the
+ * broker allows, and write a nightly outage line about a run that was never near the store's
+ * health. They fall through to the caller, where a defect is dead-lettered with a reason and said.
  *
  * <p><strong>A row the store refused is translated too, and for the other reason.</strong> It is
  * still the store answering and it still may not stop the queue, but unlike a deadlock it arrives
@@ -84,7 +99,8 @@ final class StoreOutage {
             // is rather than stopping the queue.
             throw contention;
         } catch (TransientDataAccessException | RecoverableDataAccessException
-                | DataAccessResourceFailureException | TransactionException gone) {
+                | DataAccessResourceFailureException | CannotCreateTransactionException
+                | TransactionSystemException gone) {
             throw new StoreUnavailableException("the store could not be reached to " + statement,
                     gone);
         }
