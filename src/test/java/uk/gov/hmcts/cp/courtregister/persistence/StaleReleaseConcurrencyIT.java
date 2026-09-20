@@ -114,6 +114,18 @@ class StaleReleaseConcurrencyIT {
 
     private static final Instant MONDAY_SHARED = Instant.parse("2026-08-24T09:00:00Z");
 
+    /**
+     * The day after this suite's, for a round that has to know which batch is walked second.
+     *
+     * <p>{@code STALE_BATCHES} answers {@code ORDER BY register_date, batch_id}, so two batches on
+     * one day are walked in whatever order two random identities happen to fall in. A round about
+     * what the pass does <em>after</em> a batch it could not release cannot be left to that.
+     */
+    private static final LocalDate TUESDAY = LocalDate.of(2026, 8, 25);
+
+    /** The moment the estate stamped a share of {@link #TUESDAY}'s register. */
+    private static final Instant TUESDAY_SHARED = Instant.parse("2026-08-25T09:00:00Z");
+
     private static final Instant HEARING_DATE = Instant.parse("2026-08-19T00:00:00Z");
 
     private static final Duration LEASE = Duration.ofMinutes(5);
@@ -470,11 +482,20 @@ class StaleReleaseConcurrencyIT {
      * the refusal; what is asserted is what the operation does with a batch it cannot release, and
      * that is the contract this round is for.
      *
-     * <p><strong>Why the second court centre is here.</strong> It is the isolation itself. One
-     * statement over every stale batch takes the other court centre's release down with the refusal
-     * it met on this one - so one hearing shared out of order would cost every court centre in the
-     * country its document that night. Each batch is its own statement, its own transaction and its
-     * own bounded retry, so the ending of one says nothing about the ending of another.
+     * <p><strong>Why the second court centre is here, and why it is on the following day.</strong>
+     * It is the isolation itself. One statement over every stale batch takes the other court
+     * centre's release down with the refusal it met on this one - so one hearing shared out of
+     * order would cost every court centre in the country its document that night. Each batch is its
+     * own statement, its own transaction and its own bounded retry, so the ending of one says
+     * nothing about the ending of another.
+     *
+     * <p>Which of the two is <em>reached</em> first is the part a round cannot leave to chance. The
+     * pass reads its batches {@code ORDER BY register_date, batch_id}, so two batches on one day are
+     * walked in the order two random identities happen to fall in, and a pass that stopped at the
+     * batch it could not release - a return, a break, or an exception on exhaustion - would be
+     * caught only on the runs where the contended one came first. The released batch is therefore
+     * stood on the <strong>day after</strong> the contended one, which puts it after it in the walk
+     * on every run, and what this round asserts is that the pass goes on.
      *
      * <p>And nothing escapes. The pass runs inline in the night's generation, so an exhaustion
      * raised out of the store would end the run before it assembled anything - the same cost by a
@@ -489,7 +510,7 @@ class StaleReleaseConcurrencyIT {
         final UUID heldKey = UUID.randomUUID();
         final RegisterBatch contended =
                 staleBatch(contendedCentre, heldKey, UUID.randomUUID(), true);
-        final RegisterBatch other = staleBatch(otherCentre, true);
+        final RegisterBatch other = staleBatch(otherCentre, true, TUESDAY_SHARED);
         final Instant cutoff = cutoff();
         final AtomicReference<StaleReleaseOutcome> answered = new AtomicReference<>();
 
@@ -782,6 +803,20 @@ class StaleReleaseConcurrencyIT {
     }
 
     /**
+     * The same, on a register date of the round's choosing rather than this suite's own day.
+     *
+     * @param courtCentre this round's court centre
+     * @param requested   whether the batch has had its render requested, so GENERATING rather than
+     *                    PENDING
+     * @param shared      the moment the estate stamped its registers, which decides its day
+     * @return the batch as the row stood at assembly
+     */
+    private RegisterBatch staleBatch(final UUID courtCentre, final boolean requested,
+            final Instant shared) {
+        return staleBatch(courtCentre, UUID.randomUUID(), UUID.randomUUID(), requested, shared);
+    }
+
+    /**
      * The same, where a round has to know which hearing it is about to share again.
      *
      * @param courtCentre this round's court centre
@@ -793,10 +828,32 @@ class StaleReleaseConcurrencyIT {
      */
     private RegisterBatch staleBatch(final UUID courtCentre, final UUID first, final UUID second,
             final boolean requested) {
-        record(courtCentre, first);
-        record(courtCentre, second);
+        return staleBatch(courtCentre, first, second, requested, MONDAY_SHARED);
+    }
+
+    /**
+     * The same, on a register date the round chooses, so it knows where in the walk the batch sits.
+     *
+     * <p>The pass reads its stale batches {@code ORDER BY register_date, batch_id}, so the day a
+     * round stands a batch on is the only part of that order it can state. A round asserting what
+     * the pass does with the batches <em>after</em> one it could not release has to stand them on a
+     * later day, or it is asserting it in about half of its runs.
+     *
+     * @param courtCentre this round's court centre
+     * @param first       the hearing whose register the round names
+     * @param second      the other hearing of the day, so the batch is a batch and not a row
+     * @param requested   whether the batch has had its render requested, so GENERATING rather than
+     *                    PENDING
+     * @param shared      the moment the estate stamped both shares, which decides the register date
+     * @return the batch as the row stood at assembly
+     */
+    private RegisterBatch staleBatch(final UUID courtCentre, final UUID first, final UUID second,
+            final boolean requested, final Instant shared) {
+        record(courtCentre, first, shared);
+        record(courtCentre, second, shared);
         final List<RegisterRecord> waiting = waiting(courtCentre);
-        final RegisterBatch batch = store.assemble(batchFor(courtCentre, waiting), waiting);
+        final RegisterBatch batch = store.assemble(
+                batchFor(courtCentre, waiting, LocalDate.ofInstant(shared, LONDON)), waiting);
         if (requested) {
             store.markRequested(batch.batchId(), UUID.randomUUID());
         }
@@ -1091,7 +1148,23 @@ class StaleReleaseConcurrencyIT {
 
     /** The batch the assembler would make of them, asked for by the schedule. */
     private RegisterBatch batchFor(final UUID courtCentre, final List<RegisterRecord> records) {
-        return new RegisterBatch(UUID.randomUUID(), courtCentre, null, null, MONDAY,
+        return batchFor(courtCentre, records, MONDAY);
+    }
+
+    /**
+     * The same, on the day the registers were recorded for.
+     *
+     * <p>A batch's key has to be the key its registers hold, or {@code assemble} refuses them as
+     * another day's - so a round standing a batch on a later day says so in both places.
+     *
+     * @param courtCentre  this round's court centre
+     * @param records      the registers the batch is made of
+     * @param registerDate the day they were recorded for
+     * @return the batch as the assembler would ask for it
+     */
+    private RegisterBatch batchFor(final UUID courtCentre, final List<RegisterRecord> records,
+            final LocalDate registerDate) {
+        return new RegisterBatch(UUID.randomUUID(), courtCentre, null, null, registerDate,
                 records.isEmpty() ? null : records.getFirst().fileName(), null, null,
                 BatchStatus.PENDING, null, null, true, null, null, null, null, null, null, 0,
                 null, 0);
