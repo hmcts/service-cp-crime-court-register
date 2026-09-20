@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
 
@@ -745,7 +746,7 @@ public final class GenerationLegs implements AutoCloseable {
                 .thenReturn(Optional.of(refused()));
         whateverItAnswers(() -> sink.generationFailed(BATCH_ID, PAYLOAD_FILE_ID,
                 PersonalDataMarkers.GENERATOR_REASON, AT, CompletedBy.EVENT));
-        generatorWordsKept = org.mockito.Mockito.mockingDetails(store).getInvocations().stream()
+        generatorWordsKept = mockingDetails(store).getInvocations().stream()
                 .flatMap(invocation -> Stream.of(invocation.getArguments()))
                 .anyMatch(PersonalDataMarkers.GENERATOR_REASON::equals);
     }
