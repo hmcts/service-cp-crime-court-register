@@ -33,8 +33,21 @@ import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
  * does leave this pass is a store that went away - that is the run's own failure, reported on its
  * line and rethrown, exactly as every other read the run cannot make is.
  *
- * <p>T014 computes the two cutoffs; until then both are the clock's own instant, which is the split
- * T013 has a red run against.
+ * <p><strong>Two cutoffs, computed once per pass from this pass's own clock.</strong> PENDING and
+ * GENERATING are <strong>one</strong> rule and not two: with nothing left to ask systemdocgenerator
+ * there is no question that could tell them apart, and "it did not complete before the next run
+ * began" is true of both - of the batch whose outcome was lost, and of the batch whose render
+ * request was never recorded, including the one that never minted a payload at all, which the
+ * retired reads excluded and left deferring its court centre day at every run for ever (FR-020).
+ * GENERATED is on neither arm at any age: it holds a document somebody is owed e-mails about, and
+ * failing it would throw that document away (FR-002).
+ *
+ * <p>A batch the schedule made is judged by the minimum age. A batch an operator asked for is
+ * judged by the longer of that and the run's own lock duration, because a manual generation holds
+ * no run lock and has the whole requesting deadline to work in (FR-017). Which cutoff a batch is
+ * judged by is the store's to decide from {@code system_generated}, in the statement's own
+ * predicate; both instants are computed here, once, so that every batch in one pass is judged
+ * against the same moment.
  */
 public class StaleBatchReleaser {
 
@@ -45,6 +58,12 @@ public class StaleBatchReleaser {
 
     /** Where the two released numbers and the contended one are counted. */
     private final GenerationMetrics metrics;
+
+    /** How long a batch the schedule made may be in flight before a run gives up on it. */
+    private final Duration staleAfter;
+
+    /** How long the nightly run holds its lock, which is the grace an operator's batch gets. */
+    private final Duration runLock;
 
     /** The clock both cutoffs are measured back from. */
     private final Clock clock;
@@ -64,9 +83,9 @@ public class StaleBatchReleaser {
             final Duration staleAfter, final Duration runLock, final Clock clock) {
         this.store = store;
         this.metrics = metrics;
+        this.staleAfter = staleAfter;
+        this.runLock = runLock;
         this.clock = clock;
-        // T014 takes the two durations and computes the cutoffs from them; until then both are
-        // this clock's own instant, which is the red run T013 records.
     }
 
     /**
@@ -96,7 +115,8 @@ public class StaleBatchReleaser {
      */
     private ReleaseTally release() {
         final Instant now = clock.instant();
-        final StaleReleaseOutcome outcome = store.failAndReleaseStale(now, now);
+        final StaleReleaseOutcome outcome = store.failAndReleaseStale(
+                now.minus(staleAfter), now.minus(manualGrace()));
 
         int registers = 0;
         for (final ReleasedBatch released : outcome.released()) {
@@ -116,6 +136,22 @@ public class StaleBatchReleaser {
                 + "run goes on to assemble it. released_batches={} released_registers={} "
                 + "contended={}", tally.batches(), tally.registers(), tally.contended());
         return tally;
+    }
+
+    /**
+     * The grace a batch an operator asked for is given, which is the longer of the two settings.
+     *
+     * <p><strong>The longer, and not the lock.</strong> A manual generation holds no run lock and
+     * has the whole requesting deadline to ask for its renders, so a batch it assembled at 17:25 is
+     * over the minimum age by the time the schedule fires at 18:00; failing it would orphan a
+     * render that run is still making and refuse its own {@code markRequested} (FR-017). Taking the
+     * lock alone would be the same rule stated wrong for a deployment that shortened it: an
+     * operator's batch may never be given less grace than the schedule's own.
+     *
+     * @return the grace a batch this service's schedule did not make is given
+     */
+    private Duration manualGrace() {
+        return staleAfter.compareTo(runLock) >= 0 ? staleAfter : runLock;
     }
 
     /**

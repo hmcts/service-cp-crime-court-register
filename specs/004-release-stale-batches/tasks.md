@@ -1318,11 +1318,22 @@ durations and a clock. No Spring context, no Docker.
       which is the line a quiet night still writes. All of them carry the run's `runId`, because
       `releaseStale()` runs under `RunCorrelation.under(...)`.
       `data-model.md`'s instrument table gains the contended row in the same commit.
-- [ ] T014 [US2] `batch/StaleBatchReleaser.java` — make T013 green. Both cutoffs computed once per
+- [x] T014 [US2] `batch/StaleBatchReleaser.java` — make T013 green. Both cutoffs computed once per
       pass from the injected clock and the two settings. The javadoc states the rule the retired
       class stated differently: PENDING and GENERATING are **one** rule, because with no query there
       is nothing to tell them apart; GENERATED is on no arm; and an operator's batch is given the
       longer grace because a manual generation holds no lock and has the whole deadline to work in.
+      (green: `flock -w 7200 … ./gradlew test --tests '*StaleBatchReleaserTest*' checkstyleMain
+      checkstyleTest pmdMain pmdTest -Dtest.noFailFast=true` BUILD SUCCESSFUL, **11 tests, 0
+      failures, 0 errors**, all four analysis tasks green.
+      Both cutoffs come off one read of the clock, so every batch in one pass is judged against the
+      same moment; the manual one is `max(staleAfter, runLock)` written as a comparison rather than
+      as `Duration.max`, which this JDK does not offer. `staleAfter` and `runLock` become fields in
+      this commit, which is where the code that reads them lands.
+      The javadoc states the rule the retired class stated differently: PENDING and GENERATING are
+      **one** rule, because with no query there is nothing that could tell them apart; GENERATED is
+      on neither arm at any age; and which of the two cutoffs a batch is judged by is the store's to
+      decide from `system_generated`, in the statement's own predicate.)
 
 **Phase close**: `flock … ./gradlew build` green; review gate.
 
