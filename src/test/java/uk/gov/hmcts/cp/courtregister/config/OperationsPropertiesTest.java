@@ -15,9 +15,12 @@ import org.springframework.context.annotation.Import;
  *
  * <p>The binding half of increment 005's configuration surface, written the way
  * {@code ReportPropertiesTest} writes 003's: what the settings <em>refuse</em> is
- * {@code ConfigurationValidationTest.OperationsRefusals}, in the suite that owns every other
+ * {@code ConfigurationValidationTest.OperationsSettings}, in the suite that owns every other
  * startup refusal this service makes, and what they bind to is here - because a default nobody
- * reads back is a default that moves without anybody noticing.
+ * reads back is a default that moves without anybody noticing. That class also holds the cases
+ * saying what is <strong>not</strong> refused: {@code authz.http.enabled} and
+ * {@code audit.http.enabled} are an operator's to set, they default on in {@code application.yaml},
+ * and a pod with either off starts (constitution 5.0.0).
  *
  * <p>All three matter for a different reason. {@code enabled} defaults <strong>true</strong>
  * (FR-044) because an operator surface that has to be switched on is a surface a support engineer
