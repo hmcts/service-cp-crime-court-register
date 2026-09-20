@@ -794,15 +794,13 @@ touched file inside this tree's coordination scope.
 
 Findings left open at this gate, each with its reason:
 
-* **A permanently contended batch has no operator remedy in this increment** (LOW, the wrapper's
-  observation). A batch whose hearing holds an earlier-stamped active unbatched share — the
-  out-of-order delivery `StaleReleaseConcurrencyIT` stages as data — is reported contended on every
-  run for ever: the release can never supersede that share, and the recorder never supersedes a
-  batched row. FR-003a accepts the waiting, and the 07:00 report names the court centre day as a late
-  batch every morning, but nothing here clears it. T011/T012 carry the counter and the WARN line, so
-  the condition is alertable; **the operator remedy is a follow-up for the operations surface (005 or
-  later)**, because the existing per-batch release the surface already offers is a command this tree
-  does not own.
+* ~~**A permanently contended batch has no operator remedy in this increment**~~ (LOW, the
+  wrapper's observation) — **withdrawn at the second remediation below, along with the 005 hand-off
+  it proposed.** The finding was that a batch whose hearing holds an earlier-stamped active
+  unbatched share is reported contended by every run for ever, and that the remedy therefore had to
+  come from the operations surface. The design owner settled it the other way on 2026-09-20: the
+  release decides the share instead, so the condition no longer exists and there is nothing to hand
+  off. Nothing is owed to 005 by this.
 * **`STALE_BATCHES`' `batch_id` tiebreak is unasserted** (LOW at `qa`, marked optional there). The
   ordering case proves `register_date` with two days; proving the tiebreak needs two live batches on
   one date, which `idx_register_batch_live_key` allows only at two different court centres — and
@@ -838,6 +836,108 @@ tree **as committed** and answered identically - BUILD SUCCESSFUL, exit 0, 10m 1
 over 579, 0 failures and 0 errors - and it is that run's XMLs that are left beside the report;
 `build` runs the coverage gate and not the report, so the ratios above are the first run's
 measurement of the same code.
+
+**Gate 4's two MEDIUM findings were closed in a second remediation**, after the gate's own
+artefact fixes above. Neither is a BLOCKER and neither changed what the operation is for; one is an
+assertion the suite was leaving to timing, and one is a decision the design owner took about a batch
+that could never be released.
+
+* **The re-check the whole fence rests on was pinned only by luck** (MEDIUM at `qa`,
+  `StaleReleaseConcurrencyIT`). The statement is safe because of a rule of READ COMMITTED - an
+  `UPDATE` that waited on a row re-evaluates *its own* `WHERE` against the version it is granted -
+  and that is why the staleness rule is written in the `UPDATE`'s predicate rather than in a clause
+  that feeds it. What asserted it was the `TOGETHER` rounds, where the two contenders have to land
+  inside the same handful of microseconds for the re-check to be reached at all: a property held at
+  the scheduler's discretion is not a property.
+  Closed at `f4fe47f` by two rounds with no timing in them, built on the `holdingTheBatchRow`
+  fixture the re-share round already uses. A session takes the batch row `FOR UPDATE`; the pass
+  reads `STALE_BATCHES` and blocks on its write; the **holder's own transaction** then moves the
+  batch - `markRequested` on a PENDING one, `markGenerated` on a GENERATING one - and commits. The
+  pass is granted a row version the rule no longer matches and changes nothing about it, which is
+  asserted as three separate claims: the batch is not released, it is not reported **contended**
+  either (a batch nothing was refused over lost no race), and the row stands exactly where the
+  holder left it with both its registers still stamped to it.
+  Red first, against the mutation the finding is about - the predicate lifted out of the `UPDATE`
+  into a preceding `candidate` CTE, which is the read-then-mark shape written as one statement:
+  `./gradlew test --tests '*StaleReleaseConcurrencyIT*' -Dtest.noFailFast=true`, 7 tests,
+  **3 failures**, 0 errors. The render round failed **4** assertions ("expected:
+  Ending[status=GENERATING, failureReason=null] but was: Ending[status=FAILED,
+  failureReason=NOT_COMPLETED_BY_NEXT_RUN]", the batch named in `released`, "expected: 2L but was:
+  0L" on its stamped registers, and the suite's own `prematurelyFailed` reading at 1) and the
+  document round **2**; one `TOGETHER` round of an existing case went red beside them, which is the
+  same defect found the old way. Mutation reverted. Green against the tree as committed: 7 of 7,
+  `checkstyleTest` and `pmdTest` green - `() -> {}` rather than `() -> { }`, which `WhitespaceAround`
+  refuses.
+* **A batch whose key held a share it had overtaken could never be released** (MEDIUM at
+  `code-reviewer`, `JdbcRegisterStore` ~953) - **a design decision, taken by the design owner on
+  2026-09-20**, and the finding gate 4 had recorded as an accepted permanent condition with a 005
+  hand-off. A share of the hearing delivered *behind* the register a batch already holds is recorded
+  active and unbatched, because the recorder's incumbent search is over unbatched rows and a batched
+  register is not its to supersede. It therefore holds `idx_output_active_register_key` for the day,
+  the release's successor search is the mirror of the same ordering and never finds it, and the
+  release is refused on every attempt - by every run, for ever, because no fresh snapshot removes a
+  row committed before the statement began.
+  The rule now reads the same total order **both ways**, which is what `recordAndComplete` already
+  does one operation above: the register coming back is the later share, so the release supersedes
+  the earlier active unbatched row against it (`superseded_by` = the register coming back) in the
+  same statement, while a later-stamped active row supersedes the register coming back as before.
+  Latest share wins in both directions, and the key keeps exactly one active row whichever of the
+  two writers is the one that finds the pair together.
+  Pinned by `RegisterStoreIT$StaleRelease.a_release_supersedes_the_share_it_overtook`; the
+  later-stamped direction is `a_release_supersedes_against_a_later_re_share`, unchanged. Red at
+  `5ca98f0` on **6** assertions, every one of them an assertion and not a refusal, because the
+  contention is reported rather than thrown: the batch left `GENERATING` instead of FAILED under the
+  new reason, its id in `contended`, the overtaken share's `superseded_by` empty, the key holding
+  `["RECORDED", "RECORDED"]`, the wrong register left active and unbatched, and nothing in
+  `released`. Green at `8d565ea`: `RegisterStoreIT` 86 of 86, `StaleReleaseConcurrencyIT` 7 of 7.
+  **The supersession is chained ahead of the release, and that is a correctness point rather than a
+  style one** - the same requirement `RECORD_REGISTER` has for the same index. The overtaken row
+  holds the key until its update takes it out of the index, so a release issued first collides with
+  the very row it is about to supersede; the release's source therefore counts the supersession's
+  rows, because Postgres does not otherwise say which clause of one statement runs first.
+  Mutation-checked: with the chain removed the new case fails on all six assertions again, three
+  runs out of three.
+* **The exhaustion round had to be re-staged, and the reason is worth recording.** Gate 3 staged
+  `a_batch_no_attempt_can_release_is_reported_while_the_others_are_released` **as data** - an
+  out-of-order share holding the key against every attempt - precisely because chaining three timed
+  windows could not be made reliable. That share is exactly what the decision above makes
+  releasable, so the round would have stopped being about contention at all. And there is no
+  arrangement of rows that replaces it: any active row for the key that is committed before the
+  statement begins is in its snapshot, so the release either supersedes it or is superseded against
+  it. The only refusal left is a share committing **after** the snapshot and before the write, on
+  each of the three attempts.
+  So it is staged by the database rather than by the scheduler: an `AFTER UPDATE` trigger, scoped by
+  `WHEN` to the round's own hearing and dropped in a `finally`, takes the day's active register back
+  the moment the release gives its own up - an existing superseded share of the same key, invisible
+  to the statement's snapshot, made active again inside the attempt's own transaction. Every attempt
+  meets `idx_output_active_register_key` and rolls back with it, which is what a re-share committing
+  inside each window produces. **What is staged is the refusal; what is asserted is what the
+  operation does with a batch it cannot release**, which is the contract the round exists for, and
+  the round's own assertions are what prove the exhaustion path was reached - a trigger that did
+  nothing would leave the batch released and `contended` empty. Scoped and dropped in the idiom
+  `withOneUnbatchedRegisterAllowed` already uses in `RegisterStoreIT`, so no other suite sharing the
+  container can see it, and nothing is left held afterwards: the share stays superseded, so the next
+  run releases the batch like any other. The `letTheKeyGo` fixture gate 3 needed for that is
+  therefore deleted.
+
+The port's javadoc, `data-model.md`, `spec.md`'s edge-case list and `plan.md`'s Atomicity row are
+re-pointed at the decision in the same commits, and the `COALESCE` note and the three remaining LOW
+findings above are untouched by any of it.
+
+**Green after the second remediation**: `flock -w 7200 … ./gradlew jacocoTestReport check
+-Dtest.noFailFast=true` BUILD SUCCESSFUL, exit 0, 10m 16s, **3655 tests over 579 suites, 0 failures,
+0 errors** — three more than gate 4's close, being the two staged re-check rounds and the overtaken
+share — with `checkstyleMain` and `checkstyleTest` at `maxWarnings = 0`, `pmdMain`, `pmdTest` and
+`jacocoTestCoverageVerification` all green and none of them loosened. The coverage report was
+regenerated in that same run and reads **LINE 6592/6799 = 0.9696 and BRANCH 1998/2220 = 0.9000**
+against the unchanged gate of LINE 0.88 / BRANCH 0.85; it contains `failAndReleaseStale`, which is
+how a reader can tell it is this tree's report. The ratios are unchanged from gate 4's because the
+decision is a change to one statement's SQL rather than to any Java branch, and the three new cases
+cover code that was already covered.
+
+**The Codex leg is still owed and is still unmet.** Nothing in this remediation changes that: the
+whole-increment Codex gate has not run since gate 2, and **no Phase 2 close and no Phase 3 start may
+be recorded until it has**.
 
 ---
 
