@@ -67,7 +67,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * supersession therefore cannot see the row being inserted beside it, so a recording can never
  * supersede itself (research §8).
  *
- * <p><strong>Two of them take a transaction as well, and for two different reasons.</strong>
+ * <p><strong>Three of them take a transaction as well, and for three different reasons.</strong>
  * Assembly's statement is one statement too, but the decision about it is not in the statement:
  * whether the batch is the batch that was asked for is a count compared in Java, and under
  * autocommit that comparison happens after the batch row and the stamps are already committed. A
@@ -76,7 +76,11 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * inside a transaction and the refusal rolls it back: the batch is assembled or it never existed.
  * Recording runs inside one because it may be issued more than once - a re-share that loses the
  * race for its key is refused by {@code idx_output_active_register_key} and tried again on a fresh
- * snapshot - and the supersession the refused attempt had already made has to go with it.
+ * snapshot - and the supersession the refused attempt had already made has to go with it. Each
+ * stale batch's release runs inside one for a reason that is not about its own statement at all,
+ * which is one statement like the rest: the boundary is {@code REQUIRES_NEW}, so that a caller
+ * already inside a transaction cannot fold every court centre's release into one that a single
+ * refusal aborts (FR-003a).
  *
  * <p>The clauses are chained through their output, which is what orders them: Postgres does not
  * otherwise say which clause runs first. In the recording statement {@code recorded} counts
