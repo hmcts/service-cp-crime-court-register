@@ -204,106 +204,99 @@ refusal in this repository is.
       `build.gradle`'s "keep every dependency here" comment - that comment is about the
       `apply from:` files, which dependabot cannot read, and a version catalogue is one it can.)
 - [x] **T004** [P] [US1] `config/OperationsPropertiesTest` (new) and `config/ConfigurationValidationTest`
-      (extend) — **the defaults and the refusals**. Defaults off an `ApplicationContextRunner`:
-      `courtregister.operations.enabled=true`, `supersede-max-age=30d`, `lock-wait=0s`. Refusals,
-      each asserting the message **names the offending setting**:
-      `operations_enabled_with_http_audit_disabled_refuses_to_start`,
-      `an_audit_transport_with_no_broker_refuses_to_start`,
-      `an_audit_transport_switched_off_refuses_to_start`,
+      (extend) — **the defaults and the value refusals**. Defaults off an
+      `ApplicationContextRunner`: `courtregister.operations.enabled=true`, `supersede-max-age=30d`,
+      `lock-wait=0s`, and off the shipped file `authz.http.enabled=true` and
+      `audit.http.enabled=true`. Refusals, each asserting the message **names the offending
+      setting**: `an_audit_transport_with_no_broker_refuses_to_start`,
+      `an_audit_transport_whose_only_host_is_blank_refuses_to_start`,
+      `an_audit_transport_whose_hosts_are_all_blank_refuses_to_start`,
       `an_audit_transport_with_no_port_refuses_to_start`,
-      `http_audit_enabled_with_no_openapi_spec_key_refuses_to_start`,
-      `a_zero_supersede_max_age_refuses_to_start`,
-      `a_negative_lock_wait_refuses_to_start`.
-      (The three transport cases were one method, `operations_enabled_with_an_unconfigured_audit_
-      transport_refuses_to_start`, with three runs inside it; split at gate round 1 so a failure in
-      the first no longer hides whether the other two still refuse. Four cases joined them in the
-      same round: the two literal-`true` refusals, `an_absent_http_audit_switch_refuses_a_deployed_
-      pod`, and `a_deployed_pod_with_the_operations_api_switched_off_should_start_unaudited` —
-      which is the half of the guard nothing pinned, because the only cases that switch the
-      operations API off carry no namespace. The two literal-`true` refusals are a red/green pair
-      of their own; `an_absent_http_audit_switch_refuses_a_deployed_pod`,
-      `a_deployed_pod_with_the_operations_api_switched_off_should_start_unaudited` and the
-      transport case about a laptop are **[A] characterisation** - they recorded a green run only,
-      because the production code they pin has its red in T004/T005 and a mutation red for them
-      would have had to be manufactured. They are pins against a later edit, not evidence of this
-      one.)
-      (Gate round 2 added five more, all in `ConfigurationValidationTest`. Two are red-then-green
-      against a rule that was wrong: `an_audit_transport_whose_hosts_are_all_blank_refuses_to_
-      start` (`cp.audit.hosts=,` binds to two blank strings, which the starter's own
-      `validateProps` accepts as readily as the rule did) and
-      `an_audit_port_that_is_not_a_number_refuses_to_start` (the port was converted by the
-      environment, so the refresh failed with a message naming neither the setting nor the
-      endpoints). Three are red-then-green against a rule that was **missing** — FR-053, the
-      authorisation half of the same refusal: `operations_enabled_with_no_authorisation_filter_
-      refuses_to_start`, `an_absent_authorisation_switch_refuses_a_deployed_pod` and
-      `an_authorisation_switch_the_filter_would_not_read_as_true_refuses_to_start`. Two more are
-      **characterisation and say so in their javadoc**:
-      `an_audit_transport_whose_only_host_is_blank_refuses_to_start` and
-      `an_absent_audit_port_refuses_a_deployed_pod` were green when they were written.
-      `authz.http.enabled=true` joined the base runner for the reason the four audit keys did.)
+      `an_audit_port_that_is_not_a_number_refuses_to_start`,
+      `an_audit_port_above_the_tcp_range_refuses_to_start`, `an_absent_audit_port_refuses_to_start`,
+      `an_audit_filter_with_no_openapi_spec_key_refuses_to_start`,
+      `a_zero_supersede_max_age_refuses_to_start`, `a_negative_lock_wait_refuses_to_start` — with
+      `the_highest_port_there_is_should_start`, `the_lowest_port_there_is_should_start`,
+      `an_unconfigured_transport_that_is_switched_off_should_start`,
+      `an_audit_filter_over_a_transport_that_is_off_should_start_without_a_spec_key` and
+      `a_pod_with_the_whole_audit_path_configured_should_start` as their counterparts.
+      And the three cases that say what is **not** refused:
+      `a_pod_with_both_filter_switches_off_should_start`,
+      `a_pod_serving_the_operations_api_unaudited_should_start`,
+      `a_pod_serving_the_operations_api_unauthorised_should_start`.
       Seams: `config/OperationsProperties` declared with its components and **no** `@DefaultValue`s;
       `PropertiesValidator` gains a package-private `validateOperations(...)` that returns without
-      looking. Red: the defaults case reads `null` where `30d` was expected; every refusal case on
-      "Expecting <Started application> to have failed but context started successfully".
-      (red: 166 tests, 6 failures, 0 errors, every one an assertion. The five refusals all on
+      looking.
+      (red, first landing: 166 tests, 6 failures, 0 errors, every one an assertion. The refusals on
       *"Expecting <Started application [...]> to have failed but context started successfully"*,
-      the predicted red. The defaults case on **`Expecting value to be true but was false`**
-      rather than on `30d`/null - `enabled` is read before `supersedeMaxAge` and AssertJ stops the
-      case at its first failure, exactly as 003's T001 recorded of its own defaults case; an
-      undefaulted `boolean` binds to `false` where an undefaulted `Duration` binds to `null`, so
-      the prediction was right about the cause and wrong about which line reports it.
-      **Three deviations, all recorded rather than argued after the fact.**
-      (1) The five refusals live in `ConfigurationValidationTest` and the two binding cases in the
-      new `OperationsPropertiesTest`, which is how both files named by the task are touched without
-      either restating the other - 003's T001 split the same way for the same reason.
-      (2) The two audit refusals are **deployed-environment rules**, drawn on the
-      `courtregister.servicebus.namespace` discriminator `StubReachability` and `OutboundValidation`
-      already draw deployment on. `quickstart.md`'s "Local" section is the source: *"Locally
-      `authz.http.enabled` and `cp.audit.enabled` are off ... a deployed pod refuses to start with
-      the operations API enabled and HTTP audit off."* Unconditional refusals would have made
-      `./gradlew bootRun`, `docker compose up` and the container smoke refuse the moment T005
-      landed, and would have forced `courtregister.operations.enabled: false` into
-      `application.yaml` in flat contradiction of FR-044's documented default. Two counterpart
-      "should start" cases pin both halves of the discriminator. The two value rules
-      (`supersede-max-age`, `lock-wait`) are unconditional: an unusable value is unusable anywhere.
-      (3) `validateOperations(operations, properties, environment)` reads its own inputs rather
-      than taking seven values, and is called from `afterPropertiesSet` rather than from the static
-      `validate(...)` - so the existing static's signature is untouched and 004's rename of the
-      generation grace period meets an added method rather than a reshaped class. The constructor
-      gains one parameter and the class two fields.)
+      the defaults case on **`Expecting value to be true but was false`** rather than on
+      `30d`/null - `enabled` is read before `supersedeMaxAge` and AssertJ stops the case at its
+      first failure, exactly as 003's T001 recorded of its own defaults case; an undefaulted
+      `boolean` binds to `false` where an undefaulted `Duration` binds to `null`, so the prediction
+      was right about the cause and wrong about which line reports it.
+      **Deviation, recorded rather than argued after the fact**: the refusals live in
+      `ConfigurationValidationTest` and the two binding cases in the new `OperationsPropertiesTest`,
+      which is how both files named by the task are touched without either restating the other -
+      003's T001 split the same way for the same reason.)
+      (**Rewritten at gate round 3, and the rewrite is the point of this entry.** Gate rounds 1 and
+      2 grew this task a family of cases that pinned a **cross-field start-up refusal**: the
+      operations API enabled with `audit.http.enabled` or `authz.http.enabled` off, absent, or
+      spelled `yes`, refused on a `courtregister.servicebus.namespace` discriminator, with two
+      "should start" counterparts for the local loop. The design owner withdrew the rule on
+      2026-09-20 — the two switches are ordinary configuration an operator may set, and the pod
+      always comes up — and constitution 5.0.0 redefined conditions (a) and (b) to the defaults
+      instead. Every case that pinned the refusal is **deleted**, not weakened; three cases that
+      pin its absence replace them; and two cases in `ShippedConfiguration` pin the defaults that
+      now carry the conditions. The transport and value cases stay, re-gated on the transport's own
+      switch, and one of them was **wrong**: the port rule read "one to five digits and positive",
+      which accepts 65536. `an_audit_port_above_the_tcp_range_refuses_to_start` and
+      `the_highest_port_there_is_should_start` are the boundary pair that fixes it.
+      The base runner is back to the five identity and endpoint properties it carried before gate
+      round 1 widened it with five library keys; the five pre-existing cases the widening was added
+      for pass without it, because the rule that needed it is gone.
+      red: 178 tests, 23 failed, every one an assertion — three "should start" cases on *"Expecting
+      <Unstarted application context ...> to have not failed"*, the transport and range cases on a
+      message naming `courtregister.operations.enabled` where their own setting was expected, the
+      two shipped-default cases on *`expected: "true" but was: null`*, and the five pre-existing
+      cases the widened base runner had been propping up.)
 - [x] **T005** [US1] `config/OperationsProperties` and `config/PropertiesValidator` — the record
       bound at `@ConfigurationProperties(prefix = "courtregister.operations")` with its
-      `@DefaultValue`s, following `GenerationProperties`' style, and the five refusals of T004
-      written as the validator's existing helpers write generation's. **`PropertiesValidator` is
-      shared with 004** (which renames the generation grace period): add a method, do not reshape
-      the class. Green: T004's cases.
-      (green: `OperationsPropertiesTest` + `ConfigurationValidationTest`, 166 tests, 0 failures;
-      with `ReportPropertiesTest`, `TestProfileContextTest` and `AuditComponentScanTest` beside
-      them, 177 passed. Checkstyle and PMD clean on main and test.
-      **One thing the red run did not show, and the reason this entry is worth reading.** With the
-      refusals written, five *pre-existing* cases failed - `a_namespace_alone_should_start`,
-      `a_blank_connection_string_should_count_as_unset`, `every_setting_should_be_overridable`,
-      `live_mode_on_the_deployed_credential_source_should_start` and
-      `leaving_it_on_where_the_service_is_deployed_should_start`. Every one of them sets a
-      namespace, and the operations API is served by default (FR-044), so every one of them became
-      a deployed pod serving `/operations/**` unaudited. That is the rule working rather than the
-      rule being wrong: the four audit settings joined the suite's **base runner**, beside the
-      payload, progression and reference-data identities carried there for exactly the same reason,
-      and each `OperationsRefusals` case blanks exactly one of them. No pre-existing assertion was
-      changed, weakened or deleted.
-      `validateOperations` is four private helpers under one package-private entry point, in the
-      style the class's other rule families are written in; the static `validate(...)` is
-      byte-for-byte what it was, which is what keeps 004's rename a clean rebase.
-      **Gate round 2 added a fifth helper and corrected two lines of a sixth.**
-      `validateTheOperationsApiIsNeverServedUnauthorisedWhereItIsDeployed` is FR-053 — the
-      authorisation half condition (a) of Principle III asks for, refused on the same
-      discriminator and by the same literal-`true` reading, which a code review found open while
-      its audit twin was closed. It lands here rather than with T013 because it is a rule about a
-      pod, not about a controller, and nothing is reachable to authorise until Phase 2 anyway; the
-      `authz.http.*` block itself is still T013's. The host list is now refused when any element
-      is blank, and the port is read as text and parsed here rather than converted by the
-      environment, so the refusal names `cp.audit.port` as FR-045 requires. The static
-      `validate(...)` is still byte-for-byte what it was.)
+      `@DefaultValue`s, following `GenerationProperties`' style, and T004's refusals written as the
+      validator's existing helpers write generation's; plus the `authz.http.enabled` and
+      `audit.http.enabled` defaults in `application.yaml` and the two files that override them.
+      **`PropertiesValidator` is shared with 004** (which renames the generation grace period): add
+      a method, do not reshape the class. Green: T004's cases.
+      (green, first landing: `OperationsPropertiesTest` + `ConfigurationValidationTest`, 166 tests,
+      0 failures; with `ReportPropertiesTest`, `TestProfileContextTest` and `AuditComponentScanTest`
+      beside them, 177 passed. Checkstyle and PMD clean on main and test. `validateOperations` is
+      private helpers under one package-private entry point, in the style the class's other rule
+      families are written in; the static `validate(...)` is byte-for-byte what it was, which is
+      what keeps 004's rename a clean rebase.)
+      (**Rewritten at gate round 3 with T004.** What the validator holds now is four rules and no
+      cross-field one. `validateTheAuditTransportNamesSomewhereToPublish` refuses a transport that
+      is **switched on** and names no host, a blank host, or a port outside **1..65535**;
+      `validateTheAuditFilterHasADocumentToRead` refuses an unset `audit.http.openapi-rest-spec`
+      where **both** audit switches are on, which is where the parser that globs is actually built -
+      every `audit.http.*` bean sits inside the `@AutoConfiguration` class `cp.audit.enabled` gates,
+      so the HTTP half on over a transport that is off traps nothing; and the two duration rules are
+      unchanged. `validateTheOperationsApiIsNeverServedUnauthorisedWhereItIsDeployed` and its audit
+      twin are **deleted**, with `unaudited`, `unauthorised` and `servedOnADeployedPod`;
+      `validateOperations` no longer takes `CourtRegisterProperties`, because the discriminator was
+      the only thing that read them. The static `validate(...)` is **still** byte-for-byte what it
+      was.
+      The transport rules read `cp.audit.enabled` with an absent key taken as **off** rather than as
+      the library's `matchIfMissing = true`: this service's `application.yaml` always sets the key,
+      so an absent one means a context that did not load the file, and refusing one of those would
+      be refusing a harness rather than a deployment.
+      `application.yaml` gains `authz.http.enabled: ${AUTHZ_HTTP_ENABLED:true}` and
+      `audit.http.enabled: ${HTTP_AUDIT_ENABLED:true}` — secure by default against two libraries
+      whose own conditions default off — and `docker-compose.yml` and `application-test.yaml` set
+      both `false` with the reason written beside them. The `authz.http.*` block proper is still
+      T013's and the `audit.http.*` block proper still T043's; what lands here is the one key each
+      that the default needs, and those tasks add the rest beside it.
+      green: `ConfigurationValidationTest`, `OperationsPropertiesTest`, `AuditComponentScanTest`,
+      `TestProfileContextTest` and `HttpSurfaceTest`, 193 tests, 0 failures; Checkstyle and PMD
+      clean on main and test.)
 - [x] **T006** [P] [US1] `config/PublicEventsFactoryTest` (new) — **the listener container is built
       on the public-event connection factory, not the audit one** (research R8: the audit starter's
       `auditConnectionFactory` and `auditJmsTemplate` are `@Primary`, and `PublicEventsConfig`
@@ -393,10 +386,13 @@ true rather than claimed.
       library's list wholesale, and dropping `/actuator` makes the probes answer 401),
       `reload-on-each-request: false` in deployed environments (the library default is `true`), and
       `deny-when-no-rules: true`. Green: T012.
-      ⚠ `authz.http.enabled` is already a **startup refusal** on a deployed pod serving the
-      operations API (FR-053, landed with T005 at gate round 2), so the block this task adds has
-      to set it to the literal `true` wherever the service is deployed or the pod will not start —
-      which is the point of the refusal, and is exactly what FR-045's audit keys already require.
+      ⚠ `authz.http.enabled` itself **already exists** in `application.yaml`, at
+      `${AUTHZ_HTTP_ENABLED:true}` (T005, gate round 3): the rest of the block lands **beside** that
+      key rather than restating it, and the key keeps its comment. There is **no** start-up refusal
+      behind it — the earlier FR-053 rule was withdrawn by the design owner on 2026-09-20 — so the
+      default is the whole of how condition (a) is carried, and this task must not reintroduce a
+      refusal, a discriminator or a second place to set the same switch. The library reads the
+      value as the **literal** `true`, so every deployed values file writes `true` and not `yes`.
 
 ---
 
@@ -618,13 +614,26 @@ the **real** authorisation filter refuses the people it should.
       bounded `reason` the handler can emit appears in the document's enumerations. Seam: an
       `openapi.yaml` with the info block and no paths. Red: seven paths mapped, none described.
 - [ ] **T043** [US1] `src/main/resources/openapi.yaml` — the seven endpoints as data-model describes
-      them, plus the `audit.http.*` settings block: `enabled: ${HTTP_AUDIT_ENABLED:false}`,
-      `openapi-rest-spec: openapi.yaml` (a **suffix** glob — it must match a file on the classpath
-      or start-up fails), `include-payload-body: false` **explicitly** (the library default is
+      them, plus the rest of the `audit.http.*` settings block **beside** the
+      `enabled: ${HTTP_AUDIT_ENABLED:true}` key T005 already landed (do not restate it, and do not
+      flip it: the `true` default is how condition (b) of Principle III is carried, and there is no
+      start-up refusal behind it):
+      `openapi-rest-spec` and `include-payload-body: false` **explicitly** (the library default is
       `true` and would publish every response body), **and the `courtregister.operations` block**:
       `enabled: ${COURTREGISTER_OPERATIONS_ENABLED:true}`, `supersede-max-age: 30d`,
       `lock-wait: 0s` — the record's defaults restated in the file the way every other block of this
       service's own settings is, so a deployment can see and override them. Green: T042.
+      ⚠ **`openapi-rest-spec` must be uniquely scoped, and a test must prove it.** The filter
+      resolves it as `classpath*:` + `**`/`*` + the value — a **suffix** glob over every jar on the
+      classpath, not a path — so a value of `openapi.yaml` matches this service's document and any
+      other `*openapi.yaml` a dependency ships, and the parser is handed whichever the glob returns
+      first. Name the file and the value for this service (for example
+      `courtregister-openapi.yaml`, the file renamed to match), and add a case that runs the real
+      glob against the **real** test classpath and asserts **exactly one** resource matches and that
+      it is this repository's. A count assertion is the only thing that catches a dependency adding
+      a second document later; asserting that the parser found *a* document would pass on the wrong
+      one. `PropertiesValidator` already refuses an unset value where both audit switches are on;
+      it cannot refuse an ambiguous one, which is why this is a test.
 - [ ] **T044** [P] [US1] `api/OperationsAuditFactsTest` (new) — the payload carries the action, the
       outcome (status family + bounded reason), `flagOverride` on the regeneration endpoint, the run
       id, and the superseded count on the supersede endpoint; and it carries **no** request or
@@ -724,12 +733,29 @@ a deletion has no red run, and its evidence is the green build with the replaced
       `src/main/resources/logback-cli.xml`. Nothing else in this commit. Evidence: the build is
       green and the test count drops by exactly the deleted suites' cases.
 - [ ] **T054** [US5] Delete `config/CliModeConfig` and `config/CliModeConfigTest`; remove
-      `courtregister.cli` from `application.yaml`; make the three conditionals that read it
-      unconditional — `inbound/ServiceBusConsumerConfig`, `config/SchedulingConfig` and
-      `config/ReportSchedulingConfig`, and `config/PublicEventsConfig`. **`PublicEventsConfig`'s
-      javadoc about a CLI JVM not subscribing goes with it** — the rule is retired with the JVM it
-      was about. Evidence: the build is green; a context still starts with the schedulers and the
-      listener present.
+      `courtregister.cli` from `application.yaml`; make **every** conditional that reads it
+      unconditional. **`PublicEventsConfig`'s javadoc about a CLI JVM not subscribing goes with
+      it** — the rule is retired with the JVM it was about. Evidence: the build is green; a context
+      still starts with the schedulers, the sweeps and the listener present.
+      ⚠ **This task runs AFTER the rebase onto a merged 004, and not before.** Until 004 merges,
+      `config/SchedulingConfig`, `config/SchedulingInfrastructureConfig`, `config/BatchSweepConfig`
+      (004's, new), `config/IntakeSweepConfig` and `config/ProcessedLogConfig` are **004's files**
+      under the coordination contract, and 004 is wiring its releaser and its batch-age sweep off
+      the same CLI-mode conjunct this task deletes. Deleting the bean from under an unmerged branch
+      is how both edits get lost. The ledger in `plan.md` says the same thing; if the phase order
+      puts this task before the merge, it goes back to the orchestrator rather than being taken
+      early.
+      The enumeration is made **at that time**, against the rebased tree, because 004 adds
+      consumers. As this branch stands it is: production —
+      `inbound/ServiceBusConsumerConfig`, `config/SchedulingConfig`,
+      `config/SchedulingInfrastructureConfig`, `config/ReportSchedulingConfig`,
+      `config/IntakeSweepConfig`, `config/ProcessedLogConfig`, `config/PublicEventsConfig`; tests —
+      `config/CliModeConfigTest` (deleted), `config/ReportSchedulingConfigTest`,
+      `e2e/CliDispatchIT` (deleted by T055); plus 004's `config/BatchSweepConfig` and whatever suite
+      proves its wiring. `batch/cli/CliMain` and `batch/cli/GenerateRegisterCli` read it too and are
+      gone at T053. Every one of them is re-grepped for `CliModeConfig`, `courtregister.cli` and
+      `cliMode` after the rebase, and the list in this task is corrected in the same commit —
+      a stale enumeration here is a conditional left behind on a property that no longer exists.
 - [ ] **T055** [US5] `docker/startup.sh` — the command dispatch, the `CLI_MAIN`, `CLI_COMMANDS` and
       `BOOT_LAUNCHER` variables and the whole `case` go; the entrypoint starts the application, full
       stop. Delete `e2e/CliDispatchIT`. `scripts/container-smoke.sh` calls `GET /operations/flag`

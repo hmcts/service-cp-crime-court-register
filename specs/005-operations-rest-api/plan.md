@@ -66,8 +66,9 @@ and ~20 removed
 | `authz.http.action-required` | `false` | Our filter always supplies one for our paths |
 | `authz.http.deny-when-no-rules` | `true` | Default-deny, and it also governs "the DRL failed verification" |
 | `authz.http.exclude-path-prefixes` | `/actuator`, `/error` | Setting this **replaces** the library list; omitting `/actuator` makes the probes answer 401 |
-| `audit.http.enabled` | `${HTTP_AUDIT_ENABLED:false}` | Off by default, on per environment — and start-up refuses when operations are served and this is off (FR-045) |
-| `audit.http.openapi-rest-spec` | `openapi.yaml` | A **suffix** glob: it must match a file on the classpath or start-up fails |
+| `authz.http.enabled` | `${AUTHZ_HTTP_ENABLED:true}` | **On by default** — the library's own condition defaults off, and this reverses it. No refusal behind it: an operator may switch it off and the pod starts (FR-045) |
+| `audit.http.enabled` | `${HTTP_AUDIT_ENABLED:true}` | **On by default**, on the same terms as `authz.http.enabled` and for condition (b) |
+| `audit.http.openapi-rest-spec` | `courtregister-openapi.yaml` | A **suffix** glob over the whole classpath, not a path: uniquely scoped so exactly one resource matches, proven by a real-classpath test (T043). Unset where both audit switches are on, start-up refuses |
 | `audit.http.include-payload-body` | `false` | Explicit. The library default is `true` and would publish every response body |
 | `cp.audit.enabled` | `true` deployed, `false` in the local and test profiles | The library's own switch; with it on, `cp.audit.hosts`/`port` are validated at start-up |
 | `cp.audit.hosts` / `port` / `user` / `password` / `ssl-*` | per environment, from Key Vault via CSI | No secret in a committed value |
@@ -79,7 +80,7 @@ and ~20 removed
 |---|---|
 | I — defect-fix-first | Not engaged. There is no legacy oracle for an operational surface; **no `doc/DEFECT-FIXES.md` row is added, amended or flipped**, and `RegisteredDefectFixes` and `DifferentialAuditTest` must stay green untouched |
 | II — TDD | Every task below is a red/green pair, a `[A]` characterisation, or a documentation task. Red runs are failing assertions, never compile errors; the seams land in the test task |
-| III — message-contract first | The reason for the amendment (**4.1.0**). All four conditions are requirements (FR-005–FR-009, FR-010–FR-013, FR-024–FR-027) and gate 8 of `workflow.md`. `openapi.yaml` joins the owned contracts with a contract test in both directions. Conditions (a) and (b) are enforced as start-up refusals wherever the service is deployed (FR-053, FR-045); the local loop is the one exemption and is recorded at the constitution, not here |
+| III — message-contract first | The reason for the amendment (**5.0.0**). All four conditions are requirements (FR-005–FR-009, FR-010–FR-013, FR-024–FR-027) and gate 8 of `workflow.md`. `openapi.yaml` joins the owned contracts with a contract test in both directions. Conditions (a) and (b) are carried by the **defaults**: `authz.http.enabled` and `audit.http.enabled` read `true` in `application.yaml` against two libraries whose own conditions default off (FR-045). There is no start-up refusal on the combination and no environment discriminator — the pod always comes up — and therefore no exemption to record; what is still refused is a **value** that cannot mean what it says (FR-053) |
 | IV — canonical JSON in, typed out | Unaffected: the hearing payload does not come near this surface. The API's own requests and responses are typed records, as everything this service *produces* is |
 | V — ports and adapters | The controllers are inbound adapters. No controller holds a repository, an HTTP client or a decision; the three command classes that held orchestration give it to application services |
 | VI — nothing swallowed | Every refusal is an explicit status with a bounded reason. The one place this is at risk is the audit starter, whose `AuditService.postMessageToArtemis` catches every `Exception`, logs it and returns — so an operations call could succeed with no audit event, which condition (b) of Principle III also forbids. **Not accepted as the library's behaviour**: the starter registers that bean `@ConditionalOnMissingBean` (research R10), so T045 supplies `api/OperationsAuditService` in its place and it does not swallow. What remains after that is one case and is in Complexity Tracking below |
@@ -135,7 +136,9 @@ src/main/java/uk/gov/hmcts/cp/
     ├── config/
     │   ├── OperationsProperties.java         NEW     courtregister.operations.*
     │   ├── OperationsWebConfig.java          NEW     filter registration, conditional controllers
-    │   ├── PropertiesValidator.java          CHANGED the audit-required refusal (FR-045)
+    │   ├── PropertiesValidator.java          CHANGED the audit transport's and the operations
+    │   │                                             API's value refusals (FR-053); no cross-field
+    │   │                                             rule and no environment discriminator
     │   ├── PublicEventsConfig.java           CHANGED the connection factory taken by name (R8)
     │   └── CliModeConfig.java                DELETED
     └── batch/cli/                            DELETED (10 classes)
@@ -193,7 +196,7 @@ and `RegisterRecord` are reused as they are. No existing port's signature change
 | `application/OperationsRunLauncherTest` | Mockito | the lock is **taken**; a lock it cannot take records the refusal and does nothing; the run id is minted before the submit |
 | `application/OnDemandExceptionReportServiceTest` | Mockito | the window forms (instant, ISO duration, `<n>d/h/m/s`), the e-mail refusals, the sink selection, "not every sink took it" |
 | `config/OperationsPropertiesTest` | `ApplicationContextRunner` | the defaults and the overrides |
-| `config/ConfigurationValidationTest.OperationsRefusals` | `ApplicationContextRunner` | where the refusals live, beside every other startup rule: the operations API on with authorisation or audit off, absent, or spelled in a way the owning library would not read as `true`; a transport naming no broker or no port; audit on with no spec key; a non-positive `supersede-max-age`; a negative lock wait; and the two "should start" counterparts that pin the deployed/local discriminator |
+| `config/ConfigurationValidationTest.OperationsSettings` | `ApplicationContextRunner` | where the value refusals live, beside every other startup rule: a transport switched on that names no broker, a blank host, or a port outside 1..65535; both audit switches on with no spec key; a non-positive `supersede-max-age`; a negative lock wait — each with its "should start" counterpart, including both ends of the port range. Plus the three cases that pin what is **not** refused: both filter switches off, audit off, authorisation off. `ShippedConfiguration` pins the two `true` defaults that carry conditions (a) and (b) |
 | `config/AuditComponentScanTest` | `ApplicationContextRunner` over `Application` (test profile) | the exclusion of `uk.gov.hmcts.cp.filter.audit` holds — without it the context does not start (R9) |
 | `config/PublicEventsFactoryTest` | context | the listener container's connection factory is the public-event one, not the audit one (R8) |
 | `api/OperationsAuthzIT` | full context + WireMock | **the real filter**: in the group → served; not in the group → 403; no `CJSCPPUID` → 401; identity service 500 → 403; a forged `CPP-ACTION` → still refused; `/actuator/health` → 200 |
@@ -221,20 +224,29 @@ operations section, `specs/002-consolidate-progression-leg/quickstart.md`'s CLI 
 releaser and sweep that replace it**, `application/DocumentRenderer`, `adapter/systemdocgenerator/*`,
 `adapter/stub/StubDocumentRenderer`, `domain/DocumentStatus`, `domain/BatchFailureReason`,
 `domain/CompletedBy`, `config/GenerationProperties`, `config/GenerationMetrics`,
-`config/SchedulingConfig`, `db/migration/V6*`, the `courtregister.generation.*` and
-`courtregister.report.*` blocks of `application.yaml`, README's generation section, or
-`design_rules.md`'s flow diagram and batch state machine. Those are 004's.
+`config/SchedulingConfig`, `config/SchedulingInfrastructureConfig`, `config/BatchSweepConfig`
+(004's, new), `config/IntakeSweepConfig`, `config/ProcessedLogConfig`, `db/migration/V6*` and
+`V7*`, the `courtregister.generation.*` and `courtregister.report.*` blocks of
+`application.yaml`, README's generation section, or `design_rules.md`'s flow diagram and batch
+state machine. Those are 004's.
+
+**The five `config/*` files in that list are the ones a file-level ledger loses**, because 005 has
+to edit them *eventually*: every one of them carries a `CliModeConfig` conjunct that T054 deletes,
+and 004 is wiring its releaser and its batch-age sweep off the same conjunct. **They are 004's
+until 004 merges to `main` and 005 has rebased onto it**, and T054 is worded to run only after that
+and to re-derive its own enumeration against the rebased tree. 005 taking one early deletes a bean
+from under an unmerged branch and loses both edits.
 
 **Shared, by agreement**:
 
-- `config/PropertiesValidator` — 004 renames the generation grace period; 005 adds the
-  authorisation- and audit-required refusals. Different methods, one file: expect a textual
-  conflict on the rebase and resolve it by keeping both. 005's edit is **not** confined to one
-  added method, and the rebase should know it: the constructor gains a parameter, the class gains
-  two fields, one pattern constant and six private helpers, `afterPropertiesSet` gains a call and
-  `@EnableConfigurationProperties` an entry. What the agreement was protecting is intact — the
-  static `validate(...)` is byte-identical to the base — so the resolution is to keep both sides of
-  the constructor and annotation hunks rather than to take either whole.
+- `config/PropertiesValidator` — 004 renames the generation grace period; 005 adds the audit
+  transport's and the operations API's **value** refusals. Different methods, one file: expect a
+  textual conflict on the rebase and resolve it by keeping both. 005's edit is **not** confined to
+  one added method, and the rebase should know it: the constructor gains a parameter, the class
+  gains two fields, a pattern and a range constant and four private helpers, `afterPropertiesSet`
+  gains a call and `@EnableConfigurationProperties` an entry. What the agreement was protecting is
+  intact — the static `validate(...)` is byte-identical to the base — so the resolution is to keep
+  both sides of the constructor and annotation hunks rather than to take either whole.
 - `.claude/rules/design_rules.md` — 004 edits the flow diagram and the batch state machine; 005
   edits the opening paragraph, the package structure, the Cutover Rule's wording about endpoints,
   the topic section's retired CLI-JVM rule, the out-of-scope list and the new "The operations API"
@@ -262,14 +274,16 @@ releaser and sweep that replace it**, `application/DocumentRenderer`, `adapter/s
   from either side is re-read against the merged line rather than deleted.
 - `config/ConfigurationValidationTest` — **both**, and it was missing from the first draft of this
   ledger. 004 extends it with `stale-after`, `batch-age-refresh` and `batch-generated-within` and
-  removes the `completion` cases; 005 added the four audit keys to the suite's **base runner** and a
-  nested `OperationsRefusals` class. The base-runner change is the one to watch on the rebase: it is
-  a property list every case in the file inherits, so a conflict there must be resolved by keeping
-  both sides' entries rather than by taking either list whole.
+  removes the `completion` cases; 005 adds a nested `OperationsSettings` class and two cases to
+  `ShippedConfiguration`. **The base runner is no longer a conflict**: gate round 1 added five
+  library keys to it for a refusal that gate round 3 withdrew, and the list is back to the five
+  identity and endpoint properties 004 will see. Additive on both sides.
 - `src/main/resources/application.yaml` — **both**. 004 touches four sites in the
   `courtregister.generation.*` block (the rename and its comments); 005 adds the `cp.audit.*` key
-  and will add the `authz.*`, `audit.http.*` and `courtregister.operations.*` blocks, and deletes
-  `courtregister.cli`. Different blocks of one file.
+  and the `authz.http.enabled` / `audit.http.enabled` defaults, will add the rest of the `authz.*`,
+  `audit.http.*` and `courtregister.operations.*` blocks, and deletes `courtregister.cli` —
+  **after the rebase**, because the conditionals that read it are 004's until then. Different
+  blocks of one file.
 - `config/CliModeConfig` and `config/CliModeConfigTest` — 004 **edits** them (the releaser and the
   sweep are wired off a command JVM); 005 **deletes** them with the CLI. The rebase resolution is
   the deletion, and 004's edit is discarded *with the file* — but only after the check below.
@@ -319,10 +333,11 @@ releaser and sweep that replace it**, `application/DocumentRenderer`, `adapter/s
    factory, and by taking the connection factory by name.
 3. **The audit starter swallows its own failures.** `AuditService.postMessageToArtemis` catches
    every `Exception`, logs it and returns (verified in the 1.0.5 bytecode), so a call that cannot be
-   audited would proceed and say so only in a log line. Two things answer it: FR-045 makes the audit
-   path being *configured and engaged* a start-up refusal, and **T045 replaces the bean** — the
-   starter registers it `@ConditionalOnMissingBean` — with one that refuses the call
-   (`503 AUDIT_UNAVAILABLE`) when the request event cannot be published, before the action runs.
+   audited would proceed and say so only in a log line. Two things answer it: the audit path is
+   *engaged by default* (FR-045) and a transport switched on has to name somewhere it could reach
+   (FR-053), and **T045 replaces the bean** — the starter registers it `@ConditionalOnMissingBean`
+   — with one that refuses the call (`503 AUDIT_UNAVAILABLE`) when the request event cannot be
+   published, before the action runs.
    The residual is the **response** event, which is published after work that cannot be undone; it
    is logged at ERROR and counted, it is the single entry in Complexity Tracking, and it is not
    hidden behind a claim we cannot make.
@@ -345,4 +360,4 @@ recorded rather than argued away.
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |---|---|---|
-| **Principle VI (nothing swallowed) and Principle III(b) (every endpoint audited), for the audit **response** event alone.** `cp-audit-filter-springboot`'s `AuditService.postMessageToArtemis` catches every `Exception`, logs it and returns — verified in the 1.0.5 bytecode, not inferred from the README — so a broker outage would let an operations call succeed while publishing nothing. T045 replaces that bean (the starter registers it `@ConditionalOnMissingBean`) with one that does not swallow, and publishes the **request** event before the action so a failure there refuses the call `503 AUDIT_UNAVAILABLE`. What is left is the **response** event: the action has already happened, so a publish failure there cannot be refused. It is logged at ERROR with the action and the run id and moves a bounded counter — it is not silent, but the audit trail for that one call is incomplete, and no status code can say so to a caller whose work is done. | Condition (b) is a requirement on an endpoint being *reachable* unaudited, which the start-up refusal (FR-045) and the fail-closed request event together close. The response event records the outcome of work already done; making it a precondition of that work is not possible, and making the work conditional on it would mean a broker outage stopping every operator action during exactly the incident an operator is trying to end. | **A durable outbox** — write the response event into this service's own store and publish it from a sweep — would close it completely, and is rejected **for this increment** on scope: it is a table, a migration, a publisher and a retry policy for one event per operator call, on a surface that carries no defendant detail and whose actions are already recorded in `processed_request`, `register_batch` and the run report. **Retrying inline** was rejected because it holds the caller's connection open on the one path where the answer is already known. The outbox stays the named way to close this, and it is a story of its own, not a task smuggled into this one. **This entry needs the design owner's dated sign-off before Phase 8 lands** (T044/T045); until then the shortfall is recorded, not approved. |
+| **Principle VI (nothing swallowed) and Principle III(b) (every endpoint audited), for the audit **response** event alone.** `cp-audit-filter-springboot`'s `AuditService.postMessageToArtemis` catches every `Exception`, logs it and returns — verified in the 1.0.5 bytecode, not inferred from the README — so a broker outage would let an operations call succeed while publishing nothing. T045 replaces that bean (the starter registers it `@ConditionalOnMissingBean`) with one that does not swallow, and publishes the **request** event before the action so a failure there refuses the call `503 AUDIT_UNAVAILABLE`. What is left is the **response** event: the action has already happened, so a publish failure there cannot be refused. It is logged at ERROR with the action and the run id and moves a bounded counter — it is not silent, but the audit trail for that one call is incomplete, and no status code can say so to a caller whose work is done. | Condition (b) is a requirement on an endpoint being *reachable* unaudited, which the `true` default (FR-045) and the fail-closed request event together close — the default is what makes an unaudited deployment a thing somebody had to do on purpose, and the request event is what makes an unpublished call a refused one. The response event records the outcome of work already done; making it a precondition of that work is not possible, and making the work conditional on it would mean a broker outage stopping every operator action during exactly the incident an operator is trying to end. | **A durable outbox** — write the response event into this service's own store and publish it from a sweep — would close it completely, and is rejected **for this increment** on scope: it is a table, a migration, a publisher and a retry policy for one event per operator call, on a surface that carries no defendant detail and whose actions are already recorded in `processed_request`, `register_batch` and the run report. **Retrying inline** was rejected because it holds the caller's connection open on the one path where the answer is already known. The outbox stays the named way to close this, and it is a story of its own, not a task smuggled into this one. **This entry needs the design owner's dated sign-off before Phase 8 lands** (T044/T045); until then the shortfall is recorded, not approved. |
