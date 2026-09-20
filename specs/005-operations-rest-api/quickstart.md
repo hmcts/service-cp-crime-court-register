@@ -159,12 +159,18 @@ it — `409 email-output-disabled` if that output is switched off in this enviro
 curl -s localhost:8082/operations/flag
 ```
 
-The compose environment switches `authz.http.enabled`, `audit.http.enabled` and `cp.audit.enabled`
-off, so no identity header is needed and nothing is published to an audit broker. All three default
-to secure — `true` for the two filters in `application.yaml` — and the compose file overrides them
-deliberately, with the reason beside each. That is a **local** convenience and is not how any
-deployed environment is configured; a deployed pod that had them off would still start, so what
-keeps them on there is the values file and the deployment review, not a refusal.
+The compose environment switches `authz.http.enabled` and `audit.http.enabled` off, with the reason
+beside each, so no identity header is needed; `cp.audit.enabled` — the audit transport — is already
+off, because `application.yaml` ships it `${CP_AUDIT_ENABLED:false}` so a machine with no audit
+broker starts. Nothing is published to an audit broker either way.
+
+The two filters default to **secure** (`true` in `application.yaml`, against library defaults of
+off) and the transport does not, which is the one asymmetry worth knowing: the HTTP audit filter is
+built only inside the auto-configuration class the transport's key gates, so a deployed environment
+carries Principle III's condition (b) by setting `CP_AUDIT_ENABLED=true` in its values with the
+broker's connection from Key Vault. A pod with the filter on over a transport that is off starts,
+serves, and says so once at WARN. None of this is a refusal: what keeps a deployed pod authorised
+and audited is the values file and the deployment review.
 
 ## What is gone
 
