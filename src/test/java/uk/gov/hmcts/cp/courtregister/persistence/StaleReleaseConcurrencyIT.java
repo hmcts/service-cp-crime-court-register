@@ -258,9 +258,11 @@ class StaleReleaseConcurrencyIT {
                         + "render and e-mail one court centre day twice", order)
                 .isLessThanOrEqualTo(1L);
         softly.assertThat(aggregatesPerAddress(courtCentre))
-                .as("%s: and no Youth Offending Team holds two aggregates for one register date "
-                        + "(SC-003), whichever way the race went", order)
-                .allSatisfy(held -> softly.assertThat(held).isEqualTo(1L));
+                .as("%s: the day's one Youth Offending Team holds exactly one aggregate for the "
+                        + "register date (SC-003), whichever way the race went - one, because the "
+                        + "night is settled before this is read and a day nobody was told about "
+                        + "would satisfy 'never twice' by having told nobody at all", order)
+                .containsExactly(1L);
         softly.assertThat(liveRegisters(courtCentre))
                 .as("%s: and both registers are still the day's, rather than one of them having "
                         + "been superseded or lost by a race nothing shared a key with", order)
@@ -293,26 +295,43 @@ class StaleReleaseConcurrencyIT {
      * The rest of the night, run after the race so the invariants are asserted on a settled day.
      *
      * <p>Two halves, and which of them has anything to do is exactly what the race decided. A batch
-     * that holds a document is notified once, as the notifier does it; registers the pass gave back
-     * are assembled into tonight's batch, rendered and notified, as the same run does it. A day
-     * whose batch is still GENERATING has neither half to run, and that is the correct ending for a
-     * render this service did not give up on.
+     * the race left still owed something - PENDING, GENERATING or holding a document - is walked to
+     * its ending and notified once, as the renderer and the notifier do it; registers the pass gave
+     * back are assembled into tonight's batch and walked the same way, as the same run does it.
+     *
+     * <p><strong>Every round settles, and that is what makes the aggregate invariant a claim.</strong>
+     * A round whose batch was left GENERATING used to have neither half to run, so the day ended
+     * with no notification at all and "no Youth Offending Team holds two aggregates" was satisfied
+     * by holding none. A render this service did not give up on is one that goes on to produce its
+     * document and its e-mail, so the fixture finishes it rather than stopping where the race did.
      *
      * @param courtCentre this round's court centre
      */
     private void settleTheNight(final UUID courtCentre) {
         store.batchesOn(MONDAY).stream()
                 .filter(batch -> courtCentre.equals(batch.courtCentreId()))
-                .filter(batch -> batch.status() == BatchStatus.GENERATED)
-                .forEach(this::notified);
+                .filter(batch -> LIVE.contains(batch.status().name()))
+                .forEach(this::finished);
         final List<RegisterRecord> given = waiting(courtCentre);
         if (!given.isEmpty()) {
-            final RegisterBatch tonight = store.assemble(batchFor(courtCentre, given), given);
-            store.markRequested(tonight.batchId(), UUID.randomUUID());
-            store.markGenerated(tonight.batchId(), UUID.randomUUID(), Instant.now(),
-                    CompletedBy.EVENT);
-            notified(tonight);
+            finished(store.assemble(batchFor(courtCentre, given), given));
         }
+    }
+
+    /**
+     * A batch walked from wherever the race left it to its document, and told about once.
+     *
+     * @param batch the batch as it stood when it was read
+     */
+    private void finished(final RegisterBatch batch) {
+        if (batch.status() == BatchStatus.PENDING) {
+            store.markRequested(batch.batchId(), UUID.randomUUID());
+        }
+        if (batch.status() != BatchStatus.GENERATED) {
+            store.markGenerated(batch.batchId(), UUID.randomUUID(), Instant.now(),
+                    CompletedBy.EVENT);
+        }
+        notified(batch);
     }
 
     /** One aggregate for the day's one Youth Offending Team, and the batch settled on its tally. */
@@ -391,8 +410,8 @@ class StaleReleaseConcurrencyIT {
      *
      * <p>The loser of a race is refused, and the suite's whole subject is what that refusal leaves
      * behind. Collected rather than propagated, and asserted on by
-     * {@link #assertInvariants(UUID, Order, List)} - which is also what keeps the red run an
-     * assertion while the operation is still a seam.
+     * {@link #assertInvariants(UUID, Order, Instant, Escapes)} - which is also what keeps the red
+     * run an assertion while the operation is still a seam.
      */
     private static List<Throwable> escaping(final Runnable contender) {
         final Throwable refused = catchThrowable(contender::run);
