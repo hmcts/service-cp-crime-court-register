@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -236,6 +237,17 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      * systemdocgenerator's verdict about one identity and attach it to a batch that has moved past
      * it.
      *
+     * <p><strong>That third branch is counted, and the counter is the guarantee.</strong> It is
+     * what stops a Youth Offending Team being told twice: the registers a released batch held are
+     * in tonight's batch, and tonight's batch is what tells the court centre. Until 004 the drop
+     * was a WARN and moved nothing - the one acknowledged-and-dropped path on this subscription
+     * without a bounded reason, which the design rules forbid and which no alert and no end-to-end
+     * case could see. The reason is {@code terminal-batch} on
+     * {@code courtregister_public_events_ignored_total}, beside the six the listener already
+     * moves, and deliberately not one of the notification counter's {@code late-*} labels: those
+     * describe two notifiers racing over one recipient's row, one leg further on, and reusing them
+     * here would hide a rendering fact inside a notification series.
+     *
      * <p>The reading is taken in the one branch that marked anything, immediately after the mark
      * and before whatever the caller does with the answer. The mark is what closes the round trip,
      * so the reading belongs to it: taken any later it would be lost whenever the step after it
@@ -253,6 +265,7 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
 
         final Optional<RegisterBatch> marked;
         if (batch.status() == outcome) {
+            countIfAlreadyEnded(batch);
             LOG.debug("Batch {} already stands at {}, so the outcome that has just arrived for it "
                     + "again is recognised rather than re-stamped.", batch.batchId(), outcome);
             marked = Optional.empty();
@@ -261,6 +274,7 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
             timeTheRoundTrip(batch.batchId());
             marked = Optional.of(batch);
         } else {
+            countIfAlreadyEnded(batch);
             LOG.warn("Batch {} stands at {} and an outcome arrived that would move it to {}, which "
                     + "the state machine does not draw; the batch is left where it is and the "
                     + "outcome is reported here rather than applied.",
@@ -268,6 +282,32 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
             marked = Optional.empty();
         }
         return marked;
+    }
+
+    /**
+     * Counts an outcome that arrived for a batch this service had already ended.
+     *
+     * <p><strong>Ended, and not merely unmoved.</strong> Both branches above leave the batch where
+     * it stands, and only one of them is the drop FR-008 is about. A redelivered
+     * {@code document-available} for a batch standing at GENERATED is a batch mid-journey being
+     * told something it already knows - expected, at DEBUG, and nought to alert on. A batch in a
+     * state the machine draws no move out of is the other thing: its night is over, its registers
+     * are in tonight's batch if a run gave them back, and the outcome now arriving is exactly what
+     * would otherwise send a Youth Offending Team a second register for one court centre and
+     * register date (SC-003, SC-010).
+     *
+     * <p>Terminal is asked of the machine rather than listed here, because the list is the
+     * machine's: a state it draws no move out of is a state nothing can follow, and a second copy
+     * of that list in this class would be a copy to forget to update.
+     *
+     * @param batch the batch the outcome was attributed to, as it stood when it was read
+     */
+    private void countIfAlreadyEnded(final RegisterBatch batch) {
+        final boolean ended = Arrays.stream(BatchStatus.values())
+                .noneMatch(batch.status()::canTransitionTo);
+        if (ended) {
+            metrics.terminalBatchIgnored();
+        }
     }
 
     /**

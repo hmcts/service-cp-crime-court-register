@@ -2703,11 +2703,30 @@ from being sent after something already put right.
 
 ### Implementation
 
-- [ ] T034 [US3] `application/DocumentOutcomeSinkImpl.java`, `config/GenerationMetrics.java` — make
+- [x] T034 [US3] `application/DocumentOutcomeSinkImpl.java`, `config/GenerationMetrics.java` — make
       T033 green. The refused-transition branch counts `courtregister_public_events_ignored_total`
       under a new bounded reason `terminal-batch`, beside the WARN it already writes. The constant's
       javadoc says why it exists and why it is not one of the notification counter's late-* labels,
       which describe two notifiers racing over one recipient and are a different event entirely.
+      (green: `flock -w 7200 … ./gradlew test --tests '*DocumentOutcomeSinkTest*'
+      --tests '*DocumentEventListenerTest*' --tests '*TelemetryPrivacyTest*' checkstyleMain
+      pmdMain -Dtest.noFailFast=true` → **BUILD SUCCESSFUL**, all three suites green.
+      **It is two branches and not one, which T034's own sentence did not foresee.** A
+      `generation-failed` for a batch already FAILED does not reach the refused-transition branch
+      at all: the outcome's state *equals* the batch's, so it lands in the first branch, the one
+      that says "already stands at FAILED". Counting only the third branch would have left
+      spec scenario US3.2 — a `generation-failed` for a released batch — dropped and counted
+      nowhere, which is the exact gap this task exists to close. So the counter is moved by
+      `countIfAlreadyEnded`, called from both non-marking branches and moving only where the batch
+      stands in a state the machine draws **no move out of**.
+      **Terminal is asked of the machine rather than listed.** `BatchStatus.canTransitionTo`
+      already refuses every move out of a terminal state, so "a state nothing can follow" is
+      derived from it; a second copy of that list inside the sink would be a copy to forget to
+      update, and no new method was added to the enumeration for a predicate one caller needs.
+      The log levels are untouched: the redelivery stays DEBUG and the undrawn move stays WARN.
+      A redelivered `document-available` for a batch standing at GENERATED is therefore **not**
+      counted - it is a batch mid-journey being told what it already knows, and nought is what
+      this series must read on a healthy estate for an alert to be worth writing on it.)
 - [ ] T036 `domain/ExceptionKind.java`, `application/ExceptionReportService.java` — make T035 green.
       Add `BATCH_RELEASED`, read over the window like the other failure kinds; derive it from the
       reason at the one place FAILED batches become entries; check the "four stages" text and any

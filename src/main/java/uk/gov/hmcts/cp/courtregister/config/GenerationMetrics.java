@@ -153,11 +153,18 @@ public class GenerationMetrics {
     /**
      * The {@code reason} label of an outcome for a batch this service has already ended.
      *
-     * <p>A {@code document-available} for a batch the run gave up on and released, or a second
-     * refusal for one already FAILED under a different reason: the state machine does not draw the
-     * move, so the batch is left where it stands and the outcome is dropped. Until 004 that drop
-     * was a WARN and nothing else - the one acknowledged-and-dropped path on the subscription that
-     * moved no counter, which the design rules forbid.
+     * <p>A {@code document-available} for a batch the run gave up on and released, or a refusal
+     * for one already FAILED, or either for a batch whose teams have been told: the batch stands
+     * in a state the machine draws no move out of, so it is left where it is and the outcome is
+     * dropped. Until 004 that drop was a WARN and nothing else - the one
+     * acknowledged-and-dropped path on the subscription that moved no counter, which the design
+     * rules forbid.
+     *
+     * <p><strong>Ended, and not merely unmoved.</strong> A redelivered outcome for a batch
+     * standing mid-journey where that outcome already put it - GENERATED, told a second time that
+     * its document exists - is the redelivery a durable subscription is for, and it is not
+     * counted here: it is expected, said at DEBUG, and nought is what this series has to read on a
+     * healthy estate for an alert to be worth writing on it.
      *
      * <p>It is counted now because the drop is a <em>guarantee</em> rather than a curiosity: it is
      * what stops a Youth Offending Team being told twice about one court centre and register date
