@@ -1,0 +1,99 @@
+package uk.gov.hmcts.cp.courtregister.api;
+
+import java.net.URI;
+import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.cp.courtregister.api.dto.RecordedWhileOffResponse;
+import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+
+/**
+ * The register endpoints: what is waiting, and - from a later task - what a rollback may give up.
+ *
+ * <p>An inbound adapter. It takes nothing, calls {@link BatchListingService}, and maps the answer.
+ *
+ * <p>The listing exists because automatic batching passes these rows over deliberately: they were
+ * recorded while the flag said the legacy generates. Without an answer that names them, a rollback
+ * would leave every one waiting for somebody to find it.
+ *
+ * <p>{@code @Profile("!test")} for the reason {@link BatchesController} carries it: the store is
+ * declared `!test` in the processed-log configuration and that profile has no database.
+ */
+@RestController
+@Profile("!test")
+public class RegistersController {
+
+    /** An instance that names nowhere, which is how the field is kept out of the body. */
+    private static final URI NOWHERE = URI.create("");
+
+    private static final Logger LOG = LoggerFactory.getLogger(RegistersController.class);
+
+    /** The rows could not be read, so there is no listing to give. */
+    private static final String LISTING_FAILED = "listing-failed";
+
+    /** The two listings, over the three reads they are built from. */
+    private final BatchListingService listings;
+
+    /**
+     * Creates the endpoints over the listings they answer from.
+     *
+     * @param batchListings the application service holding the reads
+     */
+    public RegistersController(final BatchListingService batchListings) {
+        this.listings = batchListings;
+    }
+
+    /**
+     * The registers automatic batching passed over because the flag did not say ON.
+     *
+     * @return the waiting registers, or the bounded refusal that stopped the listing being made
+     */
+    // PMD.AvoidCatchingGenericException: the store translates an outage into its own unchecked type
+    // and a statement can refuse with another; both mean the same thing here - this listing was not
+    // read. The catch classifies and answers explicitly; it swallows nothing.
+    // PMD.OnlyOneReturn: the listing and the refusal are said where each is decided.
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
+    @GetMapping(path = "/operations/registers/recorded-while-off",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Object> recordedWhileOff() {
+        try {
+            final List<RecordedWhileOffResponse.RecordedRegister> waiting =
+                    listings.recordedWhileOff().stream()
+                            .map(record -> new RecordedWhileOffResponse.RecordedRegister(
+                                    record.recordId(), record.hearingId(), record.registerDate(),
+                                    record.flag()))
+                            .toList();
+            return ResponseEntity.ok(new RecordedWhileOffResponse(waiting));
+        } catch (RuntimeException notRead) {
+            LOG.error("The registers recorded while the flag was off could not be read, so no "
+                    + "listing is given. cause={}", notRead.getClass().getName());
+            return refusal();
+        }
+    }
+
+    /**
+     * The one refusal this endpoint has, in bounded fields and nothing else.
+     *
+     * @return the refusal
+     */
+    private static ResponseEntity<Object> refusal() {
+        final ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.SERVICE_UNAVAILABLE);
+        problem.setTitle(HttpStatus.SERVICE_UNAVAILABLE.getReasonPhrase());
+        // Spring fills `instance` with the request URI whenever it is left null, which on the
+        // notify path would be the batch id the caller typed. An EMPTY uri is serialised away by
+        // the problem-detail mixin's NON_EMPTY rule, so this is how the field is suppressed rather
+        // than populated; setting it to null would simply let the framework fill it in again.
+        problem.setInstance(NOWHERE);
+        problem.setProperty("reason", LISTING_FAILED);
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(problem);
+    }
+}

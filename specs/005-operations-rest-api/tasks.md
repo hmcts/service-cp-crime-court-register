@@ -584,14 +584,36 @@ the "a controller may not hold a repository" rule both land.
       the store and both repositories carry it in `config/ProcessedLogConfig` - a file this
       increment may not touch - and a listing over readers that do not exist is a context that will
       not refresh.)
-- [ ] **T018** [P] [US1] [US6] `api/BatchesControllerTest` (new, listing cases only) and
+- [x] **T018** [P] [US1] [US6] `api/BatchesControllerTest` (new, listing cases only) and
       `api/RegistersControllerTest` (new, recorded-while-off cases only) — `@WebMvcTest` with
       `BatchListingService` mocked. Cases: the listing shape of data-model §2 and §3; a `date` that
       is absent → `400 missing-argument`; a `date` that will not read → `400 unreadable-argument`
       with `argument: date` and **without the value that was sent**; a store failure → `503`.
       Seams: the two controllers and their response records. Red: the body shape.
-- [ ] **T019** [US1] [US6] `api/BatchesController#list`, `api/RegistersController#recordedWhileOff`
+      (Landed with T019 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. 14 tests, 0 failures - 9 on the batch listing and 5 on the recorded-while-off one.
+      Besides the task's cases: a batch with no court house **omits** the key rather than rendering
+      null; a date holding nothing answers `batches: []` and nothing waiting answers `records: []`,
+      because silence is not an answer; an empty `date=` parameter is `missing-argument` like an
+      absent one; and two cases assert the refusal bodies **as text**, that they carry neither the
+      value that was sent nor anything the store said about itself.
+      **One of those two found a real leak and is the reason it is written as text.** Spring fills
+      a `ProblemDetail`'s `instance` with the request URI whenever it is left null, so every
+      refusal came back carrying the path - which on `/operations/batches/{batchId}/notify` would
+      be a value the caller typed. Fixed by setting the instance to an empty URI, which the
+      problem-detail mixin's NON_EMPTY rule serialises away; setting it to null lets the framework
+      fill it in again.)
+- [x] **T019** [US1] [US6] `api/BatchesController#list`, `api/RegistersController#recordedWhileOff`
       and their dtos. Green: T018.
+      (green: both suites 14 tests, 0 failures; the whole `api` package, `TestProfileContextTest`
+      and `LogStatementSweepTest` beside them, green. Checkstyle and PMD clean on main and test.
+      Each controller parses, calls `BatchListingService`, and maps - no repository, no decision.
+      The refusals are built in the controllers for now: `api/OperationsExceptionHandler` is
+      T024/T025's, and the two private `refusal(...)` helpers are what it will absorb. A store that
+      will not answer is caught, classified and answered `503 listing-failed`, with the cause
+      logged by **class name** at ERROR exactly as `ListBatchesCli.listed` logged it - classified
+      and answered, not swallowed.
+      Both controllers carry `@Profile("!test")` for the reason `batchListingService` does.)
 
 ---
 
