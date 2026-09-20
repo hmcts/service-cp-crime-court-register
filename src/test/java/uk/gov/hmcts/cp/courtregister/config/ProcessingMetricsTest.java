@@ -601,9 +601,10 @@ class ProcessingMetricsTest {
                     .as("the same three words the run line carries")
                     .containsExactlyInAnyOrder("delivered", "partial", "failed");
             assertThat(seriesOf(ProcessingMetrics.EXCEPTIONS_REPORTED))
-                    .as("all five kinds, because a sixth is a spec change rather than an addition")
+                    .as("every kind, because a seventh is a spec change rather than an addition "
+                            + "- batch-released was the sixth, added by 004 against FR-019")
                     .containsExactlyInAnyOrder("request-failed", "request-late", "batch-late",
-                            "batch-failed", "notification-failed");
+                            "batch-failed", "notification-failed", "batch-released");
             assertThat(seriesOf(ProcessingMetrics.EXCEPTION_REPORT_DELIVERIES))
                     .containsExactlyInAnyOrder("log", "email", "delivered", "partially-delivered",
                             "not-delivered");
