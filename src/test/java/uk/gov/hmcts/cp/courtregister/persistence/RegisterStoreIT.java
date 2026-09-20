@@ -1663,7 +1663,7 @@ class RegisterStoreIT {
                         requestedAtOn(MONDAY).plus(ROUND_TRIP), CompletedBy.EVENT);
                 store.markRequested(withRefusal.batchId(), SECOND_PAYLOAD_FILE_ID);
                 store.markFailed(withRefusal.batchId(), BatchFailureReason.GENERATION_FAILED,
-                        SDG_REASON, CompletedBy.RECONCILER);
+                        SDG_REASON, CompletedBy.EVENT);
             }).as(WALKED).doesNotThrowAnyException();
 
             softly.assertThat(batchesOn(MONDAY))
@@ -1719,38 +1719,38 @@ class RegisterStoreIT {
         /**
          * Which mechanism learned the outcome, written by the mark that learned it.
          *
-         * <p>{@code completed_by} is what the {@code reconciled} metric counts, and a run whose
-         * outcomes all arrive by RECONCILER is a broker or a subscription somebody has to look at.
-         * Nothing else in the flow records it, so a batch that does not carry it is a batch whose
-         * completion mechanism is lost.
+         * <p>{@code completed_by} is the only record of it. Nothing else in the flow says which
+         * mechanism delivered an outcome, so a batch that does not carry it is a batch whose
+         * completion mechanism is lost - and a night whose outcomes are all missing it is a broker
+         * or a subscription somebody has to look at, with nothing to look at it by.
          *
          * <p>It cannot be a second write. Batch state changes are compare-and-set through
          * {@code BatchStatus}: written before the mark, the batch is still GENERATING and the update
          * would be guessing at an outcome that has not arrived; written after it, the only move left
          * is GENERATED to GENERATED, which the machine refuses. The mark therefore carries it, and
-         * this case asserts that the mark's own statement is where it lands - both endings that
-         * somebody outside this service reported, so the EVENT path and the RECONCILER path are
-         * pinned by the same test rather than by one and an assumption.
+         * this case asserts that the mark's own statement is where it lands - on <em>both</em> marks
+         * that take an attribution, the generated one and the failed one, rather than on one of
+         * them and an assumption about the other.
          */
         @Test
         void generation_records_who_completed_the_batch() {
-            final DistributionCommand listenedFor = seededCommand(HEARING_ONE, MONDAY_SHARED);
-            final DistributionCommand reconciledFor = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+            final DistributionCommand announced = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand refused = seededCommand(HEARING_THREE, TUESDAY_SHARED);
 
             softly.assertThatCode(() -> {
-                record(listenedFor, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(announced, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                record(reconciledFor, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                record(refused, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
                 final List<RegisterRecord> waiting = mine(store.activeUnbatched());
-                final RegisterBatch listened = assembled(MONDAY, recordsOn(waiting, MONDAY));
-                final RegisterBatch reconciled = assembled(TUESDAY, recordsOn(waiting, TUESDAY));
-                store.markRequested(listened.batchId(), PAYLOAD_FILE_ID);
-                store.markGenerated(listened.batchId(), DOCUMENT_FILE_ID, GENERATED_AT,
+                final RegisterBatch generated = assembled(MONDAY, recordsOn(waiting, MONDAY));
+                final RegisterBatch failed = assembled(TUESDAY, recordsOn(waiting, TUESDAY));
+                store.markRequested(generated.batchId(), PAYLOAD_FILE_ID);
+                store.markGenerated(generated.batchId(), DOCUMENT_FILE_ID, GENERATED_AT,
                         CompletedBy.EVENT);
-                store.markRequested(reconciled.batchId(), SECOND_PAYLOAD_FILE_ID);
-                store.markFailed(reconciled.batchId(), BatchFailureReason.GENERATION_FAILED,
-                        SDG_REASON, CompletedBy.RECONCILER);
+                store.markRequested(failed.batchId(), SECOND_PAYLOAD_FILE_ID);
+                store.markFailed(failed.batchId(), BatchFailureReason.GENERATION_FAILED,
+                        SDG_REASON, CompletedBy.EVENT);
             }).as(WALKED).doesNotThrowAnyException();
 
             softly.assertThat(completedByOn(MONDAY))
@@ -1758,9 +1758,9 @@ class RegisterStoreIT {
                             + "is generated says so in the same breath")
                     .contains("EVENT");
             softly.assertThat(completedByOn(TUESDAY))
-                    .as("and the failure the grace-period reconciler went and asked for is the "
-                            + "other mechanism, which is the one the metric exists to count")
-                    .contains("RECONCILER");
+                    .as("and the refusal arrived the same way, on the other mark that takes an "
+                            + "attribution: the failing path records the mechanism too")
+                    .contains("EVENT");
         }
 
         /**
@@ -1769,8 +1769,7 @@ class RegisterStoreIT {
          * <p>A document exists because some mechanism outside this service said so, and the row that
          * records the document is the only place that says which one. A GENERATED row with no
          * {@code completed_by} is therefore not an incomplete row but a contradictory one: it claims
-         * an answer arrived and denies that anything delivered it, and the {@code reconciled} metric
-         * counts it as neither.
+         * an answer arrived and denies that anything delivered it.
          *
          * <p>The refusal has to come before the statement. The mark is a compare-and-set that also
          * moves this batch's registers to GENERATED, and there is no second write afterwards that
@@ -2459,7 +2458,8 @@ class RegisterStoreIT {
          * systemdocgenerator's decision rather than this service's. The column is bounded, so the
          * bound has to be applied before the write: an unbounded write against a bounded column
          * fails the whole failure statement, and the batch that could not say why it failed then
-         * stays GENERATING until the reconciler gives up on it - the failure lost twice over.
+         * stays GENERATING until the next run's stale-batch pass gives up on it - the failure lost
+         * twice over.
          */
         @Test
         void a_reason_longer_than_the_column_should_be_bounded_before_it_is_written() {
@@ -2489,13 +2489,12 @@ class RegisterStoreIT {
         }
 
         /**
-         * The two endings somebody outside this service reported, and what they must carry.
+         * The one ending somebody outside this service reported, and what it must carry.
          *
-         * <p>GENERATION_FAILED is systemdocgenerator's own verdict about the render and
-         * GENERATION_TIMED_OUT is the reconciler's verdict about systemdocgenerator's silence. Both
-         * are learned by a named mechanism, and the {@code reconciled} metric is the count of which
-         * one: a batch that ends under either of them without naming it is the one row the metric
-         * cannot be computed from, and no later write can supply it.
+         * <p>GENERATION_FAILED is systemdocgenerator's own verdict about the render, learned on its
+         * {@code generation-failed} event. The row is the only place that says which mechanism
+         * brought it, so a batch that ends under it without naming one is a row that claims
+         * somebody answered and refuses to say who, and no later write can supply it.
          */
         @Test
         void a_generator_failure_without_attribution_is_refused() {
@@ -2524,13 +2523,14 @@ class RegisterStoreIT {
         }
 
         /**
-         * The four endings this service reached on its own, and what they must not carry.
+         * The five endings this service reached on its own, and what they must not carry.
          *
-         * <p>The payload was never stored, the request was never delivered, it was refused, or the
-         * batch could not be assembled at all. Nobody outside this service was ever in a position to
-         * answer, so naming EVENT or RECONCILER on one of these credits a decision that mechanism
-         * never made - and the {@code reconciled} metric, which exists to say how many outcomes had
-         * to be gone and asked for, counts an outcome nobody delivered.
+         * <p>The payload was never stored, the request was never delivered, it was refused, the
+         * batch could not be assembled at all, or the next scheduled run began and the answer still
+         * had not come. Nobody outside this service was ever in a position to answer, so naming
+         * EVENT on one of these credits a decision that mechanism never made, and leaves the one
+         * column that says which mechanism delivered an outcome naming one for an outcome nobody
+         * delivered.
          */
         @Test
         void a_service_failure_with_attribution_is_refused() {
@@ -2560,81 +2560,6 @@ class RegisterStoreIT {
                     .isEqualTo(1);
         }
 
-        /**
-         * The second generator-attributed ending, in the direction that refuses.
-         *
-         * <p>GENERATION_TIMED_OUT is the only one of the six the reconciler itself decides: the
-         * grace period passed and systemdocgenerator still had no verdict, so the reconciler's
-         * having gone and asked is the whole of what the row records about the ending. A timeout
-         * that names nobody is a row saying an outcome was chased and refusing to say by what, and
-         * the {@code reconciled} metric - which exists to count exactly these - cannot be computed
-         * from it. The store answers for both attributed reasons alike, and the case that pins the
-         * other one would not have noticed had this one been left out of the rule.
-         */
-        @Test
-        void a_timed_out_generation_without_attribution_is_refused() {
-            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
-
-            softly.assertThatCode(() -> {
-                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
-                        RecordedFlagState.ON);
-                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
-                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
-            }).as(WALKED).doesNotThrowAnyException();
-            final UUID batchId = batchIdOn(MONDAY);
-
-            softly.assertThatThrownBy(() -> store.markFailed(batchId,
-                            BatchFailureReason.GENERATION_TIMED_OUT, null, null))
-                    .as("the grace period passing is a verdict somebody reached by going and "
-                            + "looking, and the row is the only place that says who looked")
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("GENERATION_TIMED_OUT");
-            softly.assertThat(batchOn(MONDAY))
-                    .as("and nothing is written: the batch is still the one the reconciler is "
-                            + "waiting on")
-                    .contains(new BatchOutcome(GENERATING, null, null));
-            softly.assertThat(completedByOn(MONDAY))
-                    .as("nothing was attributed, because nothing was written")
-                    .isEmpty();
-        }
-
-        /**
-         * And the direction that accepts, which is the ordinary path the reconciler walks.
-         *
-         * <p>RECONCILER rather than EVENT: a timeout is by definition an ending no event carried,
-         * so the mechanism that learned it is always the one that went and asked. The row keeps the
-         * bounded code, the attribution and the stamp on its registers, because systemdocgenerator
-         * was asked and a document may yet exist under that correlation.
-         */
-        @Test
-        void a_timed_out_generation_the_reconciler_reported_should_be_recorded_as_its_verdict() {
-            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
-
-            softly.assertThatCode(() -> {
-                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
-                        RecordedFlagState.ON);
-                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
-                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
-                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_TIMED_OUT, null,
-                        CompletedBy.RECONCILER);
-            }).as(WALKED).doesNotThrowAnyException();
-
-            softly.assertThat(batchOn(MONDAY))
-                    .as("the bounded code is what the batches counter labels the outcome with, and "
-                            + "the renderer said nothing for sdg_reason to hold")
-                    .contains(new BatchOutcome(FAILED, "GENERATION_TIMED_OUT", null));
-            softly.assertThat(completedByOn(MONDAY))
-                    .as("a timeout is an ending no event carried, so the mechanism that learned it "
-                            + "is always the one that went and asked")
-                    .contains("RECONCILER");
-            softly.assertThat(stampedRowsOn(MONDAY))
-                    .as("and the stamp stays: systemdocgenerator was asked, so a document may yet "
-                            + "exist under that correlation and re-rendering is a person's decision")
-                    .isEqualTo(1);
-            softly.assertThat(statusesOn(MONDAY))
-                    .as("the register was never sent, so it stays exactly what it was")
-                    .containsExactly(RECORDED);
-        }
     }
 
     /**

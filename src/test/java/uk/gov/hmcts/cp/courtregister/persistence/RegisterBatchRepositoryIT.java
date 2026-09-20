@@ -362,7 +362,7 @@ class RegisterBatchRepositoryIT {
             assertThat(repository.findById(assembled.batchId()))
                     .as("a caller that read a batch, decided about it and wrote it back cannot "
                             + "leave half of its decision behind - completed_by above all, which "
-                            + "is what the reconciled metric counts and nothing else records")
+                            + "is the only record of which mechanism learned the outcome")
                     .contains(notified);
         }
 
@@ -373,7 +373,7 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch failed = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, SDG_REASON, true,
-                    CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null, null,
+                    CompletedBy.EVENT, ASSEMBLED_AT, REQUESTED_AT, null, null,
                     FAILED_AT, 2, null, 0);
 
             assertThat(repository.compareAndSet(failed, BatchStatus.PENDING)).isTrue();
@@ -397,7 +397,7 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch failed = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, OVERSIZED_SDG_REASON,
-                    true, CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null,
+                    true, CompletedBy.EVENT, ASSEMBLED_AT, REQUESTED_AT, null,
                     null, FAILED_AT, 2, null, 0);
 
             assertThat(repository.compareAndSet(failed, BatchStatus.PENDING))
@@ -438,7 +438,7 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch failed = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, SDG_REASON, true,
-                    CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null, null,
+                    CompletedBy.EVENT, ASSEMBLED_AT, REQUESTED_AT, null, null,
                     FAILED_AT, 2, null, 0);
             repository.compareAndSet(failed, BatchStatus.PENDING);
             final RegisterBatch revived = generating(assembled, payloadFileId, REQUESTED_AT);
@@ -479,10 +479,10 @@ class RegisterBatchRepositoryIT {
         /**
          * The move that leaves the batch still waiting, and what it must not carry.
          *
-         * <p>GENERATING is the state the reconciler reads precisely because nothing has completed
-         * the batch yet: the render was asked for and the answer has not come back. A whole-row
-         * write that carried an attribution into it would say the answer had already arrived, and
-         * the batch would be chased by a reconciler that had supposedly already reported it.
+         * <p>GENERATING is a batch whose render was asked for and whose answer has not come back,
+         * so nothing has completed it. A whole-row write that carried an attribution into it would
+         * say the answer had already arrived, and the next run's stale-batch pass would be reading
+         * a row that claims to have been reported on already.
          */
         @Test
         void moving_a_batch_to_generating_with_an_attribution_should_be_refused() {
@@ -490,7 +490,7 @@ class RegisterBatchRepositoryIT {
             repository.insert(assembled);
             final RegisterBatch attributed = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
-                    BatchStatus.GENERATING, null, null, true, CompletedBy.RECONCILER, ASSEMBLED_AT,
+                    BatchStatus.GENERATING, null, null, true, CompletedBy.EVENT, ASSEMBLED_AT,
                     REQUESTED_AT, null, null, null, 1, null, 0);
 
             assertThatThrownBy(() -> repository.compareAndSet(attributed, BatchStatus.PENDING))
@@ -498,7 +498,7 @@ class RegisterBatchRepositoryIT {
                             + "outcome for a mechanism to have learned")
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("GENERATING")
-                    .hasMessageContaining("RECONCILER");
+                    .hasMessageContaining("EVENT");
             assertThat(repository.findById(assembled.batchId()))
                     .as("and the batch is exactly where the insert left it")
                     .contains(assembled);
@@ -532,9 +532,9 @@ class RegisterBatchRepositoryIT {
          * A batch is assembled, not completed, so the row that starts it names no mechanism.
          *
          * <p>{@code completed_by} says which mechanism learned the outcome, and at PENDING there is
-         * no outcome: nothing has been asked of the renderer, so no event and no query can have
-         * answered about it. A row inserted with one credits a decision nobody made, and the
-         * {@code reconciled} metric counts an outcome nobody delivered.
+         * no outcome: nothing has been asked of the renderer, so nothing can have announced one. A
+         * row inserted with one credits a decision nobody made, and leaves the only column that
+         * records which mechanism delivered an outcome naming one for an outcome nobody delivered.
          */
         @Test
         void inserting_a_batch_that_already_names_a_mechanism_should_be_refused() {

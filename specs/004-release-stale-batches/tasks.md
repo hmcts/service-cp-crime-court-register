@@ -2099,11 +2099,58 @@ claim. T028 runs after them, not before, so the suite it characterises is the fi
       attributed and the narrowed release table no longer classifies it, which is the two tables
       catching the same removal from opposite ends). `checkstyleTest` and `pmdTest` green in the
       same round.
-- [ ] T048 [US4] `domain/BatchFailureReason.java`, `domain/CompletedBy.java` — make T047 green.
+- [X] T048 [US4] `domain/BatchFailureReason.java`, `domain/CompletedBy.java` — make T047 green.
       Remove `GENERATION_TIMED_OUT`; narrow `isGeneratorAttributed()` to `GENERATION_FAILED`; remove
       `CompletedBy.RECONCILER`. `CompletedBy` stays a type with one constant, and its javadoc says
       why: it is an argument carried through the outcome sink into the store's marks, and a second
       mechanism is exactly the kind of thing that comes back.
+
+      **Seven test files came with it, on T022's rule: a deletion that leaves the suite
+      uncompilable is not a deletion.** Five were compile errors and two were fixtures writing a
+      value the store is about to refuse; none of the seven is a claim about the retired constants
+      that T047 does not now make by name.
+      * `application/DocumentOutcomeSinkTest` — three `CompletedBy.RECONCILER` arguments become
+        `EVENT`, and the prose with them. The two `@EnumSource(CompletedBy.class)` cases are
+        **kept**: they now drive one value, and what they say is "every mechanism the type offers",
+        which is the claim the type exists to keep answerable when a second one arrives. The
+        redelivery cases stop crediting "a reconciler racing an in-flight event" for a second
+        delivery a shared durable subscription guarantees on its own.
+      * `persistence/RegisterStoreIT` — **two cases are deleted with their subject**,
+        `a_timed_out_generation_without_attribution_is_refused` and
+        `a_timed_out_generation_the_reconciler_reported_should_be_recorded_as_its_verdict`. What
+        they pinned was the store's rule over the *second* attributed reason; there is one, and
+        `a_generator_failure_without_attribution_is_refused` pins the refusing direction over it
+        while `generation_records_who_completed_the_batch` pins the accepting one. That case is
+        re-pointed rather than halved: both marks that take an attribution are still driven, the
+        generated one and the failed one, so the claim stays "on both marks rather than on one and
+        an assumption".
+      * `persistence/RegisterBatchRepositoryIT` — five `CompletedBy.RECONCILER` arguments and the
+        `hasMessageContaining("RECONCILER")` that read one back become `EVENT`.
+      * `adapter/report/EmailReportSinkStoreIT`, `batch/cli/ReportExceptionsCliTest`,
+        `adapter/fileservice/FileServicePayloadStoreIT` — three report fixtures whose dead batch
+        was failed `GENERATION_TIMED_OUT`; `RENDER_REQUEST_FAILED` instead, which is a reason
+        something still writes. The CSV one is about UTF-8 and quoting, and neither property
+        depends on which bounded code the row carries.
+      * `domain/BatchStateTest` — three `@CsvSource` move descriptions and one javadoc named the
+        reconciler or its grace period as what makes a drawn arrow necessary. The arrows are
+        unchanged; PENDING → GENERATED is now justified by the announcement that finds the batch by
+        its payload id, which is what actually reaches it.
+
+      **The `reconciled` metric is named nowhere any more either.** It went with the reconciler in
+      Phase 5's first half, and four javadoc paragraphs across these files still explained
+      `completed_by` by what that counter counted. They now explain it by what the column is: the
+      only record of which mechanism delivered an outcome.
+
+      **Green** (`flock -w 7200 … ./gradlew test --tests '*BatchFailureReasonTest*' --tests
+      '*BatchStateTest*' --tests '*DocumentOutcomeSinkTest*' --tests '*ReportExceptionsCliTest*'
+      -Dtest.noFailFast=true`): **125 tests completed, 1 failed** — and the one failure is
+      `the_failure_reasons_should_be_exactly_the_six_the_schema_enumerates`, which is T047's
+      recorded red on the schema half and stays red until V7 lands at T049. Every other case T047
+      opened is green, `generation_timed_out_is_no_longer_a_reason` and
+      `completed_by_has_one_constant` among them. The four suites the constants' removal reached in
+      Postgres (`RegisterStoreIT`, `RegisterBatchRepositoryIT`, `EmailReportSinkStoreIT`,
+      `FileServicePayloadStoreIT`) ran green over Testcontainers in the same round, **140 tests, 0
+      failures**. `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` all green.
 - [ ] T049 [US4] `persistence/SchemaMigrationV2IT` (extend) and
       `src/main/resources/db/migration/V7__retire_reconciler_vocabulary.sql` — the narrowing, as a
       pair in one commit because the IT's red *is* the migration's absence. The test:

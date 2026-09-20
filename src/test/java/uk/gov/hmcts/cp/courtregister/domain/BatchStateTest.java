@@ -168,10 +168,10 @@ class BatchStateTest {
         @ParameterizedTest(name = "{0} -> {1} ({2})")
         @CsvSource({
             "PENDING,            GENERATING,         payload stored and the render request accepted",
-            "PENDING,            GENERATED,          the reconciler found a document for a batch whose markRequested never landed",
+            "PENDING,            GENERATED,          a document was announced for a batch whose markRequested never landed",
             "PENDING,            FAILED,             the payload store was unavailable or the request refused",
-            "GENERATING,         GENERATED,          document-available by event or by the reconciler",
-            "GENERATING,         FAILED,             generation-failed or the grace period passed",
+            "GENERATING,         GENERATED,          document-available on the public event",
+            "GENERATING,         FAILED,             generation-failed or the next run stopped waiting",
             "GENERATED,          NOTIFIED,           every recipient was accepted",
             "GENERATED,          PARTIALLY_NOTIFIED, some recipients were not",
             "GENERATED,          NOTIFIED_NOBODY,    there were no recipients at all",
@@ -284,14 +284,14 @@ class BatchStateTest {
          * batch whose render request systemdocgenerator accepted and whose {@code markRequested}
          * never landed - the pod died in the moment between the 202 and the mark, or the store
          * blipped on it - so the document was rendered against a row that still says nobody asked.
-         * The reconciler's sweep finds it by the payload id the row does carry, and refusing the
-         * move would mean throwing away a document that exists rather than sending it.
+         * The announcement finds it by the payload id the row does carry, and refusing the move
+         * would mean throwing away a document that exists rather than sending it.
          */
         @Test
         void a_document_found_for_a_batch_whose_request_was_never_recorded_should_be_applicable() {
             assertThat(BatchStatus.PENDING.canTransitionTo(BatchStatus.GENERATED))
-                    .as("the render was asked for and the mark was not; the safety net is what "
-                            + "reconciles the two, and it has to be able to")
+                    .as("the render was asked for and the mark was not; the outcome that arrives "
+                            + "is what settles the two, and it has to be able to")
                     .isTrue();
         }
 
