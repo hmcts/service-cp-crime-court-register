@@ -16,6 +16,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
+import uk.gov.hmcts.cp.courtregister.domain.StoreContendedException;
 
 /**
  * Where an assembled register is kept, and how a batch's progress is written against it.
@@ -430,6 +431,21 @@ public interface RegisterStore {
      * caller reports it as such. A store that cannot be reached at all still fails the way every
      * other unreachable store does.
      *
+     * <p><strong>What can still escape, and who decides about it.</strong> One thing a staleness
+     * predicate cannot fence is a register re-shared while the operation is running: the
+     * replacement is not in the snapshot the operation reads, so the release would give the
+     * replaced register back beside its replacement and the store would refuse the second active
+     * row for the key. That is a lost race rather than a rule, so the adapter makes the operation
+     * again on a fresh snapshot that has the re-share in it, and only where a re-share beat every
+     * one of those attempts does anything reach the caller - as
+     * {@link StoreContendedException}, which is the store answering and not the store going away.
+     * <strong>The caller decides what that means for the night.</strong> FR-003a is written about
+     * this operation - no single batch's outcome may end the run - so the pass is expected to
+     * report it as a pass that released nothing and let the run go on to assemble; rethrowing it
+     * would end the run for every court centre over one hearing that was re-shared three times in
+     * a few milliseconds. That decision and its pinning test belong to the pass, not to this port,
+     * which owes the caller only the type and the promise that nothing was released under it.
+     *
      * <p>A batch holding a document is never matched, at any age - somebody is owed e-mails about
      * it. A batch an operator asked for is given the longer cutoff, because a manual generation
      * holds no run lock and may still be requesting its renders when the schedule fires. Both
@@ -441,6 +457,8 @@ public interface RegisterStore {
      * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
      * @return one record per batch this operation changed, oldest day first, each with the count of
      *         registers still that day's to render; empty where nothing was stale
+     * @throws StoreContendedException if a register was re-shared inside the operation's own window
+     *                                 on every attempt it makes, so nothing was released
      */
     List<ReleasedBatch> failAndReleaseStale(Instant scheduledCutoff, Instant manualCutoff);
 
