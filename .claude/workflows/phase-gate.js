@@ -45,6 +45,9 @@ Work ONLY in the tree ${a.tree}: cd there for every command and use absolute pat
 Every Gradle invocation goes behind the shared lock: flock -w 7200 ${LOCK} ./gradlew <args>
   (two concurrent builds kill the Testcontainers workers; the lock lets several agents exist while one builds).
 The full build is exactly: ${BUILD}   (noFailFast so the test results are complete when something fails).
+Never enter plan mode and never stop to ask a question: nobody is watching. Decisions come from the notes below and
+the spec; where something is genuinely undecided, choose the option that changes the least behaviour, say so in
+open_points, and carry on. A halted run is worse than a stated assumption.
 You are the SOLE COMMITTER in this tree while you run. Conventional Commits; no AI attribution anywhere
 (no Co-Authored-By, no mention of Claude, AI or automated generation, in code, commits or docs).
 Before EVERY commit run git status --porcelain and remove any stray file a shell redirection left in the
