@@ -1174,6 +1174,7 @@ older statements beside it did not.
   **Closed** by a fourth branch: a `TransactionException` is the store going away exactly as a
   failure to acquire a connection is, so it becomes `StoreUnavailableException` carrying the
   statement's own name and the cause, and none of the driver's words.
+  *(The second finding's record is below this one.)*
   **Red** (`StoreOutageTest.a_transaction_that_cannot_be_begun_becomes_the_domains_own_signal`, a
   `PlatformTransactionManager` whose `getTransaction` throws): `flock -w 7200 … ./gradlew test
   --tests '*StoreOutageTest*' -Dtest.noFailFast=true` → **8 tests completed, 1 failed**, one
@@ -1185,6 +1186,30 @@ older statements beside it did not.
   arm rather than one of its own, because a store that will not begin a transaction has said the
   same thing as a store that will not give a connection; `translatingWrite`'s refusal arm is
   untouched, and no other suite in this repository names a `org.springframework.transaction` type.
+
+* **The overtaken share was decided by the fenced statement alone, and by neither statement beside
+  it.** Gate 4 taught `FAIL_AND_RELEASE_STALE` to read the key's total order both ways, so a share
+  the batched register *overtook* - a delivery that arrived behind the register it belongs in front
+  of, which the recorder writes active because a batched register is not its to supersede - is
+  superseded against the register coming back. `MARK_FAILED`'s released branch (statement 9, the one
+  `:releaseRows` selects) and `RELEASE_FAILED` (statement 9a) still read it one way only: they clear
+  the stamp beside the earlier active row, `idx_output_active_register_key` refuses the second active
+  row for the day, and the whole statement goes down with it - taking the failure mark with it in
+  statement 9's case, and an operator's `release-batch` in 9a's. One rule about one index, kept in
+  one statement out of three.
+  **Closed** by folding the same `overtaken` clause, chained ahead of the release exactly as it is in
+  the fenced statement and for the same index, into both. In statement 9 it is guarded by
+  `:releaseRows` through `stamped`, which already carries that guard, so a reason that keeps the
+  stamp supersedes nothing.
+  **Red** (`RegisterStoreIT`'s twins `Failure.a_failure_that_never_left_should_supersede_the_share_it_overtook`
+  and `Releasing.a_release_should_supersede_the_share_it_overtook`): `flock -w 7200 … ./gradlew test
+  --tests '*RegisterStoreIT*' -Dtest.noFailFast=true` → **89 tests completed, 2 failed**, **6
+  assertion failures each** and no compile error. The first of the six in each is the refusal itself,
+  caught as an assertion by the suite's soft-assertion convention - "Expecting code not to raise a
+  throwable but caught org.springframework.dao.DuplicateKeyException … `idx_output_active_register_key`"
+  - and the five after it are the properties the refusal takes with it: the batch left GENERATING or
+  its release answering with nothing, the overtaken share's `superseded_by` empty, the key holding two
+  RECORDED rows, the stamp still in place, and the wrong register left assemblable.
 
 ---
 

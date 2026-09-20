@@ -1838,6 +1838,14 @@ class RegisterStoreIT {
     @DisplayName("failing a batch")
     class Failure {
 
+        /**
+         * A share of the hearing stamped before the register the batch already holds.
+         *
+         * <p>Earlier than {@code MONDAY_SHARED} and on the same register date, because it is the
+         * ordering and not the day that decides which of two shares of one hearing is current.
+         */
+        private static final Instant MONDAY_OVERTAKEN = Instant.parse("2026-08-24T07:15:00Z");
+
         @Test
         void a_failed_batch_always_carries_its_failed_at() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
@@ -1890,6 +1898,50 @@ class RegisterStoreIT {
                     .as("and the next run picks the same registers up, under a fresh batch identity")
                     .extracting(RegisterRecord::hearingId)
                     .containsExactlyInAnyOrder(HEARING_ONE, HEARING_TWO);
+        }
+
+        @Test
+        void a_failure_that_never_left_should_supersede_the_share_it_overtook() {
+            final DistributionCommand batched = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_OVERTAKEN);
+
+            softly.assertThatCode(() -> {
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                // The hearing's earlier share is delivered after the later one is already in the
+                // batch, so the recorder writes it active: a batched register is not its to
+                // supersede. It then holds the day's active-register key against the release.
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_OVERTAKEN), APPLICANT,
+                        RecordedFlagState.ON);
+                store.markFailed(monday.batchId(),
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the failure is recorded whatever the overtaken share did: a mark the "
+                            + "active-row index refused would leave the batch claiming to be in "
+                            + "flight under a run that had already given up on it")
+                    .contains(new BatchOutcome(FAILED, "PAYLOAD_STORE_UNAVAILABLE", null));
+            softly.assertThat(supersessionOf(overtaken).map(SupersessionPair::supersededBy))
+                    .as("and the earlier share is superseded against the register being given "
+                            + "back, which is the ordering read the other way - the same rule the "
+                            + "stale-batch release keeps, and the same one the recorder applies "
+                            + "when it is the one that meets the two")
+                    .contains(outputIdOf(batched).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("so the key keeps exactly one active row, as it does after every other "
+                            + "write in this store")
+                    .containsExactlyInAnyOrder(RECORDED, SUPERSEDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("the stamp is released, because a batch that never left this service "
+                            + "holds no register hostage to a document that cannot exist")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("and the register the day is still to render is the one that came back, "
+                            + "rather than the share it had already overtaken")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(batched).orElse(null));
         }
 
         @Test
@@ -2483,6 +2535,59 @@ class RegisterStoreIT {
     @Nested
     @DisplayName("giving a failed batch's registers back")
     class Releasing {
+
+        /**
+         * A share of the hearing stamped before the register the batch already holds.
+         *
+         * <p>Earlier than {@code MONDAY_SHARED} and on the same register date, because it is the
+         * ordering and not the day that decides which of two shares of one hearing is current.
+         */
+        private static final Instant MONDAY_OVERTAKEN = Instant.parse("2026-08-24T07:15:00Z");
+
+        @Test
+        void a_release_should_supersede_the_share_it_overtook() {
+            final DistributionCommand batched = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_OVERTAKEN);
+            final List<RegisterRecord> released = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+                // The hearing's earlier share is delivered after the later one is already in the
+                // batch, so the recorder writes it active: a batched register is not its to
+                // supersede. It then holds the day's active-register key against the release an
+                // operator types.
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_OVERTAKEN), APPLICANT,
+                        RecordedFlagState.ON);
+                released.addAll(store.releaseFailed(monday.batchId()));
+            }).as(SEAM).doesNotThrowAnyException();
+
+            softly.assertThat(released)
+                    .as("the register the day is still to render is the one the batch held: the "
+                            + "share it overtook is the earlier of the two, and a key the release "
+                            + "cannot decide is a day an operator could never regenerate")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(batched).orElse(null));
+            softly.assertThat(supersessionOf(overtaken).map(SupersessionPair::supersededBy))
+                    .as("so the earlier share is superseded against the register coming back, "
+                            + "which is the same total order read the other way")
+                    .contains(outputIdOf(batched).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("one SUPERSEDED and one RECORDED, which is the invariant the whole batch "
+                            + "half is written against: at most one active row per key")
+                    .containsExactlyInAnyOrder(RECORDED, SUPERSEDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("and the stamp is gone, because the batch that failed holds nothing now")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("so the day's one assemblable register is the one that came back")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(batched).orElse(null));
+        }
 
         @Test
         void a_register_a_re_share_has_replaced_should_be_superseded_rather_than_given_back() {
