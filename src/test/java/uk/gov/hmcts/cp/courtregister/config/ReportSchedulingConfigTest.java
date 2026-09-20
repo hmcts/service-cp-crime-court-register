@@ -33,6 +33,7 @@ import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifier;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
+import uk.gov.hmcts.cp.courtregister.batch.BatchAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
@@ -93,6 +94,7 @@ class ReportSchedulingConfigTest {
         "courtregister.report.zone=Europe/London",
         "courtregister.report.lock-at-most-for=15m",
         "courtregister.intake.gauge-refresh=10m",
+        "courtregister.generation.batch-age-refresh=10m",
         "courtregister.email.templates.cr_standard=5c9a0e21-3d47-4f18-9b62-0a71c4e8d530",
     };
 
@@ -105,13 +107,25 @@ class ReportSchedulingConfigTest {
     /** One thread each, because both units of work are sequential by design. */
     private static final int ONE_THREAD = 1;
 
-    /** The generation scheduler, the report's and the sweep's: three, and never a fourth. */
-    private static final int THREE_SCHEDULERS = 3;
+    /** And the batch-age sweep's, which must not be any of the other three. */
+    private static final String BATCH_SWEEP_THREAD_PREFIX = "batch-age-sweep-";
+
+    /**
+     * The generation scheduler, the report's, the intake sweep's and the batch-age sweep's.
+     *
+     * <p>Four since 004, and never a fifth. The fourth is the one addition an otherwise
+     * subtractive increment makes: it replaces the publisher of three gauges the retired timer
+     * took on its way past, and it is a thread of its own for the reason the other two sweeps are
+     * - a ten-minute reading queued behind an 18:00 run that is asking for renders is a reading
+     * taken an hour late.
+     */
+    private static final int FOUR_SCHEDULERS = 4;
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(SchedulingInfrastructureConfig.class, SchedulingConfig.class,
-                    ReportSchedulingConfig.class, IntakeSweepConfig.class, ProcessedLogConfig.class,
-                    GenerationConfig.class, SchedulingWiringTestConfiguration.class)
+                    ReportSchedulingConfig.class, IntakeSweepConfig.class, BatchSweepConfig.class,
+                    ProcessedLogConfig.class, GenerationConfig.class,
+                    SchedulingWiringTestConfiguration.class)
             .withPropertyValues(THE_SCHEDULES);
 
     /**
@@ -280,11 +294,49 @@ class ReportSchedulingConfigTest {
                     .as("SC-008: a 07:00 report queued behind an 18:00 run that overran is a "
                             + "report that does not happen")
                     .isNotSameAs(scheduler(context, SchedulingConfig.GENERATION_SCHEDULER))
-                    .isNotSameAs(scheduler(context, IntakeSweepConfig.INTAKE_SWEEP_SCHEDULER));
+                    .isNotSameAs(scheduler(context, IntakeSweepConfig.INTAKE_SWEEP_SCHEDULER))
+                    .isNotSameAs(scheduler(context, BatchSweepConfig.BATCH_SWEEP_SCHEDULER));
+        });
+    }
+
+    /**
+     * The fourth thread, and the pod that must not have it.
+     *
+     * <p>004 deletes one schedule and adds one: the reconciliation timer goes and the batch-age
+     * sweep arrives. It is a thread of its own because a ten-minute reading queued behind an 18:00
+     * run that is asking for renders is a reading taken an hour late - and it is behind the
+     * generation half because these three gauges describe batches, so a pod that assembles none
+     * has none to describe and three flat zeroes from it would compete, under {@code max()}, with
+     * the readings of the pod that can.
+     */
+    @Test
+    @DisplayName("the batch-age sweep has a fourth thread, on a generating pod and nowhere else")
+    void the_context_holds_four_task_schedulers() {
+        podWith(true, true).run(context -> {
+            assertThat(context).hasNotFailed();
             assertThat(context.getBeanNamesForType(TaskScheduler.class))
-                    .as("three, and never a fourth: a scheduler nothing names is a thread nothing "
+                    .as("four, and never a fifth: a scheduler nothing names is a thread nothing "
                             + "runs on")
-                    .hasSize(THREE_SCHEDULERS);
+                    .hasSize(FOUR_SCHEDULERS);
+            assertThat(scheduler(context, BatchSweepConfig.BATCH_SWEEP_SCHEDULER))
+                    .as("one thread, named after the reading it carries, so a thread dump says "
+                            + "which schedule is stuck")
+                    .isNotNull()
+                    .satisfies(sweeps -> {
+                        assertThat(sweeps.getThreadNamePrefix())
+                                .isEqualTo(BATCH_SWEEP_THREAD_PREFIX);
+                        assertThat(configuredThreads(sweeps)).isEqualTo(ONE_THREAD);
+                    });
+            assertThat(context.getBeanNamesForType(BatchAgeSweep.class)).isNotEmpty();
+        });
+
+        podWith(true, false).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBeanNamesForType(BatchAgeSweep.class))
+                    .as("and a report pod assembles no batch, so it has no in-flight batch of its "
+                            + "own to take a reading of")
+                    .isEmpty();
+            assertThat(scheduler(context, BatchSweepConfig.BATCH_SWEEP_SCHEDULER)).isNull();
         });
     }
 
@@ -303,6 +355,7 @@ class ReportSchedulingConfigTest {
                     .isNotNull();
             assertThat(scheduler(context, ReportSchedulingConfig.REPORT_SCHEDULER)).isNotNull();
             assertThat(scheduler(context, IntakeSweepConfig.INTAKE_SWEEP_SCHEDULER)).isNotNull();
+            assertThat(scheduler(context, BatchSweepConfig.BATCH_SWEEP_SCHEDULER)).isNotNull();
         });
     }
 

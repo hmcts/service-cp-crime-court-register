@@ -2552,7 +2552,7 @@ whatever the last reconciliation saw and go on looking live.
       nothing to ask, the reading is the whole purpose, so `plan.md`'s "holds a repository, the
       metrics and a clock" is met literally — the sweep takes no `Duration` at all.
       `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` green.)
-- [ ] T031 `batch/BatchAgeSweepTest` (extend), `config/ReportSchedulingConfigTest` and
+- [x] T031 `batch/BatchAgeSweepTest` (extend), `config/ReportSchedulingConfigTest` and
       `config/CliModeConfigTest` (both extend) — the schedule it is on.
       `the_fixed_delay_reads_the_batch_age_refresh_key`, a reflection case over the annotation
       attribute, because a placeholder nobody asserts is one a later edit inlines;
@@ -2560,6 +2560,31 @@ whatever the last reconciliation saw and go on looking live.
       describes the JVM that publishes it and a lock would make every other pod publish nothing;
       `a_command_jvm_runs_no_batch_age_sweep`; `the_context_holds_four_task_schedulers`. Red: no
       annotation, no scheduler bean, no exclusion.
+      (red: `flock -w 7200 … ./gradlew test --tests '*BatchAgeSweepTest*'
+      --tests '*ReportSchedulingConfigTest*' --tests '*CliModeConfigTest*' -Dtest.noFailFast=true`,
+      **46 tests, 11 failed**, 0 errors — every failure an assertion. Five of the eleven are T029's
+      seam, still refusing; the six this task adds are the three reds it names and the three halves
+      they are stated in. "expected: \"${courtregister.generation.batch-age-refresh}\" but was:
+      null" and "expected: \"batchSweepScheduler\" but was: null" for the annotation;
+      "Expecting empty but was: [\"batchSweepConfig\"]" for the exclusion; and "Expected size: 4
+      but was: 3 in: [registerGenerationScheduler, exceptionReportScheduler, intakeSweepScheduler]"
+      for the thread.
+      **The seam is a configuration and not a constant holder**, and that is what makes three of
+      the four reds possible: a class carrying only `BATCH_SWEEP_SCHEDULER` would have made the
+      exclusion case green by accident, because a bean that is nowhere declared is absent from a
+      command JVM for the wrong reason. So `config/BatchSweepConfig` lands at T031 declaring the
+      sweep bean behind `courtregister.generation.enabled` and **no** scheduler bean and **no**
+      CLI-mode condition; T032 adds both. The exclusion is asserted twice over - the beans' absence
+      from the CLI context, and the `@Conditional` itself by reflection - because an absence alone
+      cannot tell a condition that is right from a configuration that was never imported.
+      `the_sweep_carries_no_scheduler_lock` is green from the first run and is kept: it is a claim
+      about an annotation that must never appear, and the case is what would fail the day somebody
+      adds it.
+      **The ordinary pod's half of the CLI pair lands here too**
+      (`an_ordinary_pod_should_hold_the_batch_age_sweep`), because the suite's shape is a pair of
+      contexts differing by one property and a claim made only about the absent half says nothing
+      about what the property does.
+      `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` green.)
 
 ### Implementation
 

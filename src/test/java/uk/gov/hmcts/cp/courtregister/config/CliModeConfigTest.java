@@ -20,6 +20,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.ConditionContext;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.jms.config.JmsListenerEndpointRegistry;
@@ -30,6 +31,7 @@ import org.springframework.scheduling.config.ScheduledTask;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DocumentEventListener;
+import uk.gov.hmcts.cp.courtregister.batch.BatchAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
 import uk.gov.hmcts.cp.courtregister.batch.IntakeAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
@@ -274,6 +276,38 @@ class CliModeConfigTest {
             assertThat(context.getBeanNamesForType(IntakeAgeSweep.class)).isEmpty();
         }
 
+        /**
+         * And no batch-age sweep, for the reason the intake one is not here either.
+         *
+         * <p>Its configuration is conditional on the generation half and on this, and on nothing
+         * else - so a command JVM run on a generating pod's settings, which is every command this
+         * service ships, would publish that pod's three readings for as long as the command ran.
+         * Three gauges are aggregated across pods with {@code max()}, so a command's copy of them
+         * is not a duplicate reading but a competing one, taken by a process that holds no batch
+         * and is about to exit.
+         *
+         * <p>The condition itself is asserted beside the absence, because the absence alone cannot
+         * tell a condition that is right from a configuration that happens not to have been
+         * imported.
+         */
+        @Test
+        @DisplayName("and no batch-age sweep, whose readings belong to the pod that holds batches")
+        void a_command_jvm_runs_no_batch_age_sweep() {
+            assertThat(context.getBeanNamesForType(BatchSweepConfig.class))
+                    .as("the sweep is conditional on the generation half and on this, so if this "
+                            + "condition were missing a command JVM would publish a pod's three "
+                            + "in-flight readings for as long as it ran")
+                    .isEmpty();
+            assertThat(context.getBeanNamesForType(BatchAgeSweep.class)).isEmpty();
+            assertThat(BatchSweepConfig.class.getAnnotation(Conditional.class))
+                    .as("and the condition is on the configuration rather than on the bean, "
+                            + "because a scheduler with nothing on it is a half-absence to reason "
+                            + "about instead of a plain one")
+                    .isNotNull()
+                    .satisfies(conditional -> assertThat(conditional.value())
+                            .contains(CliModeConfig.NotCliMode.class));
+        }
+
         @Test
         @DisplayName("runs no listener container, so the durable subscription is left alone")
         void a_cli_context_should_run_no_jms_listener_container() {
@@ -439,6 +473,16 @@ class CliModeConfigTest {
                             .isTrue());
             assertThat(context.getBeanNamesForType(DocumentEventListener.class))
                     .as("the listener the subscription delivers to")
+                    .isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("holds the batch-age sweep, which is where those three readings come from")
+        void an_ordinary_pod_should_hold_the_batch_age_sweep() {
+            assertThat(context.getBeanNamesForType(BatchAgeSweep.class))
+                    .as("a Micrometer gauge never decays, so the three in-flight readings are "
+                            + "only as current as their publisher: a generating pod that held no "
+                            + "sweep would show whatever it last saw, for ever, and look live")
                     .isNotEmpty();
         }
 

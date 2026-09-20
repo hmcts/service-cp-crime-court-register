@@ -10,6 +10,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.lang.reflect.Method;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -17,12 +18,15 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.scheduling.annotation.Scheduled;
+import uk.gov.hmcts.cp.courtregister.config.BatchSweepConfig;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
@@ -277,6 +281,66 @@ class BatchAgeSweepTest {
         softly.assertThat(RunCorrelation.current())
                 .as("and an id left behind would be inherited by the next run on that thread, "
                         + "which reads as a true correlation and is worse than none")
+                .isNull();
+    }
+
+    /**
+     * The cadence, read off the annotation rather than off a context.
+     *
+     * <p>A placeholder nobody asserts is one a later edit inlines, and an inlined cadence is a
+     * reading an operator can no longer change per environment without a release.
+     *
+     * @throws NoSuchMethodException where the scheduled method has been renamed out from under this
+     */
+    @Test
+    void the_fixed_delay_reads_the_batch_age_refresh_key() throws NoSuchMethodException {
+        final Method scheduled = BatchAgeSweep.class.getDeclaredMethod("sweepScheduled");
+        final Scheduled schedule = scheduled.getAnnotation(Scheduled.class);
+
+        softly.assertThat(scheduled.getReturnType())
+                .as("a schedule has nobody to return a reading to")
+                .isEqualTo(void.class);
+        softly.assertThat(schedule)
+                .as("the three readings are refreshed on a cadence of their own; taken once a "
+                        + "night instead, they would be a daily sample of a thing that is asked "
+                        + "about hourly (FR-011, SC-006)")
+                .isNotNull();
+        softly.assertThat(schedule == null ? null : schedule.fixedDelayString())
+                .as("the generation half's own setting, and a fixed delay rather than a cron: a "
+                        + "reading is not a decision, and nothing about it belongs to a wall clock")
+                .isEqualTo("${courtregister.generation.batch-age-refresh}");
+    }
+
+    /**
+     * The thread it is the only thing on.
+     *
+     * @throws NoSuchMethodException where the scheduled method has been renamed out from under this
+     */
+    @Test
+    void the_sweep_names_its_own_scheduler() throws NoSuchMethodException {
+        final Scheduled schedule = BatchAgeSweep.class.getDeclaredMethod("sweepScheduled")
+                .getAnnotation(Scheduled.class);
+
+        softly.assertThat(schedule == null ? null : schedule.scheduler())
+                .as("a ten-minute reading queued behind an 18:00 run that is asking for renders "
+                        + "is a reading taken an hour late, and four TaskScheduler beans route "
+                        + "nothing unless the method names one (SC-008)")
+                .isEqualTo(BatchSweepConfig.BATCH_SWEEP_SCHEDULER);
+    }
+
+    /**
+     * And the lock it deliberately does not have.
+     *
+     * @throws NoSuchMethodException where the scheduled method has been renamed out from under this
+     */
+    @Test
+    void the_sweep_carries_no_scheduler_lock() throws NoSuchMethodException {
+        final Method scheduled = BatchAgeSweep.class.getDeclaredMethod("sweepScheduled");
+
+        softly.assertThat(scheduled.getAnnotation(SchedulerLock.class))
+                .as("a gauge describes the JVM that publishes it, so a locked sweep would have "
+                        + "one replica reading the store while every other pod went on publishing "
+                        + "whatever it last saw - one pod's view under every pod's labels")
                 .isNull();
     }
 
