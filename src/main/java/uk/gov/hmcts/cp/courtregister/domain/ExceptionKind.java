@@ -1,7 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
 /**
- * The five things the exception report says can be wrong.
+ * The five things the exception report says can be wrong, and the one it says was put right.
  *
  * <p>Closed, and the {@code kind} field of every event, the {@code kind} column of the CSV and the
  * {@code kind} label of {@code courtregister_exceptions_reported_total}. A sixth kind is a spec
@@ -26,7 +26,15 @@ public enum ExceptionKind {
     BATCH_FAILED,
 
     /** A recipient's e-mail that was refused or never answered, inside the window. */
-    NOTIFICATION_FAILED;
+    NOTIFICATION_FAILED,
+
+    /**
+     * A batch a run gave up on and gave the registers back from, inside the window.
+     *
+     * <p>T036 makes it informational and derives it from the reason. Landed at T035 as the seam
+     * its cases are written against.
+     */
+    BATCH_RELEASED;
 
     /**
      * Whether a run that did not report this kind would be asked about it again.
@@ -45,7 +53,7 @@ public enum ExceptionKind {
     public boolean recursEveryRun() {
         return switch (this) {
             case REQUEST_LATE, BATCH_LATE -> true;
-            case REQUEST_FAILED, BATCH_FAILED, NOTIFICATION_FAILED -> false;
+            case REQUEST_FAILED, BATCH_FAILED, NOTIFICATION_FAILED, BATCH_RELEASED -> false;
         };
     }
 }

@@ -2677,13 +2677,29 @@ from being sent after something already put right.
       `GenerationMetricsTest` moves, because the meter is
       `courtregister_public_events_ignored_total` and only a seventh bounded reason is new;
       `TelemetryPrivacyTest`'s bounded vocabulary picks the constant up by reflection.)
-- [ ] T035 `application/ExceptionReportServiceTest` (extend) and
+- [x] T035 `application/ExceptionReportServiceTest` (extend) and
       `batch/cli/ReportExceptionsCliTest` (extend) — **FR-019**.
       `a_batch_released_by_the_run_is_reported_as_batch_released_not_batch_failed`;
       `a_batch_that_genuinely_failed_is_still_batch_failed`;
       `the_kind_switch_stays_exhaustive`, over `nameOf(dead)` and the stage naming; and in the CLI
       suite, that the table and the CSV carry the new kind. Red: a released batch reports as
       `BATCH_FAILED` and the kind does not exist (seam: the constant).
+      (red: `flock -w 7200 … ./gradlew test --tests '*ExceptionReportServiceTest*'
+      -Dtest.noFailFast=true`, **26 tests, 2 failed**, 0 errors — both failures assertions and both
+      the kind: "expected: BATCH_RELEASED but was: BATCH_FAILED", and
+      "[BATCH_FAILED, BATCH_FAILED] to contain exactly in any order [BATCH_FAILED,
+      BATCH_RELEASED]". The seam is `ExceptionKind.BATCH_RELEASED` plus its arm of
+      `recursEveryRun()`, which a switch expression makes a compile requirement rather than a
+      choice - which is why `the_kind_switch_stays_exhaustive` is green from the first run. It is
+      kept: it is the case that would fail the day a `default` arm was added to silence the
+      compiler, and it pins which of the two halves the new kind is in.
+      **`batch/cli/ReportExceptionsCliTest` is NOT extended here, and this is the one half of T035
+      this tree could not do.** The coordination contract gives 004 `src/test/**` *except* tests
+      under `batch/cli`, and Phase 5's gate round 4 rebuilt this branch's history specifically to
+      take an edit to that file back out. The CLI table and CSV read `ExceptionKind` and
+      `ExceptionEntry` and need no change to carry a sixth kind - the rendering is by name - so
+      nothing is broken by the omission; what is owed is the *case* that says the table and the CSV
+      carry it. It is handed to the 005 tree with the two sentences Phase 5 already handed over.)
 
 ### Implementation
 
