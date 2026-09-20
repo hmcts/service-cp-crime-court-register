@@ -172,9 +172,9 @@ public class GenerationMetrics {
      * <p>The same gap one leg along: a lost sample leaves {@code courtregister_generation_latency}
      * quietly under-counting, and a series that is under-counting looks exactly like a series that
      * is healthy. Counting the loss is what lets a dashboard say the latency reading is incomplete
-     * rather than good. Both legs that take the reading count it here - the sink for an outcome
-     * that arrived and the reconciler for one that had to be fetched - because the question is how
-     * many samples the series is missing and not which leg missed them.
+     * rather than good. The one leg that takes the reading counts it here, and the label says how
+     * many samples the series is missing rather than which leg missed them: a second leg that came
+     * to take the reading would count the same loss under the same label.
      */
     public static final String LATENCY_SAMPLE = "latency-sample";
 
@@ -468,10 +468,9 @@ public class GenerationMetrics {
      *
      * <p>{@link #GENERATION_LATENCY} under-counting looks exactly like {@link #GENERATION_LATENCY}
      * healthy - the count is lower and every reading in it is real - so the loss is counted here
-     * and a dashboard can say the series is short rather than assume it is complete. Both legs that
-     * take the reading count it, the sink for an outcome that arrived and the reconciler for one
-     * that had to be fetched, because the question is how many samples are missing and not which
-     * leg missed them.
+     * and a dashboard can say the series is short rather than assume it is complete. The reading is
+     * taken where an outcome is applied, which is one place, and what the label answers is how many
+     * samples are missing rather than which leg missed them.
      */
     public void latencySampleUnrecorded() {
         counter(GENERATION_UNRECORDED, REASON_TAG, LATENCY_SAMPLE).increment();

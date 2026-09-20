@@ -40,9 +40,9 @@ import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
  * enabled context now - this one, the report's and the intake sweep's - and each scheduled method
  * names the one it belongs on, so the run still cannot land on a thread anything else is using. One
  * thread, because the run is sequential by design and a pool would only make it look otherwise. The
- * run is now the only thing on this scheduler: the grace-period reconciler shared it until its timer
- * was removed, and the pass that replaced it is the run's own first statement rather than a
- * schedule.
+ * run is the only thing on this scheduler, and the generation half's only schedule at all: the pass
+ * that gives stale batches back is the run's own first statement rather than a second timer
+ * (FR-007).
  *
  * <p><strong>Only where the downstream half is deployed.</strong> The whole of this is conditional
  * on {@code courtregister.generation.enabled}, so an intake-only pod holds no lock, keeps no
@@ -69,10 +69,9 @@ public class SchedulingConfig {
      *
      * <p>The name of the bean {@link #registerGenerationScheduler()} already declares, published so
      * that {@code @Scheduled(scheduler = ...)} on {@code RegisterGenerationJob.run} names a constant
-     * rather than a string spelled twice. Two surfaces named it until the reconciler's timer was
-     * removed and now one does; no bean was added, renamed or moved by either change, and the
-     * routing stays explicit because a method naming no scheduler is routed to whichever of the
-     * three Spring resolves for the context as a whole.
+     * rather than a string spelled twice. One surface names it, and the routing stays explicit
+     * anyway: a method naming no scheduler is routed to whichever of the three Spring resolves for
+     * the context as a whole.
      */
     public static final String GENERATION_SCHEDULER = "registerGenerationScheduler";
 

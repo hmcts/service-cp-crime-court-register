@@ -1838,7 +1838,7 @@ values on every pass.
       green in the same round; the three Checkstyle warnings it opened with were T024's and T026's
       import order and an empty lambda block, both fixed here rather than left for the phase gate.
       `DocumentRendererTest` is still red at this commit, which is T025's red and not a regression.
-- [ ] T023 [US4] `batch/RunCorrelation.java`, `persistence/RegisterBatchRepository.java`,
+- [X] T023 [US4] `batch/RunCorrelation.java`, `persistence/RegisterBatchRepository.java`,
       `application/{DocumentOutcomeSink,RegisterNotifierService,NotificationDisposition,NotificationSummary}.java`,
       `domain/{BatchStatus,RegisterBatch}.java`, `config/{SchedulingConfig,SchedulingInfrastructureConfig,
       CliModeConfig,ProcessedLogConfig,CourtRegisterProperties}.java`,
@@ -1851,6 +1851,32 @@ values on every pass.
       the PENDING-with-no-payload batch nothing revisits is replaced by the note that the pass now
       covers it. **A comment that describes a mechanism that no longer exists is a defect in this
       repository**, which is why this is a task and not a tidy-up.
+
+      **Six files beyond the named list came with it**, on the same rule: `batch/IntakeAgeSweep`
+      (its correlation javadoc cited the retired class's own split, and now cites
+      `StaleBatchReleaser`'s, which is the live case of the same thing),
+      `application/DocumentOutcomeSinkImpl` and `application/RegisterStore`,
+      `persistence/JdbcRegisterStore`, `config/GenerationMetrics`,
+      `config/PublicEventsHealthIndicator` and `batch/ExceptionReportJob`. Each described the
+      retired mechanism as a live one — "the listener and the reconciler both arrive here", "both
+      legs that take the reading", "the {@code reconciled} count beside it", a `void` entry point
+      justified by `reconcileScheduled`'s shape. What was **not** touched is history stated as
+      history ("borrowed the generation half's grace period until 004 renamed it", "the shape the
+      retired reconciler used"), which is the record of a decision and not a description of what is
+      there; nor the prose naming `CompletedBy.RECONCILER` and `GENERATION_TIMED_OUT`, which are
+      constants that still exist and go with them at T047-T048.
+
+      The two `DocumentEventListener` WARN lines changed wording — "the reconciler is what asks
+      again" is no longer true of anything — so their `LogStatement` keys changed with them; the
+      telemetry sweep enumerates from the sources and its drive reaches both, which the run below
+      confirms.
+
+      **Green** (`flock -w 7200 … ./gradlew compileJava checkstyleMain pmdMain`, then
+      `… ./gradlew test --tests '*TelemetryPrivacyTest*' --tests '*DocumentEventListenerTest*'
+      --tests '*LogStatementSweepTest*' -Dtest.noFailFast=true`): BUILD SUCCESSFUL both times, 0
+      failures. Documentation-only within the loop's exemption, so no red is claimed: nothing here
+      changes behaviour, and the two suites above are what stops a re-worded line escaping the
+      sweep.
 - [ ] T025 [US4] Delete `DocumentRenderer.query`, `SystemDocGeneratorClient.query` and its answer
       parsing, `StubDocumentRenderer.query` and `domain/DocumentStatus.java`; delete the
       `GET document/{id}` WireMock mapping and its line in `docker/wiremock/README.md`. Make T024

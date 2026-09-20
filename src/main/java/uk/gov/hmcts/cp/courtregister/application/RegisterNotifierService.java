@@ -122,9 +122,9 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  *
  * <p><strong>The lease is the notifying leg's own, and is renewed before every POST and before
  * every settlement.</strong>
- * {@code courtregister.notification.claim-lease} rather than the reconciler's grace period, which
- * answers a different question: how long a batch may hold a document before the safety net looks is
- * no bound at all on telling that batch's recipients, whose cost is the number of Youth Offending
+ * {@code courtregister.notification.claim-lease} rather than {@code stale-after}, which answers a
+ * different question: how long a batch may be awaiting its render before the next run gives up on
+ * it is no bound at all on telling a generated batch's recipients, whose cost is the number of Youth Offending
  * Teams the batch is addressed to times whatever notificationnotify makes of each of them. So what
  * the lease is asked to cover is the retry cycle one recipient's turn can become - every attempt's
  * connect and read timeout with the bounded waits between them, which is the cycle startup holds it
@@ -349,8 +349,8 @@ public class RegisterNotifierService {
      * that reading mean nothing.
      *
      * <p><strong>The claim is released in a finally, and released by token.</strong> A claim held
-     * past the run that took it is a batch no resend and no reconciliation could pick up, which is
-     * defect fix P1's state wearing a different hat; the lease is the second answer to that, for
+     * past the run that took it is a batch no resend could pick up, which is defect fix P1's state
+     * wearing a different hat; the lease is the second answer to that, for
      * the pod that dies before any {@code finally} runs. Releasing by token means a notifier whose
      * claim was reclaimed while it was working releases nothing, because what it would be giving
      * back is the claim the notifier that took over is relying on.
@@ -538,10 +538,11 @@ public class RegisterNotifierService {
      * so what recovers the batch is an operator's explicit {@code notify-register --batch}
      * resend. The outcome sink is not that call either: it drives one notify per transition into
      * GENERATED and suppresses the callback for a batch already there, so no event redelivery
-     * revisits the batch. The reconciler is not that call: its third read names such a batch and
-     * publishes
-     * {@code courtregister_oldest_generated_age}, which is the reading that says a batch has been
-     * standing there since before anybody was worried, and it settles nothing.
+     * revisits the batch. Nor is the run's stale-batch pass: it never touches a GENERATED batch at
+     * any age, because that batch holds a document somebody is owed e-mails about and failing it
+     * would throw the document away. What names such a batch is
+     * {@code courtregister_oldest_generated_age}, the reading that says a batch has been standing
+     * there since before anybody was worried, and a reading settles nothing.
      *
      * <p>This is the answer of a notifier that still held the claim, and only that one. The same
      * absent row met by the tally a lost claim writes instead of a settlement is the same fault and
@@ -563,7 +564,7 @@ public class RegisterNotifierService {
                 + "it on an incomplete account of what was sent, and a batch of one vanished row "
                 + "would be settled as having had nobody to tell. It stays where it stands until an "
                 + "operator resends it with notify-register --batch; nothing recovers it unasked, "
-                + "and the reconciler reports such a batch and its age and settles nothing.",
+                + "and the batch-age reading names it and settles nothing.",
                 batchId);
         final NotificationSummary seen = tally(notifications.findByBatchId(batchId));
         return NotificationSummary.incomplete(

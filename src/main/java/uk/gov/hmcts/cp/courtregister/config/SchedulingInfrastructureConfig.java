@@ -36,8 +36,8 @@ import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
  * <p><strong>And not on a JVM started to run one operations command.</strong> The CLI condition is
  * the one that does matter here, and it is the one {@link CliModeConfig} has always described: a
  * command that held a scheduler would be a second replica of every schedule in the service - the
- * 18:00 run, the grace-period sweep, the 07:00 report and the gauge refresh - and a command that
- * ran long enough to reach any of their hours would fire it. The annotation is here now, so the
+ * 18:00 run, the 07:00 report and the gauge refresh - and a command that ran long enough to reach
+ * any of their hours would fire it. The annotation is here now, so the
  * condition is here too, and the two configurations that sit on top of this one carry it as well:
  * a bean-level condition would leave a scheduler with nothing on it rather than a plain absence.
  *
@@ -46,9 +46,9 @@ import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
  * and therefore without Docker.
  *
  * <p><strong>The lock default moves verbatim.</strong> {@code defaultLockAtMostFor} is the fallback
- * for a {@code @SchedulerLock} that states no duration of its own, and all three locked methods on
- * this context state theirs - the nightly run, the reconciler and the morning report - so the value
- * it carries is inert. That is precisely why it is left alone rather than tidied to the report's
+ * for a {@code @SchedulerLock} that states no duration of its own, and both locked methods on this
+ * context state theirs - the nightly run and the morning report - so the value it carries is
+ * inert. That is precisely why it is left alone rather than tidied to the report's
  * budget on the way past: changing it here would be a change to generation's lock semantics made in
  * a commit about the report's wiring.
  */

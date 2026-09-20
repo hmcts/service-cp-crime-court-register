@@ -121,16 +121,18 @@ public class ProcessedLogConfig {
      * The {@code register_batch} table.
      *
      * <p>Over the register store's own client, because a batch is the store's neighbour: the two
-     * write the same database and the reconciler reads this one while the store writes the other.
+     * write the same database, and the report and the batch-age readings read this one while the
+     * store writes the other.
      *
      * <p>The transaction manager is the register store's own, so the two statements the
      * notification claim is taken in - the advisory lock and the compare-and-set - run on the
      * connection this client already joins. It is the only thing here that needs a transaction at
      * all; every other statement is one statement.
      *
-     * <p>The lease is {@code courtregister.notification.claim-lease} and not the reconciler's grace
-     * period. The two answer different questions: how long a batch may hold a document before the
-     * safety net looks is no bound at all on telling that batch's recipients, whose cost is the
+     * <p>The lease is {@code courtregister.notification.claim-lease} and not {@code stale-after}.
+     * The two answer different questions: how long a batch may be awaiting its render before the
+     * next run gives up on it is no bound at all on telling a generated batch's recipients, whose
+     * cost is the
      * number of Youth Offending Teams it is addressed to times whatever notificationnotify makes of
      * each of them. Startup refuses a lease that cannot cover one recipient's POST cycle twice over
      * ({@link PropertiesValidator#NOTIFICATION_LEASE_MARGIN}).
@@ -179,8 +181,9 @@ public class ProcessedLogConfig {
      * client and one clock.
      *
      * <p>All three thresholds it is given are the report's own settings. {@code batch-generated-within}
-     * borrowed the generation half's grace period until 004 retired it; the two answer different
-     * questions now, so the report states its own. The generation schedule is handed in because it is
+     * borrowed the generation half's grace period until 004 renamed it {@code stale-after}; the two
+     * answer different questions now - when support should be told a render is late, and when a run
+     * gives up and re-batches - so the report states its own. The generation schedule is handed in because it is
      * what "the last scheduled run left this register behind" means, and the report has no business
      * guessing it.
      *

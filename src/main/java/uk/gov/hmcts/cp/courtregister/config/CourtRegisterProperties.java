@@ -112,12 +112,13 @@ public record CourtRegisterProperties(
     }
 
     /**
-     * The notifying leg's claim timing, which is not the intake half's and not the reconciler's.
+     * The notifying leg's claim timing, which is neither the intake half's nor the generation
+     * half's.
      *
      * <p>A separate setting because it bounds different work. {@link Claim#lease} bounds one
-     * hearing's pipeline run, and the generation half's {@code stale-after} says how long a batch may
-     * hold a document before the safety net looks - neither is an answer to "how long can telling
-     * one batch's recipients take", which depends on how many Youth Offending Teams the batch is
+     * hearing's pipeline run, and the generation half's {@code stale-after} says how long a batch
+     * may be awaiting its render before the next run gives up on it - neither is an answer to "how
+     * long can telling one batch's recipients take", which depends on how many Youth Offending Teams the batch is
      * addressed to and on how patient notificationnotify is being tonight. A lease that runs out
      * under the notifier holding it puts a second notifier into the cycle, and a Youth Offending
      * Team is sent a register about children twice.

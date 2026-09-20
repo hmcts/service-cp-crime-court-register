@@ -283,8 +283,8 @@ public interface RegisterStore {
      * @param batchId        the batch the document belongs to
      * @param documentFileId the rendered document's file-service id
      * @param generatedAt    when systemdocgenerator generated it
-     * @param completedBy    the mechanism that learned the document exists: the event listener or
-     *                       the grace-period reconciler
+     * @param completedBy    the mechanism that learned the document exists, which is the event
+     *                       listener
      */
     void markGenerated(UUID batchId, UUID documentFileId, Instant generatedAt,
             CompletedBy completedBy);
@@ -292,12 +292,11 @@ public interface RegisterStore {
     /**
      * Fails the batch under a bounded reason, leaving its rows where the reason says they belong.
      *
-     * <p>{@code completedBy} is nullable here and only here: five of the seven reasons are this
+     * <p>{@code completedBy} is nullable here and only here: all but one of the reasons are this
      * service's own verdict about a render it could not ask for, could not get an answer about, or
      * stopped waiting for, and naming a completion mechanism for those would credit a decision
-     * nobody outside this service made. The two that are somebody's answer - a
-     * {@code generation-failed} event, a reconciled query - carry EVENT and RECONCILER
-     * respectively.
+     * nobody outside this service made. The one that is somebody's answer - a
+     * {@code generation-failed} event - carries EVENT.
      *
      * <p>Where the reason releases the rows, a row the hearing has since been re-shared for is
      * superseded against the re-share as its stamp is cleared, exactly as {@link #releaseFailed}

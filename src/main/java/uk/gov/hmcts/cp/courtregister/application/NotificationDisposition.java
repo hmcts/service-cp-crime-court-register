@@ -79,11 +79,11 @@ public enum NotificationDisposition {
      * could revisit it. So the cycle stops, the claim is given back, and the batch stays where it
      * stands with whatever rows are settled.
      *
-     * <p><strong>GENERATED is recoverable, and nothing recovers it unasked.</strong> The
-     * reconciler's third read names such a batch and publishes
-     * {@code courtregister_oldest_generated_age} from it, which is the reading that says a batch
-     * has been standing there - and it settles nothing, because there is a document and nothing to
-     * fail. What recovers the batch is an operator's explicit {@code notify-register --batch}
+     * <p><strong>GENERATED is recoverable, and nothing recovers it unasked.</strong>
+     * {@code courtregister_oldest_generated_age} names such a batch, which is the reading that says
+     * a batch has been standing there - and a reading settles nothing, because there is a document
+     * and nothing to fail; the run's stale-batch pass does not touch a GENERATED batch at any age,
+     * for the same reason. What recovers the batch is an operator's explicit {@code notify-register --batch}
      * resend, and nothing else: the outcome sink drives one notify call per transition into
      * GENERATED and suppresses the callback for a batch already there. The resend derives the owed
      * set from the records again, mints the row the store has no record of, posts under it and

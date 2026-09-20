@@ -337,8 +337,8 @@ public class DocumentEventListener {
         final Instant generatedAt = instant(payload, GENERATED_TIME);
         if (documentFileId == null || generatedAt == null) {
             LOG.warn("A document-available for batch {} carried no document or no instant, so it "
-                    + "is acknowledged and dropped; the reconciler is what asks again.",
-                    correlationId);
+                    + "is acknowledged and dropped; the batch stays in flight and the next run "
+                    + "gives it back.", correlationId);
             return;
         }
         apply(correlationId, () -> sink.documentAvailable(correlationId, payloadFileId,
@@ -361,7 +361,8 @@ public class DocumentEventListener {
         final Instant failedAt = instant(payload, FAILED_TIME);
         if (failedAt == null) {
             LOG.warn("A generation-failed for batch {} carried no instant, so it is acknowledged "
-                    + "and dropped; the reconciler is what asks again.", correlationId);
+                    + "and dropped; the batch stays in flight and the next run gives it back.",
+                    correlationId);
             return;
         }
         apply(correlationId, () -> sink.generationFailed(correlationId, payloadFileId,

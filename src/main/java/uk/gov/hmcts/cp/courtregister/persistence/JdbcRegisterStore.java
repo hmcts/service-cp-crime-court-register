@@ -606,8 +606,8 @@ public class JdbcRegisterStore implements RegisterStore {
      * <p>{@code sdg_reason} is bounded on the way in, by the rule the domain states once
      * ({@link RegisterBatch#boundedReason(String)}). How long systemdocgenerator's message is is
      * systemdocgenerator's decision, and an unbounded write against a bounded column would fail
-     * this whole statement: the batch would stay GENERATING, unable to say why it failed, until the
-     * reconciler gave up on it.
+     * this whole statement: the batch would stay GENERATING, unable to say why it failed, until
+     * the next run gave up on it.
      *
      * <p>The rows stay RECORDED whatever the reason, because nothing was ever sent about them.
      * Three of the seven reasons leave no document to wait for, and only for those is the stamp
@@ -683,10 +683,10 @@ public class JdbcRegisterStore implements RegisterStore {
      * first.
      *
      * <p>{@code completed_by} is written here for the same reason it is written by statement 6, and
-     * it is null for most of these endings: only a {@code generation-failed} event and a reconciled
-     * query are somebody else's answer about the render. The other five are this service's own
-     * verdict about a render it could not ask for, could not hear about, or stopped waiting for,
-     * and naming a completion mechanism for those would credit a decision nobody made. Which is which
+     * it is null for most of these endings: only a {@code generation-failed} event is somebody
+     * else's answer about the render. The others are this service's own verdict about a render it
+     * could not ask for, could not hear about, or stopped waiting for, and naming a completion
+     * mechanism for those would credit a decision nobody made. Which is which
      * is {@link BatchFailureReason#isGeneratorAttributed()}, and a mark that disagrees with it is
      * refused before this statement is issued rather than persisted contradicting itself.
      */

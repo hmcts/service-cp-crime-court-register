@@ -16,10 +16,9 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 /**
  * The one place a rendering outcome becomes a batch state, whoever learned it.
  *
- * <p>The listener and the reconciler both arrive here, which is the whole reason the port exists:
- * one code path decides what an outcome does to a batch and to that batch's rows, and one code path
- * absorbs the duplicate that a durable subscription and a grace-period query will eventually produce
- * for the same batch.
+ * <p>Every outcome arrives here, which is the whole reason the port exists: one code path decides
+ * what an outcome does to a batch and to that batch's rows, and one code path absorbs the duplicate
+ * a durable subscription will eventually produce for the same batch.
  *
  * <p><strong>Scoped to the batch it was given.</strong> A document available for a batch flips that
  * batch's rows and no others, through {@code RegisterStore.markGenerated(batchId)}. Reaching for the
@@ -49,8 +48,9 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * the one its batch was requested for is counted and ignored, because an event that contradicts
  * itself is the one shape that could complete the wrong batch; an outcome for a batch already
  * standing where it would put it has nothing left to record; and an outcome that would move a batch
- * along an arrow the data-model diagram does not draw - a document arriving for a batch the
- * reconciler has already given up on, say - leaves that batch exactly where it is and is reported
+ * along an arrow the data-model diagram does not draw - a document arriving for a batch the run
+ * has already given up on and released, say - leaves that batch exactly where it is and is
+ * reported
  * here instead. None of the four is silent: each says at what level it is worth reading, and only
  * the last three of them describe a batch this service actually holds.
  *
@@ -69,8 +69,8 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * <p><strong>And the mark is where the render's round trip is timed.</strong>
  * {@code courtregister_generation_latency} is declared as the time from the render request to the
  * batch's outcome "however the outcome arrived", which is this class's whole subject: one code path
- * for the two mechanisms means one place the reading is taken, so a night whose outcomes all came
- * from the reconciler reads on the same series as a night the topic served. Both instants come off
+ * means one place the reading is taken, so every night reads on one series. Both instants come
+ * off
  * the row - {@code requested_at} and whichever outcome stamp the mark wrote - because the pod that
  * asked for the render is not always this one. It is taken at the mark and before anything the mark
  * is followed by, and it can never cost the batch what follows: a reading nobody could take is a
@@ -79,11 +79,10 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * <p><strong>Notification follows generation here, on the thread that learned of it.</strong> A
  * document that exists and has been sent to nobody is the state defect fix P1 is about, and the
  * moment the batch has one is the moment its Youth Offending Teams can be told; so the GENERATED
- * mark and {@link RegisterNotifierService#notify} are one step of one code path, which is what makes
- * the reconciler's fetched document reach the same e-mails the topic's delivered one does. It
- * follows the mark rather than replacing it, so the compare-and-set is what decides that exactly one
- * of two racing mechanisms goes on to send: a batch already standing at GENERATED is recognised
- * above and never notified twice.
+ * mark and {@link RegisterNotifierService#notify} are one step of one code path. It follows the
+ * mark rather than replacing it, so the compare-and-set is what decides that exactly one of two
+ * racing deliveries goes on to send: a batch already standing at GENERATED is recognised above and
+ * never notified twice.
  */
 public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
 
@@ -156,8 +155,8 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      * <p>{@code failedAt} is the renderer's account of when it gave up and is not written: the
      * store stamps {@code failed_at} in the statement that fails the batch, so what the row records
      * is when this service learned of the refusal rather than another system's clock reading. It
-     * stays on the port because the reconciler and the listener both have it, and a port that
-     * dropped it would have to be widened again by whatever wants it next.
+     * stays on the port because the listener has it, and a port that dropped it would have to be
+     * widened again by whatever wants it next.
      */
     @Override
     public void generationFailed(final UUID correlationId, final UUID payloadFileId,
@@ -230,12 +229,12 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      * What an outcome does to the batch it was attributed to: nothing, nothing, or the mark.
      *
      * <p>The three branches in the order they are worth reading. A batch already standing where the
-     * outcome would put it is the redelivery a durable subscription is for and a reconciler racing
-     * an in-flight event produces, and it is at DEBUG because it is expected. A move the state
-     * machine does not draw is not: it is a late outcome for a batch already ended - a document for
-     * one the reconciler gave up on, or a second refusal for one already FAILED under a different
-     * reason - and re-stamping it would take systemdocgenerator's verdict about one identity and
-     * attach it to a batch that has moved past it.
+     * outcome would put it is the redelivery a durable subscription is for, and it is at DEBUG
+     * because it is expected. A move the state machine does not draw is not: it is a late outcome
+     * for a batch already ended - a document for one the run gave up on and released, or a second
+     * refusal for one already FAILED under a different reason - and re-stamping it would take
+     * systemdocgenerator's verdict about one identity and attach it to a batch that has moved past
+     * it.
      *
      * <p>The reading is taken in the one branch that marked anything, immediately after the mark
      * and before whatever the caller does with the answer. The mark is what closes the round trip,
@@ -286,9 +285,8 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      * absorbs.</strong> Both halves of the reading can refuse - the row is read out of a store that
      * can be away, and the timer is Micrometer's, which raises on a measurement it will not take -
      * and neither is the batch's failure. Passed on, the refusal would reach the listener, which
-     * would roll its delivery back and have the broker offer an outcome already applied; inside the
-     * reconciler it would end the pass and leave every batch behind this one waiting another grace
-     * period. So it stops here and is written down instead: the batch and the class of what refused
+     * would roll its delivery back and have the broker offer an outcome already applied. So it
+     * stops here and is written down instead: the batch and the class of what refused
      * are what a gap in the series is diagnosed from, and neither is about a person. Every other
      * refusal still leaves, the store's compare-and-set included, because those say the outcome was
      * not applied.
@@ -297,8 +295,8 @@ public class DocumentOutcomeSinkImpl implements DocumentOutcomeSink {
      * reading is made of are columns and only one of them was ever in this method's hands:
      * {@code failed_at} is stamped by the statement that fails the batch, not by the renderer's
      * account of when it gave up. {@link RegisterBatch#generationRoundTrip()} is the whole of the
-     * rule - which instants, and when there is no reading to take - so the reconciler's own ending,
-     * which settles through the store rather than through here, states the same one.
+     * rule - which instants, and when there is no reading to take - and it is stated in one place
+     * because there is one place an outcome is applied.
      *
      * <p>A batch the read no longer finds, or one whose row carries no round trip, moves the timer
      * nowhere. Nothing is reported about either: a settled batch that cannot be read back a moment
