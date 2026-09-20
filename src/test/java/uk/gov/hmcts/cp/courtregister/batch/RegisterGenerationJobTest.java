@@ -37,6 +37,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.slf4j.MDC;
@@ -1169,9 +1171,23 @@ class RegisterGenerationJobTest {
             order.verify(assembler).assemble(any(), any(), anyBoolean());
         }
 
-        @Test
-        void a_skipped_run_does_not_release_anything() {
-            theGateAnswers(new Skipped(Reason.FLAG_OFF));
+        /**
+         * Both nights FR-018 names, and not one of them standing in for the other.
+         *
+         * <p>FR-005 forbids the pass on a run the flag stopped, and FR-018 states the cost: a
+         * court centre whose batch went stale is not given back tonight, because a run that may
+         * not generate may not decide that a batch it could not re-render has failed. The
+         * fail-closed night is the one worth asserting separately - it is the night nobody chose,
+         * reached by an App Configuration outage rather than by the cutover, and the temptation to
+         * "do the safe half of the run anyway" is exactly what the shared {@code Skipped} branch
+         * would let somebody act on without failing a test.
+         *
+         * @param reason the two answers that stop a run
+         */
+        @ParameterizedTest(name = "[A] {0}")
+        @EnumSource(value = Reason.class, names = {"FLAG_OFF", "FLAG_UNREADABLE"})
+        void a_skipped_run_does_not_release_anything(final Reason reason) {
+            theGateAnswers(new Skipped(reason));
 
             run();
 
@@ -1269,6 +1285,45 @@ class RegisterGenerationJobTest {
                         .isZero();
                 softly.assertThat(onTheLine(fields, "released_registers")).isZero();
                 softly.assertThat(onTheLine(fields, "contended")).isZero();
+            }
+        }
+
+        /**
+         * <strong>[A]</strong> A batch the pass could not give back does not stop the night.
+         *
+         * <p>FR-003a: exhaustion is reported, never thrown. A batch whose every attempt lost the
+         * day's active-register key is left exactly as it was found and named in the pass's
+         * answer, and the run goes on to read the store and assemble - the batches it could not
+         * release are stale still, so the next run reaches them again. The plan's test matrix
+         * claims this row for this suite; until now it was only carried incidentally, by the mixed
+         * night's line happening to report a non-zero {@code contended}.
+         *
+         * <p>Green on introduction: the run has never read the third number for anything but the
+         * line, which is the property being pinned - a pass that gave nothing back is not a pass
+         * that failed.
+         */
+        @Test
+        void a_batch_the_pass_could_not_release_should_not_stop_the_run() {
+            aNightHolding(batch());
+            everyRequestIsAccepted();
+            when(releaser.releaseStale())
+                    .thenReturn(new StaleBatchReleaser.ReleaseTally(0, 0, CONTENDED));
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                verify(store).activeUnbatched();
+                verify(assembler).assemble(any(), any(), anyBoolean());
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "contended"))
+                        .as("the night carried on and said what it had left undone, which is the "
+                                + "whole of FR-003a: a court centre the pass could not free is "
+                                + "not a reason to leave every other court centre unrendered")
+                        .isEqualTo(CONTENDED);
+                softly.assertThat(onTheLine(fields, "released_batches"))
+                        .as("and nothing was given back, so neither released number may claim it "
+                                + "was")
+                        .isZero();
             }
         }
 
