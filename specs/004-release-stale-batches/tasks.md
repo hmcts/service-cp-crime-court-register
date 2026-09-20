@@ -2775,12 +2775,28 @@ VII.
 
 ### Tasks
 
-- [ ] T037 [A] [US1] [US3] `e2e/GenerationFailureEndToEndIT` (extend) — one case carrying **SC-001**
+- [x] T037 [A] [US1] [US3] `e2e/GenerationFailureEndToEndIT` (extend) — one case carrying **SC-001**
       and **SC-003**: a batch left GENERATING since the previous evening is released by the run, its
       registers are assembled into a new batch for the same court centre and register date, that
       batch renders and notifies, **exactly one** notification exists per recipient for that key, and
       the original batch's late `document-available`, delivered afterwards, moves nothing and is
       counted under `terminal-batch`.
+      (green: `flock -w 7200 … ./gradlew test --tests '*GenerationFailureEndToEndIT*'
+      -Dtest.noFailFast=true` → **BUILD SUCCESSFUL**, 4 tests, 0 failed, 0 errors; the new case runs
+      in 1.0s against the assembled stack. **An [A] task, so there is no red to record**: every
+      mechanism it asserts landed in Phases 2-7 and this case is the statement that they are joined
+      - the release pass, the assembler's supplementary index, the render, the topic, the notifying
+      leg and the terminal-batch drop, in one run of the real service against a real Postgres, a
+      real file service, WireMock and an in-VM Artemis.
+      **Two seams in the fixture, and they are readings rather than behaviour.**
+      `GeneratedRegisters` grew `statusOf`, `payloadFileIdOf`, `documentFileIdOf` and
+      `failureReasonOf`, because every reading it had answers for a court centre holding **one**
+      batch and this is the first case whose court centre holds two - the one that was given up on
+      and tonight's. `run()` now returns the `RunReport` it was dropping, since what the run's first
+      act gave back is half of what SC-001 says. Neither changes a case that existed.
+      **The late outcome is asserted as a delta and not as a level**: the ignored counter is the
+      JVM's, so the case reads it before and awaits one more, which is what makes it independent of
+      whatever order the four cases run in.)
 - [ ] T038 [A] [US2] `e2e/GenerationEndToEndIT` (extend) — the other side of the boundary and the
       operator's batch: a batch ten minutes old is untouched and its court centre day is deferred as
       today; a `system_generated = false` batch forty minutes old is untouched because its cutoff is

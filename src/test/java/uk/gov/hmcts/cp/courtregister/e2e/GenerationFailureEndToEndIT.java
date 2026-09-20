@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.awaitility.Awaitility.await;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.jms.ConnectionFactory;
 import jakarta.jms.JMSContext;
 import java.time.Duration;
@@ -12,6 +14,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -24,11 +27,13 @@ import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DocumentEventListener;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
+import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
+import uk.gov.hmcts.cp.courtregister.domain.RunReport;
 import uk.gov.hmcts.cp.courtregister.support.GeneratedRegisters;
 import uk.gov.hmcts.cp.courtregister.support.GeneratedRegisters.Notified;
 import uk.gov.hmcts.cp.courtregister.support.GenerationStackSupport;
@@ -37,7 +42,7 @@ import uk.gov.hmcts.cp.courtregister.support.PostgresTestSupport;
 import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
 
 /**
- * The three ways a night does not go to plan, through the whole assembled service (T061).
+ * The four ways a night does not go to plan, through the whole assembled service (T061, T037).
  *
  * <p>{@code GenerationEndToEndIT} is the night that worked: the render was accepted, the topic
  * delivered the document and every Youth Offending Team was told. This is its counterpart, and every
@@ -45,7 +50,7 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  * indistinguishable from a successful one (defect fix P2) and a batch reported as delivered when one
  * of its recipients was never written to (defect fix P9).
  *
- * <p><strong>The three cases, and the ordering that makes them three.</strong>
+ * <p><strong>The four cases, and the ordering that makes them four.</strong>
  *
  * <ul>
  *   <li>A {@code generation-failed} on the topic ends the batch FAILED under the bounded
@@ -56,12 +61,15 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  *       reporting the state it would have reported had everybody been e-mailed.</li>
  *   <li>A resend re-requests the failed row only, under the identity it already holds - the same
  *       {@code notificationId} in the same path - and the batch reaches NOTIFIED.</li>
+ *   <li>A batch left in flight overnight is given back by the next run's first act, re-rendered
+ *       into tonight's batch and e-mailed once per team - and the outcome that finally arrives for
+ *       the batch that was given up on moves nothing and is counted.</li>
  * </ul>
  *
- * <p><strong>The outcome that never arrived is no longer one of them.</strong> It was the
+ * <p><strong>The outcome that never arrived is the fourth of them now.</strong> It was the
  * reconciler's case, and with the query gone there is nothing to fetch: a batch whose outcome is
  * lost is released by the next run's own first act, which is {@code StaleBatchReleaser}'s to prove
- * and T037's to assert here.
+ * in the small and this suite's to prove through the whole assembled service (SC-001, SC-003).
  *
  * <p><strong>An acceptance suite (tasks.md [A]).</strong> Nothing here is driven test-first: it
  * records what the assembled service does.
@@ -113,6 +121,16 @@ class GenerationFailureEndToEndIT {
     private static final Duration DELIVERED_WITHIN = Duration.ofSeconds(30);
 
     private static final Duration POLL = Duration.ofMillis(200);
+
+    /**
+     * How long ago the abandoned batch asked for the render it never heard about.
+     *
+     * <p>Longer than either cutoff the release pass measures by - the shipped
+     * {@code courtregister.generation.stale-after} of thirty minutes and the seventy-minute lock a
+     * batch an operator asked for is judged by instead - so this batch is stale whichever of them
+     * it is judged against, which is what "since the evening before" means at eighteen hundred.
+     */
+    private static final Duration SINCE_THE_EVENING_BEFORE = Duration.ofHours(14);
 
     /** A team both of the batch's recipients cases keep telling. */
     private static final CourtRegisterRecipient DURHAM = new CourtRegisterRecipient(
@@ -266,6 +284,84 @@ class GenerationFailureEndToEndIT {
                         GenerationStackSupport.notificationPathFor(refused));
     }
 
+    @Test
+    @DisplayName("a batch left in flight overnight is released, re-rendered, and its late outcome "
+            + "moves nothing (SC-001, SC-003)")
+    void a_stale_batch_should_be_released_re_rendered_and_left_alone_by_its_late_outcome() {
+        run();
+        final UUID abandoned = registers.batches().getFirst();
+        final UUID abandonedPayload = registers.payloadFileIdOf(abandoned).orElseThrow();
+        registers.hasBeenWaitingFor(SINCE_THE_EVENING_BEFORE);
+        final double ignoredBefore = terminalBatchIgnored();
+
+        final RunReport report = run();
+
+        assertThat(report.releasedBatches())
+                .as("the run's first act found last night's batch still waiting for a render "
+                        + "nothing can be asked about any more, and gave up on it (SC-001)")
+                .isEqualTo(1);
+        assertThat(report.releasedRegisters())
+                .as("and the register it held came back to be batched by this same run")
+                .isEqualTo(1);
+        assertThat(registers.statusOf(abandoned)).contains(BatchStatus.FAILED.name());
+        assertThat(registers.failureReasonOf(abandoned))
+                .as("under the bounded reason that says what happened rather than inventing an "
+                        + "outcome nobody delivered")
+                .contains(BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN.name());
+        assertThat(registers.batches())
+                .as("two batches for this court centre day: the one that was given up on, and "
+                        + "tonight's, which is the document the court centre is owed")
+                .hasSize(2);
+
+        final UUID tonight = registers.batches().get(1);
+        publishDocumentAvailable(tonight, registers.payloadFileIdOf(tonight).orElseThrow());
+        await().alias("tonight's batch reaches NOTIFIED off the public-event topic")
+                .atMost(DELIVERED_WITHIN)
+                .pollInterval(POLL)
+                .until(() -> registers.statusOf(tonight)
+                        .equals(Optional.of(BatchStatus.NOTIFIED.name())));
+        assertThat(registers.notifications())
+                .as("exactly one e-mail per team for this court centre day, across both batches: "
+                        + "a released batch told nobody, so the teams hear about the day once "
+                        + "(SC-003)")
+                .extracting(Notified::emailAddress, Notified::status, Notified::attempts)
+                .containsExactly(
+                        tuple(DURHAM.emailAddress1(), NotificationStatus.ACCEPTED.name(), 1),
+                        tuple(GATESHEAD.emailAddress1(), NotificationStatus.ACCEPTED.name(), 1));
+
+        publishDocumentAvailable(abandoned, abandonedPayload);
+
+        await().alias("the late outcome is counted under its bounded reason")
+                .atMost(DELIVERED_WITHIN)
+                .pollInterval(POLL)
+                .until(() -> terminalBatchIgnored() >= ignoredBefore + 1);
+        assertThat(registers.statusOf(abandoned))
+                .as("the batch this service had already ended stays ended: re-stamping it would "
+                        + "send a second e-mail about a day that has had its document")
+                .contains(BatchStatus.FAILED.name());
+        assertThat(registers.documentFileIdOf(abandoned))
+                .as("and nothing of the document it was told about is written to the row it was "
+                        + "told about it for")
+                .isEmpty();
+        assertThat(registers.notifications())
+                .as("still one per team, which is the guarantee the counter above says was needed")
+                .hasSize(2);
+    }
+
+    /**
+     * How many outcomes this service has dropped because their batch had already ended.
+     *
+     * @return the reading of {@code courtregister_public_events_ignored_total} under
+     *         {@code terminal-batch}, and nought where nothing has moved it yet
+     */
+    private static double terminalBatchIgnored() {
+        final Counter counted = service.getBean(MeterRegistry.class)
+                .find(GenerationMetrics.PUBLIC_EVENTS_IGNORED)
+                .tag(GenerationMetrics.REASON_TAG, GenerationMetrics.TERMINAL_BATCH)
+                .counter();
+        return counted == null ? 0 : counted.count();
+    }
+
     /**
      * A batch whose document exists, one of whose two teams notificationnotify would not take.
      *
@@ -405,11 +501,14 @@ class GenerationFailureEndToEndIT {
     /**
      * Runs the night through the bean the schedule would have fired.
      *
-     * <p>The return is deliberately dropped: what a run reports about its requesting half is
-     * {@code GenerationEndToEndIT}'s subject, and every case here is about what happens to the batch
-     * afterwards.
+     * <p>Three of the four cases drop the return: what a run reports about its requesting half is
+     * {@code GenerationEndToEndIT}'s subject, and they are about what happens to the batch
+     * afterwards. The fourth reads it, because what the run's first act gave back is the thing
+     * being asserted and the report is where a run says so (FR-009).
+     *
+     * @return what the run reported
      */
-    private static void run() {
-        service.getBean(RegisterGenerationJob.class).run();
+    private static RunReport run() {
+        return service.getBean(RegisterGenerationJob.class).run();
     }
 }
