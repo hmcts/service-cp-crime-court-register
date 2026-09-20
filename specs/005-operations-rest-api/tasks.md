@@ -640,7 +640,7 @@ the "a controller may not hold a repository" rule both land.
 refusal in the increment into a `ProblemDetail`. It lands here rather than in Phase 3 because the
 exception report has the widest refusal set of any endpoint.
 
-- [ ] **T020** [P] [US6] `application/OnDemandExceptionReportServiceTest` (new) — **`ReportExceptionsCli`'s
+- [x] **T020** [P] [US6] `application/OnDemandExceptionReportServiceTest` (new) — **`ReportExceptionsCli`'s
       window and sinks, moved and unchanged**. Cases: `since` as an ISO instant, as an ISO-8601
       duration and as `<n>d`/`<n>h`/`<n>m`/`<n>s`; a zero or negative window refused; no `since` →
       the window from the previous scheduled run, computed from the report cron and zone exactly as
@@ -651,10 +651,19 @@ exception report has the widest refusal set of any endpoint.
       is a strict mock and is never touched** — the command read it nowhere and neither does this.
       Seams: `application/OnDemandExceptionReportService` and its result record. Red: the window
       forms.
-- [ ] **T021** [US6] `application/OnDemandExceptionReportService` — the body of
+- [x] **T021** [US6] `application/OnDemandExceptionReportService` — the body of
       `ReportExceptionsCli.asked` and `reported` minus the parsing and the printing, returning the
       report, the per-sink outcomes, the run id and the duration. `RunCorrelation.under(...)` is
       kept: an on-demand report is a run and carries a run id, as it did. Green: T020.
+      (Green: `OnDemandExceptionReportServiceTest` 21 tests, 0 failures. The service takes the cron,
+      the zone and the e-mail switch as values rather than `ReportProperties`, exactly as
+      `ExceptionReportService`'s three limits are handed in, so the application layer does not
+      depend on the shape of a configuration file. The two seams the refusals travel on land with
+      it: `domain/OperationsReason`, the closed set of bounded codes from data-model "The reason
+      codes", and `domain/OperationsRefusedException`, which carries a reason, this service's own
+      name for an offending argument and bounded extras - never a value the caller supplied. The
+      command's window reading is duplicated rather than moved, because `ReportExceptionsCli` is
+      deleted whole in Phase 10 and delegating it first would churn a suite that is about to go.)
 - [ ] **T022** [P] [US6] `api/ExceptionReportsControllerTest` (new) — `@WebMvcTest`. Cases: the
       `200` shape of data-model §7, entries and counts and truncation and per-sink delivery and the
       run id and the duration; an empty window answers `entries: []` and the counts, never silence;
