@@ -1955,6 +1955,33 @@ values on every pass.
       **207 tests, 0 failures** — the two contexts boot without being told how they complete, and
       the HTTP surface is still Boot's error fallback and nothing else. `pmdMain`, `pmdTest`,
       `checkstyleMain` and `checkstyleTest` green in the same round.
+**Phase 5, first half closed (2026-09-20).** T021, T024, T026, T022, T023, T025 and T027 are
+landed; the mechanisms are gone and the words for two of them are not, which is the boundary this
+phase was split on. `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` → **BUILD SUCCESSFUL,
+exit 0, 10m 12s, 3646 tests over 576 suites, 0 failures, 0 errors**. `checkstyleMain`,
+`checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification` all ran and all passed,
+none of them loosened. No migration was added and no schema changed.
+
+**Read the coverage on this half, because it is the shape the ratchet is met by accident in.**
+`flock -w 7200 … ./gradlew jacocoTestReport check -Dtest.noFailFast=true` → BUILD SUCCESSFUL, exit
+0, and the report from that run reads **LINE 6512/6715 = 0.9698 and BRANCH 1995/2198 = 0.9076**
+against the unchanged gate of LINE 0.88 / BRANCH 0.85. Against the Phase 4 gate's 6651/6854 and
+2022/2228 that is **139 fewer covered lines and 27 fewer covered branches, out of 139 fewer lines
+and 30 fewer branches in the codebase at all** — which is what a deletion looks like when the thing
+deleted was covered: the ratios moved by 0.0006 and 0.0001, the denominator fell by as much as the
+numerator, and the gate was not adjusted. The suite is 48 cases smaller than the Phase 4 re-gate's
+3694, being the reconciler's own suite and the query cases of the client's, less the four absence
+cases T021 and T024 added.
+
+**Still open at this boundary**, and deliberately: `BatchFailureReason.GENERATION_TIMED_OUT` and
+`CompletedBy.RECONCILER` are still in the enums and still admitted by the schema, with nothing left
+that writes either — T047-T050 retire them and narrow the three constraints under V7, and T028
+characterises the finished suite after that. `.claude/agents/spec-validator.md` still names the
+reconciler in its read-these-files list and in its outcome-is-learned rule; both are the agent's own
+scope and rule paragraphs, which this tree does not own, and T044 covers them in Phase 9.
+
+---
+
 ### The vocabulary retirement — after the deletions above, and only after them
 
 These four are the other half of the migration split (see "Decided" above Phase 1). They land
