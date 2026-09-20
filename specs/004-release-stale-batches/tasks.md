@@ -2252,6 +2252,27 @@ claim. T028 runs after them, not before, so the suite it characterises is the fi
       comparison and would have recorded a red the suite had not actually earned.
 
       **Green** (the mutation reverted, same command): BUILD SUCCESSFUL, **5 tests, 0 failures**.
+
+      **Also added at gate round 3: `v7_refuses_to_apply_to_a_store_holding_the_retired_attribution_alone`.**
+      V7 has **two** narrowing statements and an operator can be stopped by either, but
+      `v7_refuses_to_apply_to_a_store_holding_a_retired_row` seeds a row that violates both at once
+      — `GENERATION_TIMED_OUT` *and* `RECONCILER` — so Flyway stops at statement 1 and statement 2's
+      refusal was never reached by any case. The new one seeds the row only statement 2 can refuse:
+      a **GENERATED** batch completed by `RECONCILER` carrying no failure reason at all, which is
+      valid under V6 in every other respect. It asserts the refusal names
+      `register_batch_completed_by_chk`, that the row is still there afterwards, and that V7 applies
+      once it is deleted. Operationally it is the row nobody would think to look for: a batch failed
+      `GENERATION_TIMED_OUT` is a visible dead end, whereas a batch that generated perfectly well
+      and merely recorded who told it so looks like an ordinary success, and clearing only the
+      failed ones leaves the pod still refusing to start.
+
+      **Red** (V7's statement 2 commented out; `--tests '*SchemaMigrationV2IT*'`): **80 tests
+      completed, 3 failed**, every one an assertion — the new case on "Expecting code to raise a
+      throwable", and `v7_refuses_the_retired_attribution` and
+      `completed_by_check_should_name_exactly_the_one_completion_mechanism` alongside it, which is
+      the statement's absence stated from three directions. **Green** (statement 2 restored, same
+      command plus `--tests '*SchemaMigrationV7IT*'`): BUILD SUCCESSFUL, **85 tests, 0 failures**
+      (80 in `SchemaMigrationV2IT`, 5 in `SchemaMigrationV7IT`).
 - [X] T050 [A] [US4] `docker/`, `specs/004-release-stale-batches/quickstart.md` — **[A]**, and this
       is T007 arriving where it belongs. Record that `docker compose down -v` is required before
       **V7** on any volume holding a pre-004 row, and confirm on a real local volume that the

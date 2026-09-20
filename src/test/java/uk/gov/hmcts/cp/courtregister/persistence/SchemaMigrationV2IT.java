@@ -1473,6 +1473,17 @@ class SchemaMigrationV2IT {
                         + "DATE '2026-08-20', 'courtregister_2026-08-20.json', 'FAILED', true, "
                         + "'GENERATION_TIMED_OUT', 'RECONCILER')";
 
+        /**
+         * The row the attribution narrowing is the only thing wrong with: a batch that generated,
+         * naming the mechanism that is going away and no failure reason at all.
+         */
+        private static final String RETIRED_ATTRIBUTION_ROW =
+                "INSERT INTO " + BATCH_TABLE + " (batch_id, court_centre_id, register_date, "
+                        + "file_name, status, system_generated, completed_by) "
+                        + "VALUES ('" + UUID.randomUUID() + "', '" + UUID.randomUUID() + "', "
+                        + "DATE '2026-08-20', 'courtregister_2026-08-20.json', 'GENERATED', true, "
+                        + "'RECONCILER')";
+
         private static FluentConfiguration flywayAgainst(final String jdbcUrl) {
             return Flyway.configure()
                     .dataSource(jdbcUrl, PostgresTestSupport.username(), PostgresTestSupport.password())
@@ -1520,6 +1531,68 @@ class SchemaMigrationV2IT {
             assertThat(admittedFailureReasonsIn(jdbcUrl))
                     .as("the narrowed vocabulary, read off the constraint the migration left")
                     .containsExactlyInAnyOrder(vocabularyOf(BatchFailureReason.class));
+        }
+
+        /**
+         * And the row the <em>other</em> narrowing statement is the only thing wrong with.
+         *
+         * <p>{@link #RETIRED_ROW} violates both statements at once, and Flyway stops at the first:
+         * the refusal it records is always {@code register_batch_failure_reason_chk}, so statement
+         * 2 - the attribution narrowing - is never actually reached by the case above. V7 has two
+         * narrowing statements and an operator can be stopped by either, so the second one is
+         * asserted on a row only it can refuse: a GENERATED batch completed by RECONCILER, carrying
+         * no failure reason at all. That row is valid under V6 in every other respect, which is
+         * exactly why a store can be holding one.
+         *
+         * <p>It matters operationally because the two rows look nothing alike to whoever has to
+         * clear them. A batch failed GENERATION_TIMED_OUT is a visible dead end somebody was
+         * probably already looking at; a batch that generated perfectly well and merely recorded
+         * the reconciler as the mechanism that told it so is an ordinary successful row, and
+         * deleting only the failed ones leaves the pod still refusing to start.
+         */
+        @Test
+        @DisplayName("V7 refuses to apply to a store holding the retired attribution alone")
+        void v7_refuses_to_apply_to_a_store_holding_the_retired_attribution_alone()
+                throws SQLException {
+
+            final String database =
+                    "courtregister_v7_attributed_" + UUID.randomUUID().toString().replace("-", "");
+            final String jdbcUrl = PostgresTestSupport.createEmptyDatabase(database);
+
+            flywayAgainst(jdbcUrl).target("6").load().migrate();
+            execute(jdbcUrl, RETIRED_ATTRIBUTION_ROW);
+
+            assertThatThrownBy(() -> flywayAgainst(jdbcUrl).target("7").load().migrate())
+                    .as("the second narrowing statement stops the migration too, and names the "
+                            + "constraint it could not add rather than the one before it")
+                    .hasMessageContaining("register_batch_completed_by_chk");
+            assertThat(completionMechanismsIn(jdbcUrl))
+                    .as("and this row is where it was as well - a successful batch is not "
+                            + "something a migration may quietly rewrite to make itself applicable")
+                    .containsExactly("RECONCILER");
+
+            execute(jdbcUrl, "DELETE FROM " + BATCH_TABLE);
+
+            assertThatCode(() -> flywayAgainst(jdbcUrl).target("7").load().migrate())
+                    .as("and once it is gone V7 applies, which is the same clean-the-volume step "
+                            + "reached from the other row")
+                    .doesNotThrowAnyException();
+        }
+
+        /** The attributions the batch table actually holds, for the untouched-row assertion. */
+        private static List<String> completionMechanismsIn(final String jdbcUrl)
+                throws SQLException {
+
+            final List<String> mechanisms = new ArrayList<>();
+            try (Connection connection = connectionTo(jdbcUrl);
+                 Statement statement = connection.createStatement();
+                 ResultSet rows = statement.executeQuery(
+                         "SELECT completed_by FROM " + BATCH_TABLE)) {
+                while (rows.next()) {
+                    mechanisms.add(rows.getString(1));
+                }
+            }
+            return mechanisms;
         }
 
         /** The failure reasons the batch table actually holds, for the untouched-row assertion. */
