@@ -195,21 +195,25 @@ public class PropertiesValidator implements InitializingBean {
 
     /** The operations API's own settings, by the name each one is spelled with in a refusal. */
     private static final String OPERATIONS = "courtregister.operations";
-    private static final String OPERATIONS_ENABLED = OPERATIONS + ".enabled";
     private static final String SUPERSEDE_MAX_AGE = OPERATIONS + ".supersede-max-age";
     private static final String LOCK_WAIT = OPERATIONS + ".lock-wait";
 
     /**
-     * The two audit libraries' own keys, read from the environment rather than bound.
+     * The audit library's own keys, read from the environment rather than bound.
      *
      * <p>{@code audit.http.*} belongs to {@code cp-audit-filter-springboot} and {@code cp.audit.*}
      * to its Artemis transport. Re-declaring either under a {@code courtregister.} key would give a
      * deployment two places to set one thing - the same argument {@link #BROKER_URL} is read from
-     * the environment for. The rules still have to be able to see them, because an operations
-     * endpoint served with any of them unset is an endpoint nobody can tell was called.
+     * the environment for. The rules still have to be able to see them, because a transport
+     * switched on and pointed at nothing publishes nothing and says so only in a log line.
+     *
+     * <p><strong>{@code authz.http.enabled} is deliberately not among them.</strong> Neither it
+     * nor {@code audit.http.enabled} is read as a condition of starting: both are ordinary
+     * configuration an operator may turn on or off, they are secure by default in
+     * {@code application.yaml}, and constitution 5.0.0 withdrew the refusal that tied them to
+     * {@code courtregister.operations.enabled} on a deployed pod. What is left below is about a
+     * <em>value</em> that cannot mean what it says.
      */
-    private static final String AUTHZ_ENABLED = "authz.http.enabled";
-
     private static final String HTTP_AUDIT_ENABLED = "audit.http.enabled";
     private static final String OPENAPI_REST_SPEC = "audit.http.openapi-rest-spec";
     private static final String AUDIT_TRANSPORT_ENABLED = "cp.audit.enabled";
@@ -221,6 +225,9 @@ public class PropertiesValidator implements InitializingBean {
 
     /** What the audit transport's port has to read as before it is worth parsing. */
     private static final Pattern PORT_NUMBER = Pattern.compile("\\d{1,5}");
+
+    /** The highest port a TCP stack can bind, and the top of the range the rule admits. */
+    private static final int HIGHEST_PORT = 65_535;
 
     /** Spring's own key, not this service's: the broker the completion events arrive on. */
     private static final String BROKER_URL = "spring.artemis.broker-url";
@@ -364,7 +371,7 @@ public class PropertiesValidator implements InitializingBean {
     @Override
     public void afterPropertiesSet() {
         validate(properties, generation, feature, report, brokerUrl);
-        validateOperations(operations, properties, environment);
+        validateOperations(operations, environment);
     }
 
     /**
@@ -375,101 +382,63 @@ public class PropertiesValidator implements InitializingBean {
      * arrives as one added method rather than as a reshaped signature is one a rebase can keep
      * both halves of.
      *
+     * <p><strong>None of these is a rule about one switch given another's value.</strong>
+     * Constitution 5.0.0 withdrew the refusal that would not let a deployed pod start with the
+     * operations API enabled and {@code authz.http.enabled} or {@code audit.http.enabled} off, and
+     * withdrew the {@code courtregister.servicebus.namespace} discriminator that decided where it
+     * applied. Both switches are ordinary configuration an operator may set, they default to
+     * {@code true} in {@code application.yaml} against library defaults of off, and a pod
+     * configured with either of them off comes up. What is refused here is a <em>value</em> that
+     * cannot mean what it says.
+     *
      * @param operations  the operations API's settings
-     * @param properties  the bound settings, for the deployed/local discriminator alone
-     * @param environment the resolved environment, for the authorisation and audit libraries'
-     *                    own keys
+     * @param environment the resolved environment, for the audit library's own keys
      * @throws IllegalStateException if any rule is broken
      */
     /* default */ static void validateOperations(final OperationsProperties operations,
-                                                 final CourtRegisterProperties properties,
                                                  final Environment environment) {
-        validateTheOperationsApiIsNeverServedUnauthorisedWhereItIsDeployed(operations, properties,
-                environment);
-        validateTheOperationsApiIsNeverServedUnauditedWhereItIsDeployed(operations, properties,
-                environment);
+        validateTheAuditTransportNamesSomewhereToPublish(environment);
         validateTheAuditFilterHasADocumentToRead(environment);
         validateTheSupersedeBoundAdmitsSomething(operations);
         validateTheLockAttemptIsSomethingAThreadCanMake(operations);
     }
 
     /**
-     * Condition (a) of constitution Principle III, made a startup refusal (FR-053).
+     * A transport switched on has to name a broker and a port it could actually reach.
      *
-     * <p>The symmetric half of the rule below, and the one FR-045 left open. An endpoint served
-     * to a caller with no identity is worse than the {@code kubectl exec} it replaced, which at
-     * least needed exec rights on the namespace. {@code AuthzAutoConfiguration} in
-     * {@code cp-auth-rules-filter} is conditional on {@code authz.http.enabled} being the literal
-     * {@code true} with no {@code matchIfMissing}, so the key off, absent or spelled {@code yes}
-     * leaves a pod that registers no authorisation filter and admits everybody - and, like the
-     * audit half, announces that nowhere at runtime.
-     *
-     * <p><strong>A deployed-environment rule</strong>, on the same discriminator and for the same
-     * reason as the audit half: a laptop has no usersgroups to resolve a caller's groups through,
-     * and the local loop {@code quickstart.md} documents serves the endpoints with both filters
-     * off deliberately.
-     *
-     * @param operations  the operations API's settings
-     * @param properties  the bound settings, for the deployed/local discriminator alone
-     * @param environment the resolved environment, for the auth library's own key
-     */
-    private static void validateTheOperationsApiIsNeverServedUnauthorisedWhereItIsDeployed(
-            final OperationsProperties operations, final CourtRegisterProperties properties,
-            final Environment environment) {
-
-        if (!operations.enabled() || !hasText(properties.servicebus().namespace())) {
-            return;
-        }
-        if (!switchedOnAsTheLibraryReadsIt(environment, AUTHZ_ENABLED, false)) {
-            throw new IllegalStateException(unauthorised(AUTHZ_ENABLED)
-                    + " is not true, so cp-auth-rules-filter registers no filter at all and every"
-                    + " endpoint would answer a caller carrying no identity");
-        }
-    }
-
-    /**
-     * Condition (b) of constitution Principle III, made a startup refusal (FR-045).
-     *
-     * <p>An endpoint reachable without an audit event is worse than the {@code kubectl exec} it
-     * replaced, which at least left a cluster audit record. Three things have to hold for a call to
-     * be audited and none of them announces its absence at runtime: the HTTP half has to be
-     * switched on, the library's own master switch has to be on so that there is an
-     * {@code AuditService} on the context at all, and the transport has to name a broker and a port
-     * - because the filter <strong>swallows its own publishing failures</strong>, so a transport
+     * <p>The audit filter <strong>swallows its own publishing failures</strong>, so a transport
      * pointed at nothing produces a service that serves every endpoint and says so nowhere but the
-     * log.
+     * log - which is the failure mode this service exists to end. The starter's own
+     * {@code validateProps} checks {@code hosts.isEmpty()} and {@code port > 0} and nothing else,
+     * so a list of blanks and a port of 70000 both pass it and are turned into connectors pointed
+     * at nowhere.
      *
-     * <p><strong>A deployed-environment rule</strong>, on the discriminator
-     * {@link #validateTheStubIsNotDeployed} already draws deployment on: a namespace means workload
-     * identity, which means a deployed pod. A laptop has no audit broker and no usersgroups, and
-     * the local loop serves the endpoints with both filters off deliberately - which is a local
-     * convenience and is not how any deployed environment is configured.
+     * <p>Gated on the transport's own switch, read with an absent key taken as <strong>off</strong>
+     * rather than as the library's {@code matchIfMissing = true}. This service's
+     * {@code application.yaml} always sets the key, so a real JVM never has it absent; a context
+     * that does is a test harness that did not load the file, and refusing one of those would be
+     * refusing a harness rather than a deployment. Where the key really is absent the library
+     * builds its connection factory and checks the two things it checks, which is the behaviour
+     * this rule is sharpening rather than replacing.
+     *
+     * @param environment the resolved environment, for the transport's own keys
      */
-    private static void validateTheOperationsApiIsNeverServedUnauditedWhereItIsDeployed(
-            final OperationsProperties operations, final CourtRegisterProperties properties,
+    private static void validateTheAuditTransportNamesSomewhereToPublish(
             final Environment environment) {
 
-        if (!operations.enabled() || !hasText(properties.servicebus().namespace())) {
+        if (!switchedOnAsTheLibraryReadsIt(environment, AUDIT_TRANSPORT_ENABLED, false)) {
             return;
-        }
-        if (!switchedOnAsTheLibraryReadsIt(environment, HTTP_AUDIT_ENABLED, false)) {
-            throw new IllegalStateException(unaudited(HTTP_AUDIT_ENABLED)
-                    + " is not true, so every call would be served publishing nothing");
-        }
-        if (!switchedOnAsTheLibraryReadsIt(environment, AUDIT_TRANSPORT_ENABLED, true)) {
-            throw new IllegalStateException(unaudited(AUDIT_TRANSPORT_ENABLED)
-                    + " is not true, so the audit starter contributes no publisher at all");
         }
         final List<String> hosts = Binder.get(environment).bind(AUDIT_HOSTS, HOST_LIST)
                 .orElse(List.of());
         if (hosts.isEmpty() || hosts.stream().anyMatch(host -> !hasText(host))) {
-            throw new IllegalStateException(unaudited(AUDIT_HOSTS)
+            throw new IllegalStateException(publishingNowhere(AUDIT_HOSTS)
                     + " names no broker, and the audit filter swallows every publishing failure -"
                     + " so the events would be lost in silence rather than refused");
         }
         if (!namesAPort(environment.getProperty(AUDIT_PORT))) {
-            throw new IllegalStateException(unaudited(AUDIT_PORT)
-                    + " must be the port the audit broker listens on");
+            throw new IllegalStateException(publishingNowhere(AUDIT_PORT)
+                    + " must be the port the audit broker listens on, in 1.." + HIGHEST_PORT);
         }
     }
 
@@ -478,21 +447,28 @@ public class PropertiesValidator implements InitializingBean {
      *
      * <p>Read as text and parsed here rather than asked of the environment as an {@code Integer},
      * because a conversion failure is raised by Spring during the refresh and names neither the
-     * setting, nor the endpoints it would leave unaudited, nor the operations switch that made
-     * the pair unsafe - and it quotes the offending value back. FR-045 requires the refusal to
-     * name the offending setting, so the reading is this service's own.
-     *
-     * <p>A blank element in the host list is refused by the same argument as an empty list: the
-     * audit starter's own {@code validateProps} checks {@code hosts.isEmpty()} and
-     * {@code port > 0} and nothing else, so a list of blanks passes it and is turned into
-     * connectors pointed at no host at all.
+     * setting nor the transport it leaves unpublished - and it quotes the offending value back.
+     * FR-053 requires the refusal to name the offending setting, so the reading is this service's
+     * own.
      *
      * @param value the raw value of {@code cp.audit.port}, or null where it is unset
-     * @return whether it is a positive whole number
+     * @return whether it is a whole number in 1..65535
      */
     private static boolean namesAPort(final String value) {
         final String port = value == null ? "" : value.trim();
-        return PORT_NUMBER.matcher(port).matches() && Integer.parseInt(port) > 0;
+        final int number = PORT_NUMBER.matcher(port).matches() ? Integer.parseInt(port) : 0;
+        return number > 0 && number <= HIGHEST_PORT;
+    }
+
+    /**
+     * What a transport refusal says before it names its setting.
+     *
+     * @param setting the transport setting this refusal is about
+     * @return the sentence the refusal is built from
+     */
+    private static String publishingNowhere(final String setting) {
+        return AUDIT_TRANSPORT_ENABLED + " is true, so the audit events have to reach a broker"
+                + " - but " + setting;
     }
 
     /**
@@ -505,13 +481,17 @@ public class PropertiesValidator implements InitializingBean {
      * {@code @ConditionalOnProperty(havingValue = "true")}, which compares the raw value with
      * {@code equalsIgnoreCase} and matches nothing else. Spring's own conversion is wider: asked
      * for a {@code Boolean}, it reads {@code yes}, {@code on} and {@code 1} as true as well. A
-     * deployment that writes {@code yes} would therefore satisfy a refusal that converts, and leave
-     * the library switched off - a pod serving every {@code /operations/**} endpoint unaudited,
-     * started by the very rule that exists to stop it.
+     * deployment that writes {@code yes} would leave the library switched off while reading as
+     * switched on to anything that converted - so a rule gated on "the transport is on" would let
+     * a value rule fire where there is nothing to configure, or skip one where there is.
      *
-     * <p>The two defaults are the libraries' own, and they differ: the HTTP half's conditions carry
-     * no {@code matchIfMissing}, so an absent key is off, while the transport's class-level
-     * condition carries {@code matchIfMissing = true}, so an absent key is on.
+     * <p>The {@code whenUnset} argument is the caller's, not the library's, and both callers pass
+     * {@code false}. The transport's own class-level condition carries
+     * {@code matchIfMissing = true}, so the library would treat an absent key as on; this service's
+     * {@code application.yaml} always sets it, so an absent key means a context that did not load
+     * the file, and the rules gated on it are about what a deployment configured rather than about
+     * what a harness left out. The HTTP half's conditions carry no {@code matchIfMissing}, so for
+     * that one {@code false} is the library's reading too.
      *
      * @param environment the resolved environment
      * @param key         the setting to read
@@ -526,48 +506,25 @@ public class PropertiesValidator implements InitializingBean {
     }
 
     /**
-     * The opening of every refusal above, so the endpoints and the setting are named in one place.
-     *
-     * @param setting the audit setting this refusal is about
-     * @return the sentence both halves of the refusal are built from
-     */
-    private static String unaudited(final String setting) {
-        return servedOnADeployedPod("audited", setting);
-    }
-
-    /**
-     * The same opening for the authorisation half.
-     *
-     * @param setting the authorisation setting this refusal is about
-     * @return the sentence the refusal is built from
-     */
-    private static String unauthorised(final String setting) {
-        return servedOnADeployedPod("authorised", setting);
-    }
-
-    /**
-     * What both refusals say before they name their setting.
-     *
-     * @param obligation what every endpoint must be
-     * @param setting    the setting that is stopping it from being that
-     * @return the sentence the refusal is built from
-     */
-    private static String servedOnADeployedPod(final String obligation, final String setting) {
-        return OPERATIONS_ENABLED + " is true on a deployed pod (" + NAMESPACE + " is set), so"
-                + " every /operations/** endpoint must be " + obligation + " — but " + setting;
-    }
-
-    /**
      * The audit filter finds its OpenAPI document by a <strong>suffix</strong> glob,
      * {@code classpath*:} + {@code **}{@code /*} + the value of {@code audit.http.openapi-rest-spec}.
      *
      * <p>Unset, that globs for {@code *null}, matches nothing, and the library throws during the
-     * refresh naming neither the setting nor this service. Refused here instead, and refused
-     * wherever the HTTP half is switched on rather than only where it is deployed: the trap is the
-     * library's and belongs to any context that turns it on.
+     * refresh naming neither the setting nor this service. Refused here instead.
+     *
+     * <p>Refused where the parser that does the globbing would actually be built, which is where
+     * <strong>both</strong> switches are on: every {@code audit.http.*} bean the starter declares
+     * sits inside the {@code @AutoConfiguration} class {@code cp.audit.enabled} gates, so the HTTP
+     * half switched on over a transport that is off builds no parser and globs for nothing. The
+     * HTTP half is on by default in this service's own configuration, and a laptop with no audit
+     * broker has the transport off - so reading the HTTP switch alone would refuse the local loop
+     * for a trap it cannot fall into.
+     *
+     * @param environment the resolved environment, for the audit library's own keys
      */
     private static void validateTheAuditFilterHasADocumentToRead(final Environment environment) {
-        if (switchedOnAsTheLibraryReadsIt(environment, HTTP_AUDIT_ENABLED, false)
+        if (switchedOnAsTheLibraryReadsIt(environment, AUDIT_TRANSPORT_ENABLED, false)
+                && switchedOnAsTheLibraryReadsIt(environment, HTTP_AUDIT_ENABLED, false)
                 && !hasText(environment.getProperty(OPENAPI_REST_SPEC))) {
             throw new IllegalStateException(OPENAPI_REST_SPEC + MUST_BE_SET_WHEN
                     + HTTP_AUDIT_ENABLED + " is true: the filter globs the classpath for a suffix"

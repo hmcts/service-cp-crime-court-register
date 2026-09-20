@@ -49,6 +49,15 @@ services:
       # cannot boot half-configured. Local compose has neither results nor reference data to call.
       COURTREGISTER_PAYLOAD_MODE: STUB
       COURTREGISTER_REFERENCEDATA_MODE: STUB
+      # The two estate filters, off for the local loop. `application.yaml` defaults BOTH ON
+      # (constitution 5.0.0), and this is one of the two places that deliberately turns them off:
+      # a laptop has no usersgroups for `cp-auth-rules-filter` to resolve a caller's groups
+      # through and no Artemis audit broker for `cp-audit-filter-springboot` to publish to, so
+      # `curl localhost:8082/operations/flag` needs no identity header here and nothing is audited.
+      # Nothing refuses a pod for this - the switches are configuration, not a start-up condition -
+      # so what it changes is only what this stack builds and requires.
+      AUTHZ_HTTP_ENABLED: "false"
+      HTTP_AUDIT_ENABLED: "false"
       # Local-only dummy: the submission gateway refuses to construct without an identity, and a
       # local run POSTs nothing. Never a real user id.
       COURT_REGISTER_SYSTEM_USER_ID: 00000000-0000-0000-0000-000000000000

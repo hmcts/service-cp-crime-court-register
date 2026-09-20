@@ -547,6 +547,34 @@ courtregister:
 # The per-environment connection string is supplied as APPLICATIONINSIGHTS_CONNECTION_STRING,
 # mounted from Key Vault via the Secrets Store CSI driver; there is nothing to set here.
 
+# The two estate filters that make the operations API permitted at all: `cp-auth-rules-filter`
+# resolves the caller's usersgroups membership against the allow rules, and
+# `cp-audit-filter-springboot` publishes a request and a response event for every call.
+#
+# BOTH DEFAULT ON, and that is the whole of how conditions (a) and (b) of constitution Principle III
+# are carried (5.0.0, 2026-09-20). Each library's own auto-configuration is
+# `@ConditionalOnProperty(havingValue = "true")` with no `matchIfMissing`, so a deployment that said
+# nothing would get no authorisation filter and no audit publisher; these two lines reverse that, so
+# a deployment that says nothing is authorised and audited.
+#
+# They are ordinary configuration, not a start-up condition. An operator may turn either off -
+# `AUTHZ_HTTP_ENABLED=false`, `HTTP_AUDIT_ENABLED=false` - and the pod comes up: there is no
+# cross-field refusal against `courtregister.operations.enabled` and no rule that reads the
+# environment to decide where one would apply. What keeps them on in a deployed environment is this
+# default and the values file, not a pod that refuses to start. The two places that turn them off
+# deliberately are `docker-compose.yml` (a laptop has no usersgroups and no audit broker) and
+# `application-test.yaml`, and each says so where it does it.
+#
+# The library reads the value as the LITERAL string `true`: `yes`, `on` and `1` leave the filter
+# switched off while reading as on to anything that converts. Write `true`.
+authz:
+  http:
+    enabled: ${AUTHZ_HTTP_ENABLED:true}
+
+audit:
+  http:
+    enabled: ${HTTP_AUDIT_ENABLED:true}
+
 # The estate's audit transport, owned by `cp-audit-filter-springboot` and not by this service.
 #
 # It is here because of a trap rather than because this service has an opinion: the library's
@@ -558,8 +586,13 @@ courtregister:
 # Off unless an environment says otherwise, therefore, and every environment that serves the
 # operations API says otherwise: the hosts, port, credentials and TLS material arrive from Key Vault
 # through the CSI driver, and none of them is ever a value in this file. `audit.http.*` - the HTTP
-# half, which is what actually publishes an operations call - is a separate block and a separate
-# switch, and startup refuses the combination of operations served with it off.
+# half, which is what actually publishes an operations call - is the separate block above, and
+# every bean it gates lives inside the auto-configuration class this key gates, so the HTTP half on
+# over a transport that is off publishes nothing and traps nothing.
+#
+# Switched ON, this key is what makes `cp.audit.hosts` and `cp.audit.port` required: startup refuses
+# a transport that names no broker or a port outside 1..65535, because the audit filter swallows
+# every publishing failure and a transport pointed at nothing would be silent rather than refused.
 cp:
   audit:
     enabled: ${CP_AUDIT_ENABLED:false}
