@@ -2,6 +2,7 @@ package uk.gov.hmcts.cp.courtregister.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Level;
 import java.time.Duration;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -14,6 +15,7 @@ import org.springframework.boot.test.context.ConfigDataApplicationContextInitial
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
 /**
  * Holds the configuration surface to the plan's table, and holds startup to the rules that make the
@@ -2880,6 +2882,63 @@ class ConfigurationValidationTest {
                                 .hasMessageContaining("audit.http.openapi-rest-spec")
                                 .hasMessageContaining("audit.http.enabled");
                     });
+        }
+
+        /**
+         * The same configuration is also the one the shipped defaults produce, and a pod in it
+         * publishes <strong>no</strong> audit event at all — so it says so at start-up.
+         *
+         * <p>{@code audit.http.enabled} ships {@code true} and the transport ships {@code false},
+         * because a laptop has no audit broker and the transport's connection factory validates its
+         * hosts and port while it is being built. Every {@code audit.http.*} bean lives inside the
+         * auto-configuration class the transport's key gates, so the HTTP half on over a transport
+         * that is off is a filter that was never constructed: condition (b) of Principle III is
+         * carried by a deployed values file setting {@code CP_AUDIT_ENABLED=true} beside it, and a
+         * deployment that sets nothing serves the operations API unaudited.
+         *
+         * <p>Nothing refuses that — the switches are configuration, not a start-up condition — but
+         * an unaudited pod that said so nowhere would be exactly the silence this service exists to
+         * end, and the audit filter swallows every publishing failure, so there is no later line to
+         * read either. The line names the two settings and nothing a caller or a secret could reach.
+         */
+        @Test
+        void an_audit_filter_over_a_transport_that_is_off_should_say_so_at_start_up() {
+            try (CapturedLog captured = CapturedLog.capturing(PropertiesValidator.class)) {
+                deployed.withPropertyValues("audit.http.enabled=true", "cp.audit.enabled=false")
+                        .run(context -> {
+                            assertThat(context).hasNotFailed();
+                            assertThat(captured.events())
+                                    .as("an unaudited operations API is said at start-up or"
+                                            + " nowhere: the filter that would have published is"
+                                            + " never built, and the one that is swallows its own"
+                                            + " failures")
+                                    .anySatisfy(said -> {
+                                        assertThat(said.getLevel()).isEqualTo(Level.WARN);
+                                        assertThat(said.getFormattedMessage())
+                                                .contains("audit.http.enabled")
+                                                .contains("cp.audit.enabled");
+                                    });
+                        });
+            }
+        }
+
+        /**
+         * And the pod whose whole audit path is configured says nothing, because there is nothing
+         * to say: a warning every deployed pod carried would be one nobody reads.
+         */
+        @Test
+        void a_pod_that_publishes_its_audit_events_should_say_nothing_about_them() {
+            try (CapturedLog captured = CapturedLog.capturing(PropertiesValidator.class)) {
+                publishing.withPropertyValues("audit.http.enabled=true",
+                                "audit.http.openapi-rest-spec=courtregister-openapi.yaml")
+                        .run(context -> {
+                            assertThat(context).hasNotFailed();
+                            assertThat(captured.messages())
+                                    .as("the transport is on and configured, so the filter is"
+                                            + " built and every call it sees is published")
+                                    .isEmpty();
+                        });
+            }
         }
 
         /** The other side of that gate: the HTTP half on, the transport off, no parser, no glob. */
