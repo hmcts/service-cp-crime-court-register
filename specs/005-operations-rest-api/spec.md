@@ -856,6 +856,14 @@ change is readable.
     deviation from a legacy oracle.
 17. **The five removal facts are one phase, landing last.** Nothing is deleted until every endpoint
     that replaces it has a passing test (FR-051).
+18. **From Phase 2 onwards a task's tests land in the same commit as its code, and no red run is
+    recorded.** *Design owner, 2026-09-20.* The commit order inside a pair is not audited either.
+    What the reviewers judge in place of the ceremony is the coverage gate (LINE 0.88 /
+    BRANCH 0.85, `config/**` excluded) and behaviour coverage **per endpoint** — allow and deny per
+    group, every refusal code the endpoint can answer, and the flag rule where the endpoint has
+    one. This supersedes, for this increment only, the 003-era condition that a third
+    untested-first configuration would be reverted. Every task still gets its test; only the
+    recording of a red run goes, and no other gate is relaxed by it.
 
 ## Decided by the design owner (2026-09-19)
 

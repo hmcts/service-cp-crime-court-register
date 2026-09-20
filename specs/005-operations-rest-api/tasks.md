@@ -389,6 +389,20 @@ refusal in this repository is.
 file and the action filter are what make "one explicit allow rule per action, and no default-allow"
 true rather than claimed.
 
+### Approved TDD exception — the ceremony, from Phase 2 onwards
+
+**Design owner, 2026-09-20.** For increment 005, a task's tests land in the **same commit** as the
+code they cover; the red run is **not recorded** and the commit order within a pair is **not
+audited**. What the reviewers judge instead is the coverage gate (LINE 0.88 / BRANCH 0.85,
+`config/**` excluded) and behaviour coverage **per endpoint** — allow and deny per group, every
+refusal code the endpoint can answer, and the flag rule where the endpoint has one.
+
+This supersedes, **for 005 only**, the 003-era condition that a third untested-first configuration
+would be reverted. Every task still gets its test or tests; only the ceremony goes. It does not
+relax any other gate: the operations-API gate, the no-swallowed-exception gate and the no-PII gate
+are unchanged, and the "Approved TDD exceptions" section above still governs anything a later task
+wants to claim beyond this.
+
 - [ ] **T008** [P] [US2] `api/OperationsRulesTest` (new) — **the drools rules, with no Spring**.
       Build a `KieContainer` from `acl/operations-rules.drl`, mock the
       `UserAndGroupProvider` global (note `inv.getRawArguments()[1]` for the varargs, per research
