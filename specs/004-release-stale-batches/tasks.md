@@ -1923,9 +1923,38 @@ values on every pass.
       `a_whole_generation_makes_no_request_to_the_document_endpoint` both green. `pmdMain`,
       `pmdTest`, `checkstyleMain` and `checkstyleTest` green in the same round, after the eight
       imports the deletion orphaned and one javadoc the edit had left above the wrong method.
-- [ ] T027 [US4] `config/PublicEventsConfig.java`, `config/PropertiesValidator.java` — make T026
+- [X] T027 [US4] `config/PublicEventsConfig.java`, `config/PropertiesValidator.java` — make T026
       green. Subscribe on `generation.enabled` alone; the broker rule loses its conjunct;
       `PublicEventsConfig`'s javadoc drops the `poll-only` sentence.
+
+      **Both behavioural halves were already done at `39b6aeaf`** (Phase 1, T002), which is why
+      T026 above could produce no red. What was left here was the prose that still described the
+      setting as live, and the properties five test files were still setting.
+
+      `PublicEventsConfig`'s auto-startup paragraph now says the rule has one antecedent and
+      records why the second went — a pod in that shape would learn no outcome at all and re-render
+      every court centre every night, which is strictly worse than refusing to start (FR-013). Two
+      other paragraphs in the same file still explained a delay by the retired ten-minute grace
+      period and a CLI JVM's dropped delivery by it; both now name the next run.
+      `PropertiesValidator`'s own summary loses "an event-driven completion with no broker", which
+      named a choice there no longer is, for "a generation half with no broker to hear an outcome
+      from".
+
+      **The dead property went from five places**: `GenerationWiringContextTest` and
+      `CliModeConfigTest` (the `COMPLETION_EVENT` constant and the three `@SpringBootTest` lists it
+      was on), `HttpSurfaceTest` and `support/GenerationStackSupport`. A value nothing binds is
+      ignored by Spring in silence, so a suite still setting one is a suite whose properties list
+      no longer describes the deployment it claims to be. The single remaining mention is
+      deliberate: `ConfigurationValidationTest.the_completion_setting_is_no_longer_bound` sets
+      `completion=poll-only` on purpose, to assert that the value which used to buy a deployment
+      its way out of needing a broker now buys nothing at all.
+
+      **Green** (`flock -w 7200 … ./gradlew test --tests '*PublicEventsHealthIndicatorTest*'
+      --tests '*ConfigurationValidationTest*' --tests '*GenerationWiringContextTest*' --tests
+      '*CliModeConfigTest*' --tests '*HttpSurfaceTest*' -Dtest.noFailFast=true`): BUILD SUCCESSFUL,
+      **207 tests, 0 failures** — the two contexts boot without being told how they complete, and
+      the HTTP surface is still Boot's error fallback and nothing else. `pmdMain`, `pmdTest`,
+      `checkstyleMain` and `checkstyleTest` green in the same round.
 ### The vocabulary retirement — after the deletions above, and only after them
 
 These four are the other half of the migration split (see "Decided" above Phase 1). They land

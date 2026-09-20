@@ -150,7 +150,6 @@ class HttpSurfaceTest {
     @ExtendWith(WorkloadIdentityStub.class)
     @SpringBootTest(properties = {
         "courtregister.generation.enabled=true",
-        "courtregister.generation.completion=event",
         "courtregister.generation.sdg-mode=LIVE",
         "courtregister.generation.nn-mode=LIVE",
         "courtregister.generation.fileservice-mode=LIVE",

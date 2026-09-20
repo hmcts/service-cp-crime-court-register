@@ -70,8 +70,6 @@ class CliModeConfigTest {
     /** The master switch for the downstream half; both contexts here are a generating pod's. */
     private static final String GENERATION_ENABLED = "courtregister.generation.enabled=true";
 
-    private static final String COMPLETION_EVENT = "courtregister.generation.completion=event";
-
     private static final String SDG_MODE = "courtregister.generation.sdg-mode=LIVE";
 
     private static final String NN_MODE = "courtregister.generation.nn-mode=LIVE";
@@ -193,7 +191,7 @@ class CliModeConfigTest {
     @Nested
     @ExtendWith(WorkloadIdentityStub.class)
     @SpringBootTest(properties = {
-        GENERATION_ENABLED, COMPLETION_EVENT, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
+        GENERATION_ENABLED, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
         FILESERVICE_URL, FLAG_ENDPOINT, FLAG_LABEL, SDG_ENDPOINT, NN_ENDPOINT, SYSTEM_USER_ID,
         TEMPLATE_ID, PAYLOAD_MODE, REFDATA_MODE, CONSUMER_ENABLED, NO_STORE, BROKER_URL,
         EMBEDDED_BROKER, EMBEDDED_TOPIC, CLI_ON})
@@ -370,7 +368,7 @@ class CliModeConfigTest {
     @Nested
     @ExtendWith(WorkloadIdentityStub.class)
     @SpringBootTest(properties = {
-        GENERATION_ENABLED, COMPLETION_EVENT, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
+        GENERATION_ENABLED, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
         FILESERVICE_URL, FLAG_ENDPOINT, FLAG_LABEL, SDG_ENDPOINT, NN_ENDPOINT, SYSTEM_USER_ID,
         TEMPLATE_ID, PAYLOAD_MODE, REFDATA_MODE, CONSUMER_ENABLED, NO_STORE, BROKER_URL,
         EMBEDDED_BROKER, EMBEDDED_TOPIC, CLI_OFF})

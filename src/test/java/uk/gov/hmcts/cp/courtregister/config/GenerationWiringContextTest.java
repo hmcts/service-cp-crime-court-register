@@ -85,7 +85,6 @@ import uk.gov.hmcts.cp.courtregister.support.WorkloadIdentityStub;
 @ExtendWith(WorkloadIdentityStub.class)
 @SpringBootTest(properties = {
     GenerationWiringContextTest.GENERATION_ENABLED,
-    GenerationWiringContextTest.COMPLETION_EVENT,
     GenerationWiringContextTest.SDG_MODE,
     GenerationWiringContextTest.NN_MODE,
     GenerationWiringContextTest.FILESERVICE_MODE,
@@ -134,8 +133,6 @@ class GenerationWiringContextTest {
 
     /** The extension a source of it carries, named so the sweep carries no literal. */
     private static final String JAVA = ".java";
-
-    static final String COMPLETION_EVENT = "courtregister.generation.completion=event";
 
     static final String SDG_MODE = "courtregister.generation.sdg-mode=LIVE";
 
@@ -463,7 +460,7 @@ class GenerationWiringContextTest {
      */
     @Nested
     @SpringBootTest(properties = {
-        GENERATION_ENABLED, COMPLETION_EVENT, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
+        GENERATION_ENABLED, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
         FILESERVICE_URL, FLAG_ENDPOINT, FLAG_LABEL, SDG_ENDPOINT, NN_ENDPOINT, SYSTEM_USER_ID,
         TEMPLATE_ID, PAYLOAD_MODE, REFDATA_MODE, CONSUMER_DISABLED, BROKER_URL, EMBEDDED_BROKER,
         EMBEDDED_TOPIC, CLI_ON})

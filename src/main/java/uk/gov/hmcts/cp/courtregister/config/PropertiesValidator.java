@@ -32,7 +32,7 @@ import org.springframework.stereotype.Component;
  * <p>The downstream half is held to the same standard, and its failures are quieter still: a
  * schedule read in the wrong zone, a lock that expires before the run it locks is allowed to end, a
  * notification claim whose lease cannot cover one recipient's POST cycle, a run with no payload
- * store, no flag, no renderer or no notifier, an event-driven completion with no broker to hear
+ * store, no flag, no renderer or no notifier, a generation half with no broker to hear an outcome
  * from, a stub reachable where registers are really produced, the local flag credential anywhere a
  * real flag is read, and a blank or malformed e-mail template id (fix P9). None of them is
  * discovered before 18:00, and by then the night's registers are already not going out

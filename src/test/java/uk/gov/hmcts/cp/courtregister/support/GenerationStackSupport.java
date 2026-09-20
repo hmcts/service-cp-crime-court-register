@@ -165,7 +165,6 @@ public final class GenerationStackSupport implements AutoCloseable {
         settings.put("courtregister.payload.mode", "STUB");
         settings.put("courtregister.referencedata.mode", "STUB");
         settings.put("courtregister.generation.enabled", "true");
-        settings.put("courtregister.generation.completion", "event");
         settings.put("courtregister.generation.sdg-mode", "LIVE");
         settings.put("courtregister.generation.nn-mode", "LIVE");
         settings.put("courtregister.generation.fileservice-mode", "LIVE");
