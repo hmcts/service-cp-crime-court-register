@@ -31,11 +31,13 @@ ProcessingStateService                  writes processed_request / processed_out
 
 RegisterGenerationJob                   the scheduled run, one ShedLock-held run per night
    ├─▶ FeatureFlagGate                  reads CourtRegisterService once per run, no cache, fail-closed
+   ├─▶ StaleBatchReleaser               the run's FIRST act: every PENDING or GENERATING batch past
+   │                                    its cutoff is failed NOT_COMPLETED_BY_NEXT_RUN and its rows
+   │                                    released, one fenced statement per batch
    ├─▶ BatchAssembler                   recorded rows → one batch per (court centre, register date)
    ├─▶ RegisterGenerationService        per batch: assemble payload, mint ids, request the render
    │      ├─▶ PayloadFileStore   «port» write the PDF payload into the platform file service
    │      └─▶ DocumentRenderer   «port» systemdocgenerator generate-document (202)
-   ├─▶ GenerationReconciler             the grace-period sweep for outcomes that never arrived
    └─▶ RunReport                        one structured line + three gauges, every run
 
 DocumentEventListener                   inbound adapter on Artemis public.event — parse + drop ONLY
@@ -57,8 +59,11 @@ ExceptionReportJob                      the morning run, one ShedLock-held run p
                  └─▶ ReportMailer «port» notificationnotify send-email-notification, one per address
 
 IntakeAgeSweep                          its own fixed delay, in EVERY non-command JVM and under NO
-                                        lock — a gauge describes the JVM that publishes it, so an
-                                        alert aggregates the replicas with max()
+BatchAgeSweep                           lock — a gauge describes the JVM that publishes it, so an
+                                        alert aggregates the replicas with max(). The second takes
+                                        the three in-flight batch ages the release pass left with
+                                        no reader: a Micrometer gauge never decays, so a reading
+                                        nobody refreshes goes on looking live
 ```
 
 - **Inbound adapters** (`CourtRegisterMessageListener`, `DocumentEventListener`) deserialise, and
@@ -123,8 +128,8 @@ uk.gov.hmcts.cp.courtregister
 │   │                       CSV-and-e-mail one
 │   ├── http/               the shared HTTP concerns the four clients above sit on
 │   └── progression/        the 001 add-court-register client, retained for progression-post mode
-├── batch/         RegisterGenerationJob, BatchAssembler, FeatureFlagGate, GenerationReconciler,
-│                  RecipientSet, ExceptionReportJob, IntakeAgeSweep
+├── batch/         RegisterGenerationJob, BatchAssembler, FeatureFlagGate, StaleBatchReleaser,
+│                  RecipientSet, ExceptionReportJob, IntakeAgeSweep, BatchAgeSweep
 │   └── cli/       CliMain and the six operations commands
 ├── pipeline/      ported transformation: RegisterBuilder, SubscriptionMatcher, AggregationMapper
 ├── persistence/   repositories; Flyway migrations in src/main/resources/db/migration
@@ -220,7 +225,8 @@ recorded rows, active and unbatched
    │     ├─ refused / undeliverable ─▶ FAILED, RENDER_REQUEST_REJECTED / RENDER_REQUEST_FAILED
    │     ├─ document-available (public.event) ─▶ GENERATED
    │     ├─ generation-failed  (public.event) ─▶ FAILED, GENERATION_FAILED (+ sdg_reason)
-   │     └─ neither, past the grace period ───▶ FAILED, GENERATION_TIMED_OUT (reconciler)
+   │     └─ neither, and still so at the next run ─▶ FAILED, NOT_COMPLETED_BY_NEXT_RUN,
+   │                                                 rows released into that run's batches
    ▼ GENERATED          the PDF exists in the file service
    ▼ notify every matched Youth Offending Team, once each
    ├─ all accepted ──────────────────▶ NOTIFIED
@@ -231,7 +237,7 @@ recorded rows, active and unbatched
 Statuses — batch level: `PENDING`, `GENERATING`, `GENERATED`, `NOTIFIED`, `PARTIALLY_NOTIFIED`,
 `NOTIFIED_NOBODY`, `FAILED`.
 Failure reasons (bounded): `ASSEMBLY_FAILED`, `PAYLOAD_STORE_UNAVAILABLE`, `RENDER_REQUEST_FAILED`,
-`RENDER_REQUEST_REJECTED`, `GENERATION_FAILED`, `GENERATION_TIMED_OUT`.
+`RENDER_REQUEST_REJECTED`, `GENERATION_FAILED`, `NOT_COMPLETED_BY_NEXT_RUN`.
 Per-recipient notification statuses: `PENDING`, `ACCEPTED`, `FAILED`.
 
 Rules:
@@ -241,9 +247,9 @@ Rules:
   its id is recorded is an outcome nothing can be applied to.
 - **A failed batch releases its rows.** `releaseFailed` puts the registers back for the next run;
   a failure must never leave a register stranded in a dead batch.
-- **The reconciler invents nothing.** A batch nothing can be learned about is failed
-  `GENERATION_TIMED_OUT` through the store rather than through the sink — there is no outcome to
-  apply, and applying one would be inventing evidence.
+- **Nothing is invented about a batch nothing was learned about.** Such a batch is failed by the
+  next run, through the store rather than through the sink, with its rows released — no outcome is
+  applied, because there is no outcome, and applying one would be inventing evidence.
 - **A late or duplicate outcome moves nothing** and is counted: a team that has been told has been
   told. Every acknowledged-and-dropped path on the subscription carries a bounded reason on
   `courtregister_public_events_ignored_total`.
@@ -296,8 +302,9 @@ subscription that every replica attaches to**.
   service recorded.
 - **Acknowledge and drop, never nack.** A durable subscription offers a nacked message again for
   ever, and a foreign document is never going to become ours.
-- Every drop is counted under a bounded reason. Nothing of an unreadable body reaches the log or a
-  label.
+- Every drop is counted under a bounded reason — including `terminal-batch`, the outcome that
+  arrives for a batch this service had already ended, and `incomplete-outcome`. Nothing of an
+  unreadable body reaches the log or a label.
 - **Shared, and therefore scalable.** A non-shared durable subscription admits exactly one
   consumer: a second pod is refused by the broker and retries at ERROR for ever. The subscription is
   shared and keyed by its name alone — **no client id**, because a client id every replica carried is
@@ -377,7 +384,8 @@ court-register leg for the downstream half. The register is `doc/DEFECT-FIXES.md
   a state that is persisted and settled explicitly.
 - **The one absorbed refusal** is telemetry: a round-trip reading that cannot be taken may not cost
   a Youth Offending Team its e-mail, so it stops where it happens, is counted, and is said at WARN.
-  Every other refusal still leaves.
+  It is the rule for both sweeps — `IntakeAgeSweep`'s two gauges and `BatchAgeSweep`'s three, each
+  counted on its own series. Every other refusal still leaves.
 - **Never attach a throwable this service did not write.** A caught exception is named by **class**;
   its message belongs to whatever library raised it and is exactly where a connection string or a
   fragment of a statement turns up. The log-statement sweep enforces this, and it governs INFO and

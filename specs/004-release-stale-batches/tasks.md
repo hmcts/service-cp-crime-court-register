@@ -2855,7 +2855,7 @@ VII.
 
 ## Phase 9: Polish — the documents, the register cell and the gates
 
-- [ ] T041 [P] `.claude/rules/design_rules.md` — six edits and no others: the two-leg flow diagram
+- [x] T041 [P] `.claude/rules/design_rules.md` — six edits and no others: the two-leg flow diagram
       loses the `GenerationReconciler` line and gains the release pass and the sweep; the batch state
       machine's `neither, past the grace period ───▶ FAILED, GENERATION_TIMED_OUT (reconciler)` arm
       becomes the one data-model.md gives; the bounded failure-reason list swaps one value for
@@ -2868,6 +2868,22 @@ VII.
       beside `IntakeAgeSweep`, and the "every drop is counted under a bounded reason" rule gains
       `terminal-batch` and `incomplete-outcome` (the latter landed in Phase 5's gate round).
       Nothing else on the page is touched.
+      (**Five edits were owed and one was already true.** The consumed-contracts table's
+      systemdocgenerator row has never named the query endpoint — it reads *"`generate-document`
+      (REST, 202) + the `document-available` / `generation-failed` public events"*, and the only
+      query mentions on the page are the results query API's, which are the intake half's and
+      nothing to do with this. The endpoint that does still need removing is
+      `.claude/agents/spec-validator.md`'s contract row, which is T044's.
+      **The sweep is drawn beside `IntakeAgeSweep` rather than under the run**, because that is
+      what it is: the same shape, the same absence of a lock, the same reason. Putting it under
+      `RegisterGenerationJob` would have drawn it as something the run calls, which is the one
+      thing it must never be - a gauge refreshed only by a run is a gauge that stands still all
+      day.
+      The `batch/` package line now reads `StaleBatchReleaser` and `BatchAgeSweep` where it read
+      `GenerationReconciler`; the failure-reason list swaps `GENERATION_TIMED_OUT` for
+      `NOT_COMPLETED_BY_NEXT_RUN`; the state machine's last GENERATING arm is data-model.md's; and
+      "The reconciler invents nothing" is now the rule that replaces it, which says the same thing
+      about a mechanism that exists.)
 - [ ] T042 [P] `README.md` — the generation section's "with a grace-period reconciler for the
       outcomes that never arrive" becomes the release pass, and a Status entry for increment 004 in
       the shape 001–003 use.
