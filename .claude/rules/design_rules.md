@@ -91,9 +91,11 @@ IntakeAgeSweep                          its own fixed delay, in EVERY non-comman
   fetching them. If swapping an adapter forces a pipeline edit, the port is wrong — fix the port,
   not the pipeline.
 - **Persistence:** JdbcClient repositories, accessed only by `ProcessingStateService`,
-  `IdempotencyGuard`, `JdbcRegisterStore`, `ExceptionReportService` and `IntakeAgeSweep`. Never
-  from a listener, never from the job directly. The last two are readers and nothing else: the
-  report and the sweep take the eight report reads and the two gauge reads, and write no row.
+  `IdempotencyGuard`, `JdbcRegisterStore`, `RegisterNotifierService`, `DocumentOutcomeSinkImpl`,
+  `ExceptionReportService`, `IntakeAgeSweep` and `BatchListingService`. Never from a listener,
+  never from a controller, never from the job directly. The last three are **readers and nothing
+  else**: the report and the sweep take the eight report reads and the two gauge reads, and the two
+  operations listings take the three reads they are built from — none of them writes a row.
 - **The report is not on the cutover lever's circuit.** `ExceptionReportJob` reads the
   `CourtRegisterService` flag nowhere and is gated by it nowhere, and it runs whatever
   `courtregister.generation.enabled` says — a pod that renders nothing still says every morning
