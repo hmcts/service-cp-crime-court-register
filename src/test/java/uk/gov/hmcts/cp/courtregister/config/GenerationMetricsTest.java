@@ -159,7 +159,7 @@ class GenerationMetricsTest {
         void the_failure_reason_should_not_be_a_label_on_this_counter() {
             // The bounded reason is a column on register_batch and a field of the run report. It is
             // not a second dimension here: the batches counter answers "how did the night end", and
-            // seven reasons multiplied by seven outcomes is a series count nobody reads.
+            // six reasons multiplied by seven outcomes is a series count nobody reads.
             metrics.batchCompleted(BatchStatus.FAILED);
 
             assertThat(tagKeysOf(GenerationMetrics.BATCHES)).doesNotContain("reason");

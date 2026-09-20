@@ -4,7 +4,7 @@
 LOCAL ONLY, and a test double rather than a model of systemdocgenerator. The real SDG renders the
 payload and then publishes `public.systemdocgenerator.events.document-available` onto the shared
 `public.event` topic; the WireMock stub can only answer 202, so without this helper a local run
-would leave every batch sitting in GENERATING until the reconciler timed it out, and the
+would leave every batch sitting in GENERATING until the next run released it as stale, and the
 event-driven completion path (the one the deployed service actually uses) would never be
 exercised locally at all.
 

@@ -330,9 +330,9 @@ public interface RegisterStore {
     /**
      * Gives one FAILED batch's registers back, so that a person may have the day rendered again.
      *
-     * <p>The other half of {@link #markFailed}. Three of the seven reasons leave no document to
+     * <p>The other half of {@link #markFailed}. Three of the six reasons leave no document to
      * wait for, and those release the stamp as they fail - their registers are active and unbatched
-     * by the time any later run reads them. The other four say systemdocgenerator was asked, so a
+     * by the time any later run reads them. The other three say systemdocgenerator was asked, so a
      * document may yet exist and the rows keep their stamp: re-rendering that day is a decision a
      * person makes (data-model.md), and this is the statement that decision is written as.
      *

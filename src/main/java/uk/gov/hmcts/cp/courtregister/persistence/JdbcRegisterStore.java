@@ -610,11 +610,11 @@ public class JdbcRegisterStore implements RegisterStore {
      * the next run gave up on it.
      *
      * <p>The rows stay RECORDED whatever the reason, because nothing was ever sent about them.
-     * Three of the seven reasons leave no document to wait for, and only for those is the stamp
+     * Three of the six reasons leave no document to wait for, and only for those is the stamp
      * released: the rows become unbatched again and the next run re-assembles them under a fresh
      * batch identity (data-model.md). Two of the three say the batch never left this service; the
      * third says the next run began and this one had not finished, which is the same thing for the
-     * register - nothing is coming. The other four leave the stamp in place - systemdocgenerator
+     * register - nothing is coming. The other three leave the stamp in place - systemdocgenerator
      * was asked, so a document may yet exist, and re-rendering it is a decision a person makes.
      *
      * <p><strong>A released register the estate has already replaced is superseded rather than
@@ -765,8 +765,8 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * Statement 9a - the registers of a FAILED batch given back, so the day may be rendered again.
      *
-     * <p>The other half of statement 9. Three of the seven reasons release the stamp as they fail;
-     * the other four leave it, because systemdocgenerator was asked and a document may yet exist - so no
+     * <p>The other half of statement 9. Three of the six reasons release the stamp as they fail;
+     * the other three leave it, because systemdocgenerator was asked and a document may yet exist - so no
      * later run will ever pick those registers up, a stamped row being neither active nor unbatched.
      * Re-rendering that day is a decision a person makes, and this is the statement it is written as.
      *

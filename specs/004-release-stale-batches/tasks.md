@@ -2404,16 +2404,48 @@ enum constant and one `||` in `isGeneratorAttributed()`, all of them covered. Th
 adds no Java. **The gate was not adjusted**, and on a half this small it could not have been met by
 accident: the denominator moved by two.
 
+**The stale-count and stale-prose sweep (gate round 3).** Every comment that counted the failure
+reasons was counting seven, and there are six; every comment that explained what happens to a batch
+no event reaches was still explaining it by the reconciler. Both are now corrected wherever this
+tree owns the file:
+* **the counts** — `application/RegisterStore` ("three of the six… the other three"),
+  `persistence/JdbcRegisterStore` at statement 9's javadoc, at statement 9a's and at
+  `RELEASING_REASONS`' call sites, `persistence/RegisterStoreIT` twice, and
+  `config/GenerationMetricsTest`'s "six reasons multiplied by seven outcomes" (the outcomes are the
+  seven batch statuses and stay seven). `domain/BatchStatus`, `V2__register_store.sql` and the
+  several "the six commands" comments are **not** touched: those count statuses and CLI commands,
+  both of which are unchanged.
+* **the retired query** — `config/LiveGenerationConfig` ("served by systemdocgenerator's command
+  API", not "command and query APIs") and `config/CourtRegisterProperties` (the endpoints comment
+  no longer lists `document/{id}`, which FR-006 removed).
+* **the reconciler** — `docker/sdg-echo/sdg-echo.py`'s header,
+  `adapter/systemdocgenerator/SystemDocGeneratorClient`'s undefined-success comment, and
+  `application.yaml`'s `spring.jms` `subscription-durable` comment, which called the reconciler the
+  safety net and now says the subscription is the only way an outcome arrives. `README`'s increment
+  002 bullet keeps its historical sentence and says the reconciler was retired by 004, because that
+  bullet is a record of what 002 shipped and not a description of the code as it stands.
+
+**Hand-off to the 005 tree**: `batch/cli/GenerateRegisterCli.java:388` still says "the four failure
+reasons that leave the stamp in place" and there are three. It is in 005's ownership and this tree
+did not touch it; 005's CLI deletion should either correct the count or take the sentence with the
+method.
+
 **Still open at the phase's end**, and each owned elsewhere: `doc/DEFECT-FIXES.md`'s P2 cell still
 names the deleted `GenerationReconcilerTest` case and promises the `GENERATION_TIMED_OUT` half of
 that fix, which is now doubly stale — T045 owns it. `.claude/agents/spec-validator.md` still names
 the reconciler in its read-these-files list and its outcome-is-learned rule (T044, Phase 9).
-`application.yaml`'s `spring.jms` `subscription-durable` comment still calls the reconciler the
-safety net, and is outside the two blocks this tree owns. `config/CourtRegisterProperties` and
-`docker-compose.yml` are in neither tree's ownership list and are edited here; the coordinator is
-still asked to assign them to 004. And the three in-flight age reads still have no caller until
-Phase 6's `BatchAgeSweep` — T028 renamed their fixtures off the retired mechanism but did not give
-them one.
+`config/CourtRegisterProperties`, `application.yaml`'s `spring.jms` block and `docker-compose.yml`
+are in neither tree's explicit ownership list and are edited here as comment-only corrections to
+mechanisms 004 removed; the coordinator is still asked to assign them to 004. And the three
+in-flight age reads still have no caller until Phase 6's `BatchAgeSweep` — T028 renamed their
+fixtures off the retired mechanism but did not give them one.
+
+**Ownership, for the gate record.** `adapter/fileservice/FileServicePayloadStoreIT`,
+`adapter/report/EmailReportSinkStoreIT` and `config/TelemetryPrivacyTest` are all **004-owned**: the
+coordination contract gives this tree `src/test/**` except tests under `batch/cli` and any `api/`
+package, and none of the three is either. An earlier gate asked whether editing them crossed a tree
+boundary; it did not. The one file that did was `batch/cli/ReportExceptionsCliTest`, reverted at
+gate round 3 and recorded against T048.
 
 ---
 

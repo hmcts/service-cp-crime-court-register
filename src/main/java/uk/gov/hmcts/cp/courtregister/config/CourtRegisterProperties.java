@@ -347,7 +347,7 @@ public record CourtRegisterProperties(
      * The internal mesh hosts of the two downstreams the nightly run calls.
      *
      * <p>Hosts only. Each client appends its own contract path - systemdocgenerator's
-     * {@code generate-document} command and {@code document/{id}} query, notificationnotify's
+     * {@code generate-document} command, notificationnotify's
      * {@code send-email-notification} - so a path written here would be appended to rather than
      * replaced. Neither has a default: an endpoint this service invents is an endpoint a deployment
      * can forget to set and still start.

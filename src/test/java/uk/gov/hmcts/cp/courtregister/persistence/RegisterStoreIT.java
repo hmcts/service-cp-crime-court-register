@@ -1948,7 +1948,7 @@ class RegisterStoreIT {
          *
          * <p>The negative arm of the clause above, and it is a case rather than an inference: the
          * {@code overtaken} clause is guarded by {@code :releaseRows} through {@code stamped}, so
-         * four of the seven reasons displace nothing at all. That guard is what makes the two
+         * three of the six reasons displace nothing at all. That guard is what makes the two
          * halves of statement 9 one rule - a reason that keeps the stamp keeps the register too,
          * and a register still in its batch has overtaken nobody's key. Superseding the earlier
          * share here would withdraw the day's one assemblable register for a document that may yet
@@ -2565,7 +2565,7 @@ class RegisterStoreIT {
     /**
      * The other half of {@code markFailed}, and the only write here a person types by hand.
      *
-     * <p>Four of the seven reasons leave the stamp in place because systemdocgenerator was asked and
+     * <p>Three of the six reasons leave the stamp in place because systemdocgenerator was asked and
      * document may yet exist, so no later run will ever pick those registers up again: a stamped row
      * is not active and unbatched. Re-rendering that day is therefore a decision a person makes, and
      * this is the statement the decision is written as.

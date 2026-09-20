@@ -42,7 +42,9 @@ spring:
     pub-sub-domain: true
     # A DURABLE subscription, so events published while every pod is down or redeploying are still
     # delivered afterwards. A batch's completion arrives exactly once and there is no second chance
-    # to hear it; the reconciler is the safety net, not the transport.
+    # to hear it, and since 004 there is no second informant either: a batch no event reaches
+    # is released as stale by the next run rather than asked after, so the subscription is the
+    # only way an outcome arrives.
     subscription-durable: true
     # There is deliberately NO `client-id`. The subscription is SHARED (set in PublicEventsConfig,
     # for which Spring binds no property), so it is keyed by its name alone and needs none - and a

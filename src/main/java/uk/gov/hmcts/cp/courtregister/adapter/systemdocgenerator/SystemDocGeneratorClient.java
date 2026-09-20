@@ -161,7 +161,8 @@ public class SystemDocGeneratorClient implements DocumentRenderer {
                 // The contract declares one success. A 200 or a 204 means something other than the
                 // command endpoint answered - a proxy, or a route that no longer reaches it - and
                 // calling it success would move the batch to GENERATING for a render nothing was
-                // asked for, to wait out its grace period for an event that cannot come.
+                // asked for, to sit there until the next run released it, for an event that
+                // cannot come.
                 LOG.error("systemdocgenerator answered a success this contract does not define, so "
                         + "no render can be assumed. batchId={} status={}", batchId, status);
                 throw rejected(status);

@@ -69,7 +69,8 @@ This repository carries no design narrative of its own. What it does carry:
   the register store, with supersession enforced at the write; the nightly job assembles one batch
   per (court centre, register date), writes the PDF payload into the file service, asks
   systemdocgenerator for the unchanged `OEE_Layout5` render, learns the outcome from the
-  `public.event` topic — with a grace-period reconciler for the outcomes that never arrive — and
+  `public.event` topic — with a grace-period reconciler for the outcomes that never arrive, since
+  retired by 004 in favour of the next run releasing a stale batch — and
   sends one notificationnotify e-mail per matched Youth Offending Team. The flag gate, the five
   operations commands and the run report land with it, and the progression-leg `P` rows are appended
   to the defect-fix register. The consolidation audit reproduces the recorded progression corpus by
