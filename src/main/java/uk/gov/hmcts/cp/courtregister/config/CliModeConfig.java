@@ -20,14 +20,14 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
  *   <li><strong>Every scheduler.</strong> The lock makes the 18:00 run one run; a CLI pod that
  *       held a scheduler would be a second replica of it, and a command that ran long enough to
  *       reach 18:00 London would generate the night twice. The same argument holds for the other
- *       three schedules the service now carries - the grace-period reconciler, the 07:00 exception
- *       report and the intake gauge refresh - which is why the condition goes on
+ *       two schedules the service now carries - the 07:00 exception report and the intake gauge
+ *       refresh - which is why the condition goes on
  *       {@link SchedulingInfrastructureConfig} as well: that is where {@code @EnableScheduling}
  *       lives, and without it nothing processes {@code @Scheduled} at all.</li>
  *   <li><strong>The public-event listener container.</strong> The durable subscription is shared,
  *       so a command that subscribed would be one more consumer the broker load-balances outcomes
  *       to - and it would take deliveries a process about to exit will not finish, leaving each of
- *       them to a redelivery or to the reconciler's grace period.</li>
+ *       them to a redelivery, or to the next run giving up on the batch they were about.</li>
  * </ul>
  *
  * <p>It is deliberately not the inverse of {@code courtregister.generation.enabled}: the point of
