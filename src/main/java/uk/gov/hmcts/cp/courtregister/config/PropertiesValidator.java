@@ -8,6 +8,8 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.context.properties.bind.Bindable;
@@ -48,6 +50,16 @@ import org.springframework.stereotype.Component;
 @EnableConfigurationProperties({CourtRegisterProperties.class, GenerationProperties.class,
     FeatureFlagProperties.class, ReportProperties.class, OperationsProperties.class})
 public class PropertiesValidator implements InitializingBean {
+
+    /**
+     * The one thing this class says rather than refuses, and it is said once, at start-up.
+     *
+     * <p>Every other rule here ends a pod that cannot be operated safely. The audit path has a
+     * state that is neither safe nor refusable - the operator's own choice to serve the operations
+     * API with nothing publishing - and a state nobody is told about is the silence this service
+     * exists to end.
+     */
+    private static final Logger LOG = LoggerFactory.getLogger(PropertiesValidator.class);
 
     /**
      * The fixed margin between the longest legitimate run and the broker's lock renewal, so the lock
@@ -389,7 +401,9 @@ public class PropertiesValidator implements InitializingBean {
      * applied. Both switches are ordinary configuration an operator may set, they default to
      * {@code true} in {@code application.yaml} against library defaults of off, and a pod
      * configured with either of them off comes up. What is refused here is a <em>value</em> that
-     * cannot mean what it says.
+     * cannot mean what it says - and what is <em>said</em> here, rather than refused, is the one
+     * configuration that publishes nothing while looking configured; see
+     * {@link #sayWhereNothingIsPublished}.
      *
      * @param operations  the operations API's settings
      * @param environment the resolved environment, for the audit library's own keys
@@ -401,6 +415,43 @@ public class PropertiesValidator implements InitializingBean {
         validateTheAuditFilterHasADocumentToRead(environment);
         validateTheSupersedeBoundAdmitsSomething(operations);
         validateTheLockAttemptIsSomethingAThreadCanMake(operations);
+        sayWhereNothingIsPublished(environment);
+    }
+
+    /**
+     * Says, once and at start-up, that the audit filter is switched on over a transport that is off
+     * - which is a pod serving the operations API with no audit event reaching anybody.
+     *
+     * <p>Not a refusal, and deliberately not one: constitution 5.0.0 made both switches ordinary
+     * configuration and the pod always comes up. It is the shipped default, too, so this is the
+     * common case rather than an exotic one - {@code audit.http.enabled} reads {@code true} in
+     * {@code application.yaml} and {@code cp.audit.enabled} reads {@code false}, because the
+     * transport's connection factory validates its hosts and port while it is being built and a
+     * laptop has no audit broker. Condition (b) of Principle III is carried the rest of the way by
+     * a deployed values file setting {@code CP_AUDIT_ENABLED=true} beside the two defaults, with
+     * the broker's hosts, port and credentials from Key Vault.
+     *
+     * <p>Said here because it is sayable nowhere else. Every {@code audit.http.*} bean sits inside
+     * the {@code @AutoConfiguration} class the transport's key gates, so the filter that would have
+     * published is never constructed and cannot complain; and where it <em>is</em> constructed it
+     * swallows its own publishing failures. A deployment that forgot the transport would otherwise
+     * look exactly like one that has it.
+     *
+     * <p>Only settings are named. Nothing a caller supplied and nothing from Key Vault reaches the
+     * line, and no throwable is attached to it.
+     *
+     * @param environment the resolved environment, for the audit library's own keys
+     */
+    private static void sayWhereNothingIsPublished(final Environment environment) {
+        if (switchedOnAsTheLibraryReadsIt(environment, HTTP_AUDIT_ENABLED, false)
+                && !switchedOnAsTheLibraryReadsIt(environment, AUDIT_TRANSPORT_ENABLED, false)) {
+            LOG.warn("the operations API is being served unaudited: {} is true but {} is not, and"
+                            + " every bean the first gates lives inside the auto-configuration"
+                            + " class the second gates - so no request and no response is published"
+                            + " as an audit event. A deployed environment sets {}=true beside the"
+                            + " filter, with its broker's hosts and port",
+                    HTTP_AUDIT_ENABLED, AUDIT_TRANSPORT_ENABLED, AUDIT_TRANSPORT_ENABLED);
+        }
     }
 
     /**
