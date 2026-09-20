@@ -22,6 +22,8 @@ export const meta = {
 //   codexFocus       extra questions for Codex, specific to this range (optional)
 //   contract         coordination contract: files this tree may / may not touch (optional)
 //   notes            anything else the implementer must know (optional)
+//   reviewers        which repo reviewers gate the range: any of code-reviewer, qa, spec-validator
+//                    (default all three); Codex is added separately by `codex`
 //   reviewerBuilds   true lets reviewers run Gradle after the results hold (default false)
 //   resume           true when a previous run of this range was interrupted: the tree may be past
 //                    baseCommit and dirty; the implementer inspects and carries on (default false)
@@ -176,6 +178,13 @@ const REVIEWERS = [
     ask: 'Check the range against the message contracts, the vendored schemas, settlement discipline, state-machine completeness, the defect-fix register and the constitution as it stands in this tree.',
   },
 ]
+if (Array.isArray(a.reviewers) && a.reviewers.length) {
+  const wanted = new Set(a.reviewers)
+  const unknown = [...wanted].filter(k => !REVIEWERS.some(r => r.key === k))
+  if (unknown.length) throw new Error(`phase-gate: unknown reviewers ${unknown.join(', ')}`)
+  for (let i = REVIEWERS.length - 1; i >= 0; i--) if (!wanted.has(REVIEWERS[i].key)) REVIEWERS.splice(i, 1)
+  log(`reviewers: ${REVIEWERS.map(r => r.key).join(', ')}${a.codex ? ' + codex' : ''}`)
+}
 if (a.codex) {
   REVIEWERS.push({
     key: 'codex', agentFile: null, verdicts: ['PASS', 'NEEDS CHANGES'], pass: 'PASS',
