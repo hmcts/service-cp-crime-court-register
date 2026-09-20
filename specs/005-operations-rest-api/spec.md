@@ -114,6 +114,27 @@ reviewed against. What the refusal added on top was a pod that would not start o
 operator had deliberately chosen, on a discriminator that made a laptop and a deployed pod two
 different products.
 
+**Fourth amendment — 5.0.0 → 5.0.1 (2026-09-20), proposal.** 5.0.0 says conditions (a) and (b) are
+carried "by the defaults above and nothing else", and names one default for each: `authz.http.enabled`
+and `audit.http.enabled`, both `true` in `application.yaml`. For (a) that is the whole truth. For (b)
+it is not: `audit.http.enabled` builds nothing on its own. Every `audit.http.*` bean the starter
+declares — the filter included — sits inside the `@AutoConfiguration` class `cp.audit.enabled` gates,
+and this service ships that key `false`, because the transport's connection factory validates its
+hosts and port while it is being constructed and a laptop has no audit broker. So a deployment that
+says nothing is authorised, and is **not** audited.
+
+**Proposal**: say so. Condition (b) is carried by **two** keys — `audit.http.enabled`, `true` in this
+service's configuration, and `cp.audit.enabled`, which every deployed values file sets `true` with
+its broker's hosts, port and credentials from Key Vault. A values file that omits the transport has
+not met (b), and that is what the deployment review checks. Nothing about what is enforced changes:
+there is still no cross-field start-up refusal, the pod still always comes up, and the value-shape
+refusals of FR-053 are untouched.
+
+**Version**: PATCH (5.0.1). A clarification of what an unchanged condition already required, not a
+change to the condition: no obligation is added, removed or relaxed, and a reader of 5.0.0 who
+deployed the audit transport was right. What was wrong was the sentence naming one key where two are
+needed, which is exactly the kind of omission a deployment reads as permission.
+
 **Governance step 3** — re-running `/speckit-analyze` against every in-flight feature spec and
 updating or waiving each conflict — is task **T001** of this increment. It covers this spec and the
 concurrently in-flight `specs/004-release-stale-batches`, which is read but never edited from this
@@ -585,6 +606,17 @@ command printed.
   nothing is authorised and audited. Switching either off is a deliberate act recorded in that
   environment's own configuration: the local loop does it in the compose environment and the `test`
   profile does it in `application-test.yaml`, each with the reason written beside it.
+  **Condition (b) needs the audit transport with it.** `audit.http.enabled` switches on a filter
+  that is only built where `cp.audit.enabled` is on — every `audit.http.*` bean the starter declares
+  sits inside the `@AutoConfiguration` class that key gates — and this service ships
+  `cp.audit.enabled: ${CP_AUDIT_ENABLED:false}`, because the transport's connection factory
+  validates `cp.audit.hosts` and `cp.audit.port` while it is being constructed and a laptop has no
+  audit broker. Every deployed values file MUST therefore set `CP_AUDIT_ENABLED=true` beside the
+  two switch defaults, with the broker's connection from Key Vault (deployment gate 5); a values
+  file that omits it serves the operations API **unaudited** and has not met condition (b). Because
+  nothing refuses that combination, the service MUST **say** it: one WARN at start-up naming
+  `audit.http.enabled` and `cp.audit.enabled`, since the filter that would have published is never
+  constructed and the one that is swallows its own publishing failures.
   **Start-up MUST NOT refuse on the combination**: there is no cross-field rule tying
   `courtregister.operations.enabled` to either switch, and no environment discriminator deciding
   where such a rule would apply. A pod started with either switch off — or with both off — MUST come
@@ -601,8 +633,12 @@ command printed.
 - **FR-053**: The **value-shape** validations stay, and they are the only start-up refusals these
   settings can earn. They are about a value that cannot mean what it says, never about one switch's
   value given another's:
-  - `audit.http.openapi-rest-spec` MUST be set to a non-blank value wherever `audit.http.enabled`
-    is on, because the filter resolves it as a **suffix** glob and an unset value globs for `*null`,
+  - `audit.http.openapi-rest-spec` MUST be set to a non-blank value wherever **both** the audit
+    transport (`cp.audit.enabled`) and the HTTP filter (`audit.http.enabled`) are on, which is where
+    the parser that globs is built — every `audit.http.*` bean sits inside the `@AutoConfiguration`
+    class the transport's key gates, so the filter on over a transport that is off resolves nothing.
+    It is required there because the filter resolves the value as a **suffix** glob and an unset
+    value globs for `*null`,
     matching nothing and failing the refresh without naming either this service or the key. The
     value MUST be uniquely scoped to this service's own document, so that exactly one file on the
     classpath can match it.
@@ -703,10 +739,15 @@ surface that is worse than none. 005 MUST NOT be deployed to STE before all five
    gateway**, so no other workload in the mesh can reach it directly.
 4. **usersgroups reachable from the pod** for the auth filter's identity client, with whatever
    network policy that requires.
-5. **The Artemis audit connection** in the STE values, with `HTTP_AUDIT_ENABLED` and
-   `AUTHZ_HTTP_ENABLED` left at their `true` defaults (FR-045). Start-up does not refuse a pod that
-   has them off — that is an operator's choice to make — so this gate is checked by the deployment
-   review and by the values themselves, not by the service refusing to start.
+5. **The Artemis audit connection** in the STE values — `CP_AUDIT_ENABLED=true` with the broker's
+   hosts, port, credentials and TLS material from Key Vault — with `HTTP_AUDIT_ENABLED` and
+   `AUTHZ_HTTP_ENABLED` left at their `true` defaults (FR-045). `CP_AUDIT_ENABLED` is part of this
+   gate and not an optimisation: the service ships it `false` for the local loop, and the HTTP audit
+   filter is built only where it is on, so a values file without it serves the operations API
+   unaudited and condition (b) of Principle III is unmet. Start-up does not refuse any of that — the
+   switches are an operator's choice to make, and what the pod does instead is say at WARN that it is
+   publishing nothing — so this gate is checked by the deployment review and by the values
+   themselves, not by the service refusing to start.
 
 A sixth item is an **estate decision, not a deployment step**: `cp-audit-filter-springboot`
 captures every request header verbatim, and its own README says a header allowlist "should be agreed
@@ -766,8 +807,11 @@ change is readable.
    the design owner, 2026-09-20, replacing the start-up refusal an earlier draft of FR-045 and
    FR-053 described.* Both library switches default **off** when nothing sets them, which is the
    wrong way round for a service that serves operator endpoints, so `application.yaml` defaults both
-   to `true` and every deployment that says nothing is authorised and audited. That is where
-   condition (a) and (b) of Principle III are met. What was rejected is the rule on top of it:
+   to `true`. That is where condition (a) of Principle III is met, and half of where (b) is: the
+   HTTP audit filter is built only where the transport key `cp.audit.enabled` is on too, and that one
+   ships `false` for the local loop, so (b) is met by a deployed values file setting
+   `CP_AUDIT_ENABLED=true` beside it (FR-045, deployment gate 5). A pod with the filter on and the
+   transport off comes up, serves, and says at WARN that nothing is being published. What was rejected is the rule on top of it:
    start-up refusing the combination of the operations API enabled with either filter off, on a
    `courtregister.servicebus.namespace` discriminator. It made an operator's own configuration
    choice a reason for a pod not to come up, and it made a deployed environment and a laptop two
