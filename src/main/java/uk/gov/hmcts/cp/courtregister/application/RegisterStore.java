@@ -470,14 +470,22 @@ public interface RegisterStore {
      * setting nobody could change.
      *
      * <p><strong>The one refusal that is still raised.</strong> The race for the day's key is the
-     * only refusal this operation knows what to do about. A release refused by any other unique
-     * key is a rule nobody wrote this statement against - the same row meets it on every attempt
-     * and on every run - so it is raised as
+     * only refusal this operation knows what to do about. A release refused by any other rule -
+     * another unique key, or a constraint that is no key at all, such as a bounded reason a store
+     * left short of its migrations does not admit - is a rule nobody wrote this statement against,
+     * and the same row meets it on every attempt and on every run. So it is raised as
      * {@link uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException}, a fault in the
      * schema or in the statement rather than a race, and the pass may let it end the run as it
      * lets any programming error end one. FR-003a is about a batch's <em>ordinary</em> ending, and
-     * that one is reported. No {@code org.springframework.dao} type reaches this port, so the pass
-     * never has to catch a bare {@code RuntimeException} to read a refusal (Principle V).
+     * that one is reported.
+     *
+     * <p><strong>So no refusal reaches the pass as an {@code org.springframework.dao} type</strong>
+     * and it never has to catch a bare {@code RuntimeException} to read one (Principle V). What
+     * does still cross, here and from every method on this port, is the store's own contention
+     * signal - a deadlock or a serialisation failure, which is the store answering rather than a
+     * rule being broken, and which is the run's ordinary transient failure rather than anything
+     * this operation decides about. That is the adapter's store-wide policy and it is stated here
+     * so the pass is not written against a promise the package does not make.
      *
      * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
      * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
@@ -485,7 +493,7 @@ public interface RegisterStore {
      *         registers still that day's to render, and beside them the batches it left exactly as
      *         it found them because every attempt at them lost the same race for the day's key
      * @throws uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException if a release was
-     *         refused by a unique key this operation does not account for
+     *         refused by a rule this operation does not account for
      * @throws uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException if the store could not
      *         be reached
      */

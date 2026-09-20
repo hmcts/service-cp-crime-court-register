@@ -23,6 +23,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.ConcurrencyFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.TransactionStatus;
@@ -1857,11 +1858,13 @@ public class JdbcRegisterStore implements RegisterStore {
      * for. So this call is not to be put behind an outer {@code @Transactional} or a
      * {@code TransactionTemplate}.
      *
-     * <p>A refusal on any other key is the store saying this write may never be made, which no
-     * retry changes; it is raised, translated into this package's own
-     * {@link uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException} so that no
-     * {@code org.springframework.dao} type crosses the port into {@code batch/}, where the pass
-     * that calls this may name none (constitution Principle V). It is a fault in the schema or in
+     * <p>A refusal on any other rule - another unique key, or a constraint that is no key at all,
+     * such as the bounded reason a store left short of {@code V6} does not admit - is the store
+     * saying this write may never be made, which no retry changes; it is raised, translated into
+     * this package's own
+     * {@link uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException} so that no refusal
+     * crosses the port into {@code batch/} as an {@code org.springframework.dao} type, where the
+     * pass that calls this may name none (constitution Principle V). It is a fault in the schema or in
      * this statement rather than a race, and it is allowed to end the run the way any programming
      * error is: what FR-003a forbids is one batch's <em>ordinary</em> ending - a lost race for the
      * day's key - taking the other court centres' releases with it, and that ending is the
@@ -1917,11 +1920,9 @@ public class JdbcRegisterStore implements RegisterStore {
      * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
      * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
      * @return this one batch's account: released by the winning attempt, or contended
-     * @throws uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException if the release was
-     *                                                                           refused by a key
-     *                                                                           this operation
-     *                                                                           does not account
-     *                                                                           for
+     * @throws uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException if the store
+     *         refused the release over a rule this operation does not account for - another unique
+     *         key, or a constraint that is no key at all
      */
     private StaleReleaseOutcome attemptedRelease(final UUID batchId, final Instant scheduledCutoff,
             final Instant manualCutoff) {
@@ -1933,6 +1934,12 @@ public class JdbcRegisterStore implements RegisterStore {
                 if (!violates(collision, ACTIVE_ROW_KEY)) {
                     throw unaccountedForRelease(batchId, collision);
                 }
+            } catch (DataIntegrityViolationException refused) {
+                // A rule that is no key at all - a CHECK the bounded reason does not satisfy, which
+                // is what a store V6 never reached refuses every stale batch on. Not a race, so it
+                // is not attempted again; translated here so that no org.springframework.dao type
+                // crosses the port into batch/ (constitution Principle V).
+                throw unaccountedForRelease(batchId, refused);
             }
         }
         return released == null
@@ -1945,23 +1952,33 @@ public class JdbcRegisterStore implements RegisterStore {
      *
      * <p>The mirror of {@link #unaccountedFor(DistributionCommand, DuplicateKeyException)} one
      * operation above, and for the same reason: the release knows one key it can act on, and a
-     * constraint outside it is a rule nobody wrote this statement against. Making the statement
-     * again would spend three attempts reaching the same refusal and then report the batch as
-     * contended, which says a hearing was re-shared at the wrong moment - and the next run, and
-     * every run after it, would say the same about a batch no run can ever release.
+     * rule outside it is one nobody wrote this statement against. Making the statement again would
+     * spend three attempts reaching the same refusal and then report the batch as contended, which
+     * says a hearing was re-shared at the wrong moment - and the next run, and every run after it,
+     * would say the same about a batch no run can ever release.
      *
-     * <p>The message names the batch and nothing from a register; the constraint travels on the
-     * cause (constitution Principle VII).
+     * <p><strong>Every refusal, and not only the ones that are keys.</strong> A unique index is
+     * one rule a store can refuse this write on and a CHECK constraint is another - a pod whose
+     * store never reached {@code V6} meets {@code register_batch_failure_reason_chk} on every
+     * stale batch it tries - and Spring reports the second as a bare
+     * {@link DataIntegrityViolationException}. Both are translated here, because what the port
+     * promises is that a refusal is readable in this package's own vocabulary: the pass in
+     * {@code batch/} may name no {@code org.springframework.dao} type, so anything crossing
+     * untranslated could only be caught there as {@code RuntimeException}, which is the catch that
+     * swallows every programming error beside it (constitution Principle V).
      *
-     * @param batchId   the batch whose release was refused
-     * @param collision the store's own refusal
+     * <p>The message names the batch and nothing from a register; the rule that refused the write
+     * travels on the cause (constitution Principle VII).
+     *
+     * @param batchId the batch whose release was refused
+     * @param refusal the store's own refusal, whichever rule raised it
      * @return the failure to raise
      */
     private static RegisterNotReleasedException unaccountedForRelease(final UUID batchId,
-            final DuplicateKeyException collision) {
+            final DataIntegrityViolationException refusal) {
         return new RegisterNotReleasedException("the release of a stale batch was refused by a "
-                + "unique key this store does not account for, so no attempt at it can be made "
-                + "again either; batchId=" + batchId, collision);
+                + "rule this store does not account for, so no attempt at it can be made again "
+                + "either; batchId=" + batchId, refusal);
     }
 
     /**
