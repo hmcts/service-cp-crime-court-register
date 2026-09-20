@@ -83,11 +83,43 @@ not do before. The reason the exemption is recorded rather than removed is FR-04
 both filters are estate libraries needing an estate to talk to, a laptop has neither, and FR-044
 serves the endpoints by default.
 
+**Third amendment — 4.1.0 → 5.0.0 (2026-09-20), proposal.** 4.1.0 recorded *where* conditions (a)
+and (b) are enforced: as a start-up refusal on a deployed pod, with the local loop as a named
+exemption. The design owner has since decided that the refusal itself is wrong. `authz.http.enabled`
+and `audit.http.enabled` are ordinary configuration an operator may turn on or off, and the pod
+always comes up; the two switches are secure **by default** instead, at `true` in
+`application.yaml`, and an environment that wants either off says so in its own configuration.
+
+**Proposal**: relax conditions (a) and (b) so that each reads — the authorisation filter and the
+audit publisher are enabled by **default** in the service's configuration and in every deployed
+values file; switching either off is a deliberate configuration act of the operator, recorded in
+that environment's configuration, never a code default and never inferred from the environment.
+The "Where (a) and (b) are enforced" paragraph and the local-loop exemption both go with the
+refusal they described: with the defaults secure and the switch an operator's, there is no
+exemption left to grant and no discriminator left to draw.
+
+**Version**: MAJOR (5.0.0). Relaxing a NON-NEGOTIABLE condition is a principle redefinition, not a
+narrowing: 4.1.0 said a deployed pod **MUST refuse to start** with either filter off, and 5.0.0
+says it starts. A deployed environment may now do something it could not do before, which is the
+test this repository's Governance section sets for MAJOR, and a reader of 4.1.0 would get it wrong.
+The exemption 4.1.0 added is removed rather than widened, because what it was an exemption *from*
+no longer exists.
+
+**Why the guarantee survives the relaxation**: the refusal was never the only thing holding
+conditions (a) and (b) up, and it was the weakest of them. What holds them up is the default — a
+deployment that says nothing about either switch is authorised and audited, which is the opposite of
+the libraries' own defaults and is the change that mattered — together with the deployment gates
+that require the audit connection in STE, and the allow rules and audit coverage every endpoint is
+reviewed against. What the refusal added on top was a pod that would not start on a configuration an
+operator had deliberately chosen, on a discriminator that made a laptop and a deployed pod two
+different products.
+
 **Governance step 3** — re-running `/speckit-analyze` against every in-flight feature spec and
 updating or waiving each conflict — is task **T001** of this increment. It covers this spec and the
 concurrently in-flight `specs/004-release-stale-batches`, which is read but never edited from this
 branch; conflicts found there are recorded for the orchestrator, not fixed here. It was run once
-for 4.0.0 and again for 4.1.0; both records are in T001's entry in `tasks.md`.
+for 4.0.0, again for 4.1.0 and again for 5.0.0; all three records are in T001's entry in
+`tasks.md`.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -547,35 +579,45 @@ command printed.
   exactly what the CLI answered on such a pod, rather than a `404` that reads as a mistyped URL or a
   `500` about a missing bean. The endpoints that do not need them — the flag, the recorded-while-off
   listing, supersede and the exception report — MUST be served normally.
-- **FR-045**: Start-up MUST **refuse**, **on a deployed pod**, when the operations API is enabled
-  and HTTP audit is not: the audit switch off, the library's own master switch off, or its transport
-  naming no broker or no port, each means endpoints that would be served unaudited, which condition
-  (b) of Principle III forbids. The refusal MUST name the offending setting, as every other refusal
-  in `config/PropertiesValidator` does.
-  **"Deployed" is the discriminator this service already draws deployment on** — a
-  `courtregister.servicebus.namespace`, which means workload identity, which means a pod — and it is
-  the same one that switches on the stub-reachability and outbound-validation refusals. It is part
-  of the requirement rather than an implementation liberty: a laptop has no audit broker and no
-  usersgroups, `quickstart.md`'s "Local" section documents the endpoints being reachable there with
-  both filters off, and FR-044's default of `true` means an unconditional reading of this rule would
-  stop `bootRun`, `docker compose up` and the container smoke until
-  `courtregister.operations.enabled: false` were committed into `application.yaml` — which FR-044
-  forbids. A deployment that wants the endpoints unaudited has exactly one supported way to have
-  them: switch them off.
-  Because a boolean here is read by two libraries whose own conditions match the **literal** string
-  `true`, the refusal MUST read `audit.http.enabled` and `cp.audit.enabled` the same way, and MUST
-  refuse a value such as `yes` or `on` that Spring would relax into `true` while the libraries
-  would not.
-- **FR-053**: Start-up MUST **refuse**, on the same deployed pod and by the same reading, when the
-  operations API is enabled and `authz.http.enabled` is not the literal `true`. This is FR-045's
-  sibling and closes condition **(a)** of Principle III as FR-045 closes condition (b):
-  `AuthzAutoConfiguration` in `cp-auth-rules-filter` is
-  `@ConditionalOnProperty(prefix = "authz.http", name = "enabled", havingValue = "true")` with no
-  `matchIfMissing`, so the key off, absent, or spelled in one of the ways Spring relaxes into true
-  leaves a pod that registers **no authorisation filter at all** and answers every
-  `/operations/**` call from a caller carrying no identity. The refusal MUST name
-  `authz.http.enabled`. The discriminator, the literal-`true` reading and the one supported way to
-  have the endpoints unguarded — switch them off — are FR-045's, unchanged.
+- **FR-045**: `authz.http.enabled` and `audit.http.enabled` are **ordinary configuration an
+  operator may set**, and both MUST default to `true` in `application.yaml`
+  (`${AUTHZ_HTTP_ENABLED:true}` and `${HTTP_AUDIT_ENABLED:true}`), so that a deployment which says
+  nothing is authorised and audited. Switching either off is a deliberate act recorded in that
+  environment's own configuration: the local loop does it in the compose environment and the `test`
+  profile does it in `application-test.yaml`, each with the reason written beside it.
+  **Start-up MUST NOT refuse on the combination**: there is no cross-field rule tying
+  `courtregister.operations.enabled` to either switch, and no environment discriminator deciding
+  where such a rule would apply. A pod started with either switch off — or with both off — MUST come
+  up and serve whatever it was configured to serve. An operator who wants to see what the endpoints
+  do with a filter out of the way is entitled to, and a service that refuses to start on a
+  configuration an operator chose is a service that cannot be operated.
+  *Supersedes the earlier reading of this requirement, which refused start-up on a deployed pod
+  serving the operations API with either filter off; design owner, 2026-09-20.* What the refusal was
+  protecting is protected where it belongs instead: the defaults above, the deployment gates that
+  require the audit connection in STE, and condition (a)/(b) of Principle III, which is an
+  obligation on how an environment is configured rather than on what this service's start-up
+  tolerates.
+
+- **FR-053**: The **value-shape** validations stay, and they are the only start-up refusals these
+  settings can earn. They are about a value that cannot mean what it says, never about one switch's
+  value given another's:
+  - `audit.http.openapi-rest-spec` MUST be set to a non-blank value wherever `audit.http.enabled`
+    is on, because the filter resolves it as a **suffix** glob and an unset value globs for `*null`,
+    matching nothing and failing the refresh without naming either this service or the key. The
+    value MUST be uniquely scoped to this service's own document, so that exactly one file on the
+    classpath can match it.
+  - `cp.audit.hosts` MUST name at least one non-blank host, and `cp.audit.port` MUST be a whole
+    number in **1..65535**, wherever the audit transport is switched on — the audit filter swallows
+    its own publishing failures, so a transport pointed at nothing publishes nothing and says so
+    only in a log line, and the library's own `validateProps` checks `hosts.isEmpty()` and
+    `port > 0` and nothing else.
+  - `courtregister.operations.supersede-max-age` MUST be positive and
+    `courtregister.operations.lock-wait` MUST NOT be negative — an unusable value is unusable
+    wherever it is set.
+
+  Each refusal MUST name the offending setting and MUST NOT quote the offending value back where it
+  could be a secret.
+
 
 - **FR-046**: The audit event for an operations call MUST carry **bounded fields** — the action, the
   outcome, and for a regeneration whether the flag was overridden — and MUST NOT carry a raw request
@@ -661,8 +703,10 @@ surface that is worse than none. 005 MUST NOT be deployed to STE before all five
    gateway**, so no other workload in the mesh can reach it directly.
 4. **usersgroups reachable from the pod** for the auth filter's identity client, with whatever
    network policy that requires.
-5. **The Artemis audit connection and `HTTP_AUDIT_ENABLED=true`** in the STE values — without which
-   start-up refuses (FR-045), which is deliberate: an unaudited endpoint is not permitted.
+5. **The Artemis audit connection** in the STE values, with `HTTP_AUDIT_ENABLED` and
+   `AUTHZ_HTTP_ENABLED` left at their `true` defaults (FR-045). Start-up does not refuse a pod that
+   has them off — that is an operator's choice to make — so this gate is checked by the deployment
+   review and by the values themselves, not by the service refusing to start.
 
 A sixth item is an **estate decision, not a deployment step**: `cp-audit-filter-springboot`
 captures every request header verbatim, and its own README says a header allowlist "should be agreed
@@ -718,15 +762,17 @@ change is readable.
    `ProblemDetail`. What the audit event needs is the action, the outcome, whether the flag was
    overridden and (for supersede) the count, and the generic filter can infer none of that from a
    body; those are supplied through the starter's own seam. An earlier draft left bodies on.
-9. **Authorisation and audit are enforced at start-up, not left to a default.** `audit.http.enabled` defaults false,
-   and condition (b) of Principle III says every endpoint is audited. So the operations API has its
-   own deployment switch, `courtregister.operations.enabled` (default true), and start-up refuses
-   when it is on and HTTP audit is off or its transport unconfigured (FR-045) — **on a deployed
-   pod**, on the namespace discriminator FR-045 states, because the alternative is a rule that stops
-   the local loop `quickstart.md` documents and forces `courtregister.operations.enabled: false`
-   into `application.yaml` against FR-044. The authorisation half is refused by the same rule and
-   on the same discriminator (FR-053): `authz.http.enabled` defaults false too, and a pod that
-   serves the endpoints to anybody is the same failure as one that serves them to nobody's record.
+9. **Authorisation and audit are secure by default, and switchable by the operator.** *Decided by
+   the design owner, 2026-09-20, replacing the start-up refusal an earlier draft of FR-045 and
+   FR-053 described.* Both library switches default **off** when nothing sets them, which is the
+   wrong way round for a service that serves operator endpoints, so `application.yaml` defaults both
+   to `true` and every deployment that says nothing is authorised and audited. That is where
+   condition (a) and (b) of Principle III are met. What was rejected is the rule on top of it:
+   start-up refusing the combination of the operations API enabled with either filter off, on a
+   `courtregister.servicebus.namespace` discriminator. It made an operator's own configuration
+   choice a reason for a pod not to come up, and it made a deployed environment and a laptop two
+   different products. An operator who switches a filter off has said what they meant; the pod
+   comes up, and the environment's configuration records what they did.
 10. **Nothing about the exception report's window or sinks changes.** The endpoint computes the same
     window the command computed, from the same schedule, and asks the same sinks.
 11. **Supersede is subordinated to the flag, bounded, and reversible-by-preview.** *Confirmed by the
