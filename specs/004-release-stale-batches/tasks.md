@@ -2394,11 +2394,22 @@ them. `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` → **BUILD SUC
 `checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification` all ran and all passed,
 none of them loosened.
 
+**Re-gated after gate round 3** (`flock -w 7200 … ./gradlew build -Dtest.noFailFast=true`) →
+**BUILD SUCCESSFUL, exit 0, 4m 21s, 3648 tests over 578 suites, 0 failures, 0 errors, 0 skipped**.
+The six cases and the one suite that round added are exactly `SchemaMigrationV7IT`'s five in its own
+new suite, and `v7_refuses_to_apply_to_a_store_holding_the_retired_attribution_alone` in the
+existing `RetiredVocabulary` nest. Nothing was removed: reverting `batch/cli/ReportExceptionsCliTest`
+changed a string literal in an existing case, and the prose sweep moved no assertion.
+
 **The coverage, read as this phase's note asks.** `flock -w 7200 … ./gradlew jacocoTestReport check
--Dtest.noFailFast=true` → BUILD SUCCESSFUL, exit 0, 10m 18s, and the report from that run reads
+-Dtest.noFailFast=true` → BUILD SUCCESSFUL, exit 0, and the report from that run reads
 **LINE 6514/6717 = 0.9698 and BRANCH 1993/2196 = 0.9076** against the unchanged gate of LINE 0.88 /
-BRANCH 0.85. Against the first half's re-gate at 6516/6719 and 1995/2198 that is **two fewer covered
-lines out of two fewer lines, and two fewer covered branches out of two fewer branches** — both
+BRANCH 0.85 — **unchanged by gate round 3 to every digit**, which is what a round that added a
+migration-footprint suite, a migration-refusal case and a pile of comments should read: none of
+them is production Java, and the six new cases exercise Flyway and `pg_constraint` rather than a
+branch of this service's own. Against the first half's re-gate at 6516/6719 and 1995/2198 that is
+**two fewer covered lines out of two fewer lines, and two fewer covered branches out of two fewer
+branches** — both
 ratios identical to four places, because what left the codebase this half is one enum constant, one
 enum constant and one `||` in `isGeneratorAttributed()`, all of them covered. The migration itself
 adds no Java. **The gate was not adjusted**, and on a half this small it could not have been met by
