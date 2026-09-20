@@ -811,12 +811,15 @@ Findings left open at this gate, each with its reason:
   translation for it is covered by `StoreOutageTest` plus the call site, as T009's narrative already
   records; the stronger proof belongs with Phase 3's `StaleBatchReleaserTest`, which owns the
   caller's half.
-* **Nothing pins that the call is made outside a transaction** (LOW at `qa`). The javadoc states it
-  and the suites construct the store directly, so a Phase 3 caller wrapping the pass in a
-  `TransactionTemplate` would turn every retry into "current transaction is aborted" with no test
-  going red. The guard belongs where the caller is: T011/T012 are where a case can run the real store
-  under a transaction, and a runtime assertion in the store would be a check on its caller written in
-  the wrong class.
+* ~~**Nothing pins that the call is made outside a transaction**~~ (LOW at `qa`, raised again as a
+  MEDIUM at the Codex gate) — **closed at the Codex remediation below**, and closed the other way
+  round from the reasoning recorded here. The finding was that the javadoc states the precondition
+  and nothing enforces it, so a Phase 3 caller wrapping the pass in a `TransactionTemplate` would
+  turn every retry into "current transaction is aborted" with no test going red. That was left for
+  T011/T012 on the grounds that the guard belongs where the caller is. Codex's objection is the
+  better one: a precondition nothing enforces is a comment, and the store is where the boundary can
+  be taken rather than asked for. Each attempt now runs `REQUIRES_NEW`, and
+  `a_release_is_committed_though_the_callers_transaction_rolls_back` pins it.
 * **`COALESCE(requested_at, assembled_at)` leans on a timestamp/state shape the columns do not
   enforce** (LOW at Codex, gate 2, left open there for the same reason). Latent, reachable only
   through a row no ordinary flow writes, and the fix is a constraint rather than a predicate, so it
@@ -1037,7 +1040,103 @@ the same code.
 
 **The Codex leg is still owed and is still unmet.** Nothing in this remediation changes that: the
 whole-increment Codex gate has not run since gate 2, and **no Phase 2 close and no Phase 3 start may
-be recorded until it has**.
+be recorded until it has**. *(Superseded by review gate 6 below, which is that run.)*
+
+---
+
+## Review gate 6 — the Codex leg, against Phase 2 (2026-09-20)
+
+**The Codex leg owed since gate 2 has now run** against Phase 2 as committed at `68e3cae`. It
+returned **two findings, no BLOCKER of its own beyond the first, and nothing else above LOW**. Both
+are closed in the two test/fix pairs below, test-first, and both were closed in the adapter rather
+than deferred to a caller.
+
+* **The driver's account of a refused register travelled on the refusal** (BLOCKER at Codex,
+  Principle VII). `RegisterNotReleasedException` carried the store's own
+  `DataIntegrityViolationException` as its cause. `FAIL_AND_RELEASE_STALE` updates
+  `processed_output`, and a `processed_output` row holds the register document itself, so Postgres
+  reporting the refusal by quoting the row — `Failing row contains (...)` for a CHECK,
+  `Key (...)=(...) already exists` for a unique index — puts a youth defendant's name and date of
+  birth on the driver's message. The failure is raised out of the nightly run and written at ERROR
+  into the estate's log index, and a stack trace is written whole. `persistence/StoreOutage` already
+  discards an integrity refusal's cause for exactly this reason, so the release was the one place
+  the rule was not kept.
+  **Closed** by carrying a bounded classification written in this repository — `a unique key`, or
+  `an integrity rule that is no key` — plus the batch's identity, and no cause at all. The
+  constraint's own name goes with the cause: the only safe idiom this class has for naming one,
+  `violates(DuplicateKeyException, String)`, asks the driver whether the refusal is a key *this
+  class already knows by name*, and a refusal that reaches this translation is by construction none
+  of them, so extracting a name would mean reading the message that may not be kept.
+  **Red** (`42b7825`, the two `RegisterStoreIT` cases that had *required* the unsafe cause
+  re-pointed at its absence): `flock -w 7200 … ./gradlew test --tests '…RegisterStoreIT'
+  -Dtest.noFailFast=true` → **87 tests completed, 2 failed**, 4 assertion failures each and no
+  compile error — the classification absent from the message, `hasNoCause` unmet, an
+  `org.springframework.dao` type in the chain, and the driver's words in what the chain says.
+  **Green** (`e6deb85`): the same command, BUILD SUCCESSFUL, 87 of 87, with `checkstyleMain` and
+  `pmdMain` green.
+  The two cases now walk the whole cause chain rather than the exception alone — a later change
+  re-attaching the refusal underneath would otherwise leave them green — and assert against both
+  detail lines Postgres uses, the court centre, and the fixture's `SMITH, John` / `2008-04-11`.
+  `TelemetryPrivacyTest` was **not** extended: it is a Spring-context test over the intake pipeline's
+  log lines and has no hook for an exception a store raised, so the assertion is made where the
+  refusal is produced.
+
+* **The per-batch isolation held only for a caller outside a transaction** (MEDIUM at Codex; the
+  same thing `qa` raised as a LOW at gate 5 and this file left open for T011/T012). `release()` ran
+  straight at the `JdbcClient` with no boundary of its own, and the javadoc asked not to be wrapped.
+  A caller inside a transaction would have every attempt join it: the first refusal aborts that
+  transaction, the attempts after it are made inside an aborted one, and every court centre already
+  released is rolled back at the end — FR-003a's run-ending outcome reached by obeying the port
+  rather than by breaking it.
+  **Closed** by taking the boundary instead of asking for it. Each attempt runs through a second
+  `TransactionTemplate` at `PROPAGATION_REQUIRES_NEW`, so the caller's transaction is suspended for
+  the length of an attempt and resumed after it. `JdbcRegisterStore` now takes the
+  `PlatformTransactionManager` rather than a template, because it needs two boundaries over the one
+  data source and only one of them is the ordinary kind; `ProcessedLogConfig` and the four test
+  construction sites hand it the manager, and `ProcessedLogTestSupport.transactionManager()` and
+  `ReportReadsDatabase.transactionManager()` are the fixtures' half of that.
+  **Red** (`aa44357`, `StaleReleaseConcurrencyIT.a_release_is_committed_though_the_callers_transaction_rolls_back`):
+  `flock -w 7200 … ./gradlew test --tests '…StaleReleaseConcurrencyIT' -Dtest.noFailFast=true` →
+  **8 tests completed, 1 failed**, 5 assertion failures and no compile error — what escaped was
+  `org.springframework.jdbc.UncategorizedSQLException … SQL state [25P02]`, which is
+  "current transaction is aborted" exactly as the finding predicted, and with it the released
+  batch's ending, its stamps and both halves of the account.
+  **Green** (`51307fd`): `flock -w 7200 … ./gradlew test --tests
+  'uk.gov.hmcts.cp.courtregister.persistence.*' -Dtest.noFailFast=true` BUILD SUCCESSFUL, **427
+  tests, 0 failures, 0 errors**, with `checkstyleMain` and `pmdMain` green.
+  The round stands the released batch on the **earlier** day — the reverse of the exhaustion
+  round's staging — so it is walked *before* the batch no attempt can release, and reads every row
+  back **after** the surrounding transaction has ended, which is what makes "committed" the claim
+  rather than "written". The port javadoc now says the separation is the implementation's to keep
+  rather than the caller's to remember.
+
+**What the exhaustion round's trigger actually is, recorded because Codex accepted it on this
+description.** `withTheKeyTakenBackInsideEveryAttempt` is **deterministic failure injection at the
+exception/retry boundary**, not a literal three-commit race. It stages the refusal the retry is
+bounded for — the day's active-register key taken back inside every attempt — with an
+`AFTER UPDATE` trigger scoped by `WHEN` to the round's hearing, which makes an existing superseded
+share of the same key active again the moment the release clears the stamp it is giving back,
+inside the attempt's own transaction. Chaining three genuine commit windows by timing was built and
+abandoned at review gate 3: the gap between a refused attempt's rollback and the next holder taking
+the row cannot be closed from the test. What is *staged* is the refusal; what is *asserted* is what
+the operation does with a batch it cannot release, and that is the contract the round is for.
+
+**Green after the Codex remediation**: `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true`
+BUILD SUCCESSFUL, exit 0, **3657 tests over 579 suites, 0 failures, 0 errors** — one more than gate
+5's close, being the round that calls the pass from inside a caller's transaction — with
+`checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification` all
+green and none of them loosened. The coverage report regenerated by the preceding
+`jacocoTestReport check` run reads **LINE 6599/6807 = 0.9694 and BRANCH 1999/2222 = 0.8996** against
+the unchanged gate of LINE 0.88 / BRANCH 0.85.
+
+That `jacocoTestReport check` run is also what caught the one thing this remediation got wrong on
+the way: `ReportReadsDatabase`'s new accessor and the field behind it were given the same name, and
+`pmdTest`'s `AvoidFieldNameMatchingMethodName` refused it. The field is
+`platformTransactionManager` and the accessor is `transactionManager()`; the suite, the coverage
+gate and both Checkstyle tasks were already green in that run, so nothing but the name changed.
+
+**Phase 2 may close on this gate.** The Codex leg is met, both of its findings are closed in the
+tree, and the three reviewer legs passed at gate 5 with their remaining findings recorded above.
 
 ---
 

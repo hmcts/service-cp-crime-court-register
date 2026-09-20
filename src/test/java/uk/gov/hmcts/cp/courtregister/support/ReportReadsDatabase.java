@@ -46,7 +46,7 @@ public final class ReportReadsDatabase {
     private final DataSource dataSource;
     private final JdbcClient client;
     private final TransactionOperations transactionTemplate;
-    private final PlatformTransactionManager transactionManager;
+    private final PlatformTransactionManager platformTransactionManager;
 
     private ReportReadsDatabase(final String name, final String url) {
         this.databaseName = name;
@@ -55,8 +55,8 @@ public final class ReportReadsDatabase {
                 PostgresTestSupport.username(), PostgresTestSupport.password());
         this.dataSource = new RecordingDataSource(driver);
         this.client = JdbcClient.create(dataSource);
-        this.transactionManager = new JdbcTransactionManager(dataSource);
-        this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.platformTransactionManager = new JdbcTransactionManager(dataSource);
+        this.transactionTemplate = new TransactionTemplate(platformTransactionManager);
     }
 
     /**
@@ -122,7 +122,7 @@ public final class ReportReadsDatabase {
      * @return the transaction manager, over this fixture's data source and no other
      */
     public PlatformTransactionManager transactionManager() {
-        return transactionManager;
+        return platformTransactionManager;
     }
 
     /**
