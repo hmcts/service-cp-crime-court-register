@@ -2105,10 +2105,25 @@ claim. T028 runs after them, not before, so the suite it characterises is the fi
       why: it is an argument carried through the outcome sink into the store's marks, and a second
       mechanism is exactly the kind of thing that comes back.
 
-      **Seven test files came with it, on T022's rule: a deletion that leaves the suite
-      uncompilable is not a deletion.** Five were compile errors and two were fixtures writing a
-      value the store is about to refuse; none of the seven is a claim about the retired constants
-      that T047 does not now make by name.
+      **Six test files came with it, on T022's rule: a deletion that leaves the suite uncompilable
+      is not a deletion.** Three were compile errors (`DocumentOutcomeSinkTest`, `RegisterStoreIT`,
+      `RegisterBatchRepositoryIT`, all of which name `CompletedBy.RECONCILER` as a constant), two
+      were store fixtures writing a value the schema is about to refuse (`EmailReportSinkStoreIT`,
+      `FileServicePayloadStoreIT`), and one was prose alone (`BatchStateTest`); none of the six is a
+      claim about the retired constants that T047 does not now make by name.
+
+      **`batch/cli/ReportExceptionsCliTest` is not among them, and no commit in this branch
+      touches it.** It belongs to the 005 tree under the increment's coordination contract, and it
+      never had to change: `ExceptionEntry.reason` is a `String`, so its `"GENERATION_TIMED_OUT"`
+      literal is a bounded code read back out of a row the case never writes, not a reference to the
+      constant that left `BatchFailureReason`, and the case is about the CLI's printed lines. A
+      first draft of this task did edit it; that edit is not in the branch's history — the two
+      commits carrying it were rebuilt with the path left at its `4d3f9e00` state, so
+      `git log 4d3f9e00..HEAD -- src/…/batch/cli/` is empty rather than net-zero. The file runs
+      green untouched — `--tests '*ReportExceptionsCliTest*'`, **44 tests, 0 failures**. Nothing on
+      004's side had to be cut to make that true, and the surviving `"GENERATION_TIMED_OUT"`
+      literal is a code V7 no longer admits at the insert, which is 005's to change when it deletes
+      the command.
       * `application/DocumentOutcomeSinkTest` — three `CompletedBy.RECONCILER` arguments become
         `EVENT`, and the prose with them. The two `@EnumSource(CompletedBy.class)` cases are
         **kept**: they now drive one value, and what they say is "every mechanism the type offers",
@@ -2126,11 +2141,13 @@ claim. T028 runs after them, not before, so the suite it characterises is the fi
         an assumption".
       * `persistence/RegisterBatchRepositoryIT` — five `CompletedBy.RECONCILER` arguments and the
         `hasMessageContaining("RECONCILER")` that read one back become `EVENT`.
-      * `adapter/report/EmailReportSinkStoreIT`, `batch/cli/ReportExceptionsCliTest`,
-        `adapter/fileservice/FileServicePayloadStoreIT` — three report fixtures whose dead batch
-        was failed `GENERATION_TIMED_OUT`; `RENDER_REQUEST_FAILED` instead, which is a reason
-        something still writes. The CSV one is about UTF-8 and quoting, and neither property
-        depends on which bounded code the row carries.
+      * `adapter/report/EmailReportSinkStoreIT`, `adapter/fileservice/FileServicePayloadStoreIT` —
+        two store fixtures whose dead batch was failed `GENERATION_TIMED_OUT`, which V7 is about to
+        refuse at the insert; `RENDER_REQUEST_FAILED` instead, which is a reason something still
+        writes. The CSV one is about UTF-8 and quoting, and neither property depends on which
+        bounded code the row carries. **Both are 004-owned** under the coordination contract, which
+        gives this tree `src/test/**` except `batch/cli` and any `api/` package — as is
+        `config/TelemetryPrivacyTest`, edited at T028 for the same reason.
       * `domain/BatchStateTest` — three `@CsvSource` move descriptions and one javadoc named the
         reconciler or its grace period as what makes a drawn arrow necessary. The arrows are
         unchanged; PENDING → GENERATED is now justified by the announcement that finds the batch by
