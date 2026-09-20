@@ -153,7 +153,8 @@ log(`implemented ${implemented.tasks_done.length}/${TASKS.length} tasks in ${imp
 function incomplete(work) {
   const out = []
   if (work.build_exit_code !== 0) out.push(synthetic('BLOCKER', `the build exited ${work.build_exit_code}: ${work.build_summary}`, 'make the full build exit 0, test-first'))
-  if (!work.commits.length) out.push(synthetic('BLOCKER', 'no commits were made', 'implement the range and commit it'))
+  // in resume mode the range may already be fully committed before this run: no new commit is fine then
+  if (!work.commits.length && !a.resume) out.push(synthetic('BLOCKER', 'no commits were made', 'implement the range and commit it'))
   // implementers sometimes return "T004 - what it did" rather than the bare id: count any id they name
   const done = new Set((work.tasks_done || []).flatMap(x => String(x).match(/T\d{3}/g) || []))
   const missing = TASKS.filter(t => !done.has(t))
