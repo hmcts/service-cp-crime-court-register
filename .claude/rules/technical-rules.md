@@ -132,8 +132,13 @@ private RedisHearingPayloadAdapter adapter;
 - Logging in tests: SLF4J only
 - Test commands: `./gradlew test` runs the whole suite — unit, integration and `*IT` classes alike,
   since there is no separate `integrationTest` task; the Testcontainers suites run under `test` and
-  need Docker only when those tests are in the selection. `./gradlew build` = compile + `test`; it
-  runs Checkstyle (`config/checkstyle/google_checks.xml`, `maxWarnings = 0`, main sources only)
-  and the JaCoCo coverage gate (`jacocoTestCoverageVerification`, wired into `check`) but not PMD.
-  PMD is explicit: `./gradlew pmdMain` (an `onlyIf` in `gradle/pmd.gradle` skips it unless it is
-  named on the command line, and `pmdTest` is disabled).
+  need Docker only when those tests are in the selection. `./gradlew build` = compile + `test` +
+  **every analysis**, because all of them are in `check` and none has to be named on a command
+  line: Checkstyle (`config/checkstyle/google_checks.xml`, `maxWarnings = 0`) over
+  **`checkstyleMain` and `checkstyleTest`, with `checkstyle-suppressions.xml` on the test sources**;
+  PMD, pinned to 7.22.0, over **`pmdMain` against `.github/pmd-ruleset.xml` and `pmdTest` against
+  `.github/pmd-test-ruleset.xml`**; and the JaCoCo coverage gate
+  (`jacocoTestCoverageVerification`, LINE ≥ 0.88 / BRANCH ≥ 0.85, with `Application` and
+  `config/**` excluded). Naming a task is a way to run one of them **sooner**, never a way to run
+  one at all — there is no `onlyIf` in `gradle/pmd.gradle` and `pmdTest` is not disabled
+  (constitution 2.0.3 removed both, and `CLAUDE.md`'s Build & Test table has said so since).

@@ -16,7 +16,7 @@ You are a senior Spring Boot developer on the Crime Common Platform (MOJ/HMCTS),
 | Ports          | 8082 local / 4550 Kubernetes                     |
 | Persistence    | PostgreSQL + **Flyway** (`db/migration/V*__*.sql`) — never Liquibase |
 | Messaging      | Azure Service Bus (`com.azure:azure-messaging-servicebus`) |
-| Static analysis| Checkstyle `google_checks` (`maxWarnings = 0`, main only, runs in `check`); PMD (`.github/pmd-ruleset.xml`) explicit-only via `./gradlew pmdMain`; JaCoCo gate LINE ≥ 0.88 / BRANCH ≥ 0.85 |
+| Static analysis| All of it runs in `check`, and therefore in `./gradlew build`. Checkstyle `google_checks` (`maxWarnings = 0`) over main **and** test sources; PMD pinned to 7.22.0 — `pmdMain` on `.github/pmd-ruleset.xml`, `pmdTest` on `.github/pmd-test-ruleset.xml`; JaCoCo gate LINE ≥ 0.88 / BRANCH ≥ 0.85 |
 
 ## Implementation Standards
 
@@ -67,9 +67,11 @@ If the build fails:
 2. Fix the root cause (do NOT suppress warnings, do NOT skip tests, do NOT `@SuppressWarnings` without a justifying comment)
 3. Re-run until green
 
-Note `-Werror` is on for `JavaCompile` — warnings are build failures. After significant Java changes also run:
+Note `-Werror` is on for `JavaCompile` — warnings are build failures. `build` already runs PMD on
+main and test sources; naming it gets the verdict sooner on a long change, it is not what makes it
+run:
 ```bash
-./gradlew pmdMain
+./gradlew pmdMain pmdTest
 ```
 
 ## Code Generation Checklist
@@ -97,7 +99,7 @@ Note `-Werror` is on for `JavaCompile` — warnings are build failures. After si
 1. Read the relevant design documents (`specs/*/spec.md`, `plan.md`, `tasks.md`; the design itself is the Confluence page linked from `CLAUDE.md`) before coding
 2. For each behaviour change, write the failing test first; confirm it fails for the right reason
 3. Implement the minimum to pass, following `.claude/rules/technical-rules.md`
-4. Run `./gradlew build` (and `./gradlew pmdMain` for new code)
+4. Run `./gradlew build` — it runs the suite, Checkstyle, PMD and the coverage gate
 5. Report what was created/modified
 
 Do NOT skip the build step. Every implementation must compile with `-Werror`, satisfy PMD, and pass existing tests.
