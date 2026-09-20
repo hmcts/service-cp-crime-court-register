@@ -1548,6 +1548,19 @@ numbers.
       that says the two released numbers are in neither account and what `contended` means, the
       removal of `GENERATION_RECONCILED` and `reconciled()`, and the two prose paragraphs that
       described the retired series.
+      **The retirement is pinned by absence** (added in gate round 1):
+      `GenerationMetricsTest.Surface.no_series_should_be_named_for_the_retired_reconciler` asserts
+      that no `courtregister_generation_reconciled_total` meter is registered after
+      `exerciseEveryInstrument()`, and — reflectively — that `GenerationMetrics` declares no
+      `GENERATION_RECONCILED` field and no `reconciled()` method. The surface case above could not
+      carry the claim: it lists what `exerciseEveryInstrument` exercises, so a re-added
+      `reconciled()` would register a series no case there ever asks for. Run subtractively as the
+      convention asks: the constant and the method were temporarily restored, **red** (`flock … test
+      --tests '*GenerationMetricsTest*'` → **47 tests completed, 1 failed**, "Expecting [… \"
+      GENERATION_RECONCILED\" …] not to contain …", an assertion and not a compile error), then
+      removed again, **green** (the same command → BUILD SUCCESSFUL, 47 tests, 0 failures). The run
+      line's `doesNotContain("reconciled")` in `RegisterGenerationJobTest` remains the pin on the
+      line; this is the pin on the series.
       **The reconciler is left compiling with its call pointed at nothing** (orchestrator's
       instruction): `GenerationReconciler.settle` no longer counts, under a comment naming T022 as
       the deletion, and the six counter assertions in `GenerationReconcilerTest` go with the

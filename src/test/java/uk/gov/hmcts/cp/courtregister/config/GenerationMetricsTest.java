@@ -10,7 +10,10 @@ import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
@@ -602,6 +605,43 @@ class GenerationMetricsTest {
                     .toList())
                     .containsExactlyInAnyOrder(
                             "notified-nobody", "202", "unreadable-timed-out", "accepted");
+        }
+
+        /**
+         * And no series for the mechanism the increment retired.
+         *
+         * <p>A retirement is only done when nothing can quietly put it back, and the surface case
+         * above cannot say so: it lists the instruments {@code exerciseEveryInstrument} exercises,
+         * so a {@code reconciled()} re-added to {@code GenerationMetrics} and called by a
+         * re-added writer would register a series no case here ever asks for. The name is
+         * therefore asserted by absence, and the two things that could reach it - the constant a
+         * dashboard would be written against and the method a caller would reach for - are
+         * asserted absent too, because a name that exists is a name something will use.
+         *
+         * <p>The series was {@code courtregister_generation_reconciled_total}: outcomes the
+         * grace-period pass fetched rather than received. Nothing is asked of systemdocgenerator
+         * between runs any more (FR-006), so it counts a mechanism this service does not have.
+         */
+        @Test
+        void no_series_should_be_named_for_the_retired_reconciler() {
+            exerciseEveryInstrument();
+
+            assertThat(registry.find("courtregister_generation_reconciled_total").meter())
+                    .as("no vocabulary outlives the thing it names: an outcome this service "
+                            + "fetched is a thing that no longer happens")
+                    .isNull();
+            assertThat(Arrays.stream(GenerationMetrics.class.getDeclaredFields())
+                            .map(Field::getName)
+                            .toList())
+                    .as("the constant is what a dashboard and an alert rule are written against, "
+                            + "and one that still compiles is one a later change will reach for")
+                    .doesNotContain("GENERATION_RECONCILED");
+            assertThat(Arrays.stream(GenerationMetrics.class.getDeclaredMethods())
+                            .map(Method::getName)
+                            .toList())
+                    .as("and the method is what would register it again on first call, since a "
+                            + "counter comes into being when something increments it")
+                    .doesNotContain("reconciled");
         }
 
         @Test
