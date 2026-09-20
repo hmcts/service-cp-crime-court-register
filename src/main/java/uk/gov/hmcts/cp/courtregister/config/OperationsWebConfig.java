@@ -6,11 +6,17 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
 import uk.gov.hmcts.cp.courtregister.api.OperationsActionFilter;
+import uk.gov.hmcts.cp.courtregister.api.OperationsErrorAttributes;
 
 /**
  * What the operations API needs registered on the servlet container.
  *
- * <p>One filter so far, and its order is the whole reason it is registered here rather than
+ * <p>Two beans, and each is here because something about it has to be stated rather than
+ * annotated. The filter's order is the first; the error attributes' replacement of Boot's own bean
+ * is the second - a {@code @Component} would do it, but then the reason it exists would live
+ * nowhere near the filter whose refusals it renders.
+ *
+ * <p>The filter's order is the whole reason it is registered here rather than
  * annotated into existence: {@link OperationsActionFilter} must run <strong>ahead of</strong>
  * {@code cp-auth-rules-filter} (which the library places at {@code HIGHEST_PRECEDENCE + 30}) and
  * of {@code cp-audit-filter-springboot} (fixed at {@code +50}), because both of them read the
@@ -42,5 +48,20 @@ public class OperationsWebConfig {
                 new FilterRegistrationBean<>(new OperationsActionFilter());
         registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
         return registration;
+    }
+
+    /**
+     * Replaces the body Boot writes for an error it rendered itself.
+     *
+     * <p>The authorisation filter refuses through {@code sendError}, which forwards to
+     * {@code /error}: the 401 and the 403 are written there and not by any advice of ours. Boot's
+     * default body echoes the request path, which on an unmapped path is a string the caller typed
+     * (FR-025, FR-027).
+     *
+     * @return the bounded error body: a status, a title and a bounded reason, and nothing else
+     */
+    @Bean
+    public OperationsErrorAttributes operationsErrorAttributes() {
+        return new OperationsErrorAttributes();
     }
 }

@@ -462,19 +462,42 @@ wants to claim beyond this.
       gated on `courtregister.operations.enabled`, default on, and mapped over every path rather
       than over `/operations/*` so that the list of this service's paths lives in exactly one
       place.)
-- [ ] **T012** [P] [US2] `api/OperationsErrorAttributesTest` (new) — **the `/error` body carries
+- [x] **T012** [P] [US2] `api/OperationsErrorAttributesTest` (new) — **the `/error` body carries
       nothing the caller typed**. The authorisation filter refuses through `sendError`, which
       forwards to `/error` and never reaches a `@RestControllerAdvice` (research R5), and Spring's
       default body echoes the request path. Cases: a 401 body and a 403 body carry `status`, `title`
       and a bounded `reason` and **no** `path`, `trace`, `message` or `exception`; an unmapped path's
       body does not contain the path that was tried. Seam: `api/OperationsErrorAttributes`
       skeleton. Red: the body contains `path`.
-- [ ] **T013** [US2] `api/OperationsErrorAttributes` and the `authz.http.*` settings block in
+      (Landed with T013 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. 15 tests, 0 failures. The cases go through the bean directly rather than through a
+      container, because `/error` is reached by a forward and the question is what the bean answers
+      for a recorded status - and because that way every case can ask for **everything**
+      (`MESSAGE`, `STACK_TRACE`, `BINDING_ERRORS`, `PATH`, `STATUS`, `ERROR`) and assert that none
+      of it arrives. The request carries a distinctive typed path and a line of library words in
+      `jakarta.servlet.error.message`, and the assertions are over the body's **values**, so a leak
+      through any key at all fails rather than only a leak through the keys the task predicted.
+      Deviation, additive: the 401/403 cases assert the body is **exactly** the three fields
+      (`containsExactlyInAnyOrderEntriesOf`) as well as that it carries none of Boot's seven, which
+      is the stronger form of the same rule.)
+- [x] **T013** [US2] `api/OperationsErrorAttributes` and the `authz.http.*` settings block in
       `application.yaml` — the block exactly as research R1 records it, including
       `exclude-path-prefixes` re-listing `/actuator` **and** `/error` (setting it replaces the
       library's list wholesale, and dropping `/actuator` makes the probes answer 401),
       `reload-on-each-request: false` in deployed environments (the library default is `true`), and
       `deny-when-no-rules: true`. Green: T012.
+      (green: `OperationsErrorAttributesTest` 15 tests, 0 failures; the whole `config` package and
+      `TestProfileContextTest` beside it, green, so the new block binds and the replaced
+      `ErrorAttributes` bean disturbs no context. Checkstyle and PMD clean on main and test.
+      The block lands beside `authz.http.enabled`, which keeps its own comment and its
+      `${AUTHZ_HTTP_ENABLED:true}`; no refusal, no discriminator and no second place to set it, per
+      the warning on this task. Every key was checked against `HttpAuthzProperties`' own fields
+      rather than against the README. The bean is registered in `config/OperationsWebConfig` beside
+      the action filter rather than annotated `@Component`, so the reason it exists sits next to
+      the filter whose refusals it renders. Six bounded codes and no more: `not-identified`,
+      `not-permitted`, `no-such-path`, `method-not-allowed`, and the two family codes
+      `request-refused` and `unexpected-failure`; the title is the framework's own reason phrase,
+      which is a closed set, and a status it does not name is titled `Error`.)
       ⚠ `authz.http.enabled` itself **already exists** in `application.yaml`, at
       `${AUTHZ_HTTP_ENABLED:true}` (T005, gate round 3): the rest of the block lands **beside** that
       key rather than restating it, and the key keeps its comment. There is **no** start-up refusal

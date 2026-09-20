@@ -581,6 +581,46 @@ authz:
   http:
     enabled: ${AUTHZ_HTTP_ENABLED:true}
 
+    # Where the caller's groups come from. The caller is named by the CJSCPPUID header and NEVER in
+    # the path, so this template is a plain URL; usersgroups answers the logged-in user's
+    # permissions for whoever that header asserts (research R4, and the trust boundary FR-035 puts
+    # on it - the header is a gateway assertion, and deployment gates 2 and 3 are what make it one).
+    identity-url-template: ${CP_BASE_URL:http://localhost:8080}/usersgroups-query-api/query/api/rest/usersgroups/users/logged-in-user/permissions
+    user-id-header: "CJSCPPUID"
+
+    # The header `OperationsActionFilter` writes and this filter reads. It is never the caller's
+    # value: the request is wrapped before this filter runs, so what arrives here is the action this
+    # service derived from the path and the method.
+    action-header: "CPP-ACTION"
+    accept-header: "application/vnd.usersgroups.get-logged-in-user-permissions+json"
+
+    # The rules, globbed off the classpath. `acl/operations-rules.drl` is the only file that matches
+    # and the only one there may be: seven allow rules and no deny rule.
+    drools-classpath-pattern: "classpath:/acl/**/*.drl"
+
+    # The library default is TRUE - it recompiles the rules on every request. Off by default here;
+    # a developer editing rules against a running service sets AUTHZ_RELOAD_RULES=true.
+    reload-on-each-request: ${AUTHZ_RELOAD_RULES:false}
+
+    # False, because our own filter always supplies an action for the paths this service serves. Set
+    # true, a request to any OTHER path - actuator's, or one nothing is mapped to - would be refused
+    # 400 for having no action rather than answered as the framework answers it.
+    action-required: false
+
+    # DEFAULT-DENY, and it also governs "the DRL failed verification": a rules file that will not
+    # compile refuses every action rather than admitting everything. This is what makes the absence
+    # of a rule the denial, and therefore what makes condition (a) of Principle III readable in
+    # `acl/operations-rules.drl` rather than inferred from code.
+    deny-when-no-rules: true
+
+    # SETTING THIS REPLACES THE LIBRARY'S OWN LIST WHOLESALE. `/actuator` has to be re-listed or the
+    # liveness and readiness probes start answering 401 and the pod is rolled for ever; `/error` has
+    # to be, because the filter refuses through `sendError`, which forwards there - a refusal whose
+    # own forward is refused answers nothing at all.
+    exclude-path-prefixes:
+      - "/actuator"
+      - "/error"
+
 audit:
   http:
     enabled: ${HTTP_AUDIT_ENABLED:true}
