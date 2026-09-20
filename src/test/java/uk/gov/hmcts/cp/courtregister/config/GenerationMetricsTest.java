@@ -34,9 +34,9 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
  *
  * <p>Three of them exist because a nightly, event-completed flow cannot be read from counters of
  * work that happened. The skipped counter separates "the flag is off" from "the flag could not be
- * read", which look identical from outside and are not the same night. The reconciled counter
- * separates an outcome that arrived from one that had to be fetched, because a run whose outcomes
- * all come from the reconciler is a broker to look at rather than a renderer. And the three age
+ * read", which look identical from outside and are not the same night. The released counters say
+ * what a run's first act had to give back, in batches and in registers, because a batch is one
+ * document and one e-mail while a register is one hearing's youth defendants. And the three age
  * gauges are the only reading that moves when nothing happens at all - a record that is never
  * batched, a batch whose document never comes, or a batch whose render request was never recorded,
  * touches no counter here, which is exactly the
@@ -214,8 +214,8 @@ class GenerationMetricsTest {
 
         @Test
         void every_batch_should_be_timed_however_its_outcome_arrived() {
-            // One distribution, not one per completion route: whether the event or the reconciler
-            // brought the answer is the reconciled counter's question, not this one's.
+            // One distribution, not one per completion route: a batch is timed from the request
+            // to the outcome, whatever the outcome turned out to be.
             metrics.generationLatency(Duration.ofSeconds(30));
             metrics.generationLatency(Duration.ofSeconds(60));
 
@@ -228,33 +228,6 @@ class GenerationMetricsTest {
             metrics.generationLatency(Duration.ofSeconds(1));
 
             assertThat(tagKeysOf(GenerationMetrics.GENERATION_LATENCY)).isEmpty();
-        }
-    }
-
-    /**
-     * The counter that says the completion path is not working.
-     *
-     * <p>A reconciled outcome is a correct outcome, so nothing else in the flow marks it as
-     * unusual. A night where every batch had to be fetched by the grace-period query is a durable
-     * subscription that is not delivering, and this series is the only place it shows.
-     */
-    @Nested
-    @DisplayName("courtregister_generation_reconciled_total")
-    class Reconciled {
-
-        @Test
-        void an_outcome_the_reconciler_fetched_should_count_on_its_own_series() {
-            metrics.reconciled();
-            metrics.reconciled();
-
-            assertThat(counter(GenerationMetrics.GENERATION_RECONCILED)).isEqualTo(2);
-        }
-
-        @Test
-        void it_should_carry_no_label() {
-            metrics.reconciled();
-
-            assertThat(tagKeysOf(GenerationMetrics.GENERATION_RECONCILED)).isEmpty();
         }
     }
 
@@ -529,7 +502,6 @@ class GenerationMetricsTest {
                             GenerationMetrics.BATCHES,
                             GenerationMetrics.GENERATION_REQUEST,
                             GenerationMetrics.GENERATION_LATENCY,
-                            GenerationMetrics.GENERATION_RECONCILED,
                             GenerationMetrics.RELEASED_BATCHES,
                             GenerationMetrics.RELEASED_REGISTERS,
                             GenerationMetrics.RELEASE_CONTENDED,
@@ -591,7 +563,6 @@ class GenerationMetricsTest {
             metrics.batchCompleted(BatchStatus.NOTIFIED);
             metrics.generationRequested(202);
             metrics.generationLatency(Duration.ofSeconds(30));
-            metrics.reconciled();
             metrics.staleBatchesReleased(1);
             metrics.staleRegistersReleased(2);
             metrics.staleBatchesContended(1);
@@ -707,11 +678,11 @@ class GenerationMetricsTest {
 
         @Test
         @DisplayName("the unlabelled counter scrapes as a single, unlabelled series")
-        void the_reconciled_counter_should_scrape_without_a_label_set() {
-            scraped.reconciled();
+        void the_released_batches_counter_should_scrape_without_a_label_set() {
+            scraped.staleBatchesReleased(1);
 
-            assertThat(samplesOf(GenerationMetrics.GENERATION_RECONCILED))
-                    .containsExactly(GenerationMetrics.GENERATION_RECONCILED);
+            assertThat(samplesOf(GenerationMetrics.RELEASED_BATCHES))
+                    .containsExactly(GenerationMetrics.RELEASED_BATCHES);
         }
 
         @Test
@@ -723,7 +694,7 @@ class GenerationMetricsTest {
             scraped.batchCompleted(BatchStatus.NOTIFIED_NOBODY);
             scraped.generationRequested(202);
             scraped.generationLatency(Duration.ofSeconds(30));
-            scraped.reconciled();
+            scraped.staleBatchesReleased(1);
             scraped.runSkipped(new Unreadable(UnreadableReason.MALFORMED));
             scraped.notificationSettled(NotificationStatus.FAILED, null);
 

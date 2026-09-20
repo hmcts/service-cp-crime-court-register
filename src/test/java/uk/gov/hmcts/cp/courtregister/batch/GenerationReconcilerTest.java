@@ -232,11 +232,6 @@ class GenerationReconcilerTest {
         when(renderer.query(eq(batch.payloadFileId()), any())).thenReturn(Optional.empty());
     }
 
-    private double reconciled() {
-        final Counter counter = registry.find(GenerationMetrics.GENERATION_RECONCILED).counter();
-        return counter == null ? ABSENT : counter.count();
-    }
-
     private static List<String> atInfoOrAbove(final CapturedLog log) {
         final List<String> written = new ArrayList<>();
         log.events().stream()
@@ -301,10 +296,6 @@ class GenerationReconcilerTest {
                             + "had nothing to catch")
                     .isZero();
             verifyNoInteractions(renderer, sink, store);
-            softly.assertThat(reconciled())
-                    .as("and a counter that moved on a run that reconciled nothing would make "
-                            + "every night look like a broker to investigate")
-                    .isEqualTo(ABSENT);
         }
     }
 
@@ -375,18 +366,14 @@ class GenerationReconcilerTest {
         }
 
         @Test
-        void a_fetched_document_should_be_counted_and_reported_as_reconciled() {
+        void a_fetched_document_should_be_reported_as_a_completion_this_pass_made() {
             generatedDocument();
 
             final int completed = reconcile();
 
-            softly.assertThat(reconciled())
-                    .as("an outcome this service had to go and fetch is the one reading that says "
-                            + "the event path needs looking at")
-                    .isEqualTo(1);
             softly.assertThat(completed)
-                    .as("and the run report carries the same number, so an operator reading the "
-                            + "report and an operator reading the counter see one story")
+                    .as("this pass settled it rather than the topic, and the number it answers "
+                            + "with is what the caller reports")
                     .isEqualTo(1);
         }
 
@@ -437,16 +424,12 @@ class GenerationReconcilerTest {
         }
 
         @Test
-        void a_fetched_refusal_should_be_counted_and_reported_as_reconciled() {
+        void a_fetched_refusal_should_be_reported_as_a_completion_this_pass_made() {
             generatingSince(batch);
             answers(batch, new DocumentStatus(null, null, FAILED_AT, SDG_REASON));
 
             final int completed = reconcile();
 
-            softly.assertThat(reconciled())
-                    .as("a refusal fetched here is an outcome the topic owed and did not deliver, "
-                            + "exactly as a document is")
-                    .isEqualTo(1);
             softly.assertThat(completed)
                     .as("and it is one of the batches this run completed rather than the topic")
                     .isEqualTo(1);
@@ -506,19 +489,15 @@ class GenerationReconcilerTest {
         }
 
         @Test
-        void a_timed_out_batch_should_be_counted_and_reported_as_reconciled() {
+        void a_timed_out_batch_should_be_reported_as_a_completion_this_pass_made() {
             generatingSince(batch);
             saysNothingAbout(batch);
 
             final int completed = reconcile();
 
-            softly.assertThat(reconciled())
-                    .as("the set the counter reports is the set completed_by names RECONCILER, "
-                            + "and GENERATION_TIMED_OUT is one of the two reasons that carries it")
-                    .isEqualTo(1);
             softly.assertThat(completed)
                     .as("a night whose batches all timed out is the loudest broker problem there "
-                            + "is, and a report that counted none of them would be silent about it")
+                            + "is, and a pass that answered none of them would be silent about it")
                     .isEqualTo(1);
         }
     }
@@ -560,12 +539,10 @@ class GenerationReconcilerTest {
             generatingSince(batch);
             queryFails(batch);
 
-            reconcile();
-
-            softly.assertThat(reconciled())
+            softly.assertThat(reconcile())
                     .as("nothing was learned and nothing was decided, so there is no completion "
-                            + "for the counter to report")
-                    .isEqualTo(ABSENT);
+                            + "for the run to report")
+                    .isZero();
         }
 
         @Test
@@ -701,17 +678,13 @@ class GenerationReconcilerTest {
         }
 
         @Test
-        void a_completed_stale_pending_batch_should_be_counted_and_reported_as_reconciled() {
+        void a_completed_stale_pending_batch_should_be_reported_as_a_completion_this_pass_made() {
             generatingSince();
             pendingSince(batch);
             saysNothingAbout(batch);
 
             final int completed = reconcile();
 
-            softly.assertThat(reconciled())
-                    .as("a batch this service had to go and settle is a completion the run made "
-                            + "rather than one the topic delivered, whichever state it was stuck in")
-                    .isEqualTo(1);
             softly.assertThat(completed)
                     .as("and the run report carries the same number")
                     .isEqualTo(1);

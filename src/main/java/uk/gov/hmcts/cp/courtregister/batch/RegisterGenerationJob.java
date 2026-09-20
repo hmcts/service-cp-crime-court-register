@@ -631,6 +631,14 @@ public class RegisterGenerationJob {
      * read that could not be taken, and the four zeroes under it are not a night that settled
      * nothing.
      *
+     * <p><strong>And three numbers that are in neither account.</strong>
+     * {@code released_batches} and {@code released_registers} are what the run's first act gave
+     * back, and the registers among them are re-batched by this same run - so they are already
+     * inside {@code rows} and are deliberately not added to it or to anything else (FR-009).
+     * {@code contended} is what the pass could not give back: those batches are untouched and stale
+     * still, so the next run reaches them again, and a line that said nothing about them would
+     * describe a night as complete that had left work undone.
+     *
      * @param report what the run did
      * @return that same report, so a caller can write the line and answer with it in one step
      */
@@ -641,7 +649,8 @@ public class RegisterGenerationJob {
         LOG.info("event={} run_id={} gate={} reason={} batches={} requested={} generating={} failed={} "
                         + "pending={} deferred={} rows={} rows_generating={} rows_failed={} "
                         + "rows_pending={} rows_deferred={} snapshot={} generated={} notified={} "
-                        + "rows_generated={} rows_notified={} reconciled=0 duration_ms={}",
+                        + "rows_generated={} rows_notified={} released_batches={} "
+                        + "released_registers={} contended={} duration_ms={}",
                 RUN_EVENT, RunCorrelation.current(), gateOf(report.gateDecision()),
                 reasonOf(report.gateDecision()),
                 outcomes.values().stream().mapToInt(Integer::intValue).sum(), report.requested(),
@@ -650,8 +659,8 @@ public class RegisterGenerationJob {
                 counted(rows, BatchStatus.GENERATING), counted(rows, BatchStatus.FAILED),
                 counted(rows, BatchStatus.PENDING), report.deferredRows(),
                 settled.read() ? TAKEN : UNREAD, settled.generated(), settled.notified(),
-                settled.generatedRows(), settled.notifiedRows(),
-                report.duration().toMillis());
+                settled.generatedRows(), settled.notifiedRows(), report.releasedBatches(),
+                report.releasedRegisters(), report.contended(), report.duration().toMillis());
         return report;
     }
 

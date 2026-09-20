@@ -285,7 +285,9 @@ public class GenerationReconciler {
         int completed = 0;
         for (final RegisterBatch batch : overdue) {
             if (reconcileOne(batch, silence)) {
-                metrics.reconciled();
+                // Counted nowhere since T018 retired courtregister_generation_reconciled_total:
+                // nothing is asked of systemdocgenerator between runs any more, so the series
+                // describes a mechanism that is about to stop existing. T022 deletes this class.
                 completed++;
             }
         }

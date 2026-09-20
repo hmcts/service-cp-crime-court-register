@@ -25,9 +25,9 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
  *
  * <p>Two of these answer questions nothing else in the flow can. A skipped run is counted by the
  * reason it was skipped, because "the flag is off" and "the flag could not be read" look identical
- * from outside and are not the same night; and a reconciled completion is counted separately from an
- * ordinary one, because a run whose outcomes all arrive by reconciliation is a broker to look at
- * rather than a renderer.
+ * from outside and are not the same night; and what a run's first act had to give back is counted
+ * in batches and in registers, because a batch is one document and one e-mail while a register is
+ * one hearing's youth defendants and neither answers the other's question.
  *
  * <p>The eight gauges are the state a nightly flow cannot be understood without between runs: how
  * old the oldest unbatched record is, how long the oldest batch has been waiting for a document,
@@ -56,7 +56,6 @@ public class GenerationMetrics {
     public static final String BATCHES = "courtregister_batches_total";
     public static final String GENERATION_REQUEST = "courtregister_generation_request_total";
     public static final String GENERATION_LATENCY = "courtregister_generation_latency";
-    public static final String GENERATION_RECONCILED = "courtregister_generation_reconciled_total";
     public static final String RELEASED_BATCHES = "courtregister_generation_released_batches_total";
     public static final String RELEASED_REGISTERS =
             "courtregister_generation_released_registers_total";
@@ -325,13 +324,6 @@ public class GenerationMetrics {
                 .description("Time from the render request to the batch's outcome")
                 .register(registry)
                 .record(latency);
-    }
-
-    /**
-     * Counts an outcome the grace-period reconciler had to fetch rather than receive.
-     */
-    public void reconciled() {
-        counter(GENERATION_RECONCILED).increment();
     }
 
     /**

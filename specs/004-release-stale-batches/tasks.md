@@ -1521,13 +1521,30 @@ numbers.
       from the moment it answers — the numbers are a diagnostic beside the night's two accounts and
       are not folded into either — and `RunReport` still carries `reconciled`, which is T017/T018's
       to move.
-- [ ] T018 [US4] `domain/RunReport.java`, `batch/RegisterGenerationJob.java`,
+- [x] T018 [US4] `domain/RunReport.java`, `batch/RegisterGenerationJob.java`,
       `config/GenerationMetrics.java` — make T017 green. `reconciled` → `releasedBatches` and
       `releasedRegisters` on the record, in `RunTally` and in the `recorded(...)` format string, with
       the javadoc saying — where it says what **does** add up — that these two do not, because the
       registers they count are re-batched by the same run and are already inside `rows()`. Retire
       `GENERATION_RECONCILED` and `reconciled()`; add
       `courtregister_generation_released_batches_total` and `_released_registers_total`.
+      **What Phase 3 had already landed**, per the gate record above: both released counters and
+      `courtregister_generation_release_contended_total` already existed and are already exercised,
+      so this task is the line and the retirement. The record and `RunTally` moved with T017's
+      seam; what landed here is the format string's three keys, the paragraph in `recorded(...)`
+      that says the two released numbers are in neither account and what `contended` means, the
+      removal of `GENERATION_RECONCILED` and `reconciled()`, and the two prose paragraphs that
+      described the retired series.
+      **The reconciler is left compiling with its call pointed at nothing** (orchestrator's
+      instruction): `GenerationReconciler.settle` no longer counts, under a comment naming T022 as
+      the deletion, and the six counter assertions in `GenerationReconcilerTest` go with the
+      series — the four cases they shared with a `completed` assertion keep that one and are
+      renamed to what they now claim. **Noted for T022**: the reconciler still answers a count
+      nothing reads, and its schedule is still live until the class is deleted.
+      **Green** (`flock -w 7200 … ./gradlew test --tests '*RegisterGenerationJobTest*' --tests
+      '*RunReportTest*' --tests '*GenerationMetricsTest*' --tests '*GenerationReconcilerTest*'
+      -Dtest.noFailFast=true`): BUILD SUCCESSFUL, **162 tests, 0 failures, 0 errors**, the eleven
+      red assertions among them.
 - [ ] T020 [US1] `config/GenerationConfig.java`, `config/SchedulingConfig.java` — make T019 green. The
       `generationReconciler` bean becomes `staleBatchReleaser`, taking `properties.staleAfter()` and
       `properties.lockAtMostFor()`; the job bean's `ObjectProvider<GenerationReconciler>` becomes
