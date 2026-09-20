@@ -35,6 +35,10 @@ import org.springframework.context.annotation.FilterType;
  * auto-configuration class from also being picked up as a component. Neither is optional, and the
  * failure the first one prevents surfaces nowhere near this class.
  *
+ * <p>The root is named as {@code basePackageClasses = Application.class} rather than as the string
+ * {@code uk.gov.hmcts.cp}: it is the same package either way, and this way moving this class moves
+ * the scan with it instead of quietly scanning a tree it no longer lives in.
+ *
  * <p>{@code cp-auth-rules-filter} needs no exclusion: its package root is
  * {@code uk.gov.moj.cpp.authz}, outside this tree.
  *
@@ -43,7 +47,7 @@ import org.springframework.context.annotation.FilterType;
  */
 @SpringBootApplication
 @ComponentScan(
-        basePackages = "uk.gov.hmcts.cp",
+        basePackageClasses = Application.class,
         excludeFilters = {
             @ComponentScan.Filter(type = FilterType.CUSTOM, classes = TypeExcludeFilter.class),
             @ComponentScan.Filter(
