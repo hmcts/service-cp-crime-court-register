@@ -138,6 +138,16 @@ class CliModeConfigTest {
     private static final String ERROR_FALLBACK = "basicErrorController";
 
     /**
+     * The controllers a pod holds since increment 005 replaced the commands with endpoints.
+     *
+     * <p>{@code courtregister.cli} decides who starts - the consumer, the scheduler and the event
+     * listener - and it has never decided what is mapped, so both contexts hold the same set. The
+     * assertion stays "exactly these and nothing else" for the reason the field above gives.
+     */
+    private static final List<String> OPERATIONS_CONTROLLERS =
+            List.of("flagController", "batchesController", "registersController");
+
+    /**
      * Whatever this context has scheduled, which is nothing at all where no scheduling
      * configuration was imported.
      *
@@ -169,6 +179,15 @@ class CliModeConfigTest {
     }
 
     /**
+     * The controllers either context is permitted to hold.
+     *
+     * @return the operations controllers and Boot's own error fallback
+     */
+    private static List<String> withTheErrorFallback() {
+        return Stream.concat(OPERATIONS_CONTROLLERS.stream(), Stream.of(ERROR_FALLBACK)).toList();
+    }
+
+    /**
      * Every bean on this context that serves HTTP, by the two annotations that make one.
      *
      * <p>{@code @RestController} carries {@code @Controller}, so the first name would find both;
@@ -176,7 +195,7 @@ class CliModeConfigTest {
      * and it should not depend on a meta-annotation staying where it is.
      *
      * @param context the context under assertion
-     * @return the bean names, which must be none
+     * @return the bean names, which must be exactly {@link #withTheErrorFallback()}
      */
     private static List<String> controllerBeans(final ApplicationContext context) {
         return Stream.concat(
@@ -286,12 +305,13 @@ class CliModeConfigTest {
         }
 
         @Test
-        @DisplayName("still serves no controller but Boot's error fallback")
-        void a_cli_context_should_hold_no_controller_but_the_error_fallback() {
+        @DisplayName("serves the same controllers an ordinary pod does, and nothing else")
+        void a_cli_context_should_hold_the_operations_controllers_and_nothing_else() {
             assertThat(controllerBeans(context))
-                    .as("FR-016: the operations surface is a command in the image, and a CLI "
-                            + "context is not the place a first endpoint arrives through")
-                    .containsExactly(ERROR_FALLBACK);
+                    .as("courtregister.cli decides who starts, never what is mapped: a command "
+                            + "JVM that held a different surface from the pod it runs beside "
+                            + "would be a second shape of this service")
+                    .containsExactlyInAnyOrderElementsOf(withTheErrorFallback());
         }
     }
 
@@ -420,11 +440,12 @@ class CliModeConfigTest {
         }
 
         @Test
-        @DisplayName("serves no controller either")
-        void an_ordinary_pod_should_hold_no_controller_but_the_error_fallback() {
+        @DisplayName("serves the operations controllers, and nothing else of ours")
+        void an_ordinary_pod_should_hold_the_operations_controllers_and_nothing_else() {
             assertThat(controllerBeans(context))
-                    .as("actuator only, on every shape of this service (constitution Principle III)")
-                    .containsExactly(ERROR_FALLBACK);
+                    .as("actuator and the named operator actions, on every shape of this service "
+                            + "(constitution Principle III)")
+                    .containsExactlyInAnyOrderElementsOf(withTheErrorFallback());
         }
     }
 }

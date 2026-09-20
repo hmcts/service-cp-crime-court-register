@@ -605,6 +605,23 @@ the "a controller may not hold a repository" rule both land.
       fill it in again.)
 - [x] **T019** [US1] [US6] `api/BatchesController#list`, `api/RegistersController#recordedWhileOff`
       and their dtos. Green: T018.
+      (**What the first full build after Phase 3 found, and how it was closed.** 3744 tests, 12
+      failed, in three families - all three of them "the repository still says there is no
+      controller", which stopped being true the moment the first endpoint landed:
+      • `config/GenerationMetricsContextTest` and `adapter/publicevents/DocumentEventListenerIT`
+        would not refresh - `No qualifying bean of type FeatureFlagReader` for `flagController`.
+        Both run on the **`test` profile with `courtregister.generation.enabled=true`**, and both
+        configurations that contribute a reader (`LiveFeatureFlagConfig`, `StubGenerationConfig`)
+        are `@Profile("!test")`, so that combination has the switch without the bean. Closed by
+        giving `FlagController` the profile condition beside its property one, which is the same
+        sentence the reader's own configuration carries.
+      • `config/HttpSurfaceTest.OnAGeneratingPod` and both `config/CliModeConfigTest` context cases
+        asserted `containsExactly("basicErrorController")`. Re-pointed to the three operations
+        controllers plus the fallback, **keeping the "exactly these and nothing else" force** - a
+        controller arriving from a dependency, or a business endpoint arriving without the
+        constitution amendment Principle III requires, still fails there. The list grows with the
+        phases; **T056** still owes the re-point that stops naming beans at all, and **T054** still
+        owes `CliModeConfigTest`'s deletion.)
       (green: both suites 14 tests, 0 failures; the whole `api` package, `TestProfileContextTest`
       and `LogStatementSweepTest` beside them, green. Checkstyle and PMD clean on main and test.
       Each controller parses, calls `BatchListingService`, and maps - no repository, no decision.

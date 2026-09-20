@@ -80,6 +80,22 @@ class HttpSurfaceTest {
      */
     private static final String ERROR_FALLBACK = "basicErrorController";
 
+    /**
+     * The controllers a pod that serves the operations API holds, and the only ones it may.
+     *
+     * <p>Increment 005 replaced the six operations commands with seven endpoints under
+     * {@code /operations/**}, so "no controller of ours exists" stopped being true the moment the
+     * first one landed. What has not changed is the force of the assertion: it is still "exactly
+     * these and nothing else", so a controller arriving from a dependency, or a business endpoint
+     * arriving without the constitution amendment Principle III requires, still fails here.
+     *
+     * <p>The list grows with the phases; T056 re-points this suite from naming beans to asserting
+     * that every mapped path is under {@code /actuator} or {@code /operations}, which is the form
+     * that stops caring how many controllers there are.
+     */
+    private static final List<String> OPERATIONS_CONTROLLERS =
+            List.of("flagController", "batchesController", "registersController");
+
     private final MockMvc mockMvc;
 
     private final ApplicationContext context;
@@ -183,13 +199,15 @@ class HttpSurfaceTest {
         }
 
         @Test
-        @DisplayName("still serves no controller: the operations surface is a CLI, not an API")
-        void a_generating_pod_should_hold_no_controller_but_the_error_fallback() {
+        @DisplayName("serves the operations controllers, and nothing else of ours")
+        void a_generating_pod_should_hold_the_operations_controllers_and_nothing_else() {
             assertThat(controllerBeans(context))
-                    .as("FR-016 says the tool ships in the image and that no HTTP endpoint is "
-                            + "added; every command Phase 7 lands is one an API would have been "
-                            + "the obvious home for, so this is where that decision is held")
-                    .containsExactly(ERROR_FALLBACK);
+                    .as("the operations API is the named operator actions and nothing else "
+                            + "(constitution Principle III): a controller here that is not one of "
+                            + "them is a business endpoint arriving without the amendment that "
+                            + "would have to precede it, and this is where it is noticed")
+                    .containsExactlyInAnyOrderElementsOf(Stream.concat(
+                            OPERATIONS_CONTROLLERS.stream(), Stream.of(ERROR_FALLBACK)).toList());
         }
 
         @Test

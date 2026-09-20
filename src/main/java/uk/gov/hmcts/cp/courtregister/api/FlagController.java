@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.api;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -28,9 +29,14 @@ import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
  *
  * <p>Conditional on the generation half being switched on, because that is the only place
  * {@link FeatureFlagReader} is contributed and it is exactly where {@code check-flag} answered "not
- * wired" - the pod that renders nothing has no 18:00 read to describe.
+ * wired" - the pod that renders nothing has no 18:00 read to describe. <strong>And on the profile
+ * for the same reason</strong>: both configurations that contribute a reader, live and stub, are
+ * declared {@code !test}, so a {@code test}-profile context with generation switched on has the
+ * switch without the bean - which is the exact shape four of this repository's context suites run
+ * in.
  */
 @RestController
+@Profile("!test")
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
 public class FlagController {
 
