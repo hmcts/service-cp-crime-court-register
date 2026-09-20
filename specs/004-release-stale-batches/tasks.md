@@ -2851,6 +2851,12 @@ VII.
 
 **Phase close**: `flock … ./gradlew build` green; review gate.
 
+**Phase 8 closed (2026-09-21).** `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` →
+**BUILD SUCCESSFUL, exit 0, 4m 28s, 3670 tests over 580 suites, 0 failures, 0 errors, 0 skipped**,
+`checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification` all
+run and all green, none of them loosened. Four cases more than Phase 7's close, which is exactly
+what this phase added: T037's one, T038's two and T039's one.
+
 ---
 
 ## Phase 9: Polish — the documents, the register cell and the gates
