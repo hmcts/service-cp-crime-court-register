@@ -136,6 +136,14 @@ class StaleBatchReleaserTest {
         softly.assertThat(counter(GenerationMetrics.RELEASED_BATCHES))
                 .as("and the night's own account of what it had to undo moves")
                 .isEqualTo(1);
+        softly.assertThat(correlation.get())
+                .as("and the pass driven on its own opens a correlation rather than running "
+                        + "under none: a release said at INFO with no run behind it is a line "
+                        + "the estate's index cannot tie to anything")
+                .isNotNull();
+        softly.assertThat(RunCorrelation.current())
+                .as("which it removes again, because the scheduler's threads are pooled")
+                .isNull();
     }
 
     @Test
@@ -198,6 +206,11 @@ class StaleBatchReleaserTest {
             softly.assertThat(renderedLines(log))
                     .as("so the pass still says what it did, in one line and no more")
                     .hasSize(1);
+            softly.assertThat(String.join(" | ", renderedLines(log)))
+                    .as("and the line carries all three numbers by name, because the run report "
+                            + "is to read them off it and a quiet night is the one where a "
+                            + "missing key would go unnoticed")
+                    .contains("released_batches=0", "released_registers=0", "contended=0");
             softly.assertThat(counter(GenerationMetrics.RELEASED_BATCHES))
                     .as("and the series exists from the first quiet night, rather than appearing "
                             + "the first time something goes wrong - a meter nobody can graph "
@@ -233,6 +246,12 @@ class StaleBatchReleaserTest {
             softly.assertThat(String.join(" | ", warnings(log)))
                     .as("by identity, which is the whole of what a contended batch is on a line")
                     .contains(CONTENDED_BATCH.toString());
+            softly.assertThat(renderedLines(log))
+                    .as("and the summary line carries the three numbers by name, the contended "
+                            + "one beside the two released, so a night is read off one line")
+                    .anySatisfy(line -> assertThat(line)
+                            .contains("released_batches=1", "released_registers=2",
+                                    "contended=1"));
         }
     }
 
