@@ -165,6 +165,17 @@ superseded holds the key until its update takes it out of the index, so a releas
 collides with the row it is about to supersede. Postgres does not otherwise order the clauses of one
 statement, so the release's source counts the supersession's rows.
 
+**And the same clause belongs to the two statements beside it** (closed before Phase 3 opened). The
+`MARK_FAILED` released branch — the one `:releaseRows` selects — and `RELEASE_FAILED`, which an
+operator's `release-batch` makes, hand a register back through the same index and read the same key.
+Left reading the order one way only they clear the stamp beside an earlier active share, the index
+refuses the second active row for the day, and the whole statement goes down with it: the failure
+mark in the first case and the operator's command in the second, for ever, because no re-run removes
+a row committed before it. Both now carry the `overtaken` clause, chained the same way and — in
+`MARK_FAILED` — guarded by `:releaseRows` through `stamped`, which already carries that guard. Pinned
+by `RegisterStoreIT`'s twins `Failure.a_failure_that_never_left_should_supersede_the_share_it_overtook`
+and `Releasing.a_release_should_supersede_the_share_it_overtook`.
+
 ## Vocabulary
 
 ### `BatchFailureReason` — six, one in and one out
