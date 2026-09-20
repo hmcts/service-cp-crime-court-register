@@ -18,6 +18,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.InvalidDataAccessApiUsageException;
+import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import uk.gov.hmcts.cp.courtregister.application.BatchListing;
@@ -195,6 +198,17 @@ class BatchesControllerTest {
                     .andExpect(status().isServiceUnavailable())
                     .andExpect(jsonPath("$.reason").value("listing-failed"));
         }
+
+        @Test
+        void a_failure_the_driver_says_is_worth_retrying_should_be_refused_the_same_way()
+                throws Exception {
+            when(listings.batchesOn(any())).thenThrow(
+                    new TransientDataAccessResourceException("ZQX7STOREWORDS"));
+
+            mvc.perform(get(PATH).param("date", TYPED_DATE))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.reason").value("listing-failed"));
+        }
     }
 
     /**
@@ -219,6 +233,28 @@ class BatchesControllerTest {
                     .as("it reaches the container rather than being classified as an outage")
                     .rootCause()
                     .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        void a_defect_wearing_the_stores_exception_type_should_not_be_an_outage_either() {
+            when(listings.batchesOn(any())).thenThrow(
+                    new DataIntegrityViolationException("ZQX7DEFECT"));
+
+            Assertions.assertThatThrownBy(() -> mvc.perform(get(PATH).param("date", TYPED_DATE)))
+                    .as("a violated constraint is this service's defect and not the store being "
+                            + "unreachable; answered 503 it is a defect a runbook retries for ever")
+                    .rootCause()
+                    .isInstanceOf(DataIntegrityViolationException.class);
+        }
+
+        @Test
+        void a_query_this_service_built_wrongly_should_not_be_an_outage_either() {
+            when(listings.batchesOn(any())).thenThrow(
+                    new InvalidDataAccessApiUsageException("ZQX7DEFECT"));
+
+            Assertions.assertThatThrownBy(() -> mvc.perform(get(PATH).param("date", TYPED_DATE)))
+                    .rootCause()
+                    .isInstanceOf(InvalidDataAccessApiUsageException.class);
         }
     }
 }

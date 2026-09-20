@@ -6,7 +6,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
-import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.RecoverableDataAccessException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -79,11 +81,12 @@ public class RegistersController {
                                     record.flag()))
                             .toList();
             return ResponseEntity.ok(new RecordedWhileOffResponse(waiting));
-        } catch (StoreUnavailableException | DataAccessException notRead) {
-            // The two shapes an unreachable store has, and only those two - for the reason
+        } catch (StoreUnavailableException | TransientDataAccessException
+                | RecoverableDataAccessException | DataAccessResourceFailureException notRead) {
+            // The shapes an unreachable store has, and only those - for the reason
             // BatchesController states at the same catch. A defect answered 503 is a defect a
-            // runbook retries for ever, so anything else is left to reach the 500 the status map
-            // keeps for it.
+            // runbook retries for ever, so anything else, the rest of the DataAccessException
+            // hierarchy included, is left to reach the 500 the status map keeps for it.
             LOG.error("The registers recorded while the flag was off could not be read, so no "
                     + "listing is given. cause={}", notRead.getClass().getName());
             return refusal();

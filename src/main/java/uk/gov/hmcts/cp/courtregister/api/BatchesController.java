@@ -8,7 +8,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
-import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.RecoverableDataAccessException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -107,13 +109,17 @@ public class BatchesController {
         }
         try {
             return ResponseEntity.ok(listed(registerDate));
-        } catch (StoreUnavailableException | DataAccessException notRead) {
-            // The two shapes an unreachable store has on this path, and only those two: the store
-            // translates its own outage into the first, and the two repositories behind the
-            // listing hand a statement's refusal out as the second. Anything else out of here is
-            // a defect in this service, and a defect answered 503 is a defect a runbook retries
-            // for ever - so it is left to reach the 500 the design rules' status map keeps for it,
-            // whose body OperationsErrorAttributes renders in the same bounded fields.
+        } catch (StoreUnavailableException | TransientDataAccessException
+                | RecoverableDataAccessException | DataAccessResourceFailureException notRead) {
+            // The shapes an unreachable store has on this path, and only those: the store
+            // translates its own outage into the first, and a repository that reached the driver
+            // before the driver reached the database hands the refusal out as one of the other
+            // three. The whole DataAccessException hierarchy is NOT what is caught - a bad grammar,
+            // a violated constraint or a mapping that will not read are all defects in this
+            // service wearing the store's exception type, and a defect answered 503 is a defect a
+            // runbook retries for ever. Anything else is left to reach the 500 the design rules'
+            // status map keeps for it, whose body OperationsErrorAttributes renders in the same
+            // bounded fields.
             LOG.error("The batches of one register date could not be read, so no listing is given "
                     + "for it. cause={}", notRead.getClass().getName());
             return refusal(HttpStatus.SERVICE_UNAVAILABLE, LISTING_FAILED, null);
