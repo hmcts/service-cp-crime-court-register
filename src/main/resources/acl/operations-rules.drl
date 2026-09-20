@@ -1,0 +1,83 @@
+// The operations API's authorisation rules: one allow rule per action, and nothing else.
+//
+// There is NO deny rule anywhere, and there never will be. `authz.http.deny-when-no-rules` is true,
+// so an action no rule names is refused by the absence of a rule - which is what makes "one
+// explicit allow rule per action, and no default-allow" (constitution Principle III, condition (a))
+// a thing a reviewer can check by reading this file rather than a claim about code somewhere else.
+//
+// Every rule names exactly one group, "Second Line Support", and the action names are the ones
+// `OperationsActionFilter` derives from path and method. A caller-supplied CPP-ACTION never reaches
+// here: the filter wraps the request so the server's value wins, because priority (3) of the
+// library's own resolver is the caller's header and would otherwise let a caller authorised for a
+// listing name the regeneration instead.
+//
+// There is deliberately no `package` declaration: the engine synthesises a source path from the
+// file name when a DRL carries none, which is the form the estate reference implementation uses.
+
+import uk.gov.moj.cpp.authz.drools.Outcome;
+import uk.gov.moj.cpp.authz.drools.Action;
+
+global uk.gov.moj.cpp.authz.http.providers.UserAndGroupProvider userAndGroupProvider;
+
+rule "Allow - check-flag"
+when
+  $o: Outcome()
+  $a: Action(name == "courtregister-operations.check-flag")
+  eval(userAndGroupProvider.isMemberOfAnyOfTheSuppliedGroups($a, "Second Line Support"))
+then
+  $o.setSuccess(true);
+end
+
+rule "Allow - list-batches"
+when
+  $o: Outcome()
+  $a: Action(name == "courtregister-operations.list-batches")
+  eval(userAndGroupProvider.isMemberOfAnyOfTheSuppliedGroups($a, "Second Line Support"))
+then
+  $o.setSuccess(true);
+end
+
+rule "Allow - list-recorded-while-off"
+when
+  $o: Outcome()
+  $a: Action(name == "courtregister-operations.list-recorded-while-off")
+  eval(userAndGroupProvider.isMemberOfAnyOfTheSuppliedGroups($a, "Second Line Support"))
+then
+  $o.setSuccess(true);
+end
+
+rule "Allow - generate-register"
+when
+  $o: Outcome()
+  $a: Action(name == "courtregister-operations.generate-register")
+  eval(userAndGroupProvider.isMemberOfAnyOfTheSuppliedGroups($a, "Second Line Support"))
+then
+  $o.setSuccess(true);
+end
+
+rule "Allow - notify-register"
+when
+  $o: Outcome()
+  $a: Action(name == "courtregister-operations.notify-register")
+  eval(userAndGroupProvider.isMemberOfAnyOfTheSuppliedGroups($a, "Second Line Support"))
+then
+  $o.setSuccess(true);
+end
+
+rule "Allow - supersede-before"
+when
+  $o: Outcome()
+  $a: Action(name == "courtregister-operations.supersede-before")
+  eval(userAndGroupProvider.isMemberOfAnyOfTheSuppliedGroups($a, "Second Line Support"))
+then
+  $o.setSuccess(true);
+end
+
+rule "Allow - report-exceptions"
+when
+  $o: Outcome()
+  $a: Action(name == "courtregister-operations.report-exceptions")
+  eval(userAndGroupProvider.isMemberOfAnyOfTheSuppliedGroups($a, "Second Line Support"))
+then
+  $o.setSuccess(true);
+end

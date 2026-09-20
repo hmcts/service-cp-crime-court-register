@@ -403,7 +403,7 @@ relax any other gate: the operations-API gate, the no-swallowed-exception gate a
 are unchanged, and the "Approved TDD exceptions" section above still governs anything a later task
 wants to claim beyond this.
 
-- [ ] **T008** [P] [US2] `api/OperationsRulesTest` (new) — **the drools rules, with no Spring**.
+- [x] **T008** [P] [US2] `api/OperationsRulesTest` (new) — **the drools rules, with no Spring**.
       Build a `KieContainer` from `acl/operations-rules.drl`, mock the
       `UserAndGroupProvider` global (note `inv.getRawArguments()[1]` for the varargs, per research
       R3), insert an `Outcome` and an `Action`, fire, read `outcome.isSuccess()`. Cases: each of the
@@ -412,7 +412,16 @@ wants to claim beyond this.
       assertion that the file names no group but "Second Line Support". Seam: an empty
       `src/main/resources/acl/operations-rules.drl` carrying only the imports and the global.
       Red: every allow case on `expected: true but was: false` — default-deny with no rules.
-- [ ] **T009** [US2] `src/main/resources/acl/operations-rules.drl` — seven allow rules in the
+      (Landed with T009 in one commit under the Phase 2 TDD exception above, so there is no red run
+      to quote. 19 tests, 0 failures: seven allow cases and seven deny cases off one
+      `@ParameterizedTest` pair, a caller in no group at all, one admitted group among others, two
+      unknown-action cases - including the library's own `"POST /operations/batches/generate"`
+      fallback shape, which is what an unmapped path would fall through to - and three assertions
+      about the file's own text: seven rules and no more, seven group lists and every one of them
+      exactly `"Second Line Support"`, and no `setSuccess(false)` anywhere. Checkstyle and PMD clean
+      on test sources; two PMD findings were fixed rather than suppressed - the class loader taken
+      from the current thread, and the nested class renamed off PMD's short-name list.)
+- [x] **T009** [US2] `src/main/resources/acl/operations-rules.drl` — seven allow rules in the
       reference implementation's exact form (research R3): no `package` declaration, the two
       imports, the global, `$o: Outcome()` / `$a: Action(name == "courtregister-operations.<verb>")`
       / `eval(userAndGroupProvider.isMemberOfAnyOfTheSuppliedGroups($a, "Second Line Support"))` /
