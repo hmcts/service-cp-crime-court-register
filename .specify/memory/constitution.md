@@ -1,6 +1,59 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 5.0.0 → 5.0.1
+Bump rationale: PATCH - clarification (2026-09-20). 5.0.0 said conditions (a)
+                and (b) are carried "by the defaults above and nothing else",
+                and named one default for each. For (b) one is not enough:
+                `audit.http.enabled` builds no filter on its own, because every
+                `audit.http.*` bean the starter declares sits inside the
+                `@AutoConfiguration` class `cp.audit.enabled` gates - and this
+                service ships that key `false`, so that a laptop with no audit
+                broker starts (the transport's connection factory validates its
+                hosts and port while it is being constructed). A deployment
+                that says nothing was therefore authorised and NOT audited,
+                which is not what (b) requires and not what 5.0.0 said.
+
+                (b) now names both keys: `audit.http.enabled` true in this
+                service's configuration, and `cp.audit.enabled` true in every
+                deployed values file with the broker's connection from Key
+                Vault. Nothing enforced changes - no cross-field refusal, the
+                pod still always comes up, the value-shape refusals are
+                untouched - so PATCH: the obligation is the one 5.0.0 already
+                stated, said in full.
+
+                What the service does about the gap it cannot refuse: one WARN
+                at start-up naming both settings, because the filter that would
+                have published is never constructed and the one that is
+                swallows its own publishing failures, so a deployment that
+                forgot the transport otherwise looks exactly like one that has
+                it.
+
+Proposed in: specs/005-operations-rest-api/spec.md, the amendment section's
+fourth proposal, and FR-045. Pinned by
+`ConfigurationValidationTest.ShippedConfiguration`
+(`the_audit_transport_should_ship_switched_off_for_a_laptop`) and
+`ConfigurationValidationTest.OperationsSettings`
+(`an_audit_filter_over_a_transport_that_is_off_should_say_so_at_start_up`,
+`a_pod_that_publishes_its_audit_events_should_say_nothing_about_them`).
+
+Modified sections (this amendment): Principle III - condition (b) names the
+audit transport key beside the HTTP filter's, and the "How (a) and (b) are
+carried" paragraph says which default carries which condition. Nothing else
+changes; Principles I, II, IV-VIII untouched.
+
+Templates / guidance reviewed:
+  - .claude/rules/design_rules.md            ⚠ UPDATED - the operations-API
+      section's "Both filters are on by default" bullet named one audit key.
+  - specs/005-operations-rest-api/plan.md    ⚠ UPDATED - the settings table's
+      `cp.audit.enabled` row read "`true` deployed" of a tree that ships it
+      false unless CP_AUDIT_ENABLED is set.
+  - CLAUDE.md, .claude/rules/{workflow,technical-rules}.md,
+    .claude/agents/*.md, quickstart.md       ✅ compatible - none of them
+      describes which key builds the audit filter.
+  - .specify/templates/*                     ✅ compatible - no change.
+
+Previous amendment (4.1.0 → 5.0.0):
 Version change: 4.1.0 → 5.0.0
 Bump rationale: MAJOR - Principle III's conditions (a) and (b) are redefined
                 (2026-09-20, design owner). 4.1.0 made them start-up refusals:
@@ -33,10 +86,11 @@ Bump rationale: MAJOR - Principle III's conditions (a) and (b) are redefined
                 that cannot be operated.
 
 Proposed in: specs/005-operations-rest-api/spec.md, the amendment section's
-third proposal, and FR-045/FR-053. Pinned by
-`ConfigurationValidationTest.OperationsSettings`, whose cases are the defaults
-being true, a pod with both switches off starting, and the value-shape refusals
-that remain.
+third proposal, and FR-045/FR-053. Pinned by two nested classes of
+`ConfigurationValidationTest`: `ShippedConfiguration`, whose cases are the two
+defaults being true, and `OperationsSettings`, whose cases are a pod with both
+switches off starting, the two single-switch counterparts, and the value-shape
+refusals that remain.
 
 Modified sections (this amendment): Principle III - conditions (a) and (b) are
 restated as default-on configuration, and the "Where (a) and (b) are enforced"
@@ -778,12 +832,17 @@ Rules:
     every response is published as an audit event to the audit context. An
     endpoint that is reachable without an audit event is worse than the
     `kubectl exec` it replaced, which at least left a cluster audit record.
-    The publisher MUST be enabled **by default** on the same terms as (a):
-    `audit.http.enabled` reads `true` in this service's own configuration and
-    in every deployed values file, and switching it off is a deliberate
-    configuration act of the operator, recorded in that environment's
-    configuration — never a code default, never inferred from the
-    environment.
+    The publisher MUST be enabled **by default** on the same terms as (a), and
+    it takes **two** keys rather than one: `audit.http.enabled` reads `true` in
+    this service's own configuration, and `cp.audit.enabled` — the transport,
+    inside whose `@AutoConfiguration` class every `audit.http.*` bean the
+    starter declares is built — reads `true` in every deployed values file,
+    with the broker's connection from Key Vault. This service ships the
+    transport key `false` so that a local run with no audit broker starts, so a
+    values file that omits it serves the operations API **unaudited** and has
+    not met this condition. Switching either off is a deliberate configuration
+    act of the operator, recorded in that environment's configuration — never a
+    code default, never inferred from the environment.
   - **(c) Flag-gated at least as strictly as its command was.** An endpoint
     reads the `CourtRegisterService` flag where the CLI command it replaces
     read it, and MUST NOT read it more permissively or omit the read the
@@ -804,7 +863,14 @@ Rules:
     value that was typed.
 
   **How (a) and (b) are carried** (amended 2026-09-20, superseding the start-up
-  refusal 4.1.0 described). By the **defaults above and nothing else**. The
+  refusal 4.1.0 described). By the **defaults above and nothing else** — (a) by
+  `authz.http.enabled` in this service's configuration, (b) by
+  `audit.http.enabled` there and `cp.audit.enabled` in the deployed values
+  file, which is the half of (b) no code default can carry. Where the filter is
+  on over a transport that is off, the service **says so** at start-up, at WARN,
+  naming both settings: the filter that would have published is never
+  constructed and the one that is swallows its own publishing failures, so an
+  unaudited pod that said nothing would look exactly like an audited one. The
   service MUST NOT refuse to start on the combination of the operations API
   being enabled and either filter being off, and MUST NOT decide such a rule
   from a discriminator such as `courtregister.servicebus.namespace`: a pod
@@ -1265,4 +1331,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 5.0.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-20
+**Version**: 5.0.1 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-20
