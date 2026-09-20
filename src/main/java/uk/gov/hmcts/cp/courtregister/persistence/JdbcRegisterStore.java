@@ -628,7 +628,7 @@ public class JdbcRegisterStore implements RegisterStore {
      * statement 9a does for the release a person types.
      *
      * <p><strong>And only a row that genuinely came later may be that successor.</strong> The key
-     * can hold the pair either way round: a first batch that failed under one of the four reasons
+     * can hold the pair either way round: a first batch that failed under one of the three reasons
      * that keep the stamp leaves its register RECORDED and stamped, so the batch failing here may
      * be the one holding the <em>newer</em> row with the stale one still beside it. A search that
      * asked only for another unsuperseded row would then write the current register SUPERSEDED
@@ -822,7 +822,7 @@ public class JdbcRegisterStore implements RegisterStore {
      * PENDING, POSTED and FAILED are 001's.
      *
      * <p><strong>Later, because the key can hold the pair either way round.</strong> A first batch
-     * that failed under one of the four reasons that keep the stamp, or one that reached NOTIFIED,
+     * that failed under one of the three reasons that keep the stamp, or one that reached NOTIFIED,
      * leaves its register beside the re-share rather than superseded by it - so the batch a person
      * releases may be the one holding the <em>newer</em> row, with the stale or the sent one still
      * beside it. A search that asked only for another unsuperseded row would write the current
@@ -1893,7 +1893,7 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * {@inheritDoc}
      *
-     * <p>The four reasons {@link #RELEASING_REASONS} does not name are the ones this statement
+     * <p>The three reasons {@link #RELEASING_REASONS} does not name are the ones this statement
      * exists for, and nothing but a person's own command may issue it.
      *
      * <p><strong>The state is read before anything is written, and that read is the refusal.</strong>

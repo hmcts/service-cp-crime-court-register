@@ -491,7 +491,10 @@ Postgres. No pass, no run, no Spring context.
       here: `RegisterStore` 295 and 330, `JdbcRegisterStore` 587, 639 and 696,
       `RegisterStoreIT`'s `Failure` javadoc and `GenerationMetricsTest`'s series-count comment.
       `JdbcRegisterStore` 1524's "the four reasons `RELEASING_REASONS` does not name" is **left
-      alone**: seven less three is still four, and it was already right.
+      alone**: seven less three is still four, and it was already right. (It stopped being right at
+      T048, which took `GENERATION_TIMED_OUT` out of the enumeration — six less three is three —
+      and it is corrected there along with the two other sentences that count the reasons keeping
+      the stamp.)
       **T010 was strengthened in this commit, and it had to be.** Staging the read-then-mark
       variant — the read, a 150 ms window, then a per-batch `markFailed` — showed the suite as
       committed at `dc4106c` **passing against it**: the loser's refusal is an `IllegalStateException`
@@ -2398,8 +2401,8 @@ none of them loosened.
 **BUILD SUCCESSFUL, exit 0, 4m 21s, 3648 tests over 578 suites, 0 failures, 0 errors, 0 skipped**.
 The six cases and the one suite that round added are exactly `SchemaMigrationV7IT`'s five in its own
 new suite, and `v7_refuses_to_apply_to_a_store_holding_the_retired_attribution_alone` in the
-existing `RetiredVocabulary` nest. Nothing was removed: reverting `batch/cli/ReportExceptionsCliTest`
-changed a string literal in an existing case, and the prose sweep moved no assertion.
+existing `RetiredVocabulary` nest. Nothing was removed: the prose sweep moved no assertion, and
+`batch/cli/ReportExceptionsCliTest` is back to the literal it started with.
 
 **The coverage, read as this phase's note asks.** `flock -w 7200 … ./gradlew jacocoTestReport check
 -Dtest.noFailFast=true` → BUILD SUCCESSFUL, exit 0, and the report from that run reads
@@ -2456,7 +2459,30 @@ fixtures off the retired mechanism but did not give them one.
 coordination contract gives this tree `src/test/**` except tests under `batch/cli` and any `api/`
 package, and none of the three is either. An earlier gate asked whether editing them crossed a tree
 boundary; it did not. The one file that did was `batch/cli/ReportExceptionsCliTest`, reverted at
-gate round 3 and recorded against T048.
+gate round 3 and taken out of the branch's history at gate round 4.
+
+**Gate round 4.** Two findings, both about what the range says rather than what it does.
+
+* **The history, not just the diff.** Gate round 3 reverted the `batch/cli/ReportExceptionsCliTest`
+  edit, which left `git diff 4d3f9e00..HEAD` empty for the path but left two commits in the range
+  that touched it — and the coordination contract is a rule about commits, not about net effects,
+  because it is what lets the other tree rebase on this one without meeting a change to its own
+  file. The branch carries no upstream, so the range was rebuilt with the path pinned to its
+  `4d3f9e00` blob in every commit: `feat(domain): retire the vocabulary the reconciler wrote` no
+  longer touches it (and its message now says **six** test files rather than seven, which the
+  narrative above had already had to correct), and the revert commit became the tasks.md correction
+  it really was. `git log 4d3f9e00..HEAD -- src/…/batch/cli/` is now **empty**, and the tree at the
+  new HEAD differs from the old one only by this paragraph and the sentences below.
+* **Three more stale counts.** The round-3 sweep corrected every comment that counted the reasons
+  themselves and missed the three that count the reasons `RELEASING_REASONS` does **not** name — a
+  second cardinality that also fell by one when `GENERATION_TIMED_OUT` left, from four to three
+  (`RENDER_REQUEST_FAILED`, `RENDER_REQUEST_REJECTED`, `GENERATION_FAILED`). Corrected at
+  `JdbcRegisterStore` statement 9's javadoc, statement 9a's, and `releaseFailed`'s, and at the one
+  `RegisterStoreIT` javadoc that repeats it. `RegisterGenerationService`'s "the four reasons this
+  class can produce" is **not** touched: that counts what the generation service itself writes —
+  `ASSEMBLY_FAILED`, `PAYLOAD_STORE_UNAVAILABLE`, `RENDER_REQUEST_FAILED`,
+  `RENDER_REQUEST_REJECTED` — and is still four. Neither is `V2__register_store.sql`'s "the other
+  four reasons": it is an applied migration and its comment is a record of what V2 enumerated.
 
 ---
 

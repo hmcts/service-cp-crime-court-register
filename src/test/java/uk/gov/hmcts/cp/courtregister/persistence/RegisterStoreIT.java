@@ -2803,7 +2803,7 @@ class RegisterStoreIT {
          * ordinary path: a first batch is notified, the hearing is shared again - the recording
          * predicate supersedes an incumbent that is RECORDED and unbatched, and a notified row is
          * neither - and the re-share is assembled into a batch of its own, which then fails under
-         * one of the four reasons that keep the stamp. The release an operator then types is
+         * one of the three reasons that keep the stamp. The release an operator then types is
          * against the batch holding the <em>newer</em> row, and the only other row of the key is the
          * register that was sent this morning.
          *
