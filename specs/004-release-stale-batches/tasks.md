@@ -3191,6 +3191,64 @@ with `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCov
 all run and all green. Identical to round 1's re-gate in every count, which is what a round that
 changed no code should read.
 
+## The increment gate, round 3 (2026-09-21)
+
+Round 2's three reviewers returned eleven findings above LOW; ten of them name a file this tree may
+not touch or a decision the coordinator owns, and are carried below unchanged. One was a defect and
+is fixed.
+
+**Fixed, test-first.**
+
+* **An interrupted pass still lost its account on the run's own line (MEDIUM, qa).** Round 1 gave
+  the pass a `StaleReleaseProgress` so that each batch is counted and said where it commits, and a
+  store lost partway now leaves the WARN line and the three counters carrying the committed part.
+  The run's line did not: `RunTally.releaseTally` was assigned from `releaseStale()`'s return, and
+  a throw never delivers one - so a night whose pass had given a batch back wrote
+  `released_batches=0` beside a pass line saying one, two accounts of one night under one `run_id`.
+  `releaseStale` now has a second form taking the caller's account, told in the same `finally` the
+  counters and the pass's line are written from, and the run passes its own. Red on
+  `StaleBatchReleaserTest`'s two new cases (`ReleaseTally[-1, -1, -1]` against the expected
+  `[1, 2, 1]`, the sentinel for a pass that said nothing at all), green on both plus the job's new
+  `a_pass_the_store_interrupted_still_puts_its_account_on_the_run_line`
+  (commits `e060de1f`, `850c1f74`).
+
+**Amended, in files this tree owns.**
+
+* **T046 is `[~]`, not `[x]` (MEDIUM, qa).** Its second half - the quickstart walkthrough on a
+  clean local `docker compose` stack - has still not run. The task now says half rather than
+  claiming both, and names what closes it.
+* **Round 2's boundary sentence (LOW, spec-validator).** It said no commit in the range touches
+  `batch/cli`; that is true of `src/main` only. Corrected, naming the three `src/test` hand-offs.
+* **FR-011's reach (LOW, spec-validator).** FR-011, its US2 scenario, the flow diagram and the
+  README said the three batch-age readings are refreshed in every non-command instance;
+  `BatchSweepConfig` is additionally conditional on `courtregister.generation.enabled`, which is
+  what `research.md` and `plan.md` describe. All four now say "that carries the generation half",
+  with the spec's amendment dated.
+* **`SchedulingInfrastructureConfig`'s javadoc (LOW, code-reviewer).** It listed three schedules a
+  command JVM must not replicate; there are four.
+
+**Carried, not fixed, each for the reason the finding's own `fix_hint` gives.**
+
+* The two `batch/cli` `settings()` helpers and the three out-of-grant `design_rules.md` paragraphs
+  (HIGH/MEDIUM, all three reviewers): every one of the six findings asks for ratification rather
+  than a revert, and a revert of the first two leaves the suite uncompilable. Unchanged since
+  round 1, still owed by the coordinator.
+* `.specify/memory/constitution.md` (MEDIUM, spec-validator): asked for the fourth time.
+* `.specify/feature.json`, `specs/003-exception-report/quickstart.md` and `CLAUDE.md`'s SPECKIT
+  block (LOW): ownership items for the merge, unchanged.
+* `design_rules.md`'s Persistence bullet, which does not name `BatchAgeSweep` among the repository
+  readers (LOW, code-reviewer): the bullet is outside this tree's three granted sections, so it
+  rides with the same paragraph hand-off rather than becoming a fourth out-of-grant edit.
+* The two optional coverage suggestions and the `batch/cli` FR-019 CLI case (LOW): unchanged.
+
+**Re-gated after round 3** (`flock -w 7200 … ./gradlew jacocoTestReport build -Dtest.noFailFast=true`)
+→ **BUILD SUCCESSFUL, exit 0, 4m 19s, 3675 tests over 580 suites, 0 failures, 0 errors, 0 skipped**,
+with `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification`
+all run and all green. **LINE 6589/6792 = 0.9701** and **BRANCH 2001/2204 = 0.9079** against the
+unchanged ratchet of LINE 0.88 / BRANCH 0.85 - sixteen more covered lines out of sixteen more, and
+two more covered branches out of two more, so every line and branch this round added is covered.
+The gate was not touched.
+
 ---
 
 ## Dependencies & execution order
