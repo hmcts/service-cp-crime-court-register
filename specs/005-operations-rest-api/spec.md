@@ -889,6 +889,10 @@ change is readable.
     that replaces it has a passing test (FR-051).
 18. **From Phase 2 onwards a task's tests land in the same commit as its code, and no red run is
     recorded.** *Design owner, 2026-09-20.* The commit order inside a pair is not audited either.
+    This is a **Principle II waiver**, and it is recorded in the constitution's own waiver table
+    (Principle II, "Waivers given") as well as here: a waiver that lived only in a spec is one the
+    `qa` gate cannot read and one a later increment would inherit unwritten. It waives the
+    recording and nothing else, and it expires with this increment.
     What the reviewers judge in place of the ceremony is the coverage gate (LINE 0.88 /
     BRANCH 0.85, `config/**` excluded) and behaviour coverage **per endpoint** — allow and deny per
     group, every refusal code the endpoint can answer, and the flag rule where the endpoint has

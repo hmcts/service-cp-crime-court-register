@@ -1,6 +1,36 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 5.0.3 → 5.1.0
+Bump rationale: MINOR - Principle II gains a clause it has been operated under
+                without carrying (2026-09-21). Increment 005 landed 48 of its 61
+                tasks with the test in the same commit as the code and no red run
+                recorded, under a waiver the design owner gave on 2026-09-20 and
+                which lived only in `specs/005-operations-rest-api/spec.md`
+                (assumption 18) and that increment's tasks file. A principle that
+                says "without exception" while the increment under it runs on a
+                dated exception is a principle a reviewer cannot gate on, and an
+                unwritten precedent every later increment would inherit. The
+                waiver is therefore written down: what it may relax (the
+                recording of the red run, and the commit order inside a pair),
+                what it may never relax (the test itself, and every other gate),
+                who may give it, and what the `qa` reviewer judges in its place.
+                Nothing else changes; the obligation on a waiver-free increment
+                is exactly what it was.
+
+Proposed in: specs/005-operations-rest-api/spec.md, assumption 18.
+Recorded against: increment 005, the only increment holding one.
+
+Modified sections (this amendment): Principle II - one new clause and its
+scope. Principles I, III-VIII untouched.
+
+Templates / guidance reviewed:
+  - .claude/rules/workflow.md, .claude/agents/qa.md   ⚠ both restate the red-run
+    convention; neither is changed, because the waiver is per-increment and
+    named, and the convention they state is what applies without one.
+  - .specify/templates/*                     ✅ compatible - no change.
+
+Previous amendment (5.0.2 → 5.0.3):
 Version change: 5.0.2 → 5.0.3
 Bump rationale: PATCH - the owned OpenAPI document is named (2026-09-21). The
                 principle called it `src/main/resources/openapi.yaml`; the file
@@ -781,7 +811,9 @@ only the 34 catalogued behaviours are, deliberately and traceably, different.
 
 ### II. Test-Driven Development (NON-NEGOTIABLE)
 
-Red → Green → Refactor for every behaviour change, without exception.
+Red → Green → Refactor for every behaviour change, without exception — save
+the one thing a named, dated waiver may relax, which is the *recording* of the
+red run and is set out below.
 
 1. Write the failing test first. It MUST run and fail for the *correct* reason
    — the assertion, not a missing class or a compile error.
@@ -810,6 +842,34 @@ comment.
 
 Exempt: pure mechanical refactors (rename, move, extract with no behaviour
 change), formatting, and comment-only edits.
+
+**The recording of the red run may be waived for a named increment, and
+nothing else about this principle may.** The convention above is evidence, not
+the discipline itself: what protects the register is the test, and what a red
+run protects is the *reader's* confidence that the test could have failed. A
+design owner may therefore waive, for **one named increment**, the recording of
+the red run and the commit order inside a test/implementation pair. The waiver:
+
+- is given by the design owner, dated, and written into that increment's
+  `spec.md` **and** recorded here, in this clause, naming the increment — an
+  increment whose waiver is not written here has none, whatever its spec says;
+- covers the *recording* only. Every task still gets its test, and no other
+  gate is relaxed by it: the coverage gate, the defect-fix pinning tests, the
+  golden gate and the differential audit all stand unchanged;
+- does not travel. It expires with the increment that names it, and a later
+  increment inherits the unwaived convention.
+
+What the `qa` reviewer judges in place of the ceremony is stated in the
+waiver: for increment 005 it is the coverage gate (LINE 0.88 / BRANCH 0.85,
+`config/**` excluded) and **behaviour coverage per endpoint** — allow and deny
+per group, every refusal code the endpoint can answer, and the flag rule where
+the endpoint has one.
+
+**Waivers given** (append-only):
+
+| Increment | Given by | Date | What was waived |
+|---|---|---|---|
+| `005-operations-rest-api` | design owner | 2026-09-20 | The red-run recording and the commit order inside a pair, from Phase 2 onwards (48 of 61 tasks). Judged instead: the coverage gate and behaviour coverage per endpoint. Recorded in `specs/005-operations-rest-api/spec.md` assumption 18 |
 
 **Rationale**: fix-first (Principle I) is only meaningful if it is
 executable. A test written after the code encodes what the code does; a test
@@ -1424,4 +1484,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 5.0.3 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-21
+**Version**: 5.1.0 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-21
