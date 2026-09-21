@@ -34,6 +34,7 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterRegenerationService.Reg
 import uk.gov.hmcts.cp.courtregister.application.RegisterRegenerationService.Selection;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
+import uk.gov.hmcts.cp.courtregister.batch.RunCorrelation;
 import uk.gov.hmcts.cp.courtregister.domain.GateDecision.Proceed;
 import uk.gov.hmcts.cp.courtregister.domain.GateDecision.Reason;
 import uk.gov.hmcts.cp.courtregister.domain.GateDecision.Skipped;
@@ -246,6 +247,32 @@ class OperationsRunLauncherTest {
                             && line.contains("trigger=operator")
                             && line.contains("gate=proceed")
                             && line.contains("reason=flag-on"));
+        }
+
+        @Test
+        void the_whole_background_run_should_carry_the_answered_run_id_on_the_mdc() {
+            when(gate.decide(anyBoolean())).thenReturn(new Proceed(false));
+            when(locks.lock(any())).thenReturn(Optional.of(lock));
+            final List<String> seenByTheWork = new ArrayList<>();
+            when(regeneration.regenerate(any(), anyBoolean())).thenAnswer(invocation -> {
+                seenByTheWork.add(RunCorrelation.current());
+                return nothingToDo();
+            });
+
+            final RunAccepted accepted = launcher(NO_WAIT).launch(theWholeDay());
+            theSchedulerRunsIt();
+
+            softly.assertThat(seenByTheWork)
+                    .as("the requesting leg, the store, the assembler and the two clients all "
+                            + "write lines during an operator's run, and under the 18:00 job every "
+                            + "one of them carries runId - a run reached through HTTP is the same "
+                            + "unit of work and is read the same way (Principle VII)")
+                    .containsExactly(accepted.runId());
+            softly.assertThat(RunCorrelation.current())
+                    .as("and the correlation is taken away again: the generation scheduler's "
+                            + "thread is the 18:00 run's own, and an id left on it would be "
+                            + "inherited by that run - worse than none, because it reads as true")
+                    .isNull();
         }
 
         @Test

@@ -42,6 +42,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jms.UncategorizedJmsException;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.jms.core.MessagePostProcessor;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -283,8 +284,8 @@ class OperationsAuditIT {
                 .convertAndSend(any(jakarta.jms.Destination.class), any(),
                         any(MessagePostProcessor.class));
 
-        final var response = mvc.perform(call.header(IDENTITY, A_CALLER)).andReturn()
-                .getResponse();
+        final MockHttpServletResponse response =
+                mvc.perform(call.header(IDENTITY, A_CALLER)).andReturn().getResponse();
         final String body = response.getContentAsString();
 
         softly.assertThat(response.getStatus())

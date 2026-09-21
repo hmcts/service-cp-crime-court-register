@@ -17,6 +17,7 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterRegenerationService.Reg
 import uk.gov.hmcts.cp.courtregister.application.RegisterRegenerationService.Selection;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
+import uk.gov.hmcts.cp.courtregister.batch.RunCorrelation;
 import uk.gov.hmcts.cp.courtregister.domain.GateDecision;
 import uk.gov.hmcts.cp.courtregister.domain.GateDecision.Proceed;
 import uk.gov.hmcts.cp.courtregister.domain.GateDecision.Reason;
@@ -46,7 +47,12 @@ import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
  *
  * <p><strong>Ids before calls.</strong> The run id is minted and written down before the work is
  * submitted, so an outcome that arrives can always be correlated with the answer the caller was
- * given.
+ * given. And that same id is the correlation the whole background run is written under: the task
+ * is submitted inside {@link RunCorrelation#under(String, Runnable)}, so every line the requesting
+ * leg, the store, the assembler and the two clients write during an operator's run carries
+ * {@code runId} exactly as it does under the 18:00 job. An id on four lines of this class and on
+ * none of the work's would be a run that could not be read as one thing, which is the whole point
+ * of having minted it.
  *
  * <p><strong>The background run records its own outcome and lets nothing leave.</strong> An
  * exception thrown on an executor's thread goes into a {@code Future} nobody reads, which is
@@ -145,7 +151,8 @@ public class OperationsRunLauncher {
         LOG.info("event={} run_id={} trigger={} date={} reason={} outcome=accepted", RUN_EVENT,
                 runId, OPERATOR, selection.registerDate(),
                 overridden ? Reason.OVERRIDDEN.code() : FLAG_ON);
-        generationExecutor.execute(() -> run(runId, selection, overridden));
+        generationExecutor.execute(
+                () -> RunCorrelation.under(runId, () -> run(runId, selection, overridden)));
         return new RunAccepted(runId, selection.registerDate(), overridden);
     }
 
