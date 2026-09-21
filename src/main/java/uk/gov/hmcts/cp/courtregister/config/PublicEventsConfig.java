@@ -4,11 +4,11 @@ import jakarta.jms.ConnectionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.jms.ConnectionFactoryUnwrapper;
 import org.springframework.boot.jms.autoconfigure.JmsProperties;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DeliveryObserver;
@@ -57,6 +57,22 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
  * on proxy for shared Connection}); the client id has since gone and the unwrapping has not, because
  * the double caching was always the better half of the reason.
  *
+ * <p><strong>And it is asked for by name, because by type is no longer an answer.</strong> Since
+ * increment 005 {@code cp-audit-filter-springboot} is on the classpath, and it contributes an
+ * {@code auditConnectionFactory} - pointed at the estate's <em>audit</em> broker - which it marks
+ * {@code @Primary}. A by-type injection resolves to a {@code @Primary} candidate, so this container
+ * would be built on the audit broker: a subscription that is opened, reports itself started, and
+ * hears no {@code document-available} event ever, while every batch waits for an outcome that was
+ * delivered to nobody. Nothing logs and nothing is counted. The qualifier below says which factory
+ * this is, so the answer cannot be won by somebody else's {@code @Primary}.
+ *
+ * <p>The <strong>name</strong> and not the type: both of Boot's Artemis configurations register
+ * under {@code jmsConnectionFactory}, while the type behind that name is
+ * {@code spring.jms.cache.enabled}'s choice - a {@code CachingConnectionFactory} by default and the
+ * raw {@code ActiveMQConnectionFactory} without it. The audit library's is an
+ * {@code ActiveMQConnectionFactory} too, so a qualifier written as a type would be the same trap in
+ * a new spelling ({@code config/PublicEventsFactoryTest}).
+ *
  * <p><strong>Its auto-startup is tied to {@code courtregister.generation.enabled}, and to nothing
  * else.</strong> A deployment running the intake half alone has no use for outcomes and should hold
  * no durable subscription: an unread durable subscription accumulates every matching event on the
@@ -90,17 +106,15 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
  * record and is counted rather than re-stamped, and the store's compare-and-set refuses the second
  * of two marks ({@code DocumentOutcomeSinkImpl}).
  *
- * <p><strong>And none of it on a JVM started to run one operations command.</strong> A command that
- * subscribed would be one more consumer the broker load-balances outcomes to - and it would take
- * deliveries it is about to exit without finishing, leaving each of them to a redelivery, or to
- * the next run giving up on the batch they were about. The whole configuration goes rather than the
- * listener alone, because the container factory is here too and a factory with no
- * {@code @JmsListener} to create a container from is a half-absence to reason about
- * ({@link CliModeConfig}).
+ * <p><strong>Every JVM that runs this application subscribes, and there is no longer any other
+ * kind.</strong> Until increment 005 a JVM started to run one command was kept off the topic, for a
+ * good reason: it would have been one more consumer the broker load-balances outcomes to, taking
+ * deliveries a process about to exit will not finish. No such JVM exists now - an operations call
+ * is served by a pod that is already subscribed - so the rule is retired with it, and what remains
+ * is that an operations endpoint must never bring up a second subscription of its own.
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
-@Conditional(CliModeConfig.NotCliMode.class)
 public class PublicEventsConfig {
 
     /**
@@ -110,6 +124,14 @@ public class PublicEventsConfig {
      */
     public static final String LISTENER_CONTAINER_FACTORY = "publicEventListenerContainerFactory";
 
+    /**
+     * The bean name Boot's Artemis auto-configuration registers its connection factory under.
+     *
+     * <p>Named rather than taken by type because the audit starter contributes a {@code @Primary}
+     * connection factory of its own; see this class's javadoc.
+     */
+    public static final String BOOT_CONNECTION_FACTORY = "jmsConnectionFactory";
+
     private static final Logger LOG = LoggerFactory.getLogger(PublicEventsConfig.class);
 
     /** One consumer per pod: the deployment scales on replicas, not on threads inside one of them. */
@@ -118,8 +140,11 @@ public class PublicEventsConfig {
     /**
      * The container factory the listener's subscription is created from.
      *
-     * @param connectionFactory the broker connection, unwrapped to the native factory so the
-     *                          container caches a connection of its own rather than sharing one
+     * @param connectionFactory the <strong>public-event</strong> broker's connection, named by
+     *                          Boot's own bean name so that the audit starter's {@code @Primary}
+     *                          factory cannot be resolved here instead, and unwrapped to the native
+     *                          factory so the container caches a connection of its own rather than
+     *                          sharing one
      * @param jms               Spring's own JMS settings: the topic domain and the durable flag.
      *                          {@code spring.jms.client-id} is deliberately not read - see above
      * @param generation        the downstream half's settings, read for the master switch alone:
@@ -129,7 +154,7 @@ public class PublicEventsConfig {
      */
     @Bean(LISTENER_CONTAINER_FACTORY)
     public DefaultJmsListenerContainerFactory publicEventListenerContainerFactory(
-            final ConnectionFactory connectionFactory,
+            @Qualifier(BOOT_CONNECTION_FACTORY) final ConnectionFactory connectionFactory,
             final JmsProperties jms,
             final GenerationProperties generation) {
 

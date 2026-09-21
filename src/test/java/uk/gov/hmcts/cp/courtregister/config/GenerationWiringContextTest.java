@@ -106,11 +106,11 @@ import uk.gov.hmcts.cp.courtregister.support.WorkloadIdentityStub;
 class GenerationWiringContextTest {
 
     /**
-     * The settings a generating pod is deployed with, named so that the command JVM below differs
-     * from this context by {@code courtregister.cli} and by nothing else.
+     * The settings a generating pod is deployed with, named so that every nested
+     * {@code @SpringBootTest} below differs from this context by exactly what its case is about.
      *
      * <p>A nested {@code @SpringBootTest} does not inherit the enclosing one's {@code properties},
-     * so the pair would otherwise be two different deployments and the absence it asserts would be
+     * so a pair would otherwise be two different deployments and whatever it asserted would be
      * attributable to whichever setting had been left out.
      */
     static final String GENERATION_ENABLED = "courtregister.generation.enabled=true";
@@ -176,9 +176,6 @@ class GenerationWiringContextTest {
     static final String EMBEDDED_BROKER = "spring.artemis.embedded.enabled=true";
 
     static final String EMBEDDED_TOPIC = "spring.artemis.embedded.queues=public.event";
-
-    /** The one property the command JVM below differs by. */
-    static final String CLI_ON = "courtregister.cli=true";
 
     private final ApplicationContext context;
 
@@ -283,14 +280,13 @@ class GenerationWiringContextTest {
      * <p>The classes are found from the sources rather than from a scan of the classpath, which is
      * what makes this a claim about the package as it is written: a class added to it is in the
      * sweep the moment it is saved, and a class deleted from it leaves nothing behind for the sweep
-     * to keep asserting about. {@code batch/cli} is left out on purpose - a command holds no
-     * scheduler and therefore takes no lock, which {@link CliModeConfigTest} is what asserts.
+     * to keep asserting about.
      *
      * <p><strong>It walks, and it looks inside.</strong> The sources are read recursively and every
      * nested type is collected with its enclosing one, because a lock is a lock wherever it is
-     * written: a second schedule declared on a nested class, or in a sub-package somebody adds
-     * beside {@code cli}, is exactly the arrangement FR-007 says this half may not have, and a
-     * sweep that read only the top-level type of each file in one directory would let it through.
+     * written: a second schedule declared on a nested class, or in a sub-package somebody adds, is
+     * exactly the arrangement FR-007 says this half may not have, and a sweep that read only the
+     * top-level type of each file in one directory would let it through.
      *
      * @return the lock names, in no particular order
      * @throws IOException if the package's sources cannot be read
@@ -472,47 +468,6 @@ class GenerationWiringContextTest {
          */
         private <T> ObjectProvider<T> holdingNothing(final Class<T> type) {
             return new DefaultListableBeanFactory().getBeanProvider(type);
-        }
-    }
-
-    /**
-     * A JVM started to run one operations command must not hold the pass.
-     *
-     * <p>An operator regenerating one court centre must not, as a side effect, give up on another
-     * court centre's in-flight batch: the pass belongs to the scheduled run, which holds the lock
-     * that makes it one run. The absence is complete because the pass is declared beside the job on
-     * {@link SchedulingConfig}, which carries {@link CliModeConfig}'s condition - a bean-level
-     * condition would leave a pass nothing calls.
-     */
-    @Nested
-    @SpringBootTest(properties = {
-        GENERATION_ENABLED, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
-        FILESERVICE_URL, FLAG_ENDPOINT, FLAG_LABEL, SDG_ENDPOINT, NN_ENDPOINT, SYSTEM_USER_ID,
-        TEMPLATE_ID, PAYLOAD_MODE, REFDATA_MODE, CONSUMER_DISABLED, BROKER_URL, EMBEDDED_BROKER,
-        EMBEDDED_TOPIC, CLI_ON})
-    @DisplayName("a JVM started to run one operations command")
-    class ACommandJvm {
-
-        private final ApplicationContext commandContext;
-
-        @Autowired
-        ACommandJvm(final ApplicationContext commandContext) {
-            this.commandContext = commandContext;
-        }
-
-        @Test
-        @DisplayName("holds no stale-batch pass")
-        void a_command_jvm_holds_no_stale_batch_releaser() {
-            assertThat(commandContext.getBeanNamesForType(StaleBatchReleaser.class))
-                    .as("the on-demand generation command does not run the pass: one court "
-                            + "centre's regeneration may not decide that another's in-flight batch "
-                            + "has failed, and the per-batch release the operations surface "
-                            + "already offers is the supported way to free one")
-                    .isEmpty();
-            assertThat(commandContext.getBeanProvider(RegisterGenerationJob.class).getIfAvailable())
-                    .as("and it holds no run to call one either, which is what makes the absence "
-                            + "a plain one rather than a half")
-                    .isNull();
         }
     }
 

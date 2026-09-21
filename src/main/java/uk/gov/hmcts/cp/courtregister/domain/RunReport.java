@@ -63,6 +63,17 @@ import java.util.Map;
  * own series on {@code courtregister_generation_skipped_total}, which is where
  * {@link uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate} already puts them.
  *
+ * <p><strong>And who asked for it.</strong> {@link #trigger} is the one word that tells the run
+ * the schedule fired from the run a named person asked for over {@code POST
+ * /operations/batches/generate}. They are the same run doing the same work under the same lock, so
+ * they write the same line; what differs is that one of them has somebody behind it, and an
+ * operator's run over a flag that said OFF is the single night in this flow most worth finding
+ * again. The schedule's value is the default - the eleven-component constructor below is the
+ * schedule's, unchanged from the call site that has always used it - and the operator's is
+ * {@link #byOperator}.
+ *
+ * @param trigger           what started the run: the schedule, or a named person over the
+ *                          operations API
  * @param gateDecision      what the gate decided from its one read of the flag, which is the first
  *                          thing a run does and the reason a skipped run is a success
  * @param outcomes          how many batches ended in each state; empty for a skipped run
@@ -93,6 +104,7 @@ import java.util.Map;
  * @param duration          how long the run took
  */
 public record RunReport(
+        Trigger trigger,
         GateDecision gateDecision,
         Map<BatchStatus, Integer> outcomes,
         int requested,
@@ -116,9 +128,88 @@ public record RunReport(
      * that said nothing about it has not measured a night that settled nothing.
      */
     public RunReport {
+        trigger = trigger == null ? Trigger.SCHEDULE : trigger;
         outcomes = outcomes == null ? Map.of() : Map.copyOf(outcomes);
         rowOutcomes = rowOutcomes == null ? Map.of() : Map.copyOf(rowOutcomes);
         settled = settled == null ? Settled.UNREAD : settled;
+    }
+
+    /**
+     * The schedule's own report, which is every report this service wrote before increment 005.
+     *
+     * <p>The default is the schedule's because the schedule is what a run is unless somebody says
+     * otherwise: a night nobody asked for is the ordinary case, and a constructor that made every
+     * caller name it would have made the 18:00 job say out loud what it has never had to.
+     *
+     * @param gateDecision      what the gate decided from its one read of the flag
+     * @param outcomes          how many batches ended in each state
+     * @param requested         how many batches this run asked the renderer for
+     * @param rowOutcomes       how many registers ended under each of those states
+     * @param deferredKeys      how many court-centre days the assembler passed over
+     * @param deferredRows      how many registers are waiting under those days
+     * @param settled           what the store said tonight's batches had come to
+     * @param releasedBatches   how many batches the run's first act failed and released
+     * @param releasedRegisters how many registers came back with them
+     * @param contended         how many batches the pass left exactly as it found them
+     * @param duration          how long the run took
+     */
+    public RunReport(final GateDecision gateDecision, final Map<BatchStatus, Integer> outcomes,
+            final int requested, final Map<BatchStatus, Integer> rowOutcomes,
+            final int deferredKeys, final int deferredRows, final Settled settled,
+            final int releasedBatches, final int releasedRegisters, final int contended,
+            final Duration duration) {
+
+        this(Trigger.SCHEDULE, gateDecision, outcomes, requested, rowOutcomes, deferredKeys,
+                deferredRows, settled, releasedBatches, releasedRegisters, contended, duration);
+    }
+
+    /**
+     * The same night, said to have been asked for by a person.
+     *
+     * <p>The second factory, and the only way a report becomes an operator's: a run is the
+     * schedule's until somebody says it was theirs, which is the safe direction for a field an
+     * alert reads to find the nights a person drove.
+     *
+     * @param report what the run did, counted exactly as the schedule's runs are counted
+     * @return that same account, under {@link Trigger#OPERATOR}
+     */
+    public static RunReport byOperator(final RunReport report) {
+        return new RunReport(Trigger.OPERATOR, report.gateDecision(), report.outcomes(),
+                report.requested(), report.rowOutcomes(), report.deferredKeys(),
+                report.deferredRows(), report.settled(), report.releasedBatches(),
+                report.releasedRegisters(), report.contended(), report.duration());
+    }
+
+    /**
+     * What started a run, as one bounded word on the line.
+     *
+     * <p>Two values and no third: either the schedule fired it or a named person asked for it over
+     * the operations API. A caller is never named here - who the person was belongs in the audit
+     * event, which is the one place this service names a caller on purpose (Principle VII).
+     */
+    public enum Trigger {
+
+        /** The 18:00 Europe/London weekday run, which is every run this service used to have. */
+        SCHEDULE("schedule"),
+
+        /** A regeneration a named person asked for over {@code POST /operations/batches/generate}. */
+        OPERATOR("operator");
+
+        /** The bounded word the run line carries. */
+        private final String spelling;
+
+        Trigger(final String lineValue) {
+            this.spelling = lineValue;
+        }
+
+        /**
+         * The word the line says, which is what an alert filters on.
+         *
+         * @return the bounded value
+         */
+        public String wire() {
+            return spelling;
+        }
     }
 
     /**
@@ -172,8 +263,17 @@ public record RunReport(
      * statement, and the run writes it on the line as a word rather than as four zeroes, because a
      * night that settled nothing and a night nobody could read are otherwise the same line.
      *
-     * @param read          whether the four counts beside this are what the store said; false where
-     *                      the read was refused and they are zeroes the run did not earn
+     * <p><strong>And a reading nobody took is a third thing again.</strong> A regeneration takes no
+     * settled reading at all - the night it is part of is read back from
+     * {@code GET /operations/batches?date=D} - so it is {@link #NOT_TAKEN} rather than
+     * {@link #UNREAD}. The distinction is not a nicety: a refused read also WARNs and moves
+     * {@code courtregister_generation_unrecorded_total}, and an operator run moves nothing, so one
+     * word for both would make the line and the counter disagree and would fire an alert keyed on
+     * the line every time somebody regenerated a date.
+     *
+     * @param reading       which of the three this is: the store answered, the store refused, or
+     *                      nobody asked. The four counts beside it are measurements only under
+     *                      {@link Reading#TAKEN}
      * @param generated     how many of the batches this run assembled have a document by now,
      *                      whether or not anybody has been told about them yet
      * @param notified      how many of them the notifying leg has finished with, under any of its
@@ -182,8 +282,56 @@ public record RunReport(
      *                      as this run stamped them
      * @param notifiedRows  how many are inside the batches counted by {@link #notified}
      */
-    public record Settled(boolean read, int generated, int notified, int generatedRows,
+    public record Settled(Reading reading, int generated, int notified, int generatedRows,
             int notifiedRows) {
+
+        /**
+         * What the four counts beside it are, in the one word the run line carries.
+         *
+         * <p>Three values rather than a boolean, because the two ways a run has no counts are not
+         * the same event: one is a store that refused and is worth an alert, the other is a run
+         * that never asks.
+         */
+        public enum Reading {
+
+            /** The store answered, so the four counts are measurements. */
+            TAKEN("taken"),
+
+            /** The store was asked and refused, which is counted and said at WARN. */
+            UNREAD("unread"),
+
+            /** Nobody asked, because this kind of run takes no settled reading. */
+            NOT_TAKEN("not-taken");
+
+            /** The word the run line carries, which is what a dashboard partitions on. */
+            private final String spelling;
+
+            /**
+             * Binds a value to the word the line carries.
+             *
+             * @param wireSpelling the word as the run line writes it
+             */
+            Reading(final String wireSpelling) {
+                this.spelling = wireSpelling;
+            }
+
+            /**
+             * The word the run line carries.
+             *
+             * @return the spelling, which is bounded and never composed
+             */
+            public String wire() {
+                return spelling;
+            }
+        }
+
+        /**
+         * A reading nobody took, because this kind of run takes none.
+         *
+         * <p>What a regeneration writes. Deliberately not {@link #UNREAD}: that one is a read this
+         * service issued and the store refused, and it is counted.
+         */
+        public static final Settled NOT_TAKEN = new Settled(Reading.NOT_TAKEN, 0, 0, 0, 0);
 
         /**
          * The read was refused, so nothing is claimed and the line says which.
@@ -191,7 +339,7 @@ public record RunReport(
          * <p>Zeroes rather than a negative or an absent value, because the line an operator reads
          * is a set of counts and the word beside them is what says these four are not measurements.
          */
-        public static final Settled UNREAD = new Settled(false, 0, 0, 0, 0);
+        public static final Settled UNREAD = new Settled(Reading.UNREAD, 0, 0, 0, 0);
 
         /**
          * The run assembled no batch, so there is nothing to ask about and the empty answer is
@@ -201,7 +349,20 @@ public record RunReport(
          * and a night with nothing waiting have settled nothing because there was nothing to settle,
          * which is a fact about the night, and no statement is issued against the store to learn it.
          */
-        public static final Settled NOTHING_ASSEMBLED = new Settled(true, 0, 0, 0, 0);
+        public static final Settled NOTHING_ASSEMBLED = new Settled(Reading.TAKEN, 0, 0, 0, 0);
+
+        /**
+         * A reading with no value stated is the refused one, which is the safe direction.
+         *
+         * @param reading       which of the three this is
+         * @param generated     batches with a document by now
+         * @param notified      batches the notifying leg has finished with
+         * @param generatedRows registers inside the first
+         * @param notifiedRows  registers inside the second
+         */
+        public Settled {
+            reading = reading == null ? Reading.UNREAD : reading;
+        }
 
         /**
          * What the store said, counted.
@@ -214,7 +375,7 @@ public record RunReport(
          */
         public static Settled taken(final int generated, final int notified, final int generatedRows,
                 final int notifiedRows) {
-            return new Settled(true, generated, notified, generatedRows, notifiedRows);
+            return new Settled(Reading.TAKEN, generated, notified, generatedRows, notifiedRows);
         }
     }
 

@@ -19,11 +19,10 @@ import uk.gov.hmcts.cp.courtregister.application.ReportMailer;
  * The report's second output: the exception list as a CSV, e-mailed to support.
  *
  * <p>Behind <strong>one</strong> condition, {@code courtregister.report.email.enabled}, and
- * deliberately no other. In particular it is <em>not</em> conditional on not being a command JVM:
- * {@code report-exceptions --email} is the on-demand half of this output, and a command that could
- * not resolve the sink would decline a flag the deployment says is switched on. It is not
- * conditional on {@code courtregister.report.enabled} either - the schedule and the command are two
- * callers of one report, and the sink belongs to neither of them.
+ * deliberately no other. In particular it is not conditional on {@code courtregister.report.enabled}:
+ * the 07:00 schedule and {@code POST /operations/exception-reports} are two callers of one report,
+ * and the sink belongs to neither of them - an endpoint that could not resolve it would decline an
+ * output the deployment says is switched on.
  *
  * <p>With the output off, a context holds one sink, the log's, and the job's run line reads
  * {@code delivered_email=disabled}: not {@code skipped}, because nothing was decided by anybody.

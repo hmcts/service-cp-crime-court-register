@@ -1,8 +1,14 @@
 # Architecture & Domain Rules
 
 This service is a **message-driven pipeline with a scheduled second leg**, not a REST application.
-There is no controller layer and no public HTTP API — actuator only. Operational actions are a CLI
-baked into the image. Everything below assumes that shape.
+There is **no business REST API**: no hearing is submitted over HTTP, no register is read out over
+HTTP, no batch is created by a caller. Everything below assumes that shape.
+
+Since increment 005 it does serve one HTTP surface besides actuator — the **operations API** under
+`/operations/**`, the named operator actions that replaced the CLI, each behind
+`cp-auth-rules-filter` and `cp-audit-filter-springboot` (see "The operations API" below). The CLI is
+gone: `batch/cli/`, `config/CliModeConfig`, the `courtregister.cli` property and the
+`docker/startup.sh` dispatch are removed, and the image starts the application, full stop.
 
 Since increment 002 the service owns **both halves** of the court-register flow: the intake half
 ported from the function app, and the downstream half absorbed from `cpp-context-progression`.
@@ -92,9 +98,11 @@ BatchAgeSweep                           lock — the latter in every such JVM th
   fetching them. If swapping an adapter forces a pipeline edit, the port is wrong — fix the port,
   not the pipeline.
 - **Persistence:** JdbcClient repositories, accessed only by `ProcessingStateService`,
-  `IdempotencyGuard`, `JdbcRegisterStore`, `ExceptionReportService` and `IntakeAgeSweep`. Never
-  from a listener, never from the job directly. The last two are readers and nothing else: the
-  report and the sweep take the eight report reads and the two gauge reads, and write no row.
+  `IdempotencyGuard`, `JdbcRegisterStore`, `RegisterNotifierService`, `DocumentOutcomeSinkImpl`,
+  `ExceptionReportService`, `IntakeAgeSweep` and `BatchListingService`. Never from a listener,
+  never from a controller, never from the job directly. The last three are **readers and nothing
+  else**: the report and the sweep take the eight report reads and the two gauge reads, and the two
+  operations listings take the three reads they are built from — none of them writes a row.
 - **The report is not on the cutover lever's circuit.** `ExceptionReportJob` reads the
   `CourtRegisterService` flag nowhere and is gated by it nowhere, and it runs whatever
   `courtregister.generation.enabled` says — a pod that renders nothing still says every morning
@@ -109,6 +117,9 @@ outside the topic's.
 
 ```
 uk.gov.hmcts.cp.courtregister
+├── api/           the operations API: the seven controllers, their request and response records,
+│                  the ProblemDetail advice, and the auth/audit filter wiring. An INBOUND ADAPTER —
+│                  it parses, calls one application service, and maps the answer. No logic
 ├── inbound/       ServiceBusProcessorClient config, message listener, DistributionCommand parsing
 ├── application/   DistributionPipeline, RegisterGenerationService, DocumentOutcomeSinkImpl,
 │                  RegisterNotifierService, ExceptionReportService, IdempotencyGuard,
@@ -132,11 +143,10 @@ uk.gov.hmcts.cp.courtregister
 │   └── progression/        the 001 add-court-register client, retained for progression-post mode
 ├── batch/         RegisterGenerationJob, BatchAssembler, FeatureFlagGate, StaleBatchReleaser,
 │                  RecipientSet, ExceptionReportJob, IntakeAgeSweep, BatchAgeSweep
-│   └── cli/       CliMain and the six operations commands
 ├── pipeline/      ported transformation: RegisterBuilder, SubscriptionMatcher, AggregationMapper
 ├── persistence/   repositories; Flyway migrations in src/main/resources/db/migration
 └── config/        typed @ConfigurationProperties, ObjectMapper, health indicators, the two
-                   metrics classes, CliModeConfig
+                   metrics classes, and the auth/audit starter settings
 ```
 
 ## Domain Model
@@ -272,11 +282,14 @@ Configuration feature flag, `CourtRegisterService`**.
 - **Never add a second switch** — no Helm value, no static-data patch, no endpoint — that decides
   which implementation is live. `courtregister.output` and `courtregister.generation.enabled` are
   deployment shape, not cutover levers, and neither may be documented as one.
-- The regeneration CLI refuses to run without `--ignore-flag`.
+- **An operations endpoint is not a second lever.** `POST /operations/batches/generate` reads the
+  same flag, through the same `FeatureFlagGate`, at exactly the point `generate-register` read it,
+  and refuses `FLAG_OFF` unless the body carries `ignoreFlag: true` — which is the same decision
+  `--ignore-flag` was, taken by a named caller instead of by whoever held exec rights. The override
+  is recorded in the audit event and printed on the run report, exactly as the command counted it.
+  An endpoint that *decided which implementation is live*, or that could run the generation leg
+  without the flag having been read at all, **would** be a second lever and is forbidden.
 - Never run generation with notification enabled against production data outside cutover.
-- `courtregister.cli` decides **who starts** (it switches off the consumer, the scheduler and the
-  event listener) and nothing else. It is deliberately not the inverse of
-  `generation.enabled`: a command and the schedule must read the same configuration.
 
 ## Queue and Topic Semantics
 
@@ -313,9 +326,99 @@ subscription that every replica attaches to**.
   what the broker refuses the second connection for. Concurrency stays at one consumer per pod.
   Changing a subscription between shared and non-shared abandons the existing subscription and its
   backlog, so it is a broker-visible change and not a local edit.
-- Because a CLI JVM would be one more consumer the broker load-balances outcomes to — taking
-  deliveries a process about to exit will not finish — a CLI JVM must not subscribe; see the
-  `courtregister.cli` rule above.
+- Every JVM that runs this application subscribes, and there is no longer any other kind: the CLI
+  JVM the `courtregister.cli` rule used to keep off the topic no longer exists, because an
+  operations call is served by a pod that is already subscribed rather than by a process about to
+  exit. An operations endpoint must never bring up a second subscription of its own.
+
+## The operations API
+
+Seven endpoints under `/operations/**`, one per action an operator used to reach by
+`kubectl exec`. They are an **inbound adapter** in `api/`: each parses its request, calls the one
+application service the CLI class called, and maps the answer. No transformation, no repository
+call, no HTTP client, no business decision.
+
+```
+HTTP request  (CJSCPPUID header)
+   ▼
+cp-auth-rules-filter     drools rules in src/main/resources/acl/operations-rules.drl
+   │                     one rule per action, "Second Line Support" only; denied ⇒ refused here
+   ▼
+cp-audit-filter-springboot   every request and response published to the audit context
+   ▼
+api/*Controller          inbound adapter — parse, call, map. NOTHING else
+   ▼
+the same application services the CLI called:
+   FeatureFlagReader · FeatureFlagGate + BatchAssembler + RegisterGenerationService ·
+   RegisterNotifierService · RegisterStore · RegisterBatchRepository +
+   RegisterNotificationRepository · ExceptionReportService + its sinks
+```
+
+- **One endpoint per action, and no capability the CLI did not have** — with three exceptions, each
+  of which makes an endpoint *stricter* than its command because HTTP reaches further than
+  `kubectl exec` did: supersede is admitted only while the flag says OFF and gains a `dryRun` and an
+  age bound; regeneration takes the nightly lock instead of trusting a runbook; and both are
+  audited. Otherwise: the same arguments, the same refusals, the same fields — as JSON rather than
+  as `key=value` lines.
+- **The three exit codes become a status map, refined where HTTP has a truer code.** `400` a
+  malformed or missing argument; `404` a well-formed identifier that names nothing; `409` a state
+  refusal that changed nothing; `503` a dependency this endpoint exists to read or write that is
+  unavailable; `502`/`504` a downstream platform contract that refused or did not answer; `500` an
+  unexpected defect **and nothing else** — a 500 this service can explain is a 409, a 503 or a 502
+  it failed to classify, and the one it cannot is answered `UNEXPECTED` by the advice's single
+  fallback rather than left to the container, because the audit filter publishes no response event
+  for an exception that leaves the dispatcher. Every non-2xx answer is a `ProblemDetail` carrying a bounded `reason`.
+  One status belongs to the surface rather than to an action: `415 UNSUPPORTED_CONTENT_TYPE`, for a
+  `Content-Type` beginning `multipart/`, which `cp-audit-filter-springboot` hands down the chain
+  without publishing either of its events. It is refused by `OperationsActionFilter` ahead of both
+  estate filters, because an endpoint reachable unaudited is an endpoint that may not exist.
+- **One endpoint is asynchronous, and it is the dangerous one.** Regeneration answers
+  `202` with a run id and does the work on the generation scheduler's single thread, because the
+  CLI's inline render requests ran under a sixty-minute deadline and no gateway will hold a
+  connection that long. Everything else answers when it is done.
+- **Nothing the caller typed is echoed back**, in the body or in a log line: a refusal names the
+  *argument*, never the value (Principle VII). Recipient addresses are masked exactly as
+  `list-batches` masked them. No exception text, no store's or far end's own words.
+- **The flag is read where the command read it, or more strictly, never more loosely.**
+  `check-flag`'s endpoint reads it because that is what it is for; the generate endpoint reads it
+  through the same `FeatureFlagGate` and takes `ignoreFlag` as the per-request break-glass
+  `--ignore-flag` was; **supersede reads it although its command did not**, and is admitted only
+  while it says OFF, with no override and fail-closed on unreadable — an unconditional HTTP mutation
+  that gives a period of registers up is a second lever however well authorised; the
+  exception-report endpoint reads it **nowhere**, as `report-exceptions` did not.
+- **The 18:00 lock is taken, not asked about, and this is the one rule the CLI did not have.** The
+  CLI left "do not regenerate during the nightly run" to a runbook. Asking whether the lock is held
+  and then acting races the scheduler; the background regeneration takes the same
+  `@SchedulerLock` name by a non-blocking attempt and records the refusal as the run's outcome when
+  it cannot.
+- **The claims that already exist do the arbitrating.** Two concurrent notifies for one batch are
+  decided by `RegisterNotifierService`'s claim and its four dispositions, not by anything new; two
+  concurrent regenerations for one date are decided by `releaseFailed` returning no rows to the
+  loser and by the live-key index refusing its assemble — which must surface as a clean bounded
+  refusal, never a 500.
+- **`@ControllerAdvice` and `ProblemDetail` are permitted here and nowhere else.** The message
+  listeners and the jobs still convert an exception into a settlement or a persisted state, never
+  into a response.
+- **Both filters are on by default, and the pod always starts.** `authz.http.enabled` and
+  `audit.http.enabled` read `true` in `application.yaml` against library defaults of off, so a
+  deployment that says nothing is authorised (FR-045, constitution 5.0.1). They are
+  ordinary configuration: an operator may turn either off, the compose environment and the `test`
+  profile do exactly that with the reason written beside them, and **start-up never refuses on the
+  combination** — no cross-field rule against `courtregister.operations.enabled`, no
+  `courtregister.servicebus.namespace` discriminator, no laptop-versus-pod exemption. What is still
+  refused is a **value** that cannot mean what it says (FR-053): an audit transport switched on with
+  no host or a port outside 1..65535, an audit filter switched on with no OpenAPI document to
+  resolve, and an unusable `supersede-max-age` or `lock-wait`.
+- **Being audited takes the transport key as well, and that one is the deployment's.**
+  `audit.http.enabled` builds nothing on its own: every `audit.http.*` bean the starter declares
+  sits inside the `@AutoConfiguration` class `cp.audit.enabled` gates, and this service ships
+  `cp.audit.enabled: ${CP_AUDIT_ENABLED:false}` so a laptop with no audit broker starts. Condition
+  (b) is therefore met by a deployed values file setting `CP_AUDIT_ENABLED=true` with the broker's
+  connection from Key Vault — a values file without it serves the operations API **unaudited**.
+  Nothing refuses that combination, so the pod **says** it: one WARN at start-up naming both
+  settings, because the filter that would have published was never constructed and the one that is
+  swallows its own publishing failures.
+- **Actuator is not part of this surface** and is not behind these filters.
 
 ## Idempotency and Supersession
 
@@ -409,8 +512,10 @@ court-register leg for the downstream half. The register is `doc/DEFECT-FIXES.md
 
 ## Out of Scope — do not build here
 
-- Any REST API. If a status/replay surface is ever wanted, it is a separate, agreed story. The CLI
-  is the operational surface.
+- Any **business** REST API — a hearing submitted over HTTP, a register read out over HTTP, a batch
+  created by a caller, a status or replay surface. The operations API is the named operator actions
+  and nothing else; a path that is not one of them needs a constitution amendment, not a spec
+  (Principle III). Widening an existing endpoint into a query surface is the same thing by degrees.
 - The prison court register — its own pipeline, its own future migration. Keep the seams clean; the
   shared kernel this port produces is what the PCR migration will consume.
 - SJP hearings — the court register has no SJP leg at all (unlike informant).

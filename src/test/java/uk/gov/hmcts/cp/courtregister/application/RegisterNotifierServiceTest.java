@@ -55,6 +55,7 @@ import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDefendant;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterDocument;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.NoSuchBatchException;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
@@ -1584,7 +1585,10 @@ class RegisterNotifierServiceTest {
                     .as("naming an identity nothing was ever assembled under is the caller's own "
                             + "correlation being wrong, and it is the failure this service already "
                             + "had for it")
-                    .isInstanceOf(IllegalStateException.class)
+                    .isInstanceOf(NoSuchBatchException.class)
+                    .as("and it has a type of its own, so the one refusal that is about the "
+                            + "identifier can be answered 404 while the two that are about a "
+                            + "batch that exists stay the command's resend-failed")
                     .hasMessageContaining(BATCH_ID.toString());
             softly.assertThat(notificationIgnoredCount(GenerationMetrics.ALREADY_NOTIFYING))
                     .as("and it is not contention: no notifier is telling this batch's recipients, "

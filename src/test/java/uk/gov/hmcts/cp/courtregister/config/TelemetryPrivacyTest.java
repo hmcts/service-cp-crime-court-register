@@ -19,9 +19,9 @@ import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.RecordComponent;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -31,7 +31,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -59,30 +58,14 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.adapter.fileservice.FileServicePayloadStore;
 import uk.gov.hmcts.cp.courtregister.application.DistributionPipeline;
-import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
-import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
-import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.HearingPayloadSource;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
 import uk.gov.hmcts.cp.courtregister.application.NowSubscriptionsSource;
-import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
-import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
-import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmission;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.application.SubmissionReceipt;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAgeSweep;
-import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
-import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
-import uk.gov.hmcts.cp.courtregister.batch.cli.Args;
-import uk.gov.hmcts.cp.courtregister.batch.cli.CheckFlagCli;
-import uk.gov.hmcts.cp.courtregister.batch.cli.CliMain;
-import uk.gov.hmcts.cp.courtregister.batch.cli.GenerateRegisterCli;
-import uk.gov.hmcts.cp.courtregister.batch.cli.ListBatchesCli;
-import uk.gov.hmcts.cp.courtregister.batch.cli.NotifyRegisterCli;
-import uk.gov.hmcts.cp.courtregister.batch.cli.ReportExceptionsCli;
-import uk.gov.hmcts.cp.courtregister.batch.cli.SupersedeBeforeCli;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
@@ -95,6 +78,7 @@ import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 import uk.gov.hmcts.cp.courtregister.domain.GateDecision;
 import uk.gov.hmcts.cp.courtregister.domain.GuardDecision;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
+import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
 import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.ReportDeliveryReason;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
@@ -103,8 +87,6 @@ import uk.gov.hmcts.cp.courtregister.domain.TransformationAnomaly;
 import uk.gov.hmcts.cp.courtregister.inbound.CourtRegisterMessageListener;
 import uk.gov.hmcts.cp.courtregister.inbound.DistributionCommandParser;
 import uk.gov.hmcts.cp.courtregister.inbound.ServiceBusConsumerConfig;
-import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
-import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 import uk.gov.hmcts.cp.courtregister.support.GenerationLegs;
 import uk.gov.hmcts.cp.courtregister.support.LegacyFixtures;
@@ -155,11 +137,12 @@ import uk.gov.hmcts.cp.courtregister.support.StoreGateTestSupport;
  * sweep for different values.
  *
  * <p><strong>The delivery path is not the only way text this service did not write gets in.</strong>
- * The operations commands are the other one, and the text they are handed is an operator's own
- * typing rather than a producer's message: a court house dictated over the phone, a batch identity
- * copied out of a support ticket. Those lines reach the same index as every line above, so the last
- * group holds the five commands to the same rule, over a marker of its own
- * ({@link PersonalDataMarkers#OPERATOR_TOKEN}).
+ * The operations API is the other one, and the text it is handed is an operator's own typing rather
+ * than a producer's message: a court house dictated over the phone, a batch identity copied out of
+ * a support ticket. {@code TheOperationsSurface} below holds the seven endpoints to the rule over
+ * their records and their source - a refusal names the argument and never the value, and nothing
+ * the caller supplied reaches a body or a line. It replaced a group that ran the six commands and
+ * swept their terminals, which increment 005 deleted with the commands themselves.
  *
  * <p>Every assertion is made against a capture of <em>everything</em>, at TRACE, including the
  * rendered text of any exception attached to a line. A stack trace reaches a log index exactly as a
@@ -250,6 +233,15 @@ class TelemetryPrivacyTest {
                     // and an outage of theirs and a bug of ours have to stay tellable apart, which
                     // is why there are two of them and why both belong in the vocabulary.
                     Arrays.stream(SweepFailureReason.values()).map(Enum::name),
+                    // The operations API's own closed set, in its wire spelling and in that one
+                    // alone. A reason slot carries wire() wherever it is written - in a
+                    // ProblemDetail and in the log line beside it - so a line and the body
+                    // answered with it grep as the same code, and admitting the constant as a
+                    // second spelling would be the sweep widened to fit the code. The whole enum
+                    // rather than the codes logged today, because the set is closed by
+                    // OperationsProblem's table and a code added to it is a code an endpoint may
+                    // then refuse under.
+                    Arrays.stream(OperationsReason.values()).map(OperationsReason::wire),
                     Stream.of("flag-on"))
             .flatMap(codes -> codes)
             .collect(Collectors.toUnmodifiableSet());
@@ -595,162 +587,6 @@ class TelemetryPrivacyTest {
                 }
             });
         }
-    }
-
-    // --- text an operator typed ------------------------------------------------------------------
-
-    /**
-     * What the operations commands may write down about what was typed at them.
-     *
-     * <p>The five commands are reached by {@code kubectl exec} rather than by a delivery, so the
-     * text they are handed is somebody's own typing: a court house dictated over the phone, a batch
-     * identity copied out of a support ticket, an instant a half-remembered runbook step composed.
-     * Every value one of them reads is read by a JDK parser that quotes the token it choked on -
-     * {@code Invalid UUID string: ...}, {@code Text '...' could not be parsed} - and a command's
-     * log stream is this pod's stderr, which reaches the index every claim above is about. So a
-     * contact detail typed where a court house belongs, or a credential pasted over
-     * {@code --batch}, is one refusal away from being published.
-     *
-     * <p>The sweep is over all six commands and both halves of every refusal - the grammar
-     * underneath them and each value a command interprets - because the rule is not one command's:
-     * it is what this image's whole operations surface may say about text it did not write. What a
-     * diagnosis needs instead is on the line and asserted by {@code batch/cli/CliMainTest}: which
-     * argument would not read, by the name this service owns, and the class of the reader that
-     * refused it.
-     */
-    @Nested
-    @DisplayName("an argument an operator typed")
-    class TheOperationsCommands {
-
-        private final FeatureFlagGate gate = mock(FeatureFlagGate.class);
-        private final RegisterStore store = mock(RegisterStore.class);
-        private final BatchAssembler assembler = mock(BatchAssembler.class);
-        private final RegisterGenerationService generation =
-                mock(RegisterGenerationService.class);
-        private final RegisterNotifierService notifier = mock(RegisterNotifierService.class);
-        private final RegisterBatchRepository batches = mock(RegisterBatchRepository.class);
-        private final RegisterNotificationRepository notifications =
-                mock(RegisterNotificationRepository.class);
-        private final FeatureFlagReader reader = mock(FeatureFlagReader.class);
-        private final ExceptionReportService reporting = mock(ExceptionReportService.class);
-        private final ExceptionReportSink logSink = mock(ExceptionReportSink.class);
-
-        @ParameterizedTest(name = "{0}")
-        @MethodSource("uk.gov.hmcts.cp.courtregister.config.TelemetryPrivacyTest"
-                + "#invocationsAnOperatorGetsWrong")
-        @DisplayName("is written nowhere: not to the terminal, and not to the log either")
-        void should_never_write_down_a_token_an_operator_typed(final String shape,
-                final String command, final List<String> typed) {
-
-            final List<String> printed = new ArrayList<>();
-
-            try (CapturedLog log = CapturedLog.everything()) {
-                final int code = commands(printed::add).get(command).run(typed);
-
-                assertThat(code)
-                        .as("the refusal has to have happened for the silence below to mean "
-                                + "anything: %s", shape)
-                        .isEqualTo(CliMain.REFUSED);
-                assertThat(printed)
-                        .as("an operator's terminal is pasted into tickets, and what they typed is "
-                                + "not the report's business twice over")
-                        .noneMatch(line -> line.contains(PersonalDataMarkers.OPERATOR_TOKEN));
-                assertThat(log.renderings())
-                        .as("and the log is shipped to an index the whole estate reads, which is "
-                                + "the same rule and not a weaker one: %s", shape)
-                        .isNotEmpty()
-                        .noneMatch(line -> line.contains(PersonalDataMarkers.OPERATOR_TOKEN));
-            }
-        }
-
-        /**
-         * The six commands over doubled collaborators, by the names the registry knows them by.
-         *
-         * <p>Built the way {@code CliMain.registryOf} builds them, so a command added to the image
-         * is one line from being inside this claim. None of the doubles is reached: every
-         * invocation below is refused at the argument, before a store, a flag or a notifier is
-         * asked anything.
-         *
-         * @param output where the command's lines are written, one line per call
-         * @return the six commands, by name
-         */
-        private Map<String, CliMain.Command> commands(final Consumer<String> output) {
-            return Map.of(
-                    CliMain.GENERATE_REGISTER, new GenerateRegisterCli(gate, store, assembler,
-                            generation, generationSettings(), Clock.systemUTC(), output)::run,
-                    CliMain.NOTIFY_REGISTER, new NotifyRegisterCli(notifier, output)::run,
-                    CliMain.LIST_BATCHES,
-                            new ListBatchesCli(batches, notifications, store, output)::run,
-                    CliMain.SUPERSEDE_BEFORE, new SupersedeBeforeCli(store, output)::run,
-                    CliMain.CHECK_FLAG, new CheckFlagCli(reader, output)::run,
-                    CliMain.REPORT_EXCEPTIONS, new ReportExceptionsCli(reporting, List.of(logSink),
-                            reportSettings(), Clock.systemUTC(), output)::run);
-        }
-
-        /**
-         * The report's settings a deployed command works to, with the e-mail output off.
-         *
-         * <p>Off because every environment ships it off until the Notify template exists, and
-         * because the refusal being swept for here happens at the window rather than at the
-         * output: a window this command cannot read is refused before either sink is asked
-         * anything, which is what makes the doubles above unreachable.
-         *
-         * @return the report on, at seven in the court's zone, with no e-mail output
-         */
-        private static ReportProperties reportSettings() {
-            return new ReportProperties(true, "0 0 7 * * MON-FRI", GenerationProperties.COURTS_ZONE,
-                    false, Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(15),
-                    Duration.ofMinutes(30), MAX_ENTRIES,
-                    new ReportProperties.Email(false, null, List.of()));
-        }
-
-        /**
-         * The settings a deployed command works to, which are the ones {@code application.yaml}
-         * ships.
-         *
-         * @return generation enabled, at the court's hour, in the court's zone
-         */
-        private static GenerationProperties generationSettings() {
-            return new GenerationProperties(true, "0 0 18 * * MON-FRI", "Europe/London", false,
-                    Duration.ofMinutes(60), Duration.ofMinutes(70), Duration.ofMinutes(30),
-                    Duration.ofMinutes(10),
-                    GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE,
-                    GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE);
-        }
-    }
-
-    /**
-     * The invocations an operator gets wrong, one for every value the six commands read and two
-     * for the grammar underneath all of them.
-     *
-     * <p>Each puts {@link PersonalDataMarkers#OPERATOR_TOKEN} where the mistake goes: in a value a
-     * command interprets, in the name position - which is where a pasted token lands when a runbook
-     * step is half-typed - and as a name nobody owns given twice, which is the one refusal the
-     * parser makes that has a name in its hands.
-     *
-     * @return each shape, beside the command it was typed at and the tokens that make it
-     */
-    static Stream<Arguments> invocationsAnOperatorGetsWrong() {
-        final String token = PersonalDataMarkers.OPERATOR_TOKEN;
-        final String aDate = "2026-08-20";
-        return Stream.of(
-                arguments("generate-register's register date", CliMain.GENERATE_REGISTER,
-                        List.of("--" + Args.DATE, token)),
-                arguments("generate-register's batch", CliMain.GENERATE_REGISTER,
-                        List.of("--" + Args.DATE, aDate, "--" + Args.BATCH, token)),
-                arguments("generate-register's bound", CliMain.GENERATE_REGISTER,
-                        List.of("--" + Args.DATE, aDate, "--" + Args.RECORDED_BEFORE, token)),
-                arguments("notify-register's batch", CliMain.NOTIFY_REGISTER,
-                        List.of("--" + Args.BATCH, token)),
-                arguments("list-batches' register date", CliMain.LIST_BATCHES,
-                        List.of("--" + Args.DATE, token)),
-                arguments("supersede-before's bound", CliMain.SUPERSEDE_BEFORE,
-                        List.of("--" + Args.SHARED_BEFORE, token)),
-                arguments("report-exceptions' window", CliMain.REPORT_EXCEPTIONS,
-                        List.of("--" + Args.SINCE, token)),
-                arguments("a token where a name belongs", CliMain.CHECK_FLAG, List.of(token)),
-                arguments("a name nobody owns, given twice", CliMain.LIST_BATCHES,
-                        List.of("--" + token, "--" + token)));
     }
 
     // --- the batch and the notification legs -----------------------------------------------------
@@ -1266,6 +1102,175 @@ class TelemetryPrivacyTest {
         });
     }
 
+    // --- the surface an operator reads -----------------------------------------------------------
+
+    /**
+     * The sweep, extended past log statements to the one thing this service now writes to a caller.
+     *
+     * <p>Every other case in this suite is about a log line or a metric label. Since increment 005
+     * there is a third telemetry surface - an HTTP response - and Principle VII governs it exactly
+     * as it governs the other two: bounded codes, counts and identifiers, no defendant detail, no
+     * unmasked recipient address, no exception message and nothing the caller supplied (FR-025,
+     * FR-026).
+     *
+     * <p>Read off the source and off the records themselves rather than by driving a request. A
+     * case per endpoint proves what that endpoint answered for the inputs it was given; these
+     * prove what any endpoint <em>could</em> answer, which is the claim a sweep exists to make.
+     */
+    @Nested
+    @DisplayName("what an operations response may carry")
+    class TheOperationsSurface {
+
+        /** Where the response and request records live. */
+        private static final Path DTO = Path.of("src", "main", "java", "uk", "gov", "hmcts", "cp",
+                "courtregister", "api", "dto");
+
+        /** The inbound adapter itself: the controllers, the advice, the filter and the facts. */
+        private static final Path API = Path.of("src", "main", "java", "uk", "gov", "hmcts", "cp",
+                "courtregister", "api");
+
+        /**
+         * Every type a bounded field may be.
+         *
+         * <p>A closed list rather than a rule about what is forbidden, for the reason the reason
+         * codes are an enum: a response record gaining a {@code CourtRegisterDocument}, a
+         * {@code RegisterRecord} or a {@code JsonNode} is how a defendant reaches a caller, and
+         * the way to catch that is to say what is allowed rather than to guess at what is not.
+         */
+        private static final Set<Class<?>> BOUNDED = Set.of(
+                String.class, int.class, long.class, boolean.class, Integer.class, Long.class,
+                Boolean.class, UUID.class, LocalDate.class, java.time.Instant.class,
+                List.class, Map.class);
+
+        /**
+         * Field names that would be a person, whatever their type.
+         *
+         * <p>Matched as whole words against the component's name, lower-cased. {@code fileName} and
+         * {@code courtHouse} are not among them and must not be: the register's file name is a
+         * bounded composition of a date, an OU code and a hearing id, and a court house is a
+         * building.
+         */
+        private static final List<String> A_PERSON = List.of("defendant", "person", "guardian",
+                "dateofbirth", "nino", "ethnic", "statementoffacts", "firstname", "lastname",
+                "surname", "postcode");
+
+        /**
+         * Every record the API declares, request and response alike.
+         *
+         * @return the record classes under {@code api/dto}, nested ones included
+         * @throws Exception where the directory cannot be read
+         */
+        private List<Class<?>> theApiRecords() throws Exception {
+            final List<Class<?>> records = new ArrayList<>();
+            try (Stream<Path> sources = Files.walk(DTO)) {
+                for (final Path source : sources
+                        .filter(path -> path.toString().endsWith(".java")).toList()) {
+
+                    final String simple = source.getFileName().toString().replace(".java", "");
+                    final Class<?> declared = Class.forName(
+                            "uk.gov.hmcts.cp.courtregister.api.dto." + simple);
+                    records.add(declared);
+                    records.addAll(Arrays.asList(declared.getDeclaredClasses()));
+                }
+            }
+            return records.stream().filter(Class::isRecord).toList();
+        }
+
+        @Test
+        @DisplayName("every field of every request and response record is a bounded type")
+        void no_api_record_should_carry_a_type_this_service_keeps_out_of_telemetry()
+                throws Exception {
+
+            final List<String> unbounded = new ArrayList<>();
+            for (final Class<?> declared : theApiRecords()) {
+                for (final RecordComponent component : declared.getRecordComponents()) {
+                    final Class<?> type = component.getType();
+                    if (!BOUNDED.contains(type) && !type.isEnum()
+                            && !type.getName().startsWith(
+                                    "uk.gov.hmcts.cp.courtregister.api.dto.")) {
+                        unbounded.add(declared.getSimpleName() + '.' + component.getName()
+                                + " : " + type.getName());
+                    }
+                }
+            }
+
+            assertThat(unbounded)
+                    .as("a response record gaining a register document, a register row or a "
+                            + "JsonNode is how a defendant reaches a caller - so what may be on "
+                            + "one is a closed list, exactly as the reason codes are")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("and no field of one is named after a person")
+        void no_api_record_should_name_a_field_after_a_person() throws Exception {
+            final List<String> named = new ArrayList<>();
+            for (final Class<?> declared : theApiRecords()) {
+                for (final RecordComponent component : declared.getRecordComponents()) {
+                    final String lowered = component.getName().toLowerCase(Locale.ROOT);
+                    if (A_PERSON.stream().anyMatch(lowered::contains)) {
+                        named.add(declared.getSimpleName() + '.' + component.getName());
+                    }
+                }
+            }
+
+            assertThat(named)
+                    .as("every defendant on this register is a child, and a field that names one "
+                            + "is a field somebody will populate")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("the ProblemDetail is never given a detail")
+        void no_refusal_should_carry_an_exceptions_or_a_stores_own_words() throws Exception {
+            assertThat(sourcesUnder(API))
+                    .as("`detail` is the one field of RFC 9457 that invites free text, and free "
+                            + "text is where a connection string or a fragment of a statement "
+                            + "turns up - so it is never populated at all (data-model, Common)")
+                    .noneMatch(source -> source.contains("setDetail("));
+        }
+
+        @Test
+        @DisplayName("the caller's identity reaches no line of the inbound adapter")
+        void the_callers_identity_should_belong_to_the_audit_event_and_nowhere_else()
+                throws Exception {
+
+            assertThat(sourcesUnder(API))
+                    .as("the CJSCPPUID belongs in the audit event, which is the one place this "
+                            + "service names a caller on purpose (FR-038) - a class that does not "
+                            + "hold the value cannot log it")
+                    .noneMatch(source -> source.contains("CJSCPPUID"));
+        }
+
+        @Test
+        @DisplayName("and the address masking has exactly one home")
+        void the_api_should_not_carry_a_masking_rule_of_its_own() throws Exception {
+            assertThat(sourcesUnder(API))
+                    .as("`list-batches` masked by one rule and the endpoint masks by the same one, "
+                            + "in BatchListingService; a second rule in the adapter is how the two "
+                            + "come to disagree, and the weaker of them is the one that ships")
+                    .noneMatch(source -> source.contains("\"***\""));
+        }
+
+        /**
+         * Every Java source under a directory, as text.
+         *
+         * @param root where to read from
+         * @return the sources
+         * @throws Exception where the tree cannot be read
+         */
+        private List<String> sourcesUnder(final Path root) throws Exception {
+            try (Stream<Path> sources = Files.walk(root)) {
+                final List<String> text = new ArrayList<>();
+                for (final Path source : sources
+                        .filter(path -> path.toString().endsWith(".java")).toList()) {
+                    text.add(Files.readString(source));
+                }
+                return text;
+            }
+        }
+    }
+
     // --- the configuration that decides what reaches the index -----------------------------------
 
     @Nested
@@ -1273,17 +1278,15 @@ class TelemetryPrivacyTest {
     class ShippedConfiguration {
 
         /**
-         * Both shipped configurations, because there are two and they are read by one index.
+         * The one shipped configuration, which since increment 005 is the only one there is.
          *
-         * <p>{@code logback.xml} is the pod's. {@code logback-cli.xml} is the one
-         * {@code CliMain.dispatch} starts a command's JVM under, and it differs from the pod's in
-         * one line - the appender's target, so that a command's report has stdout to itself. Every
-         * claim above is about what reaches a log index, and a command's lines reach the same one,
-         * so a second configuration that dropped the MDC or lowered a level would be outside a rule
-         * that named only the first file.
+         * <p>There were two until the CLI was removed: {@code logback-cli.xml} was the one a
+         * command's JVM started under, differing from the pod's in one line so that a command's
+         * report had stdout to itself. No JVM starts under it now - an operations call is served by
+         * a pod already running - so the file is gone and every claim here is about the pod's.
          */
         @ParameterizedTest
-        @ValueSource(strings = {"logback.xml", "logback-cli.xml"})
+        @ValueSource(strings = "logback.xml")
         @DisplayName("emits the MDC, without which the correlation fields are thrown away")
         void should_ship_a_logging_configuration_that_carries_the_correlation_fields(
                 final String configuration) throws Exception {
@@ -1307,10 +1310,7 @@ class TelemetryPrivacyTest {
          * <p>{@code LogEventReportSink} writes both of its events through
          * {@code StructuredArguments.value(...)}, and an encoder with no {@code <arguments/>}
          * provider renders those values into the message text and emits no fields at all - so
-         * every saved query would need {@code parse()}, which is precisely what SC-003 forbids. It
-         * is asserted over <strong>both</strong> files for the same reason the MDC claim above is:
-         * a command's lines reach the same index as a pod's, and {@code report-exceptions} writes
-         * the same two events the 07:00 run does.
+         * every saved query would need {@code parse()}, which is precisely what SC-003 forbids.
          *
          * <p><strong>Read as XML, not as characters.</strong> A search for the text
          * {@code <arguments/>} is satisfied by the tag inside an XML comment, which is the one
@@ -1319,13 +1319,13 @@ class TelemetryPrivacyTest {
          * where logback would never read it as a provider at all. So the file is parsed and the
          * question asked of the encoder's own provider list.
          *
-         * @param configuration which of the two shipped files is being read
+         * @param configuration the shipped file being read
          * @throws Exception where the file cannot be read or parsed at all
          */
         @ParameterizedTest
-        @ValueSource(strings = {"logback.xml", "logback-cli.xml"})
+        @ValueSource(strings = "logback.xml")
         @DisplayName("emits the structured arguments, without which the report's fields are prose")
-        void both_logback_files_declare_the_arguments_provider(final String configuration)
+        void the_logback_file_declares_the_arguments_provider(final String configuration)
                 throws Exception {
             assertThat(encoderProvidersOf(configuration))
                     .as("without the arguments provider every field of both report events is "
@@ -1338,7 +1338,7 @@ class TelemetryPrivacyTest {
         /**
          * Every provider the shipped file declares, by element name, inside an encoder.
          *
-         * @param configuration which of the two shipped files is being read
+         * @param configuration the shipped file being read
          * @return the provider element names, in the order the encoder lists them
          * @throws Exception where the file cannot be read or parsed
          */

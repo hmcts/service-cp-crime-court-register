@@ -64,16 +64,6 @@ courtregister:
   # (constitution Principle III), and nothing here may become a second one.
   output: record
 
-  # Whether this JVM was started to run ONE operations command and exit. False everywhere except the
-  # invocations docker/startup.sh dispatches to CliMain, which set it themselves. It turns off the
-  # three things that must not come up with a command - the Service Bus consumer, the nightly
-  # scheduler and the public-event listener container - and NOTHING else: a command runs the deployed
-  # configuration with the generation adapters live, because a regeneration against a stub would be a
-  # night's registers nobody sent. It is not a second cutover switch and must never become one; the
-  # one lever that decides which implementation generates is the App Configuration flag
-  # `CourtRegisterService` (constitution Cutover Rule).
-  cli: false
-
   consumer:
     # The master switch for intake. Off in the `test` profile, so context-load tests need no broker.
     enabled: true
@@ -551,9 +541,165 @@ courtregister:
       # the address back.
       recipients: ${COURTREGISTER_REPORT_RECIPIENTS:}
 
+  # The operations API's own settings. The defaults are `config/OperationsProperties`'s and are
+  # restated here for the reason every other block of this service's settings is: a deployment can
+  # see what it is getting and override it without reading Java.
+  operations:
+    # DEPLOYMENT SHAPE, NOT A CUTOVER LEVER (FR-044). It decides whether the seven `/operations/**`
+    # endpoints are served, and nothing else. The one lever that decides which implementation is
+    # live is the App Configuration flag `CourtRegisterService`, and this must never become a
+    # second one - a pod with the endpoints off still records, batches, renders and notifies exactly
+    # as it did.
+    enabled: ${COURTREGISTER_OPERATIONS_ENABLED:true}
+
+    # How far back `POST /operations/registers/supersede` may reach. The command it replaces was
+    # unbounded, because it was reachable only by somebody already inside the namespace with a
+    # runbook open; an endpoint reaches further, and an unbounded irreversible mutation is one
+    # keystroke from giving up the estate's whole history of registers. Refused at startup if it is
+    # not positive: a bound of zero admits no instant at all and reads to an operator as though
+    # their own argument were wrong.
+    supersede-max-age: ${COURTREGISTER_SUPERSEDE_MAX_AGE:30d}
+
+    # How long a background regeneration waits for the register-generation lock before recording
+    # SCHEDULE_RUNNING as its own outcome. ZERO IS THE DEFAULT AND IS ONE NON-BLOCKING ATTEMPT,
+    # which is the only kind that cannot sit on a thread the schedule wants. Refused at startup if
+    # it is negative.
+    lock-wait: ${COURTREGISTER_OPERATIONS_LOCK_WAIT:0s}
+
 # Application Insights is configured by the Java agent (lib/applicationinsights.json).
 # The per-environment connection string is supplied as APPLICATIONINSIGHTS_CONNECTION_STRING,
 # mounted from Key Vault via the Secrets Store CSI driver; there is nothing to set here.
+
+# The two estate filters that make the operations API permitted at all: `cp-auth-rules-filter`
+# resolves the caller's usersgroups membership against the allow rules, and
+# `cp-audit-filter-springboot` publishes a request and a response event for every call.
+#
+# BOTH DEFAULT ON, and that is how conditions (a) and (b) of constitution Principle III are carried
+# (5.0.1, 2026-09-20). Each library's own auto-configuration is
+# `@ConditionalOnProperty(havingValue = "true")` with no `matchIfMissing`, so a deployment that said
+# nothing would get no authorisation filter and no audit publisher; these two lines reverse that, so
+# a deployment that says nothing is authorised.
+#
+# AUDITED TAKES ONE MORE KEY, AND IT IS NOT THIS FILE'S. `audit.http.enabled` builds no filter on
+# its own: every `audit.http.*` bean the starter declares sits inside the `@AutoConfiguration` class
+# `cp.audit.enabled` gates, and that one is `false` below so a laptop with no audit broker starts.
+# Condition (b) is completed by the deployed values file setting `CP_AUDIT_ENABLED=true` with the
+# broker's connection from Key Vault (spec FR-045, deployment gate 5). A pod with this switch on
+# over a transport that is off serves the operations API UNAUDITED; nothing refuses it - the
+# switches are configuration - so `PropertiesValidator` says it at WARN once, at start-up, because
+# the filter that would have published was never constructed and the one that is swallows every
+# publishing failure.
+#
+# They are ordinary configuration, not a start-up condition. An operator may turn either off -
+# `AUTHZ_HTTP_ENABLED=false`, `HTTP_AUDIT_ENABLED=false` - and the pod comes up: there is no
+# cross-field refusal against `courtregister.operations.enabled` and no rule that reads the
+# environment to decide where one would apply. What keeps them on in a deployed environment is this
+# default and the values file, not a pod that refuses to start. The two places that turn them off
+# deliberately are `docker-compose.yml` (a laptop has no usersgroups and no audit broker) and
+# `application-test.yaml`, and each says so where it does it.
+#
+# The library reads the value as the LITERAL string `true`: `yes`, `on` and `1` leave the filter
+# switched off while reading as on to anything that converts. Write `true`.
+authz:
+  http:
+    enabled: ${AUTHZ_HTTP_ENABLED:true}
+
+    # Where the caller's groups come from. The caller is named by the CJSCPPUID header and NEVER in
+    # the path, so this template is a plain URL; usersgroups answers the logged-in user's
+    # permissions for whoever that header asserts (research R4, and the trust boundary FR-035 puts
+    # on it - the header is a gateway assertion, and deployment gates 2 and 3 are what make it one).
+    identity-url-template: ${CP_BASE_URL:http://localhost:8080}/usersgroups-query-api/query/api/rest/usersgroups/users/logged-in-user/permissions
+    user-id-header: "CJSCPPUID"
+
+    # The header `OperationsActionFilter` writes and this filter reads. It is never the caller's
+    # value: the request is wrapped before this filter runs, so what arrives here is the action this
+    # service derived from the path and the method.
+    action-header: "CPP-ACTION"
+    accept-header: "application/vnd.usersgroups.get-logged-in-user-permissions+json"
+
+    # The rules, globbed off the classpath. `acl/operations-rules.drl` is the only file that matches
+    # and the only one there may be: seven allow rules and no deny rule.
+    drools-classpath-pattern: "classpath:/acl/**/*.drl"
+
+    # The library default is TRUE - it recompiles the rules on every request. Off by default here;
+    # a developer editing rules against a running service sets AUTHZ_RELOAD_RULES=true.
+    reload-on-each-request: ${AUTHZ_RELOAD_RULES:false}
+
+    # False, because our own filter always supplies an action for the paths this service serves. Set
+    # true, a request to any OTHER path - actuator's, or one nothing is mapped to - would be refused
+    # 400 for having no action rather than answered as the framework answers it.
+    action-required: false
+
+    # DEFAULT-DENY, and it also governs "the DRL failed verification": a rules file that will not
+    # compile refuses every action rather than admitting everything. This is what makes the absence
+    # of a rule the denial, and therefore what makes condition (a) of Principle III readable in
+    # `acl/operations-rules.drl` rather than inferred from code.
+    deny-when-no-rules: true
+
+    # SETTING THIS REPLACES THE LIBRARY'S OWN LIST WHOLESALE. `/actuator` has to be re-listed or the
+    # liveness and readiness probes start answering 401 and the pod is rolled for ever; `/error` has
+    # to be, because the filter refuses through `sendError`, which forwards there - a refusal whose
+    # own forward is refused answers nothing at all.
+    exclude-path-prefixes:
+      - "/actuator"
+      - "/error"
+
+audit:
+  http:
+    enabled: ${HTTP_AUDIT_ENABLED:true}
+
+    # THE NAME IS LOAD-BEARING, AND IT IS WHY THE FILE IS NOT CALLED `openapi.yaml`. The filter
+    # resolves this as `classpath*:` + `**`/`*` + the value - a SUFFIX glob over every jar on the
+    # classpath, not a path - and hands the parser whichever resource the glob returns FIRST. A
+    # value of `openapi.yaml` would match this service's document and any other `*openapi.yaml` a
+    # dependency ships, and the audit events of a whole surface would be resolved against somebody
+    # else's paths. `api/OpenApiContractTest` runs the real glob against the real classpath and
+    # asserts exactly one match; `PropertiesValidator` refuses an unset value where both audit
+    # switches are on, which is where the parser is actually built.
+    openapi-rest-spec: ${HTTP_AUDIT_OPENAPI_SPEC:courtregister-openapi.yaml}
+
+    # EXPLICIT, BECAUSE THE LIBRARY DEFAULT IS TRUE. Left alone, every response this surface writes
+    # goes onto the audit topic: the batch listing's masked addresses and court centre ids, the
+    # exception report's whole entry table, and every ProblemDetail. The audit topic is a telemetry
+    # surface like any other and Principle VII governs it. What an audit event actually needs - the
+    # action, the outcome, whether the flag was overridden, the superseded count - the generic
+    # filter cannot infer from a body anyway, and `api/OperationsAuditService` supplies it through
+    # the starter's own seam instead.
+    include-payload-body: false
+
+# The estate's audit transport, owned by `cp-audit-filter-springboot` and not by this service.
+#
+# It is here because of a trap rather than because this service has an opinion: the library's
+# auto-configuration is gated `matchIfMissing = true`, so ADDING THE DEPENDENCY SWITCHES IT ON, and
+# its connection-factory bean validates `cp.audit.hosts` and `cp.audit.port` while it is being built
+# - which it does even when HTTP auditing itself is off. A local run has no audit broker, so a key
+# that said nothing would be a service that would not start on a laptop.
+#
+# Off unless an environment says otherwise, therefore, and every environment that serves the
+# operations API MUST say otherwise: this key is the second half of Principle III's condition (b),
+# and a values file without `CP_AUDIT_ENABLED=true` serves the operations API unaudited. The hosts,
+# port, credentials and TLS material arrive from Key Vault through the CSI driver, and none of them
+# is ever a value in this file. `audit.http.*` - the HTTP half, which is what actually publishes an
+# operations call - is the separate block above, and every bean it gates lives inside the
+# auto-configuration class this key gates, so the HTTP half on over a transport that is off
+# publishes nothing and traps nothing - which is the state the start-up WARN names.
+#
+# Switched ON, this key is what makes `cp.audit.hosts` and `cp.audit.port` required: startup refuses
+# a transport that names no broker or a port outside 1..65535, because the audit filter swallows
+# every publishing failure and a transport pointed at nothing would be silent rather than refused.
+cp:
+  audit:
+    enabled: ${CP_AUDIT_ENABLED:false}
+
+    jms:
+      # BOUNDED, BECAUSE THE REQUEST EVENT IS PUBLISHED ON THE CALLER'S OWN THREAD. The library
+      # ships ten initial attempts over a 2s interval with a 1.5 multiplier, so a broker that is
+      # not there costs roughly two minutes per call - and this service publishes the request event
+      # BEFORE the action, so that is two minutes of a held connection and a held servlet thread
+      # before the caller is told `503 AUDIT_UNAVAILABLE`. Two attempts says the same thing in about
+      # two seconds. It changes nothing about what is refused; it changes how long the refusal takes
+      # (`api/OperationsAuthzIT`, which is where the two minutes were found).
+      initial-connect-attempts: ${CP_AUDIT_INITIAL_CONNECT_ATTEMPTS:2}
 
 management:
   endpoints:

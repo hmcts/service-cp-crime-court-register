@@ -61,10 +61,6 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * The fourth combination is here because four is what two switches have, and a table with a hole in
  * it is a deployment nobody checked.
  *
- * <p>The one shape that is <strong>not</strong> here is a command JVM, and it is not here because
- * it belongs beside the other two things a command must not start: {@code CliModeConfigTest} owns
- * the consumer, the public-event listener and now all three of these.
- *
  * <p>Nothing below connects to anything. The store, the two transports and the flag reader are
  * doubles, because what is under assertion is which beans a set of conditions contributes and not
  * what any of them would do - and a suite about wiring that needed a database would be a suite that

@@ -212,6 +212,12 @@ public class GenerationMetrics {
      * read failed could not be alerted on, only found by somebody already reading the log index.
      * The run itself is unharmed - the batches are stamped and the renders are away by the time the
      * snapshot is taken - so this counts a report that came up short, never a night that did.
+     *
+     * <p>{@code snapshot=unread} is the <em>refused</em> read and nothing else. A run that takes no
+     * settled reading at all - a regeneration an operator asked for, which the night is read back
+     * for from {@code GET /operations/batches} - writes {@code snapshot=not-taken} and moves
+     * nothing here, so the line and this series agree about what {@code unread} means and an alert
+     * keyed on either does not fire on every regeneration.
      */
     public static final String SETTLED_SNAPSHOT = "settled-snapshot";
 

@@ -15,11 +15,13 @@ import tools.jackson.databind.node.ObjectNode;
  * comes to sweep for a field the other one has stopped setting, with both of them green.
  *
  * <p>A third kind of text belongs here for the same reason, and it arrives by a different door:
- * what an operator types at the operations commands. {@link #OPERATOR_TOKEN} is that one, swept for
- * by the CLI cases of {@code config/TelemetryPrivacyTest} and by
- * {@code batch/cli/CliMainTest} - a command is reached by {@code kubectl exec} rather than by a
- * delivery, so its arguments are somebody's own typing, and the rule about text this service did not
- * write is the same rule whoever wrote it.
+ * what an operator types at the operations API. {@link #OPERATOR_TOKEN} is that one - a request
+ * body is somebody's own typing rather than a producer's message, and the rule about text this
+ * service did not write is the same rule whoever wrote it. It was swept for by
+ * {@code config/TelemetryPrivacyTest}'s command cases and by {@code batch/cli/CliMainTest} until
+ * increment 005 deleted both with the CLI; the claim is now `TheOperationsSurface`'s, over the
+ * request and response records and the {@code api/} source, and what still uses this marker is the
+ * event listener's and the run's own refusals.
  *
  * <p>The markers are deliberately implausible strings. A suite looking for the word "name" would
  * fail on a field called {@code loggerName}; a suite looking for a value nothing else in this

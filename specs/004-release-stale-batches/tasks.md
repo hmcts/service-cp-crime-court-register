@@ -2485,10 +2485,11 @@ tree owns the file:
   002 bullet keeps its historical sentence and says the reconciler was retired by 004, because that
   bullet is a record of what 002 shipped and not a description of the code as it stands.
 
-**Hand-off to the 005 tree**: `batch/cli/GenerateRegisterCli.java:388` still says "the four failure
-reasons that leave the stamp in place" and there are three. It is in 005's ownership and this tree
-did not touch it; 005's CLI deletion should either correct the count or take the sentence with the
-method.
+~~**Hand-off to the 005 tree**~~ — **discharged, 2026-09-21.** `batch/cli/GenerateRegisterCli.java`
+said "the four failure reasons that leave the stamp in place" and there were three. 005's T053 took
+the sentence with the method: the whole file is deleted and the count is nobody's to correct. The
+same is true of the other note this phase left about a `batch/cli` file — see `plan.md`'s report
+row, where the printed-table half of the `BATCH_RELEASED` case is discharged the same way.
 
 **Still open at the phase's end**, and each owned elsewhere: `doc/DEFECT-FIXES.md`'s P2 cell still
 names the deleted `GenerationReconcilerTest` case and promises the `GENERATION_TIMED_OUT` half of

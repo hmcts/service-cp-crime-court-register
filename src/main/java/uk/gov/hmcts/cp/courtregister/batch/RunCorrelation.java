@@ -77,6 +77,34 @@ public final class RunCorrelation {
     }
 
     /**
+     * Runs work under a correlation the caller has already minted and handed out.
+     *
+     * <p>A run reached through HTTP answers its caller a run id <em>before</em> the work begins -
+     * ids before calls - so the id exists before there is anything to put it on. That is the one
+     * case the minting overload cannot serve: an id minted here would not be the id the caller was
+     * given, and a run that cannot be found by the id it was accepted under is a run nobody can
+     * read. The adoption rule and the removal rule are otherwise the minting overload's exactly:
+     * an ambient correlation wins, because work reached from inside another unit of work is part
+     * of it, and only the call that put an id there takes it away again.
+     *
+     * @param runId the id the caller was answered with
+     * @param work  the unit of work
+     */
+    public static void under(final String runId, final Runnable work) {
+        final boolean owned = MDC.get(KEY) == null;
+        if (owned) {
+            MDC.put(KEY, runId);
+        }
+        try {
+            work.run();
+        } finally {
+            if (owned) {
+                MDC.remove(KEY);
+            }
+        }
+    }
+
+    /**
      * The correlation this unit of work is running under, for the one line that names it as a field.
      *
      * @return the id, or {@code null} outside any correlation

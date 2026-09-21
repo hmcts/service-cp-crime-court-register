@@ -121,11 +121,6 @@ public class RegisterGenerationJob {
     /** What the line calls the reading a run goes ahead on when nobody overrode anything. */
     private static final String FLAG_ON = "flag-on";
 
-    /** What the line calls a settled snapshot the store answered for, and one it refused. */
-    private static final String TAKEN = "taken";
-
-    private static final String UNREAD = "unread";
-
     private final FeatureFlagGate gate;
 
     private final RegisterStore store;
@@ -262,7 +257,8 @@ public class RegisterGenerationJob {
 
         if (decision instanceof Skipped) {
             return recorded(new RunReport(decision, Map.of(), 0, Map.of(), 0, 0,
-                    RunReport.Settled.NOTHING_ASSEMBLED, 0, 0, 0, sinceStart(startedAt)));
+                    RunReport.Settled.NOTHING_ASSEMBLED, 0, 0, 0, sinceStart(startedAt)),
+                    RunCorrelation.current());
         }
         // Only from here on is the file service anything readiness should have an opinion
         // about, and it stops being one however the run ends.
@@ -270,12 +266,14 @@ public class RegisterGenerationJob {
         runProgress.recordRunStarted();
         try {
             generate(tally);
-            return recorded(tally.reportOf(decision, settled(tally), sinceStart(startedAt)));
+            return recorded(tally.reportOf(decision, settled(tally), sinceStart(startedAt)),
+                    RunCorrelation.current());
         } catch (RuntimeException stopped) {
             LOG.error("The run did not finish, so the line beside this one describes what it had "
                             + "done rather than a night that completed. cause={}",
                     stopped.getClass().getName());
-            recorded(tally.reportOf(decision, settled(tally), sinceStart(startedAt)));
+            recorded(tally.reportOf(decision, settled(tally), sinceStart(startedAt)),
+                    RunCorrelation.current());
             throw stopped;
         } finally {
             // Once, at the end, however the run ended - and only for what the run actually learned.
@@ -642,26 +640,36 @@ public class RegisterGenerationJob {
      * still, so the next run reaches them again, and a line that said nothing about them would
      * describe a night as complete that had left work undone.
      *
+     * <p><strong>The line is written here for both runs that can produce one.</strong> Since
+     * increment 005 a regeneration a person asked for is the same run under the same lock, and it
+     * has to be readable as one: two spellings of a night would mean two dashboards and one of
+     * them always out of date. So the renderer is shared and the correlation is handed in - the
+     * schedule's is the ambient {@link RunCorrelation}, and a launched run's is the id its caller
+     * was answered with - and {@link RunReport#trigger()} is the one field that says which kind of
+     * night this was.
+     *
      * @param report what the run did
+     * @param runId  the correlation the line is read by
      * @return that same report, so a caller can write the line and answer with it in one step
      */
-    private static RunReport recorded(final RunReport report) {
+    public static RunReport recorded(final RunReport report, final String runId) {
         final Map<BatchStatus, Integer> outcomes = report.outcomes();
         final Map<BatchStatus, Integer> rows = report.rowOutcomes();
         final RunReport.Settled settled = report.settled();
-        LOG.info("event={} run_id={} gate={} reason={} batches={} requested={} generating={} failed={} "
+        LOG.info("event={} run_id={} trigger={} gate={} reason={} batches={} requested={} "
+                        + "generating={} failed={} "
                         + "pending={} deferred={} rows={} rows_generating={} rows_failed={} "
                         + "rows_pending={} rows_deferred={} snapshot={} generated={} notified={} "
                         + "rows_generated={} rows_notified={} released_batches={} "
                         + "released_registers={} contended={} duration_ms={}",
-                RUN_EVENT, RunCorrelation.current(), gateOf(report.gateDecision()),
+                RUN_EVENT, runId, report.trigger().wire(), gateOf(report.gateDecision()),
                 reasonOf(report.gateDecision()),
                 outcomes.values().stream().mapToInt(Integer::intValue).sum(), report.requested(),
                 counted(outcomes, BatchStatus.GENERATING), counted(outcomes, BatchStatus.FAILED),
                 counted(outcomes, BatchStatus.PENDING), report.deferredKeys(), report.rows(),
                 counted(rows, BatchStatus.GENERATING), counted(rows, BatchStatus.FAILED),
                 counted(rows, BatchStatus.PENDING), report.deferredRows(),
-                settled.read() ? TAKEN : UNREAD, settled.generated(), settled.notified(),
+                settled.reading().wire(), settled.generated(), settled.notified(),
                 settled.generatedRows(), settled.notifiedRows(), report.releasedBatches(),
                 report.releasedRegisters(), report.contended(), report.duration().toMillis());
         return report;

@@ -2,6 +2,7 @@ package uk.gov.hmcts.cp.courtregister.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Level;
 import java.time.Duration;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -14,6 +15,7 @@ import org.springframework.boot.test.context.ConfigDataApplicationContextInitial
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
 /**
  * Holds the configuration surface to the plan's table, and holds startup to the rules that make the
@@ -138,7 +140,7 @@ class ConfigurationValidationTest {
 
     @Configuration(proxyBeanMethods = false)
     @EnableConfigurationProperties({CourtRegisterProperties.class, GenerationProperties.class,
-        FeatureFlagProperties.class, ReportProperties.class})
+        FeatureFlagProperties.class, ReportProperties.class, OperationsProperties.class})
     @Import(PropertiesValidator.class)
     static class PropertiesTestConfiguration {
     }
@@ -2291,6 +2293,69 @@ class ConfigurationValidationTest {
                         .isNullOrEmpty();
             });
         }
+
+        /**
+         * The authorisation filter's switch, which the shipped file turns <strong>on</strong>.
+         *
+         * <p>Condition (a) of constitution Principle III, and since 5.0.0 the whole of how it is
+         * carried: {@code AuthzAutoConfiguration} is
+         * {@code @ConditionalOnProperty(havingValue = "true")} with no {@code matchIfMissing}, so
+         * the library's own default is a pod that registers no authorisation filter at all. The
+         * file reverses it. A deployment that wants the endpoints unguarded says so through
+         * {@code AUTHZ_HTTP_ENABLED}, and the pod starts either way - there is no refusal behind
+         * this default, which is exactly why the default is what has to be right.
+         */
+        @Test
+        void the_authorisation_filter_should_ship_switched_on() {
+            shippedOnTheStub.run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context.getEnvironment().getProperty("authz.http.enabled"))
+                        .as("secure by default: the file reads AUTHZ_HTTP_ENABLED and defaults it"
+                                + " on, against a library default of off")
+                        .isEqualTo("true");
+            });
+        }
+
+        /**
+         * The HTTP audit filter's switch, which the shipped file also turns <strong>on</strong>,
+         * for condition (b) and by the same argument.
+         *
+         * <p>It costs a laptop nothing, because every bean the key gates lives inside the
+         * auto-configuration class {@code cp.audit.enabled} gates - and that one ships off, on the
+         * case below.
+         */
+        @Test
+        void the_http_audit_filter_should_ship_switched_on() {
+            shippedOnTheStub.run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context.getEnvironment().getProperty("audit.http.enabled"))
+                        .as("secure by default: the file reads HTTP_AUDIT_ENABLED and defaults it"
+                                + " on, against a library default of off")
+                        .isEqualTo("true");
+            });
+        }
+
+        /**
+         * The audit transport's own master switch, which the shipped file turns <em>off</em>.
+         *
+         * <p>It is not this service's setting and it is not read by any rule above, which is why
+         * nothing else in this suite would notice it moving: {@code AuditComponentScanTest} sets it
+         * explicitly and the {@code test} profile overrides it. What the default protects is a
+         * laptop: with the key on, the audit starter's auto-configuration builds an Artemis
+         * connection factory and validates {@code cp.audit.hosts} and {@code cp.audit.port} while
+         * doing so - whether or not HTTP auditing is on - so a lost or flipped default is a
+         * {@code bootRun} that fails on a broker nobody asked for.
+         */
+        @Test
+        void the_audit_transport_should_ship_switched_off_for_a_laptop() {
+            shippedOnTheStub.run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context.getEnvironment().getProperty("cp.audit.enabled"))
+                        .as("the file reads CP_AUDIT_ENABLED and defaults it off; a deployment that"
+                                + " wants the transport says so through the environment variable")
+                        .isEqualTo("false");
+            });
+        }
     }
 
     /**
@@ -2683,6 +2748,325 @@ class ConfigurationValidationTest {
             runner.withPropertyValues(CONNECTION_STRING_PROPERTY, A_TEMPLATE, A_RECIPIENT)
                     .run(context -> assertThat(context)
                             .as("and of neither half on a pod that sends nothing at all")
+                            .hasNotFailed());
+        }
+    }
+
+    /**
+     * The operations API's own settings (increment 005, FR-045 and FR-053).
+     *
+     * <p><strong>Nothing here refuses a pod for the value of one switch given another's.</strong>
+     * {@code authz.http.enabled} and {@code audit.http.enabled} are ordinary configuration an
+     * operator may turn on or off, and they are secure by default instead - {@code application.yaml}
+     * reads both as {@code true} against library defaults of off, which is what
+     * {@code ShippedConfiguration} pins. Constitution 5.0.0 replaced the start-up refusal an earlier
+     * round wrote here, and with it the {@code courtregister.servicebus.namespace} discriminator
+     * that decided where it applied: a service that will not start on a configuration its operator
+     * chose is a service that cannot be operated. The first three cases below are that decision,
+     * stated as tests.
+     *
+     * <p>What remains is refused because a <strong>value cannot mean what it says</strong>, which
+     * is a different rule: a transport switched on that names no broker or an impossible port, an
+     * audit filter switched on with no document to resolve, and an unusable age bound or lock wait.
+     * The library will fail on some of these too, later and with a worse message; refusing first is
+     * what names the setting.
+     */
+    @Nested
+    @DisplayName("the operations API's settings")
+    class OperationsSettings {
+
+        /** The audit transport switched on, which is what the value rules below are gated on. */
+        private static final String TRANSPORT_ON = "cp.audit.enabled=true";
+
+        /** A transport that names somewhere, so a case about the port is only about the port. */
+        private static final String TRANSPORT_HOSTS = "cp.audit.hosts=artemis-audit.internal";
+
+        /** A port that is a port, so a case about the hosts is only about the hosts. */
+        private static final String TRANSPORT_PORT = "cp.audit.port=61616";
+
+        /** A deployed pod: a namespace, which is what the withdrawn discriminator read. */
+        private final ApplicationContextRunner deployed =
+                runner.withPropertyValues(NAMESPACE_PROPERTY);
+
+        /** A deployed pod with the audit transport on and configured. */
+        private final ApplicationContextRunner publishing =
+                deployed.withPropertyValues(TRANSPORT_ON, TRANSPORT_HOSTS, TRANSPORT_PORT);
+
+        /**
+         * The decision of 2026-09-20, and the case this class exists for.
+         *
+         * <p>A deployed pod serving every {@code /operations/**} endpoint with both filters
+         * switched off starts. It is not a configuration anybody should deploy, and nothing here
+         * pretends otherwise - what keeps the filters on in a deployed environment is the default
+         * below and the values file, not a pod that refuses to come up. An operator who switched
+         * them off said what they meant.
+         */
+        @Test
+        void a_pod_with_both_filter_switches_off_should_start() {
+            deployed.withPropertyValues("authz.http.enabled=false", "audit.http.enabled=false")
+                    .run(context -> assertThat(context)
+                            .as("the two switches are configuration, not a start-up condition:"
+                                    + " there is no cross-field rule against"
+                                    + " courtregister.operations.enabled and no environment"
+                                    + " discriminator deciding where one would apply")
+                            .hasNotFailed());
+        }
+
+        /**
+         * The audit half on its own, because the withdrawn rule refused each half separately and a
+         * single both-off case would not notice one of them coming back.
+         */
+        @Test
+        void a_pod_serving_the_operations_api_unaudited_should_start() {
+            deployed.withPropertyValues("courtregister.operations.enabled=true",
+                            "audit.http.enabled=false")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /** The authorisation half on its own, for the same reason. */
+        @Test
+        void a_pod_serving_the_operations_api_unauthorised_should_start() {
+            deployed.withPropertyValues("courtregister.operations.enabled=true",
+                            "authz.http.enabled=false")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /**
+         * A value rule, and the reason it is one: the audit filter <strong>swallows every
+         * publishing failure</strong>, so a transport switched on and pointed at nothing publishes
+         * nothing and says so only in a log line. The library's own {@code validateProps} checks
+         * {@code hosts.isEmpty()} and {@code port > 0} and nothing else.
+         */
+        @Test
+        void an_audit_transport_with_no_broker_refuses_to_start() {
+            publishing.withPropertyValues("cp.audit.hosts=").run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure())
+                        .hasMessageContaining("cp.audit.hosts")
+                        .hasMessageContaining("cp.audit.enabled");
+            });
+        }
+
+        /**
+         * A list of one blank is not a list of none, and the starter accepts it as readily as it
+         * accepts a list of real hosts - then builds connectors pointed at no host at all.
+         */
+        @Test
+        void an_audit_transport_whose_only_host_is_blank_refuses_to_start() {
+            publishing.withPropertyValues("cp.audit.hosts=   ").run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure()).hasMessageContaining("cp.audit.hosts");
+            });
+        }
+
+        /** And a list whose every element is blank, which is what a stray separator produces. */
+        @Test
+        void an_audit_transport_whose_hosts_are_all_blank_refuses_to_start() {
+            publishing.withPropertyValues("cp.audit.hosts=,").run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure()).hasMessageContaining("cp.audit.hosts");
+            });
+        }
+
+        @Test
+        void an_audit_transport_with_no_port_refuses_to_start() {
+            publishing.withPropertyValues("cp.audit.port=0").run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure()).hasMessageContaining("cp.audit.port");
+            });
+        }
+
+        /**
+         * Read as text and parsed here rather than asked of the environment as an {@code Integer}:
+         * a conversion failure is raised by Spring during the refresh, names neither the setting
+         * nor the transport it leaves unpublished, and quotes the offending value back.
+         */
+        @Test
+        void an_audit_port_that_is_not_a_number_refuses_to_start() {
+            publishing.withPropertyValues("cp.audit.port=sixty").run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure()).hasMessageContaining("cp.audit.port");
+            });
+        }
+
+        /**
+         * The top of the range, and the case the old five-digit reading got wrong.
+         *
+         * <p>{@code 65536} is five digits and a positive whole number, so a rule that checked only
+         * those two things accepted a value no TCP stack can bind - and the failure would have
+         * arrived from Artemis at the first publish, inside a filter that swallows it.
+         */
+        @Test
+        void an_audit_port_above_the_tcp_range_refuses_to_start() {
+            publishing.withPropertyValues("cp.audit.port=65536").run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure()).hasMessageContaining("cp.audit.port");
+            });
+        }
+
+        /** The boundary from the other side: the highest port there is, and it is accepted. */
+        @Test
+        void the_highest_port_there_is_should_start() {
+            publishing.withPropertyValues("cp.audit.port=65535")
+                    .run(context -> assertThat(context)
+                            .as("65535 is a port; the rule is a range, not a digit count")
+                            .hasNotFailed());
+        }
+
+        /** And the lowest, for the same reason. */
+        @Test
+        void the_lowest_port_there_is_should_start() {
+            publishing.withPropertyValues("cp.audit.port=1")
+                    .run(context -> assertThat(context).hasNotFailed());
+        }
+
+        /**
+         * An absent port is not a port either, and the base runner carries none - so this case is
+         * built from a transport switched on with hosts and nothing else.
+         */
+        @Test
+        void an_absent_audit_port_refuses_to_start() {
+            deployed.withPropertyValues(TRANSPORT_ON, TRANSPORT_HOSTS).run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure()).hasMessageContaining("cp.audit.port");
+            });
+        }
+
+        /**
+         * The transport switched off is the transport nothing is published over, so its connection
+         * is not a value that has to mean anything.
+         */
+        @Test
+        void an_unconfigured_transport_that_is_switched_off_should_start() {
+            deployed.withPropertyValues("cp.audit.enabled=false", "cp.audit.hosts=",
+                            "cp.audit.port=0")
+                    .run(context -> assertThat(context)
+                            .as("nothing publishes, so there is no connection to refuse")
+                            .hasNotFailed());
+        }
+
+        /**
+         * The audit filter finds the OpenAPI document by a <strong>suffix</strong> glob,
+         * {@code classpath*:**}{@code /*<value>}. Unset, it globs for {@code *null}, finds nothing
+         * and throws during the refresh - naming neither the setting nor this service.
+         *
+         * <p>Refused where the parser bean would actually be built, which is where <em>both</em>
+         * halves are on: every {@code audit.http.*} bean sits inside the auto-configuration class
+         * {@code cp.audit.enabled} gates, so the HTTP half on over a transport that is off builds
+         * no parser and globs for nothing.
+         */
+        @Test
+        void an_audit_filter_with_no_openapi_spec_key_refuses_to_start() {
+            publishing.withPropertyValues("audit.http.enabled=true",
+                            "audit.http.openapi-rest-spec=")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("audit.http.openapi-rest-spec")
+                                .hasMessageContaining("audit.http.enabled");
+                    });
+        }
+
+        /**
+         * The same configuration is also the one the shipped defaults produce, and a pod in it
+         * publishes <strong>no</strong> audit event at all — so it says so at start-up.
+         *
+         * <p>{@code audit.http.enabled} ships {@code true} and the transport ships {@code false},
+         * because a laptop has no audit broker and the transport's connection factory validates its
+         * hosts and port while it is being built. Every {@code audit.http.*} bean lives inside the
+         * auto-configuration class the transport's key gates, so the HTTP half on over a transport
+         * that is off is a filter that was never constructed: condition (b) of Principle III is
+         * carried by a deployed values file setting {@code CP_AUDIT_ENABLED=true} beside it, and a
+         * deployment that sets nothing serves the operations API unaudited.
+         *
+         * <p>Nothing refuses that — the switches are configuration, not a start-up condition — but
+         * an unaudited pod that said so nowhere would be exactly the silence this service exists to
+         * end, and the audit filter swallows every publishing failure, so there is no later line to
+         * read either. The line names the two settings and nothing a caller or a secret could reach.
+         */
+        @Test
+        void an_audit_filter_over_a_transport_that_is_off_should_say_so_at_start_up() {
+            try (CapturedLog captured = CapturedLog.capturing(PropertiesValidator.class)) {
+                deployed.withPropertyValues("audit.http.enabled=true", "cp.audit.enabled=false")
+                        .run(context -> {
+                            assertThat(context).hasNotFailed();
+                            assertThat(captured.events())
+                                    .as("an unaudited operations API is said at start-up or"
+                                            + " nowhere: the filter that would have published is"
+                                            + " never built, and the one that is swallows its own"
+                                            + " failures")
+                                    .anySatisfy(said -> {
+                                        assertThat(said.getLevel()).isEqualTo(Level.WARN);
+                                        assertThat(said.getFormattedMessage())
+                                                .contains("audit.http.enabled")
+                                                .contains("cp.audit.enabled");
+                                    });
+                        });
+            }
+        }
+
+        /**
+         * And the pod whose whole audit path is configured says nothing, because there is nothing
+         * to say: a warning every deployed pod carried would be one nobody reads.
+         */
+        @Test
+        void a_pod_that_publishes_its_audit_events_should_say_nothing_about_them() {
+            try (CapturedLog captured = CapturedLog.capturing(PropertiesValidator.class)) {
+                publishing.withPropertyValues("audit.http.enabled=true",
+                                "audit.http.openapi-rest-spec=courtregister-openapi.yaml")
+                        .run(context -> {
+                            assertThat(context).hasNotFailed();
+                            assertThat(captured.messages())
+                                    .as("the transport is on and configured, so the filter is"
+                                            + " built and every call it sees is published")
+                                    .isEmpty();
+                        });
+            }
+        }
+
+        /** The other side of that gate: the HTTP half on, the transport off, no parser, no glob. */
+        @Test
+        void an_audit_filter_over_a_transport_that_is_off_should_start_without_a_spec_key() {
+            deployed.withPropertyValues("audit.http.enabled=true", "cp.audit.enabled=false")
+                    .run(context -> assertThat(context)
+                            .as("every audit.http.* bean is inside the class cp.audit.enabled"
+                                    + " gates, so nothing resolves the document and nothing traps")
+                            .hasNotFailed());
+        }
+
+        @Test
+        void a_zero_supersede_max_age_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.operations.supersede-max-age=0s").run(context -> {
+                        assertThat(context)
+                                .as("a bound of zero admits no instant at all, so the endpoint"
+                                        + " refuses every call it is given and says the argument"
+                                        + " was too old - which is a configuration error wearing a"
+                                        + " refusal's clothes")
+                                .hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.operations.supersede-max-age");
+                    });
+        }
+
+        @Test
+        void a_negative_lock_wait_refuses_to_start() {
+            runner.withPropertyValues(CONNECTION_STRING_PROPERTY,
+                    "courtregister.operations.lock-wait=-1s").run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("courtregister.operations.lock-wait");
+                    });
+        }
+
+        @Test
+        void a_pod_with_the_whole_audit_path_configured_should_start() {
+            publishing.withPropertyValues("audit.http.enabled=true",
+                            "audit.http.openapi-rest-spec=courtregister-openapi.yaml")
+                    .run(context -> assertThat(context)
+                            .as("the counterpart every refusal above needs: a transport that"
+                                    + " names somewhere, a port in range and a document for the"
+                                    + " filter to read")
                             .hasNotFailed());
         }
     }

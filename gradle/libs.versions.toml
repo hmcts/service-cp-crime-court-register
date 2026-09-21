@@ -1,0 +1,14 @@
+# The estate starters, and only those.
+#
+# Every other dependency this build has stays declared inline in `build.gradle`, for the reason the
+# comment there gives: dependabot does not read the `apply from:` files. A version catalogue is a
+# different mechanism and dependabot does read one, so the two starters live here - which is also
+# where the reference implementation, `service-cp-crime-hearing-results-validator`, keeps them, and
+# copying a coordinate rather than a version is how the two repositories stay on the same pair.
+[versions]
+cp-auth-rules-filter = "1.0.7"
+cp-audit-filter-springboot = "1.0.5"
+
+[libraries]
+cp-auth-rules-filter = { module = "uk.gov.hmcts.cp:cp-auth-rules-filter", version.ref = "cp-auth-rules-filter" }
+cp-audit-filter-springboot = { module = "uk.gov.hmcts.cp:cp-audit-filter-springboot", version.ref = "cp-audit-filter-springboot" }

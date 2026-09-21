@@ -67,6 +67,41 @@ courtregister:
   # key this profile does set is the embedded switch below, and it is there to keep the promise the
   # header makes rather than to configure a connection.
 
+# The two estate filters, off in this profile. `application.yaml` defaults BOTH ON (constitution
+# 5.0.0, conditions (a) and (b) of Principle III), and these two lines replace those defaults for
+# context-load tests - which is the only thing a yaml file can do about them, since an exported
+# AUTHZ_HTTP_ENABLED or HTTP_AUDIT_ENABLED reaches Spring as a system-environment property source
+# that out-ranks every config-data file including this one.
+#
+# Off because this profile has neither of the estates the filters talk to: no usersgroups to resolve
+# a caller's groups through, and no Artemis audit broker to publish to. Nothing here is refused for
+# it - a pod with both switches off starts, deliberately - so what this buys is a context that is
+# not building a Drools engine and an identity client for suites that never make a request.
+authz:
+  http:
+    enabled: false
+
+audit:
+  http:
+    enabled: false
+
+# The audit starter's own switch, off in this profile - the same reasoning
+# `courtregister.generation.enabled` above is written as a literal for. `application.yaml` reads
+# CP_AUDIT_ENABLED, and without this line every context-load test in this profile would inherit
+# whatever that placeholder resolved to and build an Artemis connection factory for an audit broker
+# that is not there: the library's auto-configuration validates `cp.audit.hosts` and `cp.audit.port`
+# while constructing it, and does so whether or not HTTP auditing is on.
+#
+# What this line does is replace that placeholder's default, and no more. An exported
+# CP_AUDIT_ENABLED reaches Spring as a system-environment property source, which out-ranks every
+# config-data file including this one, so a developer who exported it as `true` would still switch
+# the transport on under this profile. This profile promises no broker; keeping that promise
+# against an exported variable is not something a yaml file can do, and the comment used to say it
+# was.
+cp:
+  audit:
+    enabled: false
+
 spring:
   artemis:
     # `artemis-jakarta-server` is on the test classpath for the durable-subscription listener IT, and

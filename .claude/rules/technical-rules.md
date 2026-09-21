@@ -42,7 +42,14 @@ private RedisHearingPayloadAdapter adapter;
   success value from a catch block. Catch only to classify and rethrow, or to map to a persisted
   `FAILED` state that is then explicitly dead-lettered
 - The message listener is the only place that converts an exception into a settlement decision
-- No `@ControllerAdvice`, no `ProblemDetail` — there is no HTTP request surface to map errors onto
+- `@ControllerAdvice` and `ProblemDetail` are permitted **for the operations API only** (the `api/`
+  package, `/operations/**`), which is the one HTTP request surface there is to map errors onto.
+  The advice maps a refusal to 409 (or 400 for an argument that will not read) and a failure to 500,
+  each carrying the bounded `reason` the CLI command printed — never exception text, never a
+  fragment of a store's or a far end's words, and never a value the caller supplied. Nowhere else:
+  the message listeners and the scheduled jobs convert an exception into a settlement or a persisted
+  state, not into a response, and an advice reachable from them would be a swallowed exception with
+  a status code on it
 
 ## Messaging
 
@@ -93,6 +100,9 @@ private RedisHearingPayloadAdapter adapter;
 | Port (interface) | capability noun    | `HearingPayloadSource`, `RegisterSubmissionClient` |
 | Adapter          | `*Adapter`         | `RedisHearingPayloadAdapter`, `StubRegisterSubmissionAdapter` |
 | Message listener | `*MessageListener` | `CourtRegisterMessageListener` |
+| Operations controller | `*Controller` | `BatchesController`, `FlagController` |
+| Request record (API) | `*Request`     | `GenerateRegisterRequest` |
+| Response record (API)| `*Response`    | `BatchListingResponse` |
 | Repository       | `*Repository`      | `ProcessedRequestRepository`     |
 | Entity           | domain noun        | `ProcessedRequest`               |
 | Record (in)      | `*Command`         | `DistributionCommand`            |
@@ -110,6 +120,14 @@ private RedisHearingPayloadAdapter adapter;
 - Testcontainers for integration tests (suffix `*IT`): `servicebus-emulator` for the consumer,
   Postgres for the processed-log
 - WireMock for external HTTP stubs (use `dynamicPort()`), asserting exact CPP vendor media types
+- **Operations API**: `@WebMvcTest` slice tests per controller, with the application service mocked
+  and the identity client stubbed — one case that the caller without "Second Line Support" is
+  refused, one that the caller with it is served, and one per refusal the endpoint can answer with.
+  A contract test asserts the controllers against `src/main/resources/courtregister-openapi.yaml`. No test asserts
+  a response body that echoes the caller's own characters back. A success record may carry this
+  service's own parse of an identifier or instant (FR-025); the case that covers such a field
+  sends a non-canonical but parseable spelling and expects the canonical rendering, so what is
+  pinned is the parse and not an echo
 - **Golden-parity tests**: Jest fixtures copied byte-identical into `src/test/resources/fixtures/`;
   one JUnit twin per Jest case; comparison field-order-insensitive, array-order-sensitive,
   BigDecimal-tolerant; registered deviations asserted explicitly
@@ -117,8 +135,13 @@ private RedisHearingPayloadAdapter adapter;
 - Logging in tests: SLF4J only
 - Test commands: `./gradlew test` runs the whole suite — unit, integration and `*IT` classes alike,
   since there is no separate `integrationTest` task; the Testcontainers suites run under `test` and
-  need Docker only when those tests are in the selection. `./gradlew build` = compile + `test`; it
-  runs Checkstyle (`config/checkstyle/google_checks.xml`, `maxWarnings = 0`, main sources only)
-  and the JaCoCo coverage gate (`jacocoTestCoverageVerification`, wired into `check`) but not PMD.
-  PMD is explicit: `./gradlew pmdMain` (an `onlyIf` in `gradle/pmd.gradle` skips it unless it is
-  named on the command line, and `pmdTest` is disabled).
+  need Docker only when those tests are in the selection. `./gradlew build` = compile + `test` +
+  **every analysis**, because all of them are in `check` and none has to be named on a command
+  line: Checkstyle (`config/checkstyle/google_checks.xml`, `maxWarnings = 0`) over
+  **`checkstyleMain` and `checkstyleTest`, with `checkstyle-suppressions.xml` on the test sources**;
+  PMD, pinned to 7.22.0, over **`pmdMain` against `.github/pmd-ruleset.xml` and `pmdTest` against
+  `.github/pmd-test-ruleset.xml`**; and the JaCoCo coverage gate
+  (`jacocoTestCoverageVerification`, LINE ≥ 0.88 / BRANCH ≥ 0.85, with `Application` and
+  `config/**` excluded). Naming a task is a way to run one of them **sooner**, never a way to run
+  one at all — there is no `onlyIf` in `gradle/pmd.gradle` and `pmdTest` is not disabled
+  (constitution 2.0.3 removed both, and `CLAUDE.md`'s Build & Test table has said so since).

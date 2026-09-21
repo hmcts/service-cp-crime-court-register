@@ -5,7 +5,6 @@ import net.javacrumbs.shedlock.core.LockProvider;
 import net.javacrumbs.shedlock.provider.jdbctemplate.JdbcTemplateLockProvider;
 import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -23,23 +22,21 @@ import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
  * {@code courtregister.generation.enabled} - so a pod deployed without the downstream half
  * processed no schedule of any kind.
  *
- * <p><strong>Conditional on nothing but not being a command JVM.</strong> No enabled-flag
- * condition at all, and that is the decision rather than an omission. {@code IntakeAgeSweep} must
+ * <p><strong>Conditional on nothing but the profile.</strong> No enabled-flag condition at all,
+ * and that is the decision rather than an omission. {@code IntakeAgeSweep} must
  * refresh the two intake gauges wherever the intake half runs, which includes a pod with the
  * report and the generation half both switched off - and that pod is exactly the one whose stuck
  * requests nothing else would report. A condition of generation-or-report was considered and
  * rejected for that reason: it would leave the deployment the gauges were added for without
  * {@code @Scheduled} processing, which is the failure wearing the instrument that was supposed to
- * reveal it. The cost of being unconditional is an idle scheduler on a pod that schedules nothing;
- * {@code CliModeConfigTest} proves it is not even that on a command JVM.
+ * reveal it. The cost of being unconditional is an idle scheduler on a pod that schedules nothing.
  *
- * <p><strong>And not on a JVM started to run one operations command.</strong> The CLI condition is
- * the one that does matter here, and it is the one {@link CliModeConfig} has always described: a
- * command that held a scheduler would be a second replica of every schedule in the service - the
- * 18:00 run, the 07:00 report, the intake gauge refresh and the batch-age refresh - and a command
- * that ran long enough to reach any of their hours would fire it. The annotation is here now, so the
- * condition is here too, and the two configurations that sit on top of this one carry it as well:
- * a bean-level condition would leave a scheduler with nothing on it rather than a plain absence.
+ * <p>There used to be a second condition here, and it is gone with what it was about. Until
+ * increment 005 a JVM could be started to run one operations command and exit, and it was kept off
+ * every schedule - a process that held one would have been a second replica of the 18:00 run, the
+ * 07:00 report and the two sweeps, and one that ran long enough to reach any of their hours would
+ * have fired it. No such JVM exists now: an operations call is served by a pod that is already
+ * running, and the 18:00 lock is what a regeneration contends for.
  *
  * <p>{@code @Profile("!test")} because the provider needs a {@code DataSource} and that profile
  * deliberately has none: the plain context-load tests must keep running with no broker, no database
@@ -54,7 +51,6 @@ import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
  */
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
-@Conditional(CliModeConfig.NotCliMode.class)
 @EnableScheduling
 @EnableSchedulerLock(defaultLockAtMostFor = RegisterGenerationJob.LOCK_AT_MOST_FOR)
 public class SchedulingInfrastructureConfig {

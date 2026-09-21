@@ -2,7 +2,6 @@ package uk.gov.hmcts.cp.courtregister.config;
 
 import java.time.Clock;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.TaskScheduler;
@@ -13,11 +12,10 @@ import uk.gov.hmcts.cp.courtregister.persistence.ProcessedRequestRepository;
 /**
  * The two intake gauges' refresh, on a thread of its own, in every service JVM.
  *
- * <p>Conditional on not being a command JVM and on the non-test profile, and on
- * <strong>nothing else</strong>. The gauges belong to the intake half, so they refresh wherever the
- * intake half runs - which is every JVM that is not a command, whichever of the other two halves a
- * deployment switched on. A pod with the report and the generation half both off still consumes the
- * queue, and it is exactly the pod whose stuck requests nothing else would report (user story 2
+ * <p>Conditional on the non-test profile and on <strong>nothing else</strong>. The gauges belong
+ * to the intake half, so they refresh wherever the intake half runs, whichever of the other two
+ * halves a deployment switched on. A pod with the report and the generation half both off still
+ * consumes the queue, and it is exactly the pod whose stuck requests nothing else would report (user story 2
  * scenario 4): a flag condition here would leave that deployment with the two readings it was given
  * them for switched off.
  *
@@ -41,7 +39,6 @@ import uk.gov.hmcts.cp.courtregister.persistence.ProcessedRequestRepository;
  */
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
-@Conditional(CliModeConfig.NotCliMode.class)
 public class IntakeSweepConfig {
 
     /**

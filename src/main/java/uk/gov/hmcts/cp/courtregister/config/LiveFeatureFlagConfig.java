@@ -26,11 +26,21 @@ import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
  * {@link PropertiesValidator} refuses STUB outright wherever the deployed credential source is in
  * use, so the pair cannot be resolved the wrong way round in an environment that matters.
  *
- * <p>It is also conditional on generation being enabled, because a deployment that runs no nightly
- * job has nothing to ask the flag: the reader would hold an endpoint and a credential for a question
- * nobody asks, and {@link PropertiesValidator} only requires the endpoint and the label once
- * generation is on. The two conditions are the same sentence as the properties' own rule, stated
- * where the bean is.
+ * <p><strong>It is not conditional on generation being enabled</strong>, and that is a decision
+ * rather than an omission (T040/T041, 2026-09-21). {@code GET /operations/flag} is served on every
+ * pod - it is the endpoint an operator checks the cutover with, and a pod that renders nothing can
+ * still be asked what the lever says - so the reader has to exist wherever the operations API does.
+ * What the generation switch still decides is what is <em>required</em>: {@link PropertiesValidator}
+ * asks for the endpoint and the label only once generation is on, so a pod with no nightly job and
+ * no App Configuration endpoint configured gets a reader with no store behind it, which answers
+ * {@code NOT_CONFIGURED} - a reading with a cause on it, which is the honest answer to "what does
+ * the flag say" on a pod that cannot see it.
+ *
+ * <p>Which is also why the workload identity is built only where an endpoint names a store. The
+ * three projected variables are a deployed pod's and a laptop has none of them; refusing to start
+ * for want of a credential to read a store nobody configured would make the flag endpoint cost
+ * every non-generating pod its start-up. Where an endpoint <em>is</em> named the refusal stands
+ * exactly as it did, and generation on with no endpoint is still refused before this bean is built.
  *
  * <p><strong>Which identity the read is authorised with is {@code courtregister.feature.credential}
  * and nothing else.</strong> Both values contribute the same reader over the same properties, so
@@ -44,7 +54,6 @@ import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
  */
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
-@ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
 public class LiveFeatureFlagConfig {
 
     /** The pod's own client id, projected by the AKS workload-identity webhook. */
@@ -91,10 +100,20 @@ public class LiveFeatureFlagConfig {
     public FeatureFlagReader featureFlagReader(
             final FeatureFlagProperties properties, final Environment environment) {
         return switch (properties.credential()) {
-            case WORKLOAD_IDENTITY ->
-                new AppConfigurationFlagReader(properties, workloadIdentity(environment));
+            case WORKLOAD_IDENTITY -> new AppConfigurationFlagReader(properties,
+                    namesAStore(properties) ? workloadIdentity(environment) : null);
             case LOCAL_TEST -> new AppConfigurationFlagReader(properties, localTestClient(properties));
         };
+    }
+
+    /**
+     * Whether a store is configured to read the flag from at all.
+     *
+     * @param properties where the flag is read from
+     * @return {@code true} where an endpoint names one
+     */
+    private static boolean namesAStore(final FeatureFlagProperties properties) {
+        return properties.endpoint() != null && !properties.endpoint().isBlank();
     }
 
     /**

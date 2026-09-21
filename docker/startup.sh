@@ -8,74 +8,13 @@ logmsg() {
 export LOCALJARFILE=$(ls ./build/libs/*.jar 2>/dev/null | grep -v 'plain' | head -n1)
 export DOCKERJARFILE=$(ls /app/*.jar 2>/dev/null | grep -v 'plain' | head -n1)
 
-# The operations commands, run out of the same image rather than off an API this service does not
-# have. There is no REST surface to regenerate a date, resend a batch's failed recipients, read the
-# cutover flag or pull the exception report through, deliberately (FR-016, constitution Principle III), so support reaches
-# those through `kubectl exec ... -- ./startup.sh <command>`, which runs with the pod's own identity
-# and network path and needs no data-plane credential of its own (research 13).
+# The entrypoint starts the application, full stop. It used to dispatch on a first argument as well,
+# because the six operator actions were commands in this image and `kubectl exec ... -- ./startup.sh
+# <command>` was the only way to reach one. They are the seven endpoints under `/operations/**` now
+# (constitution Principle III), served by the pod itself behind `cp-auth-rules-filter` and
+# `cp-audit-filter-springboot` - which is how an action comes to be authorised and audited at all,
+# neither of which an exec into a pod ever was.
 #
-# The six names below are exactly `CliMain.COMMANDS`, and the two lists are one list: a name this
-# script does not recognise is answered with the list and a refusal, exactly as CliMain answers one
-# it does not recognise. The fall-through to `exec java -jar` further down is for a container
-# started with NO arguments, which is every deployed pod - and only for that, because a mistyped
-# name reaching it would start a second whole application in the pod, drop the operator's arguments,
-# leave `courtregister.cli` false and end on 1 rather than print any of the six names.
-CLI_MAIN=uk.gov.hmcts.cp.courtregister.batch.cli.CliMain
-# The same six names as the dispatch pattern below, for the refusal to print. `case` patterns are
-# not expanded, so this is the one place they are written twice in this file; `CliDispatchIT` asks
-# the built image for both halves - three of the names dispatched, and all six listed by a refusal.
-CLI_COMMANDS="generate-register notify-register list-batches supersede-before check-flag report-exceptions"
-# A Boot 4 fat jar's manifest names JarLauncher, whose Start-Class is the application. Running a
-# second main class out of the same archive is what PropertiesLauncher and `loader.main` are for:
-# BOOT-INF/classes and BOOT-INF/lib are on the classpath it builds, so a command sees exactly the
-# dependencies the application does. `java -jar` cannot do it, because the manifest's Main-Class
-# wins over anything on the command line, and `-cp` alone cannot either, because a nested jar is
-# not a classpath entry.
-BOOT_LAUNCHER=org.springframework.boot.loader.launch.PropertiesLauncher
-
-case "${1:-}" in
-    generate-register|notify-register|list-batches|supersede-before|check-flag|report-exceptions)
-        if [ -f "$DOCKERJARFILE" ]; then
-            CLIJARFILE=$DOCKERJARFILE
-        elif [ -f "$LOCALJARFILE" ]; then
-            CLIJARFILE=$LOCALJARFILE
-        else
-            # 2 and not 1, because CliMain's codes mean the same three things whether it was reached
-            # or not: the command could not be run, which is a failure, and not the refusal a
-            # runbook step must never retry as though it were one.
-            logmsg "ERROR - No jarfile found. Unable to run the $1 command" >&2
-            exit 2
-        fi
-        # To stderr, alone among this script's lines. What a command writes to stdout is
-        # line-oriented and grepped by the runbook step that ran it, and a line of this script's own
-        # in front of it would be a line an operator has to know to skip.
-        logmsg "Running the $1 command from $CLIJARFILE" >&2
-        # `exec`, so the code the process ends on is the command's own - 0 did it, 1 declined, 2
-        # could not - with no shell left in between to replace it, and so an operator's Ctrl-C
-        # reaches the JVM rather than orphaning it. Every argument is passed through untouched,
-        # including the name, which is what CliMain dispatches on.
-        exec java -cp "$CLIJARFILE" "-Dloader.main=$CLI_MAIN" "$BOOT_LAUNCHER" "$@"
-        ;;
-    "")
-        # No arguments at all: the deployed pod, which falls through to the application below.
-        ;;
-    *)
-        # A first argument that is none of the six. Answered here rather than dropped into the
-        # application, and answered the way CliMain answers an unknown name: the list of what this
-        # image offers, and nothing about what was typed - it is a string from outside this service
-        # and an operator's terminal is pasted into tickets.
-        #
-        # To stderr with the script's other line, and 2 rather than 1: the command could not be run,
-        # which is a failure, and not the refusal a runbook step must never retry as though it were
-        # one.
-        echo "usage: startup.sh <command> [arguments]" >&2
-        for command in $CLI_COMMANDS; do
-            echo "  $command" >&2
-        done
-        exit 2
-        ;;
-esac
-
 # `exec` replaces this shell with the JVM, so the JVM becomes PID 1 and receives the container's
 # SIGTERM directly. Without it the signal is delivered to the shell, which dies while the JVM is
 # left to be killed outright a grace period later — so Spring's shutdown never runs, the consumer

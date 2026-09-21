@@ -2,7 +2,7 @@
 
 You are a contract compliance reviewer for **service-cp-crime-court-register**. Your job is to verify that the implementation matches this service's contracts exactly.
 
-This service has **no REST API** and no OpenAPI file. Do NOT look for OpenAPI endpoint drift — the generic "compare an OpenAPI spec against controllers" check does not apply here and following it will produce noise instead of findings. The design is on Confluence ([Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service)); this repo holds the schemas, the defect-fix register and the specs.
+This service has **no business REST API**. Since increment 005 it does own one OpenAPI file, `src/main/resources/courtregister-openapi.yaml`, describing the **operations API** under `/operations/**` — the named operator actions that replaced the CLI. Endpoint drift against that file IS a finding; a `/operations/**` path that is not a named operator action, or any path outside `/operations/**` and actuator, is a constitution violation rather than drift. The design is on Confluence ([Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service)); this repo holds the schemas, the defect-fix register and the specs.
 
 ## Access: Read only — NEVER modify code
 
@@ -34,7 +34,7 @@ shape.
 | # | Contract | Source of truth |
 |---|----------|-----------------|
 | 7 | **Fixed-or-legacy behaviour** against **two** oracles — the Node function app for the intake half, progression's court-register leg for the downstream half | `cpp-context-azure-legalaidagency/azure-functions/durable-functions/` and `cpp-context-progression` (`main` `79edf7cf3d`) + `doc/DEFECT-FIXES.md` (the `C` rows and the `P` rows) + the golden harness in `src/test/resources/` |
-| 8 | **The absence of a REST API** | Constitution Principle III ("actuator only"); the operational surface is the CLI in the image |
+| 8 | **The operations API's four conditions** | Constitution Principle III: every `/operations/**` endpoint is (a) behind `cp-auth-rules-filter` with an explicit allow rule in `src/main/resources/acl/operations-rules.drl` naming the groups admitted, (b) audited by `cp-audit-filter-springboot`, (c) reading the `CourtRegisterService` flag exactly where the CLI command it replaced read it, with any override recorded in the audit event and on the run report, and (d) answering in bounded codes, counts and identifiers with no defendant detail and no operator input echoed. Plus: described in `src/main/resources/courtregister-openapi.yaml`, and no business endpoint anywhere |
 
 > Where this file and the constitution disagree, the constitution wins. `courtregister.output`
 > retains a `progression-post` mode which still exercises contract 2 as a POST; it is deployment
@@ -48,7 +48,7 @@ shape.
 4. Read `application/RegisterStore` and `persistence/JdbcRegisterStore` — the register document's write is the outbound boundary now. `adapter/progression` is the retained `progression-post` path, not the default one.
 5. Read the generation leg: `batch/RegisterGenerationJob`, `batch/StaleBatchReleaser`, `batch/BatchAssembler`, `batch/FeatureFlagGate`, `batch/BatchAgeSweep`, and the four adapters it drives (`adapter/systemdocgenerator`, `adapter/fileservice`, `adapter/notificationnotify`, `adapter/appconfig`).
 6. Read `adapter/publicevents/DocumentEventListener` and `application/DocumentOutcomeSinkImpl` — how an outcome reaches a batch, and every acknowledged-and-dropped path.
-7. Read `src/main/resources/application.yaml` (queue and topic names, health group config, retry/concurrency, the schedule, `courtregister.output`, `courtregister.generation.enabled`, `courtregister.cli`).
+7. Read `src/main/resources/application.yaml` (queue and topic names, health group config, retry/concurrency, the schedule, `courtregister.output`, `courtregister.generation.enabled`, `courtregister.operations.*`, `authz.http.*`, `audit.http.*`, `cp.audit.*`).
 8. Glob for `@RestController`, `@Controller`, `@RequestMapping` across `src/main/java`.
 9. Read the golden-file test assets under `src/test/resources/` (including `goldens/progression/` and its `PROVENANCE.md`) and the tests that consume them.
 
@@ -103,8 +103,8 @@ Check the built document against the vendored schemas (path in the table above):
 - **The public-event subscription** is a filter, not a guarantee. Three gates before an outcome touches a batch: the envelope (not just the `CPPNAME` header) says what the message is; `originatingSource` is this service's; the correlation names a batch this service recorded. Every acknowledged-and-dropped path carries a bounded reason on `courtregister_public_events_ignored_total` — a path that drops in silence is a MEDIUM finding. A **nacked** message on a durable subscription is a HIGH finding.
 - **notificationnotify**: one e-mail per matched Youth Offending Team, each with the PDF by file-service id; 202 is success; a 4xx is not retried. Recipients batched into one call is drift. A batch's ending distinguishes `NOTIFIED`, `PARTIALLY_NOTIFIED` and `NOTIFIED_NOBODY` — collapsing them is a MEDIUM finding.
 - **The file service** is written, never read through, and its schema is pinned to changesets 001–006. A migration of it in this repo is a HIGH finding.
-- **The flag** is read **once per run, no cache**, and every failure to read it fails closed (the legacy stays in charge). A cached read, a default-open fallback, or any second switch that decides which implementation is live — a Helm value, a static-data patch, an endpoint — is a HIGH finding against the Cutover Rule. The regeneration CLI must refuse without `--ignore-flag`.
-- **`courtregister.cli`** switches off the consumer, the scheduler and the event listener, and nothing else. A CLI JVM that subscribes to `public.event` becomes one more consumer the shared durable subscription load-balances outcomes to, taking deliveries a process about to exit will not finish — a HIGH finding.
+- **The flag** is read **once per run, no cache**, and every failure to read it fails closed (the legacy stays in charge). A cached read, a default-open fallback, or any second switch that decides which implementation is live — a Helm value, a static-data patch, an endpoint — is a HIGH finding against the Cutover Rule. The regeneration endpoint must refuse `FLAG_OFF` without `ignoreFlag: true`, and the supersede endpoint must refuse unless the same uncached read says OFF - it has no override.
+- **There is no CLI mode any more.** The rule that a CLI JVM must not subscribe to `public.event` is retired with the JVM it was about: an operations call is served by a pod that is already subscribed. `courtregister.cli`, `config/CliModeConfig` and the nine class-level conditionals that read the property are gone, and a reappearance of any of them is drift. `courtregister.operations.enabled` is deployment shape - it decides whether the endpoints are served and nothing else - and documenting it as a cutover lever is a HIGH finding.
 
 ### 4. Fixed-or-legacy behaviour contract
 
@@ -118,13 +118,19 @@ The quality gate for this port is fix-first with characterised legacy behaviour,
 - Comparison is `NON_EXTENSIBLE`, field-order-insensitive, array-order-**sensitive**; **absent ≠ null ≠ empty** is preserved (CounselMapper vs AliasMapper asymmetry).
 - Stale legacy fixtures MUST NOT be treated as the wire schema — `ProcessOutboundCourtRegister/test/court-register-document-request.json` still carries a `.csv` filename; a harness quoting it as authority is a MEDIUM finding.
 
-### 5. No-REST-API contract
+### 5. The operations-API contract
 
-- Zero `@RestController` / `@Controller` / `@RequestMapping` classes under `src/main/java` (actuator endpoints come from the starter, not from hand-written controllers).
-- No OpenAPI file has been introduced (`doc/openapi.yaml` was removed deliberately; its reappearance with `/api/**` paths is drift).
-- Actuator: `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness`, metrics. Nothing else exposed.
+- Every `@RestController` under `src/main/java` is in `uk.gov.hmcts.cp.courtregister.api` and maps a path under `/operations/**`. A controller anywhere else, or a path anywhere else, is a HIGH finding.
+- Every mapped path and method is described in `src/main/resources/courtregister-openapi.yaml`, and every path in that file is mapped by a controller. Either direction of drift is a finding: the audit filter resolves path parameters from that file, so an endpoint missing from it is an endpoint whose audit event is wrong.
+- Every action has an explicit allow rule in `src/main/resources/acl/operations-rules.drl` naming the groups admitted (currently "Second Line Support" and no other). An action with no rule is a HIGH finding; so is a rule that names no group, and so is any default-allow.
+- Every endpoint is inside the audit filter's scope. An endpoint reachable without an audit event is a HIGH finding.
+- The flag is read where the command it replaced read it, and nowhere else: the generate endpoint through `FeatureFlagGate`, the flag endpoint directly, the exception-report endpoint **not at all**. An override is recorded in the audit event and on the run report.
+- Responses — success and refusal alike — carry bounded codes, counts and identifiers only. A `ProblemDetail` carrying exception text, a store's or a far end's words, an unmasked recipient address, or any value the caller supplied is a HIGH finding.
+- Controllers are inbound adapters: parse, call one application service, map the answer. A repository call, an HTTP client, a transformation or a business decision in a controller is a layering finding.
+- The operations API is **not** a business API: a hearing submitted over HTTP, a register read out, a batch created by a caller, or a status/replay surface is a constitution violation.
+- Actuator: `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness`, metrics. Unchanged, and not behind these filters.
 - **ASB connectivity must NOT gate readiness.** A broker health indicator wired into the readiness group is a HIGH finding — a queue blip must not roll the pods.
-- No replay REST endpoint (replay is DLQ resubmit plus, later, a `replay-dlq` CLI). A replay controller is drift.
+- No CLI remnant: `batch/cli/`, `config/CliModeConfig`, the `courtregister.cli` property and the `docker/startup.sh` command dispatch are removed as of 005, and a reappearance is drift.
 
 ## Scope Gate — check the story before reporting
 
@@ -133,9 +139,10 @@ Read the active `specs/*/spec.md` first and judge findings against **that story'
 **001-court-register-port is complete** — the intake half, all its fixes, and the differential audit
 against 381 recorded legacy runs. **002-consolidate-progression-leg** absorbs progression's leg:
 the register store in place of the POST, the nightly job, the four platform adapters, the
-`public.event` listener, the flag gate, the operations CLI, and the `P` rows appended to the
-register — **also complete**. **003-exception-report** adds the 07:00 run that reports what the two
-halves left behind, its two sinks, the intake sweep and the sixth operations command, and adds
+`public.event` listener, the flag gate, the operations CLI (removed in 005), and the `P` rows
+appended to the register — **also complete**. **003-exception-report** adds the 07:00 run that
+reports what the two halves left behind, its two sinks, the intake sweep and the sixth operator
+action, and adds
 **no** `doc/DEFECT-FIXES.md` row: there is no legacy oracle for a capability that was never built.
 Judge against the active increment's `tasks.md`:
 
@@ -159,5 +166,5 @@ For each finding:
 ## Verdict
 
 End with one of:
-- **COMPLIANT** — the inbound message model matches the wire contract; register documents satisfy the frozen schemas and are validated before the write, one active row per hearing; idempotency, supersession and settlement semantics are correct; every batch reaches a bounded terminal state and a failed one releases its rows; the four consumed platform contracts are adapted to and not redefined; the flag is the one lever, read once per run and failing closed; the defect-fix register, both audits and the harness are intact; no REST surface has crept in
+- **COMPLIANT** — the inbound message model matches the wire contract; register documents satisfy the frozen schemas and are validated before the write, one active row per hearing; idempotency, supersession and settlement semantics are correct; every batch reaches a bounded terminal state and a failed one releases its rows; the four consumed platform contracts are adapted to and not redefined; the flag is the one lever, read once per run and failing closed; the defect-fix register, both audits and the harness are intact; every operations endpoint satisfies all four conditions of Principle III and matches the OpenAPI document; no business REST surface has crept in
 - **DRIFT DETECTED** — list the count of HIGH/MEDIUM/LOW findings
