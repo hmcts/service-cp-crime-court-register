@@ -855,14 +855,30 @@ departure is forced — research R16 has the reasoning.
       ⚠ **The operator trigger is not on the run report line yet.** T036/T037 add the field and run
       after the 004 rebase; a `TODO` in `OperationsRunLauncher.run` names T037, and until then the
       trigger and the override are on the launcher's own line.)
-- [ ] **T034** [P] [US3] `api/BatchesControllerTest` (extend) — the generate slice cases of
+- [x] **T034** [P] [US3] `api/BatchesControllerTest` (extend) — the generate slice cases of
       data-model §4: `202` with the run id and `overridden`; `400 missing-argument` for an absent
       date; `400 unreadable-argument` for each of `date`, `batchId`, `recordedBefore`, naming the
       argument and never the value; **`400 OVERRIDE_REQUIRES_BATCH` for `ignoreFlag: true` with no
       `batchId`**, and the accepted override *with* one (design owner, 2026-09-19);
       `409 flag-off`; `409 flag-unreadable`; a date-wide regeneration with the flag ON accepted.
       Red: the override cases.
-- [ ] **T035** [US3] `api/BatchesController#generate` and its request/response records. Green: T034.
+- [x] **T035** [US3] `api/BatchesController#generate` and its request/response records. Green: T034.
+      (Landed with T034 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. Green: `BatchesControllerTest` 27 tests, 0 failures; the whole `api` package and
+      `HttpSurfaceTest` beside it, green. Checkstyle and PMD clean on main and test.
+      The controller parses the three values that have to be read - one at a time, each under its
+      own name - and decides nothing else: the cross-field rule on the override, the flag and the
+      lock are all the launcher's, and the `202` body carries this service's own parse of the date
+      rather than the characters the caller typed. `GenerateRegisterRequest` joins
+      `OperationsRequestBodies`'s closed set, so a field this service does not take is `400`.
+      **The class gained a second `@ConditionalOnProperty`, on `courtregister.generation.enabled`,
+      in this commit rather than in T041's.** It had to: the launcher is contributed only where the
+      generating half is, and a controller left scanned over a bean that does not exist is an
+      `UnsatisfiedDependencyException` at refresh - so the commit that adds the endpoint is the
+      commit that has to gate the class, or the build is not green. `@ConditionalOnProperty` is
+      `@Repeatable` on Boot 4.1, so the two conditions are two annotations and not a new
+      meta-annotation. `HttpSurfaceTest.OnAPodThatRendersNothing` now expects the three controllers
+      that are served everywhere; T041 adds the fallback to that list.)
 - [ ] **T036** [P] [US3] `domain/RunReportTest` (**new here, extended after the rebase if 004
       landed it first** — there is no such suite in either tree today, the line is asserted only
       inside `batch/RegisterGenerationJobTest`, which is 004's and must not be touched, and 004's

@@ -1,13 +1,16 @@
 package uk.gov.hmcts.cp.courtregister.api;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.sql.SQLException;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -15,18 +18,25 @@ import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import uk.gov.hmcts.cp.courtregister.application.BatchListing;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher;
+import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher.RunAccepted;
+import uk.gov.hmcts.cp.courtregister.application.RegisterRegenerationService.Selection;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
+import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
+import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 
 /**
@@ -43,6 +53,9 @@ import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
     "authz.http.enabled=false",
     "audit.http.enabled=false",
     "cp.audit.enabled=false",
+    // Not incidental: two of this controller's three endpoints need the generating half, so the
+    // whole class is conditional on it and a slice that said nothing would 404 every case here.
+    "courtregister.generation.enabled=true",
 })
 @DisplayName("the batch listing endpoint")
 class BatchesControllerTest {
@@ -60,11 +73,26 @@ class BatchesControllerTest {
 
     private static final UUID BATCH = UUID.fromString("11111111-2222-4333-8444-555555555555");
 
+    /** The generate endpoint's path, written out for the same reason the listing's is. */
+    private static final String GENERATE = "/operations/batches/generate";
+
+    /** The run id the launcher answers with, which is what a caller correlates the run by. */
+    private static final String RUN_ID = "9f2b6d44-6b1a-4f0a-9d24-0cc2b0d1f3aa";
+
+    /** A value nothing else in this repository produces, so a leak can only be this one. */
+    private static final String NOT_A_UUID = "ZQX7NOTAUUID";
+
+    /** And another, for the instant that will not read. */
+    private static final String NOT_AN_INSTANT = "ZQX7NOTANINSTANT";
+
     @Autowired
     private MockMvc mvc;
 
     @MockitoBean
     private BatchListingService listings;
+
+    @MockitoBean
+    private OperationsRunLauncher launcher;
 
     @Nested
     @DisplayName("a date that was asked for")
@@ -255,6 +283,178 @@ class BatchesControllerTest {
             Assertions.assertThatThrownBy(() -> mvc.perform(get(PATH).param("date", TYPED_DATE)))
                     .rootCause()
                     .isInstanceOf(InvalidDataAccessApiUsageException.class);
+        }
+    }
+
+    /**
+     * The regeneration an operator asks for: accepted, refused, or refused by name.
+     *
+     * <p>Every decision belongs to {@link OperationsRunLauncher} and this asserts the mapping - the
+     * {@code 202} and its three fields, the three values parsed here so a refusal can name the
+     * argument, and the fact that none of the four ways a request can be wrong ever quotes a
+     * character the caller typed.
+     */
+    @Nested
+    @DisplayName("the regeneration an operator asks for")
+    class Generating {
+
+        /**
+         * Asks for a regeneration with the body given.
+         *
+         * @param body the JSON an operator posted
+         * @return the request builder
+         */
+        private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder asking(
+                final String body) {
+            return post(GENERATE).contentType(MediaType.APPLICATION_JSON).content(body);
+        }
+
+        @Test
+        void an_accepted_run_should_answer_202_with_the_run_id() throws Exception {
+            when(launcher.launch(any())).thenReturn(new RunAccepted(RUN_ID, DATE, false));
+
+            mvc.perform(asking("{\"date\":\"" + TYPED_DATE + "\"}"))
+                    .andExpect(status().isAccepted())
+                    .andExpect(jsonPath("$.runId").value(RUN_ID))
+                    .andExpect(jsonPath("$.date").value(TYPED_DATE))
+                    .andExpect(jsonPath("$.overridden").value(false));
+        }
+
+        @Test
+        void the_narrowing_should_reach_the_launcher_as_this_services_own_parse() throws Exception {
+            when(launcher.launch(any())).thenReturn(new RunAccepted(RUN_ID, DATE, false));
+
+            mvc.perform(asking("{\"date\":\"" + TYPED_DATE + "\",\"courtHouse\":\"Lewes "
+                            + "Youth Court\",\"batchId\":\"" + BATCH + "\",\"recordedBefore\""
+                            + ":\"2026-09-04T17:00:00Z\"}"))
+                    .andExpect(status().isAccepted());
+
+            final ArgumentCaptor<Selection> asked = ArgumentCaptor.forClass(Selection.class);
+            verify(launcher).launch(asked.capture());
+            Assertions.assertThat(asked.getValue())
+                    .isEqualTo(new Selection(DATE, "Lewes Youth Court", BATCH,
+                            Instant.parse("2026-09-04T17:00:00Z"), false));
+        }
+
+        @Test
+        void an_accepted_override_should_say_so_on_the_answer() throws Exception {
+            when(launcher.launch(any())).thenReturn(new RunAccepted(RUN_ID, DATE, true));
+
+            mvc.perform(asking("{\"date\":\"" + TYPED_DATE + "\",\"batchId\":\"" + BATCH
+                            + "\",\"ignoreFlag\":true}"))
+                    .andExpect(status().isAccepted())
+                    .andExpect(jsonPath("$.overridden").value(true));
+        }
+
+        @Test
+        void an_override_without_a_batch_should_be_refused_400_by_the_launchers_own_code()
+                throws Exception {
+            when(launcher.launch(any())).thenThrow(new OperationsRefusedException(
+                    OperationsReason.OVERRIDE_REQUIRES_BATCH,
+                    OperationsRunLauncher.IGNORE_FLAG, null));
+
+            mvc.perform(asking("{\"date\":\"" + TYPED_DATE + "\",\"ignoreFlag\":true}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("OVERRIDE_REQUIRES_BATCH"))
+                    .andExpect(jsonPath("$.argument").value("ignoreFlag"));
+        }
+
+        @Test
+        void an_absent_date_should_be_refused_400_missing_argument() throws Exception {
+            mvc.perform(asking("{}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("missing-argument"))
+                    .andExpect(jsonPath("$.argument").value("date"));
+
+            verifyNoInteractions(launcher);
+        }
+
+        @Test
+        void no_body_at_all_should_be_refused_the_same_way() throws Exception {
+            mvc.perform(post(GENERATE))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("missing-argument"));
+
+            verifyNoInteractions(launcher);
+        }
+
+        @Test
+        void a_date_that_will_not_read_should_be_refused_by_the_arguments_name() throws Exception {
+            mvc.perform(asking("{\"date\":\"" + NOT_A_DATE + "\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("unreadable-argument"))
+                    .andExpect(jsonPath("$.argument").value("date"));
+
+            verifyNoInteractions(launcher);
+        }
+
+        @Test
+        void a_batch_id_that_will_not_read_should_be_refused_by_the_arguments_name()
+                throws Exception {
+            mvc.perform(asking("{\"date\":\"" + TYPED_DATE + "\",\"batchId\":\"" + NOT_A_UUID
+                            + "\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("unreadable-argument"))
+                    .andExpect(jsonPath("$.argument").value("batchId"));
+
+            verifyNoInteractions(launcher);
+        }
+
+        @Test
+        void a_bound_that_will_not_read_should_be_refused_by_the_arguments_name() throws Exception {
+            mvc.perform(asking("{\"date\":\"" + TYPED_DATE + "\",\"recordedBefore\":\""
+                            + NOT_AN_INSTANT + "\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("unreadable-argument"))
+                    .andExpect(jsonPath("$.argument").value("recordedBefore"));
+
+            verifyNoInteractions(launcher);
+        }
+
+        @Test
+        void nothing_the_caller_typed_should_come_back_in_any_of_the_refusals() throws Exception {
+            final String body = mvc.perform(asking("{\"date\":\"" + NOT_A_DATE
+                            + "\",\"batchId\":\"" + NOT_A_UUID + "\",\"recordedBefore\":\""
+                            + NOT_AN_INSTANT + "\",\"courtHouse\":\"ZQX7COURTHOUSE\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andReturn().getResponse().getContentAsString();
+
+            Assertions.assertThat(body)
+                    .as("a refusal names the argument, never the value (FR-024)")
+                    .doesNotContain(NOT_A_DATE)
+                    .doesNotContain(NOT_A_UUID)
+                    .doesNotContain(NOT_AN_INSTANT)
+                    .doesNotContain("ZQX7COURTHOUSE")
+                    .doesNotContain(GENERATE);
+        }
+
+        @Test
+        void a_flag_that_says_off_should_be_refused_409() throws Exception {
+            when(launcher.launch(any())).thenThrow(
+                    new OperationsRefusedException(OperationsReason.FLAG_OFF));
+
+            mvc.perform(asking("{\"date\":\"" + TYPED_DATE + "\"}"))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.reason").value("flag-off"));
+        }
+
+        @Test
+        void a_flag_that_cannot_be_read_should_be_refused_409() throws Exception {
+            when(launcher.launch(any())).thenThrow(
+                    new OperationsRefusedException(OperationsReason.FLAG_UNREADABLE));
+
+            mvc.perform(asking("{\"date\":\"" + TYPED_DATE + "\"}"))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.reason").value("flag-unreadable"));
+        }
+
+        @Test
+        void a_field_this_service_does_not_take_should_be_refused_400() throws Exception {
+            mvc.perform(asking("{\"date\":\"" + TYPED_DATE + "\",\"zqx7Unknown\":true}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("unreadable-argument"));
+
+            verifyNoInteractions(launcher);
         }
     }
 }

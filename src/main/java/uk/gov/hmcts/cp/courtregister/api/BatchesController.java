@@ -1,8 +1,10 @@
 package uk.gov.hmcts.cp.courtregister.api;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -13,11 +15,18 @@ import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.cp.courtregister.api.dto.BatchListingResponse;
+import uk.gov.hmcts.cp.courtregister.api.dto.GenerateRegisterRequest;
+import uk.gov.hmcts.cp.courtregister.api.dto.GenerateRegisterResponse;
 import uk.gov.hmcts.cp.courtregister.application.BatchListing;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher;
+import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher.RunAccepted;
+import uk.gov.hmcts.cp.courtregister.application.RegisterRegenerationService.Selection;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
@@ -44,11 +53,21 @@ import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
  * operator's paths at all (FR-044). The switch withdraws the listings; a controller left scanned
  * over a listing nothing contributes is a pod that will not start, which is the one thing a
  * deployment shape setting may not do.
+ *
+ * <p><strong>And {@code courtregister.generation.enabled}, because two of its three endpoints
+ * need the generating half.</strong> The regeneration hand-off and the resend are contributed only
+ * where the flag gate, the assembler, the requesting leg and the notifier are, so a pod that
+ * renders nothing holds none of them - and a controller left scanned over beans that do not exist
+ * is the refresh failure the operations switch is written to avoid. Such a pod answers all three
+ * batch paths {@code 501 command-not-wired} through {@code NotWiredController}, which is exactly
+ * what the commands they replace answered there (FR-052).
  */
 @RestController
 @Profile("!test")
 @ConditionalOnProperty(prefix = "courtregister.operations", name = "enabled",
         havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled",
+        havingValue = "true")
 public class BatchesController {
 
     private static final Logger LOG = LoggerFactory.getLogger(BatchesController.class);
@@ -56,16 +75,118 @@ public class BatchesController {
     /** This service's own name for the one argument the listing takes. */
     private static final String DATE = "date";
 
+    /** This service's own name for the argument that names one batch of a date. */
+    private static final String BATCH_ID = "batchId";
+
+    /** This service's own name for the argument that bounds a run to part of a date. */
+    private static final String RECORDED_BEFORE = "recordedBefore";
+
     /** The two listings, over the three reads they are built from. */
     private final BatchListingService listings;
 
+    /** The regeneration hand-off, which validates, reads the flag and answers with a run id. */
+    private final OperationsRunLauncher launcher;
+
     /**
-     * Creates the endpoints over the listings they answer from.
+     * Creates the endpoints over the services they answer from.
      *
      * @param batchListings the application service holding the reads
+     * @param runLauncher   the application service holding the regeneration hand-off
      */
-    public BatchesController(final BatchListingService batchListings) {
+    public BatchesController(final BatchListingService batchListings,
+            final OperationsRunLauncher runLauncher) {
         this.listings = batchListings;
+        this.launcher = runLauncher;
+    }
+
+    /**
+     * Regenerates a register date, and answers as soon as the run has been accepted.
+     *
+     * <p>Every decision is the launcher's: the cross-field rule on the override, the one lever's
+     * reading, the run id and the lock. This parses the three values that have to be read, one at
+     * a time and each under its own name, so that a refusal can say <em>which</em> argument would
+     * not read - the one thing about a refused value that may be written down, since the value
+     * itself may not (FR-024).
+     *
+     * @param request what the caller asked for, or {@code null} where they sent no body
+     * @return {@code 202} with the run id, the date as this service parsed it, and whether the run
+     *         goes ahead over a flag that would have stopped it
+     * @throws uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException where the date is
+     *         absent, where any of the three values will not read, where an override was asked for
+     *         without the one batch it may cover, or where the flag did not admit the run - all
+     *         answered by {@link OperationsExceptionHandler} from the one status map
+     */
+    @PostMapping(path = "/operations/batches/generate",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Object> generate(
+            @RequestBody(required = false) final GenerateRegisterRequest request) {
+
+        final GenerateRegisterRequest asked =
+                request == null ? GenerateRegisterRequest.NOTHING : request;
+        if (asked.date() == null || asked.date().isBlank()) {
+            throw new OperationsRefusedException(OperationsReason.MISSING_ARGUMENT, DATE, null);
+        }
+        final Selection selection = new Selection(dateOf(asked.date()), asked.courtHouse(),
+                batchOf(asked.batchId()), instantOf(asked.recordedBefore()), asked.overrideAsked());
+        final RunAccepted accepted = launcher.launch(selection);
+        return ResponseEntity.accepted().body(new GenerateRegisterResponse(accepted.runId(),
+                accepted.registerDate(), accepted.overridden()));
+    }
+
+    /**
+     * The register date, as this service reads it.
+     *
+     * @param typed what the caller sent
+     * @return the date
+     */
+    private static LocalDate dateOf(final String typed) {
+        try {
+            return LocalDate.parse(typed);
+        } catch (DateTimeParseException notADate) {
+            throw new OperationsRefusedException(OperationsReason.UNREADABLE_ARGUMENT, DATE,
+                    notADate);
+        }
+    }
+
+    /**
+     * The one batch a caller named, or the absence of one.
+     *
+     * @param typed what the caller sent, which may be absent
+     * @return the batch's identity, or {@code null} for every batch of the day
+     */
+    // PMD.OnlyOneReturn: absent and unreadable are different answers to different questions, each
+    // said where it is decided.
+    @SuppressWarnings("PMD.OnlyOneReturn")
+    private static UUID batchOf(final String typed) {
+        if (typed == null || typed.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(typed);
+        } catch (IllegalArgumentException notAnIdentity) {
+            throw new OperationsRefusedException(OperationsReason.UNREADABLE_ARGUMENT, BATCH_ID,
+                    notAnIdentity);
+        }
+    }
+
+    /**
+     * The instant a caller bounded the run at, or the absence of a bound.
+     *
+     * @param typed what the caller sent, which may be absent
+     * @return the exclusive bound, or {@code null} for the whole day
+     */
+    // PMD.OnlyOneReturn: as above - no bound and a bound that will not read are two answers.
+    @SuppressWarnings("PMD.OnlyOneReturn")
+    private static Instant instantOf(final String typed) {
+        if (typed == null || typed.isBlank()) {
+            return null;
+        }
+        try {
+            return Instant.parse(typed);
+        } catch (DateTimeParseException notAnInstant) {
+            throw new OperationsRefusedException(OperationsReason.UNREADABLE_ARGUMENT,
+                    RECORDED_BEFORE, notAnInstant);
+        }
     }
 
     /**

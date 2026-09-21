@@ -98,6 +98,18 @@ class HttpSurfaceTest {
             List.of("flagController", "batchesController", "registersController",
                     "exceptionReportsController");
 
+    /**
+     * The same list on a pod with no generation half, where {@code batchesController} is not one.
+     *
+     * <p>Two of its three endpoints - the regeneration and the resend - need the flag gate, the
+     * assembler, the requesting leg and the notifier, and none of those is contributed where
+     * {@code courtregister.generation.enabled} is false. The class is therefore conditional on it,
+     * and such a pod answers all three batch paths through the not-wired fallback instead
+     * (FR-052).
+     */
+    private static final List<String> CONTROLLERS_WITHOUT_GENERATION =
+            List.of("flagController", "registersController", "exceptionReportsController");
+
     private final MockMvc mockMvc;
 
     private final ApplicationContext context;
@@ -281,8 +293,11 @@ class HttpSurfaceTest {
                             + "without the three variables only a deployed pod is given")
                     .isTrue();
             assertThat(controllerBeans(context))
+                    .as("the batch controller goes with the generating half it needs; the other "
+                            + "three are served on every pod")
                     .containsExactlyInAnyOrderElementsOf(Stream.concat(
-                            OPERATIONS_CONTROLLERS.stream(), Stream.of(ERROR_FALLBACK)).toList());
+                            CONTROLLERS_WITHOUT_GENERATION.stream(),
+                            Stream.of(ERROR_FALLBACK)).toList());
         }
 
         @Test
