@@ -478,11 +478,11 @@ command printed.
   - the same `RunReport` line the 18:00 run writes, carrying the run id, an operator trigger,
     `reason=overridden` where the flag was overridden, and the **counts** the command printed —
     released, registers, batches, requested, deferred, and how many batches were withheld;
-  - the requesting leg's own lines, under that same run id, for **each batch's** id, state and
-    record count, and a `WARN` per withheld batch naming its bounded reason. The run line is one
-    line and stays one line: a per-batch tally on it would be a line whose width is a night's
-    workload;
-  - `GET /operations/batches?date=D` for the day's state afterwards.
+  - the requesting leg's own lines, under that same run id, for **each batch's** id and state, and
+    a `WARN` per withheld batch naming its bounded reason. The run line is one line and stays one
+    line: a per-batch tally on it would be a line whose width is a night's workload;
+  - `GET /operations/batches?date=D` for the day's state afterwards, which is the only place a
+    per-batch **record count** is carried — no log line has one.
 
   The whole of it is correlated by the one run id the caller was answered with, which is what makes
   three places one account rather than three.
@@ -546,9 +546,13 @@ command printed.
   superseded from, each of them a field the OpenAPI document types as a uuid, a date or a
   date-time. It is rendered from the parsed value and never from the characters that arrived, and a
   request made in a non-canonical but parseable spelling therefore comes back in the canonical one.
-  That is what tells a parse from an echo, and it is how each of these fields is tested: pinning
-  the identical characters back would prove nothing either way. No exception message and no
-  throwable this service did not write MUST reach either.
+  That is what tells a parse from an echo, and it is how each of these fields is tested, one case
+  per field: pinning the identical characters back would prove nothing either way. A **refusal**
+  MUST carry no caller value but one — the parsed identifier of the thing it refused about, on the
+  same terms, so that an operator told `409 already-notifying` is told which batch. That is not the
+  value-naming Principle III(d) bans: what is banned is quoting back an argument that would not
+  read, and an argument that would not read never parses, so it can never reach a refusal by this
+  route. No exception message and no throwable this service did not write MUST reach either.
 - **FR-026**: No response MUST contain defendant detail of any kind, an unmasked recipient address,
   a payload, a register document or a fragment of one.
 - **FR-027**: An unknown or unmapped path or method MUST answer as the framework does, without a

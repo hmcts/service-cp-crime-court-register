@@ -154,7 +154,7 @@ public class OperationsWebConfig {
      *
      * @param auditJmsTemplate the template the starter built against the audit broker
      * @param auditObjectMapper the starter's own mapper, so the event is spelled as it spells it
-     * @param meters           where the lost-response-event counter is registered
+     * @param meters           where the unpublished-event counter is registered
      * @return the publisher the audit filter uses
      */
     @Bean
@@ -165,8 +165,11 @@ public class OperationsWebConfig {
             final MeterRegistry meters) {
 
         final Counter unpublished = Counter.builder("courtregister_operations_audit_unpublished")
-                .description("Response events an answered operations call could not publish, "
-                        + "which is the recorded shortfall a durable outbox would close")
+                .description("Audit events this pod could not publish and did not refuse: a "
+                        + "response event an answered operations call had already been given, "
+                        + "and any event raised on a thread serving no operations call. Both are "
+                        + "the recorded shortfall a durable outbox would close. A request event "
+                        + "is refused, not counted here")
                 .register(meters);
         return new OperationsAuditService(auditJmsTemplate, auditObjectMapper, unpublished);
     }

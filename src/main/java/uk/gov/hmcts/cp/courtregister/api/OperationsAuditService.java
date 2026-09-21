@@ -70,7 +70,11 @@ public class OperationsAuditService extends AuditService {
     /** The starter's own mapper, so the event on the wire is spelled as the library spells it. */
     private final ObjectMapper mapper;
 
-    /** What moves when a response event could not be published, which is the recorded shortfall. */
+    /**
+     * What moves when an event could not be published and there was nothing to refuse: a
+     * response event the caller has already been answered past, or an event raised on a
+     * thread serving no operations call. Both are the recorded shortfall.
+     */
     private final Counter unpublished;
 
     /**
