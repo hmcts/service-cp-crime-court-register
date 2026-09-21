@@ -25,7 +25,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -44,6 +43,7 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSinkImpl;
 import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
 import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
+import uk.gov.hmcts.cp.courtregister.application.OnDemandExceptionReportService;
 import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
@@ -60,12 +60,10 @@ import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.IntakeAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
 import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
-import uk.gov.hmcts.cp.courtregister.batch.cli.ReportExceptionsCli;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
-import uk.gov.hmcts.cp.courtregister.config.ReportProperties;
 import uk.gov.hmcts.cp.courtregister.domain.AssembledBatch;
 import uk.gov.hmcts.cp.courtregister.domain.BatchAssembly;
 import uk.gov.hmcts.cp.courtregister.domain.BatchException;
@@ -166,7 +164,7 @@ public final class GenerationLegs implements AutoCloseable {
             ExceptionReportService.class,
             LogEventReportSink.class,
             EmailReportSink.class,
-            ReportExceptionsCli.class);
+            OnDemandExceptionReportService.class);
 
     /**
      * The classes that write a line about a register: the two legs, and the report over both.
@@ -1251,47 +1249,40 @@ public final class GenerationLegs implements AutoCloseable {
     }
 
     /**
-     * The one line the sixth operations command writes, which is about a report nobody got.
+     * The one line the seventh operations endpoint writes, which is about a report nobody got.
      *
      * <p>Driven immediately after {@link #theMorningRun()}, which leaves the request log refusing:
-     * a command whose read will not answer is the one thing it has to say out loud, because its
-     * report is an operator's terminal and there is nothing on it to read. The store's own words
-     * and the cause it carries are exactly what the sweep holds this line to a class name over.
+     * a report whose read will not answer is the one thing this service has to say out loud,
+     * because the caller is answered a bounded code and there is nothing in it to read. The store's
+     * own words and the cause it carries are exactly what the sweep holds this line to a class name
+     * over.
      *
-     * <p>The command's own table goes nowhere here. What it prints is asserted by
-     * {@code batch/cli/ReportExceptionsCliTest}, over a consumer it hands in; this fixture's
-     * subject is the log, which is a command's stderr and reaches the index the whole estate reads.
+     * <p>What the endpoint answers goes nowhere here. That is
+     * {@code OnDemandExceptionReportServiceTest}'s and {@code ExceptionReportsControllerTest}'s
+     * claim; this fixture's subject is the log, which reaches the index the whole estate reads.
      */
     private void theOnDemandReport() {
-        whateverItAnswers(() -> new ReportExceptionsCli(reporting, List.of(logSink),
-                reportSettings(), clock, this::nowhere).run(List.of("--since", "2h")));
+        whateverItAnswers(() -> onDemand(false).report("2h", false));
+        whateverItAnswers(() -> onDemand(false).report("2h", true));
+        whateverItAnswers(() -> onDemand(true).report("2h", true));
+        whateverItAnswers(() -> onDemand(false).report("not-a-window", false));
     }
 
     /**
-     * Where the command's own table goes here, which is nowhere.
+     * The on-demand report over this fixture's reads and its one sink.
      *
-     * <p>What it prints is {@code batch/cli/ReportExceptionsCliTest}'s claim, over a consumer that
-     * suite hands in. This fixture's subject is the log, which is a command's stderr and reaches
-     * the index the whole estate reads. Nothing of the table is kept - a fixture that collected
-     * what it never reads is a field a later reader has to work out the purpose of - but a null
-     * line is still refused, because a destination that accepted one would let the command stop
-     * writing without any suite noticing.
+     * <p>Built per invocation rather than held as a field because the e-mail switch is what tells
+     * its two refusals apart, and both of them have a line of their own: the output switched off is
+     * a deploy to fix, the output on with no sink behind it is this context holding one sink and
+     * not two. The four drives above are the four things this service says out loud - the report it
+     * could not produce, and those two, and a window an operator typed that will not read.
      *
-     * @param line one line of a report nobody is reading
+     * @param emailEnabled whether the e-mail output is switched on at all
+     * @return the report service, over the log sink this fixture already sweeps
      */
-    private void nowhere(final String line) {
-        Objects.requireNonNull(line, "a command writes a line, never a null, to its terminal");
-    }
-
-    /**
-     * The report's own settings, with the e-mail output off as every environment ships it.
-     *
-     * @return the report on, at seven in the court's zone, with no e-mail output
-     */
-    private static ReportProperties reportSettings() {
-        return new ReportProperties(true, REPORT_CRON, GenerationProperties.COURTS_ZONE, false,
-                Duration.ofMinutes(15), REPORT_LIMIT, REPORT_LIMIT, REPORT_LIMIT, MAX_ENTRIES,
-                new ReportProperties.Email(false, null, List.of()));
+    private OnDemandExceptionReportService onDemand(final boolean emailEnabled) {
+        return new OnDemandExceptionReportService(reporting, List.of(logSink), REPORT_CRON,
+                GenerationProperties.COURTS_ZONE, emailEnabled, clock);
     }
 
     /**

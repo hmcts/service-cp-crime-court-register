@@ -1344,10 +1344,36 @@ not there to switch them off.
 (FR-051). At no commit is there neither surface. The deletion tasks carry the mechanical exemption:
 a deletion has no red run, and its evidence is the green build with the replaced suite gone.
 
-- [ ] **T053** [US5] Delete `src/main/java/uk/gov/hmcts/cp/courtregister/batch/cli/` (all ten
+- [x] **T053** [US5] Delete `src/main/java/uk/gov/hmcts/cp/courtregister/batch/cli/` (all ten
       classes) and `src/test/java/uk/gov/hmcts/cp/courtregister/batch/cli/` (all nine suites), plus
       `src/main/resources/logback-cli.xml`. Nothing else in this commit. Evidence: the build is
       green and the test count drops by exactly the deleted suites' cases.
+      (Done. The deletion exemption applies: no red run, and the evidence is the green suite with
+      the deleted one gone. Green: `TelemetryPrivacyTest` 32 tests, 0 failures; Checkstyle and PMD
+      clean on main and test; `compileJava`/`compileTestJava` clean under `-Werror`.
+      **"Nothing else" held for the production tree and could not hold for two test files**, which
+      referred to the deleted classes by type and would not compile without them. Both are
+      re-pointed rather than weakened:
+      *`config/TelemetryPrivacyTest`* loses its `TheOperationsCommands` group, which ran the six
+      commands over doubled collaborators and swept their terminals. The claim it made - what an
+      operator typed reaches no line and no answer - is `TheOperationsSurface`'s since T051, over
+      the records and the source of the surface that replaced them, and
+      `OperationsExceptionHandlerTest` makes it per refusal. Its `ShippedConfiguration` group drops
+      `logback-cli.xml` from both parameterised cases: there is one shipped logging configuration
+      now, because no JVM starts under a second one.
+      *`support/GenerationLegs`* drove `ReportExceptionsCli` for the one line the sixth command
+      writes. It now drives `OnDemandExceptionReportService`, which is the class that line moved to,
+      and `THE_REPORT` names that class in the command's place - so the log-statement sweep's
+      enumeration covers the on-demand report exactly as it covered the command.
+      **Two things the re-pointing then found, and both are the enumeration working.** The sweep
+      refused the new class until the drive reached *all* of its statements, so the drive is four
+      invocations rather than one: the report that could not be produced, the e-mail output
+      switched off, the e-mail output on with no sink behind it, and a window an operator typed
+      that will not read. And the bounded-reason vocabulary did not hold `OperationsReason`,
+      because until now nothing on the legs wrote one into a `reason=` slot. It is added in **both**
+      of its spellings - the kebab-case wire form a `ProblemDetail` carries and the constant a log
+      line writes through `Enum::toString` - which is a difference worth having recorded: the same
+      refusal is spelled two ways depending on whether it is being answered or logged.)
 - [ ] **T054** [US5] Delete `config/CliModeConfig` and `config/CliModeConfigTest`; remove
       `courtregister.cli` from `application.yaml`; make **every** conditional that reads it
       unconditional. **`PublicEventsConfig`'s javadoc about a CLI JVM not subscribing goes with
