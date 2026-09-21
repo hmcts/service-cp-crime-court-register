@@ -976,7 +976,18 @@ of them.
       today - the notifier catches it per row - and the mapping is what keeps that true by
       accident rather than by luck if it ever does.
       `ALREADY_NOTIFYING` is a `409` here where the command exited SUCCESS: over HTTP the call
-      changed nothing and the status says so, which is data-model §5.)
+      changed nothing and the status says so, which is data-model §5.
+      **The `404` is answered as of the 004 merge, and the one-line change this entry left for
+      "whoever owns it next" is made.** The 005 tree owns `application/RegisterNotifierService`
+      once 004 has merged, so `noSuchBatch` now raises `domain/NoSuchBatchException` - an
+      `IllegalStateException` subtype, so nothing that caught the three together stops catching it
+      - and the controller catches that one alone, ahead of the bare type, for
+      `404 UNKNOWN_BATCH`. `documentOf` and `rowThatWon` keep `500 resend-failed`, and
+      `a_batch_that_carries_no_document_should_not_be_answered_as_no_such_batch` still pins that.
+      Green: `BatchesControllerTest` 41 tests and `RegisterNotifierServiceTest` 52, 0 failures;
+      Checkstyle and PMD clean on main and test. The distinction T039 asked for between an outage
+      and a batch that does not exist stays in the controller, because the two shapes an outage
+      arrives in are Spring's and belong nowhere nearer the store.)
 - [x] **T040** [P] [US6] `api/NotWiredControllerTest` (new) — `501 COMMAND_NOT_WIRED` on a pod with
       `courtregister.generation.enabled=false` for the three endpoints that need those beans
       (generate, notify, the batch listing), and the other four served normally. This is exactly

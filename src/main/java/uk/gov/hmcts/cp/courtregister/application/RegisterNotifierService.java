@@ -19,6 +19,7 @@ import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CallerIdentity;
 import uk.gov.hmcts.cp.courtregister.domain.CourtRegisterRecipient;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.NoSuchBatchException;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
@@ -1181,7 +1182,7 @@ public class RegisterNotifierService {
      *
      * @param batchId the batch identity the caller named
      * @return the batch row
-     * @throws IllegalStateException where this store holds no such batch, which is a caller naming
+     * @throws NoSuchBatchException where this store holds no such batch, which is a caller naming
      *     an identity nothing was ever assembled under rather than a batch with nothing to send
      */
     private RegisterBatch batchOf(final UUID batchId) {
@@ -1196,12 +1197,19 @@ public class RegisterNotifierService {
      * somebody else is telling - a different night from a batch that does not exist, and the wrong
      * one to tell an operator about.
      *
+     * <p><strong>And it has its own type.</strong> It used to be a bare
+     * {@code IllegalStateException}, which is also what a batch carrying no document and a
+     * notification row the store holds none for raise - so a caller could not tell "this
+     * identifier names nothing" from "this batch could not be finished with", and the operations
+     * endpoint had to answer all three under the command's {@code resend-failed}. The type is what
+     * lets the first be a {@code 404}. {@link NoSuchBatchException} extends
+     * {@code IllegalStateException}, so nothing that caught the three together stops catching it.
+     *
      * @param batchId the identity the caller named
      * @return the failure to raise; the message carries the identity and nothing else
      */
-    private static IllegalStateException noSuchBatch(final UUID batchId) {
-        return new IllegalStateException(
-                "no register batch " + batchId + " to tell the recipients of");
+    private static NoSuchBatchException noSuchBatch(final UUID batchId) {
+        return new NoSuchBatchException(batchId);
     }
 
     /**

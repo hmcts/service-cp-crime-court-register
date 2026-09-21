@@ -37,6 +37,7 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterRegenerationService.Selection;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.NoSuchBatchException;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
@@ -473,9 +474,11 @@ class BatchesControllerTest {
      * than one. It also asserts the distinctions the command could not make - a store that will
      * not answer is a {@code 503} and a far end that refused is a {@code 502}, where the CLI
      * caught both as one {@code RuntimeException} - and the one that is deliberately <em>not</em>
-     * made: the notifier's {@code IllegalStateException} covers a batch that does not exist and
-     * two endings of a batch that does, so it keeps the command's {@code resend-failed} rather
-     * than telling an operator their identifier is wrong when it is right.
+     * made by status alone: the notifier's {@code IllegalStateException} covers two endings of a
+     * batch that <em>does</em> exist, so those keep the command's {@code resend-failed} rather
+     * than telling an operator their identifier is wrong when it is right. The one that is about
+     * the identifier - {@code NoSuchBatchException}, an identity nothing was ever assembled under
+     * - has its own type now, and is the {@code 404} of data-model section 5.
      */
     @Nested
     @DisplayName("the resend an operator asks for")
@@ -556,10 +559,21 @@ class BatchesControllerTest {
         }
 
         @Test
+        void a_batch_that_was_never_assembled_should_be_answered_404_under_its_own_code()
+                throws Exception {
+            when(notifier.resendFailed(BATCH)).thenThrow(new NoSuchBatchException(BATCH));
+
+            mvc.perform(post(NOTIFY))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.reason").value("UNKNOWN_BATCH"))
+                    .andExpect(jsonPath("$.batchId").value(BATCH.toString()));
+        }
+
+        @Test
         void a_resend_the_notifier_would_not_make_should_answer_500_under_the_commands_code()
                 throws Exception {
             when(notifier.resendFailed(BATCH)).thenThrow(
-                    new IllegalStateException("no register batch to tell the recipients of"));
+                    new IllegalStateException("register batch holds no row for that address"));
 
             mvc.perform(post(NOTIFY))
                     .andExpect(status().isInternalServerError())
@@ -581,7 +595,8 @@ class BatchesControllerTest {
             Assertions.assertThat(body)
                     .as("a batch that exists and has not been generated is not a batch that does "
                             + "not exist, and sending an operator to check an identifier that is "
-                            + "right is the one thing a bounded code must not do")
+                            + "right is the one thing a bounded code must not do - which is why "
+                            + "only NoSuchBatchException earns the 404")
                     .doesNotContain(OperationsReason.UNKNOWN_BATCH.wire())
                     .doesNotContain("PENDING");
         }

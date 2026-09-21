@@ -35,6 +35,7 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterRegenerationService.Selection;
 import uk.gov.hmcts.cp.courtregister.config.CliModeConfig;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.NoSuchBatchException;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
@@ -169,11 +170,14 @@ public class BatchesController {
      * <p>The command caught all of them as one {@code RuntimeException} and printed
      * {@code resend-failed}; HTTP has truer codes and an operator acts on the difference - a store
      * that will not answer is an outage to wait out, and a far end that refused is somebody
-     * else's incident. What is <strong>not</strong> classified apart is the notifier's
-     * {@code IllegalStateException}: it is raised for a batch that does not exist and for two
-     * endings of a batch that does, and a {@code 404} over the wrong one of the three is a worse
-     * answer than the command's, so all three keep {@code resend-failed} until the notifier
-     * distinguishes them by type.
+     * else's incident. The notifier's own refusals are now two cases and not one:
+     * {@link NoSuchBatchException} is an identity nothing was ever assembled under, which is a
+     * {@code 404}, and every other {@code IllegalStateException} it raises - a batch that exists
+     * and carries no document, a notification row the store refused and then holds none for - is a
+     * batch this service knows about and could not finish with, which keeps the command's
+     * {@code resend-failed}. Answering those two the same way was the whole reason the
+     * {@code 404} could not be given: it would have sent an operator to check an identifier that
+     * was right.
      *
      * @param batchId the batch to resend for
      * @return the tally the notifier answered with
@@ -198,15 +202,20 @@ public class BatchesController {
                     + "it. classification={}", batchId, refused.classification().name());
             throw new OperationsRefusedException(downstream(refused), null,
                     Map.of(BATCH_ID, batchId.toString()), refused);
+        } catch (NoSuchBatchException named) {
+            // The one of the notifier's refusals that is about the identifier rather than about
+            // the batch behind it: nothing was ever assembled under it, so there is nothing for a
+            // later attempt to find and an operator's next step is to check what they typed.
+            LOG.warn("A resend was asked for a batch this service never assembled. reason={}",
+                    OperationsReason.UNKNOWN_BATCH.wire());
+            throw new OperationsRefusedException(OperationsReason.UNKNOWN_BATCH, null,
+                    Map.of(BATCH_ID, batchId.toString()), named);
         } catch (IllegalStateException notMade) {
-            // The notifier raises this type for three different endings, and a controller cannot
-            // tell them apart: an identity nothing was ever assembled under, a batch that exists
-            // and carries no document because it was never generated, and a notification row the
-            // store refused and then holds none for. Only the first is a 404, and answering all
-            // three that way sends an operator to check an identifier that is right - so all three
-            // are the command's own resend-failed until the notifier names the first apart by
-            // type. See the note on T039: it is a one-line change in a file this increment may
-            // call and may not edit.
+            // Everything else the notifier refuses under this type is a batch that exists: one
+            // carrying no document because it was never generated, and a notification row the
+            // store refused and then holds none for. Both are the command's own resend-failed -
+            // the call tried and could not finish - and neither is a 404, because the identifier
+            // the operator gave is right.
             LOG.error("Batch {}'s resend was not made, because the notifier would not finish it. "
                     + "reason={} cause={}", batchId, OperationsReason.RESEND_FAILED.wire(),
                     notMade.getClass().getName());

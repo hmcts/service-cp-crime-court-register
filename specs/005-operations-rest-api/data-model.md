@@ -191,6 +191,12 @@ audit filter resolves path parameters for.
 `500` because it tried and got part-way (spec assumption 3). The claim that decides between them is
 `RegisterNotifierService`'s own, unchanged.
 
+The `404` is answered for `NoSuchBatchException` and for nothing else. The notifier raises an
+`IllegalStateException` for two further endings — a batch that exists and carries no document
+because it was never generated, and a notification row the store refused and then holds none for —
+and both of those keep the command's `500 resend-failed`: the identifier the operator gave is
+right, and sending them back to check it is the one thing a bounded code must not do.
+
 ---
 
 ## 6. `POST /operations/registers/supersede`
