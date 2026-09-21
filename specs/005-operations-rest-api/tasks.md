@@ -1271,7 +1271,7 @@ the **real** authorisation filter refuses the people it should.
 the consumer, both schedulers and the public-event listener are all running, and `CliModeConfig` is
 not there to switch them off.
 
-- [ ] **T049** [US5] `e2e/OperationsConcurrencyIT` (new) — Testcontainers Postgres, the real store
+- [x] **T049** [US5] `e2e/OperationsConcurrencyIT` (new) — Testcontainers Postgres, the real store
       and the real lock. Cases: **two notify calls for one batch at once** → the dispositions
       `RegisterNotifierService`'s existing claim defines, and **no recipient is e-mailed twice**;
       **a regeneration racing the scheduled run**, in both orders — the scheduler holding the lock,
@@ -1280,9 +1280,34 @@ not there to switch them off.
       as a **bounded recorded outcome and never an unexplained failure**; **a public document event
       arriving during a regeneration** → applied exactly as it is during a scheduled run. Red:
       expect the two-regenerations case to be an unexplained failure first — that is the finding.
-- [ ] **T050** [US5] Whatever T049 exposes, as a bounded refusal in the application service. No new
+- [x] **T050** [US5] Whatever T049 exposes, as a bounded refusal in the application service. No new
       locking beyond the register-generation lock, and no reproduction of a claim that already
       exists. Green: T049.
+      (T049 and T050 landed in one commit. Green: `OperationsConcurrencyIT` 6 tests, 0 failures;
+      Checkstyle and PMD clean on test after four findings were fixed rather than suppressed.
+      **T050 changes no production code, and T049's own prediction is what it disproves.** T049
+      expected the two-regenerations case to be an unexplained failure first. It is not: by the
+      time the loser reads the day there is no FAILED batch left to release and nothing active and
+      unbatched to assemble, so it answers a tally of noughts - `released=0`, `registers=0`,
+      `batches=0` - and the day ends with exactly one new batch. The store's own claims and the
+      live-key index do the arbitrating, which is what the design said they would, and adding a
+      refusal for a case the store already ends cleanly would have been a second mechanism for
+      something that needs none.
+      **The other three races behave as designed too.** Two simultaneous notifies for one batch end
+      `SETTLED` and `ALREADY_NOTIFYING` with exactly one e-mail sent. A regeneration launched while
+      the schedule holds the register-generation lock does nothing and never reaches the
+      regeneration service; in the other order, a contender for the same lock while a regeneration
+      holds it gets nothing, and the lock is given back when the run ends. A `document-available`
+      event applied to a batch an operator's run had requested moves it to GENERATED with the
+      document id, exactly as it does for a batch the schedule requested.
+      **Two things the run had to settle, both of them about the fixtures rather than the subject.**
+      *Each case takes a register date of its own*: every one of them reads and writes a whole day -
+      a regeneration releases the day's FAILED batches and re-assembles what it finds waiting - so
+      two cases on one day would contend with each other's leftovers instead of with the contender
+      the case is about. *And the launcher is given this machine's clock rather than the suite's
+      fixed one*, because ShedLock computes `locked_until` from the instant the configuration
+      carries: a fixed clock in the past writes a lock that is already expired and every contender
+      walks straight through it, which is a green test over a lock that was never held.)
 - [ ] **T051** [P] [US4] `config/TelemetryPrivacyTest` (extend) and `support/PersonalDataMarkers` —
       **the sweep now covers responses, not only log statements**. Cases: no controller response
       record and no `ProblemDetail` field can carry a personal-data marker; `detail` never carries
