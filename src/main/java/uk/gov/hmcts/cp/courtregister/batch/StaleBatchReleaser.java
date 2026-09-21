@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
 import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseProgress;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 
 /**
@@ -116,7 +117,7 @@ public class StaleBatchReleaser {
     private ReleaseTally release() {
         final Instant now = clock.instant();
         final StaleReleaseOutcome outcome = store.failAndReleaseStale(
-                now.minus(staleAfter), now.minus(manualGrace()));
+                now.minus(staleAfter), now.minus(manualGrace()), StaleReleaseProgress.NONE);
 
         int registers = 0;
         for (final ReleasedBatch released : outcome.released()) {

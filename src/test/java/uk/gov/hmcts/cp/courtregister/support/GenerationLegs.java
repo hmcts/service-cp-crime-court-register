@@ -52,6 +52,7 @@ import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
 import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
 import uk.gov.hmcts.cp.courtregister.application.ReportMailer;
 import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseProgress;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
@@ -545,9 +546,13 @@ public final class GenerationLegs implements AutoCloseable {
      */
     private void theStaleBatchPass() {
         reset(store);
-        when(store.failAndReleaseStale(any(), any())).thenReturn(new StaleReleaseOutcome(
-                List.of(new ReleasedBatch(BATCH_ID, COURT_CENTRE, REGISTER_DATE, 2)),
-                List.of(CONTENDED_BATCH_ID)));
+        final ReleasedBatch given = new ReleasedBatch(BATCH_ID, COURT_CENTRE, REGISTER_DATE, 2);
+        when(store.failAndReleaseStale(any(), any(), any())).thenAnswer(call -> {
+            final StaleReleaseProgress progress = call.getArgument(2, StaleReleaseProgress.class);
+            progress.recordReleased(given);
+            progress.recordContended(CONTENDED_BATCH_ID);
+            return new StaleReleaseOutcome(List.of(given), List.of(CONTENDED_BATCH_ID));
+        });
         whateverItAnswers(releaser::releaseStale);
     }
 
@@ -912,7 +917,8 @@ public final class GenerationLegs implements AutoCloseable {
         // store that answered nothing here would end the run inside its first statement, and the
         // lines these nights exist to reach would never be written. The pass's own endings are
         // driven by theStaleBatchPass(), which answers with both of them.
-        when(store.failAndReleaseStale(any(Instant.class), any(Instant.class)))
+        when(store.failAndReleaseStale(any(Instant.class), any(Instant.class),
+                any(StaleReleaseProgress.class)))
                 .thenReturn(new StaleReleaseOutcome(List.of(), List.of()));
         when(batches.generatingSince(any(Instant.class))).thenReturn(List.of());
         when(batches.pendingSince(any(Instant.class))).thenReturn(List.of());

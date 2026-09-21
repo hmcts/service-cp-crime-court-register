@@ -50,6 +50,7 @@ import uk.gov.hmcts.cp.courtregister.application.RecordedCompletion;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
 import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseProgress;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
@@ -3513,6 +3514,42 @@ class RegisterStoreIT {
         }
 
         @Test
+        void each_released_batch_is_announced_where_it_is_settled() {
+            final DistributionCommand monday = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand tuesday = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+            final List<UUID> told = new ArrayList<>();
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(tuesday, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> active = mine(store.activeUnbatched());
+                final RegisterBatch first = assembled(MONDAY, recordsOn(active, MONDAY));
+                final RegisterBatch second = assembled(TUESDAY, recordsOn(active, TUESDAY));
+                store.markRequested(first.batchId(), UUID.randomUUID());
+                store.markRequested(second.batchId(), UUID.randomUUID());
+                ageBatch(first.batchId(), LAST_NIGHT);
+                ageBatch(second.batchId(), LAST_NIGHT);
+                released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER),
+                        recording(told)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(told)
+                    .as("every batch is committed by itself, so the caller is told about each one "
+                            + "where it is settled rather than in an answer a later batch's "
+                            + "refusal could take away with it - a walk that threw halfway would "
+                            + "otherwise leave a night's released registers unaccounted for")
+                    .containsExactlyElementsOf(released.get().released().stream()
+                            .map(ReleasedBatch::batchId)
+                            .toList());
+            softly.assertThat(mineReleased(released.get()))
+                    .as("and the two days this case stood up are both in it")
+                    .hasSize(2);
+        }
+
+        @Test
         void a_batch_stamped_exactly_at_its_cutoff_is_stale() {
             final DistributionCommand monday = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final DistributionCommand tuesday = seededCommand(HEARING_THREE, TUESDAY_SHARED);
@@ -4994,6 +5031,28 @@ class RegisterStoreIT {
      * @param released what the operation answered with, or {@code null} where it refused
      * @return the records naming this case's court centre, in the order they came back
      */
+    /**
+     * An observer that writes down the batches it is told about, in the order it is told.
+     *
+     * @param told where each released batch's identity is recorded
+     * @return the observer to hand the release
+     */
+    private static StaleReleaseProgress recording(final List<UUID> told) {
+        return new StaleReleaseProgress() {
+
+            @Override
+            public void recordReleased(final ReleasedBatch released) {
+                told.add(released.batchId());
+            }
+
+            @Override
+            public void recordContended(final UUID batchId) {
+                // No case here stands a batch up that every attempt loses its day's key on;
+                // StaleReleaseConcurrencyIT is where that ending is driven.
+            }
+        };
+    }
+
     private List<ReleasedBatch> mineReleased(final StaleReleaseOutcome release) {
         return release == null ? List.of() : release.released().stream()
                 .filter(batch -> courtCentre.equals(batch.courtCentreId()))

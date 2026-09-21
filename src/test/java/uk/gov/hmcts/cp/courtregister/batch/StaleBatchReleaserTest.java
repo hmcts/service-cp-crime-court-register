@@ -25,6 +25,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
 import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseProgress;
 import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser.ReleaseTally;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
@@ -281,7 +282,7 @@ class StaleBatchReleaserTest {
         final StoreUnavailableException outage = new StoreUnavailableException(
                 "the store could not be reached to fail and release the stale batches",
                 new IllegalStateException("the connection was refused"));
-        when(store.failAndReleaseStale(any(), any())).thenThrow(outage);
+        when(store.failAndReleaseStale(any(), any(), any())).thenThrow(outage);
 
         final Throwable escaped = catchThrowable(releaser::releaseStale);
 
@@ -294,6 +295,49 @@ class StaleBatchReleaserTest {
         softly.assertThat(counter(GenerationMetrics.RELEASED_BATCHES))
                 .as("and nothing is counted for a pass that learned nothing")
                 .isEqualTo(NO_METER);
+        softly.assertThat(RunCorrelation.current())
+                .as("a correlation this pass opened is removed however the pass ended")
+                .isNull();
+    }
+
+    @Test
+    void a_store_that_goes_away_partway_should_leave_the_account_of_what_it_had_released() {
+        final StoreUnavailableException outage = new StoreUnavailableException(
+                "the store could not be reached to fail and release the stale batches",
+                new IllegalStateException("the connection was refused"));
+        when(store.failAndReleaseStale(any(), any(), any())).thenAnswer(call -> {
+            told(call.getArgument(2, StaleReleaseProgress.class), new StaleReleaseOutcome(
+                    List.of(released(FIRST_BATCH, 2)), List.of(CONTENDED_BATCH)));
+            throw outage;
+        });
+
+        try (CapturedLog log = CapturedLog.capturing(StaleBatchReleaser.class)) {
+            final Throwable escaped = catchThrowable(releaser::releaseStale);
+
+            softly.assertThat(escaped)
+                    .as("the store going away is still the run's own failure and still leaves")
+                    .isSameAs(outage);
+            softly.assertThat(counter(GenerationMetrics.RELEASED_BATCHES))
+                    .as("but each batch was committed by itself before the walk reached the one "
+                            + "that could not be: those registers really are back for tonight, so "
+                            + "the night's account of them is published rather than thrown away "
+                            + "with the walk that was making it")
+                    .isEqualTo(1);
+            softly.assertThat(counter(GenerationMetrics.RELEASED_REGISTERS)).isEqualTo(2);
+            softly.assertThat(counter(GenerationMetrics.RELEASE_CONTENDED))
+                    .as("and a batch nothing could be given back from is counted on the way past, "
+                            + "which is where it was learned")
+                    .isEqualTo(1);
+            softly.assertThat(renderedLines(log))
+                    .as("with one line per batch, said where it was settled rather than after an "
+                            + "answer that never came")
+                    .anySatisfy(line -> assertThat(line).contains(FIRST_BATCH.toString()));
+            softly.assertThat(String.join(" | ", renderedLines(log)))
+                    .as("and a closing line that says the pass did not get to the end, carrying "
+                            + "the three numbers it did reach - a run line reading zero for a "
+                            + "night that released some is the silence this service exists to end")
+                    .contains("released_batches=1", "released_registers=2", "contended=1");
+        }
         softly.assertThat(RunCorrelation.current())
                 .as("a correlation this pass opened is removed however the pass ended")
                 .isNull();
@@ -379,13 +423,26 @@ class StaleBatchReleaserTest {
      * @param outcome what the fenced statements between them released and could not release
      */
     private void answering(final StaleReleaseOutcome outcome) {
-        when(store.failAndReleaseStale(any(), any())).thenAnswer(call -> {
+        when(store.failAndReleaseStale(any(), any(), any())).thenAnswer(call -> {
             scheduledCutoff.set(call.getArgument(0));
             manualCutoff.set(call.getArgument(1));
             correlation.set(RunCorrelation.current());
             asked.incrementAndGet();
+            told(call.getArgument(2, StaleReleaseProgress.class), outcome);
             return outcome;
         });
+    }
+
+    /**
+     * Tells the observer about each batch the way the store does, as each one is settled.
+     *
+     * @param progress what the pass handed the store
+     * @param outcome  the batches the fenced statements between them settled
+     */
+    private static void told(final StaleReleaseProgress progress,
+            final StaleReleaseOutcome outcome) {
+        outcome.released().forEach(progress::recordReleased);
+        outcome.contended().forEach(progress::recordContended);
     }
 
     /**

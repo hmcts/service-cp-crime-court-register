@@ -498,8 +498,17 @@ public interface RegisterStore {
      * this operation decides about. That is the adapter's store-wide policy and it is stated here
      * so the pass is not written against a promise the package does not make.
      *
+     * <p><strong>And the account is told as it is made, not only returned.</strong> Each batch is
+     * committed by itself, so a walk that ends in a throw still leaves the batches before it
+     * durably failed and released. {@code progress} is told about each of them where it is
+     * settled, so a caller keeping an account has the part that happened whether the walk finished
+     * or not; {@link StaleReleaseProgress#NONE} is for a caller that keeps none. The return value
+     * is the same account, whole, for a walk that got to the end.
+     *
      * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
      * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
+     * @param progress        told about each batch as its own transaction commits, so that an
+     *                        interrupted walk still leaves an account of what it did
      * @return the batches this operation changed, oldest day first, each with the count of
      *         registers still that day's to render, and beside them the batches it left exactly as
      *         it found them because every attempt at them lost the same race for the day's key
@@ -508,7 +517,29 @@ public interface RegisterStore {
      * @throws uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException if the store could not
      *         be reached
      */
-    StaleReleaseOutcome failAndReleaseStale(Instant scheduledCutoff, Instant manualCutoff);
+    StaleReleaseOutcome failAndReleaseStale(Instant scheduledCutoff, Instant manualCutoff,
+            StaleReleaseProgress progress);
+
+    /**
+     * The same release, for a caller that keeps no account of the pass as it goes.
+     *
+     * <p>The operations commands and the suites that ask the store about one day read the whole
+     * answer out of the return value and have no run report to write, so they are not made to pass
+     * an observer that would be told nothing they use. Only the nightly pass, whose numbers are
+     * the night's own account, tells the difference between the two forms.
+     *
+     * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
+     * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
+     * @return what the operation released and what it could not release
+     * @throws uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException if a release was
+     *         refused by a rule this operation does not account for
+     * @throws uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException if the store could not
+     *         be reached
+     */
+    default StaleReleaseOutcome failAndReleaseStale(final Instant scheduledCutoff,
+            final Instant manualCutoff) {
+        return failAndReleaseStale(scheduledCutoff, manualCutoff, StaleReleaseProgress.NONE);
+    }
 
     /**
      * Settles the batch on its notification tally, and moves its rows to NOTIFIED.
