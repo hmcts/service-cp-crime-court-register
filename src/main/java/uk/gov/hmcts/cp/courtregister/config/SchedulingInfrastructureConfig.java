@@ -36,8 +36,8 @@ import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
  * <p><strong>And not on a JVM started to run one operations command.</strong> The CLI condition is
  * the one that does matter here, and it is the one {@link CliModeConfig} has always described: a
  * command that held a scheduler would be a second replica of every schedule in the service - the
- * 18:00 run, the 07:00 report and the gauge refresh - and a command that ran long enough to reach
- * any of their hours would fire it. The annotation is here now, so the
+ * 18:00 run, the 07:00 report, the intake gauge refresh and the batch-age refresh - and a command
+ * that ran long enough to reach any of their hours would fire it. The annotation is here now, so the
  * condition is here too, and the two configurations that sit on top of this one carry it as well:
  * a bean-level condition would leave a scheduler with nothing on it rather than a plain absence.
  *
