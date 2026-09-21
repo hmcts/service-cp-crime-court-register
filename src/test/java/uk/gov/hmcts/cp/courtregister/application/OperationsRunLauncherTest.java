@@ -39,6 +39,7 @@ import uk.gov.hmcts.cp.courtregister.domain.GateDecision.Reason;
 import uk.gov.hmcts.cp.courtregister.domain.GateDecision.Skipped;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
+import uk.gov.hmcts.cp.courtregister.domain.RunReport;
 import uk.gov.hmcts.cp.courtregister.support.AdjustableClock;
 import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
@@ -99,7 +100,19 @@ class OperationsRunLauncherTest {
 
     /** An empty tally, for the cases that are about the run happening rather than about counts. */
     private static RegenerationTally nothingToDo() {
-        return new RegenerationTally(THURSDAY, 0, 0, 0, 0, 0, false, Map.of(), Map.of());
+        return tallyReporting(new RunReport(new Proceed(false), Map.of(), 0, Map.of(), 0, 0,
+                RunReport.Settled.UNREAD, 0, 0, 0, Duration.ZERO));
+    }
+
+    /**
+     * A tally whose report is the night the run line will be written from.
+     *
+     * @param scheduleShaped the night, counted exactly as the schedule counts one
+     * @return the tally a regeneration answers with
+     */
+    private static RegenerationTally tallyReporting(final RunReport scheduleShaped) {
+        return new RegenerationTally(THURSDAY, 0, 0, 0, 0, 0, false, Map.of(), Map.of(),
+                RunReport.byOperator(scheduleShaped));
     }
 
     /** What a run that stopped had already written down, as its refusal carries it. */
@@ -202,6 +215,60 @@ class OperationsRunLauncherTest {
                     .as("a gateway will not hold a connection for a run measured in tens of "
                             + "minutes, which is the whole reason the endpoint is asynchronous")
                     .hasSize(1);
+        }
+    }
+
+    /**
+     * Where a launched run is read: the schedule's own line, said in the schedule's own words.
+     */
+    @Nested
+    @DisplayName("the line a launched run leaves")
+    class TheRunLine {
+
+        @Test
+        void a_finished_run_should_write_the_schedules_own_run_report_line() {
+            when(gate.decide(anyBoolean())).thenReturn(new Proceed(false));
+            when(locks.lock(any())).thenReturn(Optional.of(lock));
+            when(regeneration.regenerate(any(), anyBoolean())).thenReturn(nothingToDo());
+
+            final RunAccepted accepted = launcher(NO_WAIT).launch(theWholeDay());
+            final List<String> lines;
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                theSchedulerRunsIt();
+                lines = log.renderings();
+            }
+
+            softly.assertThat(lines)
+                    .as("one line a night is read from, whoever asked for it - two spellings would "
+                            + "mean two dashboards and one of them always out of date")
+                    .anyMatch(line -> line.startsWith("event=register_generation_run")
+                            && line.contains("run_id=" + accepted.runId())
+                            && line.contains("trigger=operator")
+                            && line.contains("gate=proceed")
+                            && line.contains("reason=flag-on"));
+        }
+
+        @Test
+        void a_run_over_an_overridden_flag_should_say_overridden_on_that_same_line() {
+            when(gate.decide(anyBoolean())).thenReturn(new Proceed(true));
+            when(locks.lock(any())).thenReturn(Optional.of(lock));
+            when(regeneration.regenerate(any(), anyBoolean())).thenReturn(
+                    tallyReporting(new RunReport(new Proceed(true), Map.of(), 0, Map.of(), 0, 0,
+                            RunReport.Settled.UNREAD, 0, 0, 0, Duration.ZERO)));
+
+            launcher(NO_WAIT).launch(new Selection(THURSDAY, null, BATCH, null, true));
+            final List<String> lines;
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                theSchedulerRunsIt();
+                lines = log.renderings();
+            }
+
+            softly.assertThat(lines)
+                    .as("the field FeatureFlagGate already counts and logs, kept rather than "
+                            + "replaced - the night this service generated while the flag said the "
+                            + "legacy was is the one most worth finding again")
+                    .anyMatch(line -> line.contains("trigger=operator")
+                            && line.contains("reason=overridden"));
         }
     }
 

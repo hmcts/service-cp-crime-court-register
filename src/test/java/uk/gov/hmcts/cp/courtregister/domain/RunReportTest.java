@@ -24,6 +24,11 @@ import uk.gov.hmcts.cp.courtregister.domain.GateDecision.Proceed;
  * They are written here rather than left to the job's own suite because the arithmetic claim is the
  * record's and not the log line's: the line can be re-ordered, but a total that silently grew would
  * be wrong wherever it was read.
+ *
+ * <p><strong>And since increment 005, who asked for the night.</strong> A regeneration a named
+ * person asked for over the operations API is the same run under the same lock writing the same
+ * line, so the one thing that tells them apart has to be on the record rather than in the spelling
+ * of whichever class happened to write it (T036).
  */
 @ExtendWith(SoftAssertionsExtension.class)
 @DisplayName("what one nightly run did")
@@ -115,6 +120,86 @@ class RunReportTest {
                     .as("so two nights that differ only in what the pass gave back have the same "
                             + "total: the released numbers are a diagnostic and not a third sum")
                     .isEqualTo(releasedNothing.rows());
+        }
+    }
+
+    /**
+     * Which of the two things that can start a run started this one.
+     */
+    @Nested
+    @DisplayName("who asked for the night")
+    class TheTrigger {
+
+        @Test
+        void a_run_nobody_asked_for_should_be_the_schedules() {
+            final RunReport report =
+                    aNightThatReleased(RELEASED_BATCHES, RELEASED_REGISTERS, CONTENDED);
+
+            softly.assertThat(report.trigger())
+                    .as("the eleven-component constructor is the schedule's, so the 18:00 job says "
+                            + "nothing it did not have to say before")
+                    .isEqualTo(RunReport.Trigger.SCHEDULE);
+            softly.assertThat(report.trigger().wire())
+                    .as("and the line carries one bounded word, never a caller")
+                    .isEqualTo("schedule");
+        }
+
+        @Test
+        void a_run_a_person_asked_for_should_say_so() {
+            final RunReport asked = RunReport.byOperator(
+                    aNightThatReleased(RELEASED_BATCHES, RELEASED_REGISTERS, CONTENDED));
+
+            softly.assertThat(asked.trigger())
+                    .as("the second factory, and the only way a report becomes an operator's")
+                    .isEqualTo(RunReport.Trigger.OPERATOR);
+            softly.assertThat(asked.trigger().wire())
+                    .as("which is what an alert looking for the nights a person drove filters on")
+                    .isEqualTo("operator");
+        }
+
+        @Test
+        void an_operators_run_should_change_nothing_else_about_the_night() {
+            final RunReport scheduled =
+                    aNightThatReleased(RELEASED_BATCHES, RELEASED_REGISTERS, CONTENDED);
+            final RunReport asked = RunReport.byOperator(scheduled);
+
+            softly.assertThat(asked)
+                    .as("the same counts under a different word: a factory that also re-counted "
+                            + "the night would make the two runs unreadable side by side")
+                    .isEqualTo(new RunReport(RunReport.Trigger.OPERATOR, scheduled.gateDecision(),
+                            scheduled.outcomes(), scheduled.requested(), scheduled.rowOutcomes(),
+                            scheduled.deferredKeys(), scheduled.deferredRows(), scheduled.settled(),
+                            scheduled.releasedBatches(), scheduled.releasedRegisters(),
+                            scheduled.contended(), scheduled.duration()));
+            softly.assertThat(asked.gateDecision())
+                    .as("and the gate's own verdict is kept, not replaced - reason=overridden is "
+                            + "the field FeatureFlagGate already counts and logs")
+                    .isEqualTo(new Proceed(false));
+        }
+
+        @Test
+        void a_report_made_without_a_trigger_should_be_the_schedules_rather_than_nothing() {
+            final RunReport unstated = new RunReport(null, new Proceed(true),
+                    Map.of(), 0, Map.of(), 0, 0, RunReport.Settled.UNREAD, 0, 0, 0,
+                    Duration.ZERO);
+
+            softly.assertThat(unstated.trigger())
+                    .as("a run is the schedule's until somebody says it was theirs, which is the "
+                            + "safe direction for a field an alert reads")
+                    .isEqualTo(RunReport.Trigger.SCHEDULE);
+        }
+
+        @Test
+        void an_operators_overridden_run_should_keep_the_overridden_reading() {
+            final RunReport overridden = RunReport.byOperator(new RunReport(new Proceed(true),
+                    Map.of(), 0, Map.of(), 0, 0, RunReport.Settled.UNREAD, 0, 0, 0,
+                    Duration.ZERO));
+
+            softly.assertThat(overridden.gateDecision())
+                    .as("the night this service generated while the flag said the legacy was is "
+                            + "the one night most worth finding again")
+                    .isEqualTo(new Proceed(true));
+            softly.assertThat(overridden.trigger()).isEqualTo(RunReport.Trigger.OPERATOR);
         }
     }
 }

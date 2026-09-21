@@ -203,13 +203,14 @@ public class OperationsRunLauncher {
         }
         try {
             final RegenerationTally tally = regeneration.regenerate(selection, overridden);
-            LOG.info("event={} run_id={} trigger={} date={} released={} registers={} batches={} "
-                            + "requested={} deferred={} withheld={} overridden={} outcome=generated",
-                    RUN_EVENT, runId, OPERATOR, tally.registerDate(), tally.released(),
-                    tally.registers(), tally.batches(), tally.requested(), tally.deferred(),
-                    tally.withheld().size(), tally.overridden());
-            // TODO T037: the trigger and the override belong on the run report line as well, and
-            // that field is added to domain/RunReport by the task that follows the 004 rebase.
+            // The one line a night is read from, whoever asked for it. The run report carries
+            // trigger=operator and, where the flag was overridden, reason=overridden; what a
+            // regeneration knows beyond the schedule - the day, the batches it would not release -
+            // is on the line beside it, because the report's fields are the schedule's and a
+            // regeneration does not get to widen them.
+            RegisterGenerationJob.recorded(tally.report(), runId);
+            LOG.info("event={} run_id={} trigger={} date={} withheld={} outcome=generated",
+                    RUN_EVENT, runId, OPERATOR, tally.registerDate(), tally.withheld().size());
         } catch (OperationsRefusedException refused) {
             LOG.error("event={} run_id={} trigger={} date={} outcome={}{}", RUN_EVENT, runId,
                     OPERATOR, selection.registerDate(), refused.reason().wire(),

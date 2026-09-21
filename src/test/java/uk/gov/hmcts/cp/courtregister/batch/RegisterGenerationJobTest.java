@@ -258,6 +258,16 @@ class RegisterGenerationJobTest {
     private static final String NORMALISED_RUN_ID = " run_id=<id>";
 
     /**
+     * What every scheduled night says about who asked for it, which is nobody.
+     *
+     * <p>The field exists for the run a person asks for over {@code POST
+     * /operations/batches/generate}: the same run under the same lock writing this same line, told
+     * apart by this one word. A schedule that stopped saying it would make a launched run
+     * indistinguishable from a night nobody drove.
+     */
+    private static final String THE_SCHEDULE_ASKED = " trigger=schedule";
+
+    /**
      * The line a night that did something leaves behind, in full.
      *
      * <p>Every field of {@link RunReport}: what the gate decided and why, how many batches the run
@@ -270,7 +280,7 @@ class RegisterGenerationJobTest {
      * firing.
      */
     private static final String THE_MIXED_NIGHTS_LINE = RUN_EVENT
-            + NORMALISED_RUN_ID
+            + NORMALISED_RUN_ID + THE_SCHEDULE_ASKED
             + " gate=proceed reason=flag-on batches=3 requested=2 generating=1 failed=1 pending=1"
             + " deferred=2 rows=" + THE_MIXED_NIGHTS_ROWS
             + " rows_generating=" + GENERATING_ROWS
@@ -291,7 +301,7 @@ class RegisterGenerationJobTest {
      * still have to say so.
      */
     private static final String NOTHING_YET = RUN_EVENT
-            + NORMALISED_RUN_ID
+            + NORMALISED_RUN_ID + THE_SCHEDULE_ASKED
             + " gate=proceed reason=flag-on batches=0 requested=0 generating=0 failed=0"
             + " pending=0 deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0"
             + " rows_deferred=0" + NOTHING_SETTLED_YET + NOTHING_RELEASED_ON_THE_LINE
@@ -299,7 +309,7 @@ class RegisterGenerationJobTest {
 
     /** The same line for a night the flag stopped: the same fields, and nothing earned. */
     private static final String THE_SKIPPED_NIGHTS_LINE = RUN_EVENT
-            + NORMALISED_RUN_ID
+            + NORMALISED_RUN_ID + THE_SCHEDULE_ASKED
             + " gate=skipped reason=flag-off batches=0 requested=0 generating=0 failed=0 pending=0"
             + " deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0 rows_deferred=0"
             + NOTHING_SETTLED_YET + NOTHING_RELEASED_ON_THE_LINE
@@ -315,6 +325,7 @@ class RegisterGenerationJobTest {
      */
     private static final Pattern BOUNDED_FIELDS_ONLY = Pattern.compile(
             "event=register_generation_run run_id=[0-9a-f-]{36} "
+                    + "trigger=(?:schedule|operator) "
                     + "gate=(?:proceed|skipped) reason=[a-z-]+ batches=\\d+ "
                     + "requested=\\d+ generating=\\d+ failed=\\d+ pending=\\d+ deferred=\\d+ "
                     + "rows=\\d+ rows_generating=\\d+ rows_failed=\\d+ rows_pending=\\d+ "
@@ -2305,7 +2316,7 @@ class RegisterGenerationJobTest {
          * stopped part way can still say what the store makes of the batches it did stamp.
          */
         private static final String AS_FAR_AS_IT_GOT = RUN_EVENT
-                + NORMALISED_RUN_ID
+                + NORMALISED_RUN_ID + THE_SCHEDULE_ASKED
                 + " gate=proceed reason=flag-on batches=1 requested=1 generating=1 failed=0"
                 + " pending=0 deferred=2 rows=" + (GENERATING_ROWS + WAITING_ROWS)
                 + " rows_generating=" + GENERATING_ROWS
@@ -2328,7 +2339,7 @@ class RegisterGenerationJobTest {
          * it asked.
          */
         private static final String A_RENDER_AWAY_AND_NOTHING_ACCOUNTED = RUN_EVENT
-                + NORMALISED_RUN_ID
+                + NORMALISED_RUN_ID + THE_SCHEDULE_ASKED
                 + " gate=proceed reason=flag-on batches=0 requested=1 generating=0 failed=0"
                 + " pending=0 deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0"
                 + " rows_deferred=0" + NOTHING_SETTLED_YET + NOTHING_RELEASED_ON_THE_LINE

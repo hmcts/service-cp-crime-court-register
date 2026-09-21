@@ -886,7 +886,7 @@ departure is forced — research R16 has the reasoning.
       `@Repeatable` on Boot 4.1, so the two conditions are two annotations and not a new
       meta-annotation. `HttpSurfaceTest.OnAPodThatRendersNothing` now expects the three controllers
       that are served everywhere; T041 adds the fallback to that list.)
-- [ ] **T036** [P] [US3] `domain/RunReportTest` (**new here, extended after the rebase if 004
+- [x] **T036** [P] [US3] `domain/RunReportTest` (**new here, extended after the rebase if 004
       landed it first** — there is no such suite in either tree today, the line is asserted only
       inside `batch/RegisterGenerationJobTest`, which is 004's and must not be touched, and 004's
       own T017 names this file "(extend)". Creation is **004's** by the plan's coordination
@@ -899,11 +899,36 @@ departure is forced — research R16 has the reasoning.
       ⚠ **`domain/RunReport` is also touched by 004** (its run line loses `reconciled=` and gains
       `released_batches=`/`released_registers=`). Add a field; do not reshape the line. Expect a
       textual conflict on the rebase and resolve it by keeping both. Red: the trigger is absent.
-- [ ] **T037** [US3] `domain/RunReport` — the trigger field, added so that **the existing call site
+- [x] **T037** [US3] `domain/RunReport` — the trigger field, added so that **the existing call site
       in `batch/RegisterGenerationJob` does not change**: the scheduler's value is the default and
       the operator's is a second factory. The job is 004's and 005 does not edit it; if the field
       cannot be added without editing it, the task stops and goes back to the orchestrator rather
       than reaching into the other tree's file. Green: T036.
+      (Landed with T036 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. Green: `RunReportTest` 8 tests, `OperationsRunLauncherTest` 16,
+      `RegisterRegenerationServiceTest` 18 and `RegisterGenerationJobTest` 74, 0 failures;
+      Checkstyle and PMD clean on main and test after one finding was fixed rather than suppressed
+      (`Trigger`'s field renamed `spelling`, which is how `OperationsReason` already spells it).
+      **The record's construction call sites in the job did not change**, which is what the task
+      asked for: `trigger` is a twelfth component with the eleven-component constructor kept beside
+      it as the schedule's, and `RunReport.byOperator` is the second factory. A `null` trigger is
+      the schedule's too - a run is the schedule's until somebody says it was theirs.
+      **004 had merged by the time this ran, so the job was editable and two things in it did
+      change**, neither of them a construction: the line gained `trigger={}` after `run_id=`, and
+      `recorded` became `public static recorded(report, runId)` so that the launcher writes the
+      **same** line rather than a second spelling of a night. The correlation is handed in because
+      a launched run's id is the one its caller was answered with and not the ambient
+      `RunCorrelation`'s.
+      **The launcher's interim line is gone and the TODO with it.** What replaces it is the run
+      report line under `trigger=operator`, plus one short line beside it carrying the two things
+      the report's fields have no room for - the day and how many FAILED batches the run would not
+      release. `RegisterRegenerationService` therefore had to earn the counts a report needs and
+      the tally did not carry: the row partition per batch status (from `assembled.records()`,
+      counted exactly where the schedule counts it), how many batches the release actually gave
+      back, and how many registers reached no batch. `RegenerationTally` gains one component,
+      `report`. `contended` is nought and the snapshot is `unread`, because a regeneration runs no
+      stale-batch pass and takes no settled reading - four zeroes claiming a settled nothing would
+      be a measurement nobody took.)
 
 ---
 

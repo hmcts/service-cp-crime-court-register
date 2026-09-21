@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,10 +17,12 @@ import uk.gov.hmcts.cp.courtregister.domain.AssembledBatch;
 import uk.gov.hmcts.cp.courtregister.domain.BatchAssembly;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.Deadline;
+import uk.gov.hmcts.cp.courtregister.domain.GateDecision.Proceed;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
+import uk.gov.hmcts.cp.courtregister.domain.RunReport;
 
 /**
  * The night, asked for again by a person: read the day, release what failed, group it, ask again.
@@ -119,6 +122,7 @@ public class RegisterRegenerationService {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public RegenerationTally regenerate(final Selection selection, final boolean overridden) {
         final Progress progress = new Progress();
+        final Instant startedAt = clock.instant();
         try {
             final List<RegisterBatch> day = store.batchesOn(selection.registerDate());
             final List<RegisterRecord> released =
@@ -127,9 +131,11 @@ public class RegisterRegenerationService {
             final List<RegisterRecord> registers = registers(released, selection);
             progress.registers(registers.size());
             final BatchAssembly assembly = assembler.assemble(registers, day, BY_HAND);
-            progress.assembled(assembly.batches().size(), assembly.deferred().size());
+            progress.assembled(assembly.batches().size(), assembly.deferred().size(),
+                    waiting(registers, assembly));
             request(assembly, progress);
-            return progress.tallyOf(selection, overridden);
+            return progress.tallyOf(selection, overridden,
+                    Duration.between(startedAt, clock.instant()));
         } catch (RuntimeException notGenerated) {
             LOG.error("The regeneration of register date {} did not finish, so the day stands as "
                             + "whatever this run had already written down. cause={}",
@@ -185,6 +191,7 @@ public class RegisterRegenerationService {
                     final OperationsReason withheld = withheldReason(batch, day, selection);
                     if (withheld == null) {
                         released.addAll(store.releaseFailed(batch.batchId()));
+                        progress.releasedBatch();
                     } else {
                         LOG.warn("The registers of batch {} were left where they are, because this "
                                         + "run would not have re-assembled them. reason={}",
@@ -245,6 +252,24 @@ public class RegisterRegenerationService {
     }
 
     /**
+     * How many registers are waiting under the days the assembler passed over.
+     *
+     * <p>Counted by subtraction rather than by reading the deferred keys back, because every
+     * register handed to the assembler either went into a batch or did not: a second read to learn
+     * which would be a second statement for a number the run already knows.
+     *
+     * @param handed   the registers this run gave the assembler
+     * @param assembly what it made of them
+     * @return how many of them reached no batch
+     */
+    private static int waiting(final List<RegisterRecord> handed, final BatchAssembly assembly) {
+        final int batched = assembly.batches().stream()
+                .mapToInt(assembled -> assembled.records().size())
+                .sum();
+        return handed.size() - batched;
+    }
+
+    /**
      * Writes each batch down and then asks for its render, in that order and one at a time.
      *
      * <p>Everything downstream is keyed on the batch, so a render asked for before the row exists
@@ -261,7 +286,8 @@ public class RegisterRegenerationService {
             final BatchOutcome outcome = service.request(stored, deadline, RenderProgress.NONE);
             // The requesting leg's own account of what it did, exactly as the run's line reads it.
             // A batch the deadline left without an attempt was written down and never asked for.
-            progress.requested(stored.batchId(), outcome.status(), outcome.renderRequested());
+            progress.requested(stored.batchId(), outcome.status(), outcome.renderRequested(),
+                    assembled.records().size());
         }
     }
 
@@ -320,11 +346,14 @@ public class RegisterRegenerationService {
      * @param overridden   whether the run went ahead over a flag that would have stopped it
      * @param withheld     the FAILED batches left carrying their stamps, under the bounded reason
      * @param states       where each batch stood when the requesting leg let go of it
+     * @param report       the same night in the shape the run line is written from, under
+     *                     {@link RunReport.Trigger#OPERATOR} - so that a regeneration and the
+     *                     schedule leave one line an operator can read, and not two
      */
     public record RegenerationTally(LocalDate registerDate, int released, int registers,
                                     int batches, int requested, int deferred, boolean overridden,
                                     Map<UUID, OperationsReason> withheld,
-                                    Map<UUID, BatchStatus> states) {
+                                    Map<UUID, BatchStatus> states, RunReport report) {
 
         /**
          * Copies the two maps, so a tally cannot be changed after the run that answered it.
@@ -357,6 +386,15 @@ public class RegisterRegenerationService {
 
         private int deferredCount;
 
+        /** How many batches the release actually gave back, as against the registers inside them. */
+        private int releasedBatchCount;
+
+        /** How many registers ended under each state, counted exactly as the schedule counts them. */
+        private final Map<BatchStatus, Integer> rowOutcomes = new EnumMap<>(BatchStatus.class);
+
+        /** How many registers are waiting under the days the assembler passed over. */
+        private int deferredRowCount;
+
         /**
          * Records a FAILED batch left carrying its stamp.
          *
@@ -386,14 +424,26 @@ public class RegisterRegenerationService {
         }
 
         /**
-         * Records what the assembler made of them.
+         * Records what the assembler made of them, and what it left waiting.
+         *
+         * <p>The waiting registers are counted here rather than at the end, for the reason the
+         * nightly run counts them here: they are known the moment the assembler answers, and a run
+         * that stops while requesting still has to be able to say how much of the day it passed
+         * over.
          *
          * @param batches  how many batches it made
          * @param deferred how many court centre days it left waiting
+         * @param waiting  how many registers are inside those days
          */
-        private void assembled(final int batches, final int deferred) {
+        private void assembled(final int batches, final int deferred, final int waiting) {
             batchCount = batches;
             deferredCount = deferred;
+            deferredRowCount = waiting;
+        }
+
+        /** Records one FAILED batch whose registers this run took back. */
+        private void releasedBatch() {
+            releasedBatchCount++;
         }
 
         /**
@@ -403,11 +453,14 @@ public class RegisterRegenerationService {
          * @param status   where it stood when the requesting leg let go of it
          * @param asked    whether systemdocgenerator had been asked by then
          */
-        private void requested(final UUID batchId, final BatchStatus status, final boolean asked) {
+        private void requested(final UUID batchId, final BatchStatus status, final boolean asked,
+                final int registers) {
+
             batchStates.put(batchId, status);
             if (asked) {
                 requestedCount++;
             }
+            rowOutcomes.merge(status, registers, Integer::sum);
         }
 
         /**
@@ -417,10 +470,34 @@ public class RegisterRegenerationService {
          * @param overridden whether it went ahead over a flag that would have stopped it
          * @return the tally
          */
-        private RegenerationTally tallyOf(final Selection selection, final boolean overridden) {
+        private RegenerationTally tallyOf(final Selection selection, final boolean overridden,
+                final Duration took) {
+
             return new RegenerationTally(selection.registerDate(), releasedCount, registerCount,
                     batchCount, requestedCount, deferredCount, overridden, withheldBatches,
-                    batchStates);
+                    batchStates, reportOf(overridden, took));
+        }
+
+        /**
+         * The same night, in the shape the run line is written from.
+         *
+         * <p>Every count here is one this run earned. The snapshot is
+         * {@link RunReport.Settled#UNREAD} because a regeneration takes none - the night it is
+         * part of is read back from {@code GET /operations/batches?date=D}, and four zeroes
+         * claiming a settled nothing would be a measurement nobody took. {@code contended} is
+         * nought for the same kind of reason: the release a regeneration makes is the operator's
+         * narrowing rather than the stale-batch pass, and it has no contended case to report.
+         *
+         * @param overridden whether the run went ahead over a flag that would have stopped it
+         * @param took       how long it took
+         * @return the report, under {@link RunReport.Trigger#OPERATOR}
+         */
+        private RunReport reportOf(final boolean overridden, final Duration took) {
+            final Map<BatchStatus, Integer> outcomes = new EnumMap<>(BatchStatus.class);
+            batchStates.values().forEach(status -> outcomes.merge(status, 1, Integer::sum));
+            return RunReport.byOperator(new RunReport(new Proceed(overridden), outcomes,
+                    requestedCount, rowOutcomes, deferredCount, deferredRowCount,
+                    RunReport.Settled.UNREAD, releasedBatchCount, releasedCount, 0, took));
         }
 
         /**

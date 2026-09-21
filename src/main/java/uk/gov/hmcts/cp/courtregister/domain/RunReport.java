@@ -63,6 +63,17 @@ import java.util.Map;
  * own series on {@code courtregister_generation_skipped_total}, which is where
  * {@link uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate} already puts them.
  *
+ * <p><strong>And who asked for it.</strong> {@link #trigger} is the one word that tells the run
+ * the schedule fired from the run a named person asked for over {@code POST
+ * /operations/batches/generate}. They are the same run doing the same work under the same lock, so
+ * they write the same line; what differs is that one of them has somebody behind it, and an
+ * operator's run over a flag that said OFF is the single night in this flow most worth finding
+ * again. The schedule's value is the default - the eleven-component constructor below is the
+ * schedule's, unchanged from the call site that has always used it - and the operator's is
+ * {@link #byOperator}.
+ *
+ * @param trigger           what started the run: the schedule, or a named person over the
+ *                          operations API
  * @param gateDecision      what the gate decided from its one read of the flag, which is the first
  *                          thing a run does and the reason a skipped run is a success
  * @param outcomes          how many batches ended in each state; empty for a skipped run
@@ -93,6 +104,7 @@ import java.util.Map;
  * @param duration          how long the run took
  */
 public record RunReport(
+        Trigger trigger,
         GateDecision gateDecision,
         Map<BatchStatus, Integer> outcomes,
         int requested,
@@ -116,9 +128,88 @@ public record RunReport(
      * that said nothing about it has not measured a night that settled nothing.
      */
     public RunReport {
+        trigger = trigger == null ? Trigger.SCHEDULE : trigger;
         outcomes = outcomes == null ? Map.of() : Map.copyOf(outcomes);
         rowOutcomes = rowOutcomes == null ? Map.of() : Map.copyOf(rowOutcomes);
         settled = settled == null ? Settled.UNREAD : settled;
+    }
+
+    /**
+     * The schedule's own report, which is every report this service wrote before increment 005.
+     *
+     * <p>The default is the schedule's because the schedule is what a run is unless somebody says
+     * otherwise: a night nobody asked for is the ordinary case, and a constructor that made every
+     * caller name it would have made the 18:00 job say out loud what it has never had to.
+     *
+     * @param gateDecision      what the gate decided from its one read of the flag
+     * @param outcomes          how many batches ended in each state
+     * @param requested         how many batches this run asked the renderer for
+     * @param rowOutcomes       how many registers ended under each of those states
+     * @param deferredKeys      how many court-centre days the assembler passed over
+     * @param deferredRows      how many registers are waiting under those days
+     * @param settled           what the store said tonight's batches had come to
+     * @param releasedBatches   how many batches the run's first act failed and released
+     * @param releasedRegisters how many registers came back with them
+     * @param contended         how many batches the pass left exactly as it found them
+     * @param duration          how long the run took
+     */
+    public RunReport(final GateDecision gateDecision, final Map<BatchStatus, Integer> outcomes,
+            final int requested, final Map<BatchStatus, Integer> rowOutcomes,
+            final int deferredKeys, final int deferredRows, final Settled settled,
+            final int releasedBatches, final int releasedRegisters, final int contended,
+            final Duration duration) {
+
+        this(Trigger.SCHEDULE, gateDecision, outcomes, requested, rowOutcomes, deferredKeys,
+                deferredRows, settled, releasedBatches, releasedRegisters, contended, duration);
+    }
+
+    /**
+     * The same night, said to have been asked for by a person.
+     *
+     * <p>The second factory, and the only way a report becomes an operator's: a run is the
+     * schedule's until somebody says it was theirs, which is the safe direction for a field an
+     * alert reads to find the nights a person drove.
+     *
+     * @param report what the run did, counted exactly as the schedule's runs are counted
+     * @return that same account, under {@link Trigger#OPERATOR}
+     */
+    public static RunReport byOperator(final RunReport report) {
+        return new RunReport(Trigger.OPERATOR, report.gateDecision(), report.outcomes(),
+                report.requested(), report.rowOutcomes(), report.deferredKeys(),
+                report.deferredRows(), report.settled(), report.releasedBatches(),
+                report.releasedRegisters(), report.contended(), report.duration());
+    }
+
+    /**
+     * What started a run, as one bounded word on the line.
+     *
+     * <p>Two values and no third: either the schedule fired it or a named person asked for it over
+     * the operations API. A caller is never named here - who the person was belongs in the audit
+     * event, which is the one place this service names a caller on purpose (Principle VII).
+     */
+    public enum Trigger {
+
+        /** The 18:00 Europe/London weekday run, which is every run this service used to have. */
+        SCHEDULE("schedule"),
+
+        /** A regeneration a named person asked for over {@code POST /operations/batches/generate}. */
+        OPERATOR("operator");
+
+        /** The bounded word the run line carries. */
+        private final String spelling;
+
+        Trigger(final String lineValue) {
+            this.spelling = lineValue;
+        }
+
+        /**
+         * The word the line says, which is what an alert filters on.
+         *
+         * @return the bounded value
+         */
+        public String wire() {
+            return spelling;
+        }
     }
 
     /**
