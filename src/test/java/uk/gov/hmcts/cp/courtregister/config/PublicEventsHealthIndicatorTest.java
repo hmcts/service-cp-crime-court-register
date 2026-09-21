@@ -319,7 +319,13 @@ class PublicEventsHealthIndicatorTest {
      */
     private static String jmsHealthSetting() throws IOException {
         final String yaml = Files.readString(APPLICATION_YAML);
-        final int jms = yaml.indexOf("\n    jms:");
+        // From `management.health` onwards, and not from the first `jms:` in the file: since
+        // increment 005 the audit transport has a `cp.audit.jms` block of its own at the same
+        // indentation and earlier in the file, and a search that took the first match would read
+        // its connect bound as this indicator's switch.
+        final int health = yaml.indexOf("\n  health:");
+        assertThat(health).as("application.yaml settles the health indicators").isNotNegative();
+        final int jms = yaml.indexOf("\n    jms:", health);
         assertThat(jms).as("application.yaml settles the auto-configured jms indicator")
                 .isNotNegative();
         return yaml.substring(jms).lines()
