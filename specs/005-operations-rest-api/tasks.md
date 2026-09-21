@@ -1687,12 +1687,68 @@ settings. The deployment review is what checks it.
   a multipart request down the chain publishing neither event, and an endpoint reachable unaudited
   is an endpoint that may not exist. Pinned in `OperationsAuthzIT` on all three of `401`, `403` and
   `415`.
-- **The seven findings of T059's `/speckit-analyze` pass**, none of which blocks the gates. One is
-  CRITICAL and is a **stale success criterion rather than a defect**: `SC-010` still demands the
-  start-up refusal constitution 5.0.0 removed and FR-045 now forbids. `FR-048`'s "three
-  conditionals" are nine. Three refusals are logged as the enum constant while the wire carries the
-  kebab-case form, so an alert keyed on `reason=` and a runbook keyed on the body disagree —
-  three one-line edits. `FR-043` has no task and no named test. See T059 for the rest.
+- **The seven findings of T059's `/speckit-analyze` pass — CLOSED in gate round 1** (below). They
+  were: `SC-010` still demanding the start-up refusal FR-045 replaced; `FR-048`'s "three
+  conditionals" against the nine the removal found; three refusals logged as the enum constant
+  while the wire carried the kebab-case form; `FR-043` with no task and no named test;
+  `data-model.md`'s claim that the OpenAPI document normalises the reason spelling; `FR-001`
+  omitting `/error` and saying nothing about the vacant FR-029 to FR-032. See the round's own
+  section for what each became.
+
+### Gate round 1 — what the reviewers found and what it cost
+
+Round 1 of the whole-increment gate. Nothing here is a new task: every change belongs to a task
+already closed, and is recorded against it. No behaviour of an endpoint changed; what changed is
+one log spelling, one correlation, one refusal that could not be rendered, and the coverage of
+three things that were true and untested.
+
+- **T053** — the three refusal lines that logged the enum constant now log `wire()`, and
+  `TelemetryPrivacyTest`'s bounded-reason vocabulary drops the second spelling it had been widened
+  with. One slot, one spelling: an alert keyed on `reason=` and a runbook keyed on the body now
+  grep the same characters. (`0c1f713d`. Red: both new cases failed on
+  `reason=FLAG_UNREADABLE` against `reason=flag-unreadable`; green after the three edits.)
+- **T036 / T031** — a launched run's whole body is now correlated by the run id its caller was
+  answered with. Only the launcher's own four lines carried `run_id`; everything the requesting
+  leg, the store, the assembler and the two clients wrote during an operator's run carried no
+  `runId` at all, unlike the same work under the 18:00 job. `RunCorrelation` gains an overload that
+  adopts a caller-minted id. (`daaa7d7e`. Red: the new case saw `null` where it expected the
+  answered id.)
+- **T042 / T048** — the `503 AUDIT_UNAVAILABLE` refusal is exercised on the wire for the first
+  time, for all seven endpoints, through the real audit filter: the block that renders it from the
+  status map was unexecuted across the whole suite, and whether the refusal travels unwrapped out
+  of `cp-audit-filter-springboot` into `OperationsActionFilter`'s catch had been observed once by
+  hand and pinned by nothing. Its other half — a lost **response** event leaving the answer
+  standing and moving the counter — is pinned beside it. (`bcefd5a2`, no production change.)
+- **T042** — the `MessagePostProcessor` that stamps `CPPNAME`, the property the audit context
+  routes on, was executed by no test: both suites mock the template. Captured and applied.
+  (`031f0324`, no production change.)
+- **T042** — and a real one behind it: with no open facts every publish was treated as a request
+  event, so on a pod with `courtregister.operations.enabled=false` a broker outage threw
+  `AUDIT_UNAVAILABLE` out of the audit filter after the response was committed, with nothing above
+  it to render the refusal. No open call means nothing to refuse: counted and said instead.
+  (`2eb9291f`.)
+- **FR-043, previously mapped to no task** — pinned on the three endpoints that change something,
+  by a test-only filter that takes the caller away while the answer is being written. Each keeps
+  the status it had decided, writes nothing, names no bounded refusal code anywhere, and leaves its
+  application service asked exactly once. (`041ad920`, no production change.)
+- **FR-025 against the data model** — seven success-shape assertions expected the characters the
+  request sent. FR-025 was stricter than constitution Principle III(d), which bans an echo and a
+  refusal naming a value, not this service's own canonical rendering of what it parsed. FR-025 is
+  narrowed to say so, and the three cases now send a parseable spelling that is not the canonical
+  one — `+002026-09-04`, an upper-case UUID, `…T17:00:00.000Z` — and expect the canonical answer,
+  which only a parse can produce. (`974aadc1`.)
+- **Principle II** — the red-run waiver 48 of these tasks ran under lived only in `spec.md`
+  assumption 18. It is now in the constitution, with what it may relax, what it may never relax,
+  who gives it and what is judged instead. Constitution 5.1.0. (`e8021b43`.)
+- **T043** — the owned document under-described its own `ProblemDetail`: `ignoreFlag` was missing
+  from the `argument` enum and `accepted`, `failed` and `state` were undeclared. Both directions
+  pinned. Supersede gained the no-body case its generate twin had. (`aba730e2`.)
+- **T055** — `scripts/container-smoke.sh` is named in `README.md` as the un-automated release gate
+  it became when `e2e/CliDispatchIT` went with the dispatch it tested. (`0be4e497`.)
+- **Declined, with the reason, for the reviewers to re-judge**: removing the two unreachable advice
+  handlers (`MethodArgumentTypeMismatchException`, `MissingServletRequestParameterException`), and
+  binding the audit destination from the starter rather than the copied constant. See the round's
+  open points.
 
 ### What 004 owed 005, and where it stands
 
