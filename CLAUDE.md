@@ -107,8 +107,8 @@ data outside cutover.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/004-release-stale-batches/plan.md` (with `research.md`, `data-model.md`,
+`specs/003-exception-report/plan.md` (with `research.md`, `data-model.md`,
 `quickstart.md` and `contracts/` alongside it); the completed increments are
-`specs/001-court-register-port/`, `specs/002-consolidate-progression-leg/` and
-`specs/003-exception-report/`.
+`specs/001-court-register-port/` and
+`specs/002-consolidate-progression-leg/`.
 <!-- SPECKIT END -->
