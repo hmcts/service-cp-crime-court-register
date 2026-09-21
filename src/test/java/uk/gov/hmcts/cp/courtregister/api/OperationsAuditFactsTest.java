@@ -61,6 +61,15 @@ class OperationsAuditFactsTest {
     /** The run id a regeneration answered with, which correlates the event to the run line. */
     private static final String RUN_ID = "9f2b6d44-6b1a-4f0a-9d24-0cc2b0d1f3aa";
 
+    /**
+     * The event's own name, which is what the audit context routes on.
+     *
+     * <p>It leaves as the {@code CPPNAME} property rather than inside the body, so an event that
+     * left without it is an event the context never reads - an unaudited call in its terms,
+     * whatever the JSON on it says.
+     */
+    private static final String EVENT_NAME = "audit.events.audit-recorded";
+
     private final JmsTemplate template = mock(JmsTemplate.class);
 
     /**
@@ -110,7 +119,7 @@ class OperationsAuditFactsTest {
         content.put("_payload", body);
         return new AuditPayload(content, "courtregister-service", "courtregister-service",
                 "2026-09-21T09:00:00Z",
-                new Metadata(UUID.randomUUID(), "audit.events.audit-recorded",
+                new Metadata(UUID.randomUUID(), EVENT_NAME,
                         "2026-09-21T09:00:00Z", Optional.empty(),
                         Optional.of(new Metadata.Context("a-caller"))));
     }
@@ -123,7 +132,7 @@ class OperationsAuditFactsTest {
     private AuditPayload anEventWithNoContent() {
         return new AuditPayload(null, "courtregister-service", "courtregister-service",
                 "2026-09-21T09:00:00Z",
-                new Metadata(UUID.randomUUID(), "audit.events.audit-recorded",
+                new Metadata(UUID.randomUUID(), EVENT_NAME,
                         "2026-09-21T09:00:00Z", Optional.empty(),
                         Optional.of(new Metadata.Context("a-caller"))));
     }
@@ -230,6 +239,22 @@ class OperationsAuditFactsTest {
                     .as("each of them a bounded code, a boolean or a count")
                     .allMatch(value -> value instanceof String || value instanceof Boolean
                             || value instanceof Integer);
+        }
+
+        @Test
+        void the_event_should_leave_stamped_with_the_property_the_audit_context_routes_on()
+                throws jakarta.jms.JMSException {
+
+            service.postMessageToArtemis(anEvent(null));
+
+            final org.mockito.ArgumentCaptor<MessagePostProcessor> stamp =
+                    org.mockito.ArgumentCaptor.forClass(MessagePostProcessor.class);
+            verify(template).convertAndSend(any(jakarta.jms.Destination.class), any(),
+                    stamp.capture());
+            final jakarta.jms.Message message = mock(jakarta.jms.Message.class);
+            stamp.getValue().postProcessMessage(message);
+
+            verify(message).setStringProperty("CPPNAME", EVENT_NAME);
         }
 
         @Test
