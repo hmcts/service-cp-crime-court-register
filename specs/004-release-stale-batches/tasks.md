@@ -3154,6 +3154,17 @@ findings between them, most of them the same three seen three times. What each o
   `RegisterStoreIT`, and parameterising `GenerationWiringContextTest`'s incomplete-context case over
   each missing collaborator - are left open, as they were at gates 4 and 5.
 
+**Re-gated after round 1.** `flock -w 7200 … ./gradlew build -Dtest.noFailFast=true` →
+**BUILD SUCCESSFUL, exit 0, 4m 16s, 3672 tests over 580 suites, 0 failures, 0 errors, 0 skipped**,
+and `flock -w 7200 … ./gradlew jacocoTestReport check -Dtest.noFailFast=true` →
+**BUILD SUCCESSFUL, exit 0, 4m 29s**, with `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest`
+and `jacocoTestCoverageVerification` all run and all green. **Coverage, against the unchanged
+ratchet of LINE 0.88 / BRANCH 0.85: LINE 6586/6789 = 0.9701 and BRANCH 2001/2204 = 0.9079.**
+Against T046's own run (6573/6776 and 1999/2202) that is thirteen more covered lines out of
+thirteen more lines and two more covered branches out of two more - the observer, the account and
+the interrupted line, all of them driven. The two new cases are the pass's interrupted account and
+the store's announcement of each batch where it settles it. **The gate was not touched.**
+
 ---
 
 ## Dependencies & execution order
