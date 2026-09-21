@@ -783,7 +783,7 @@ was confirmed by the design owner on 2026-09-19 and is a requirement, not a prec
 command's shape (`202`, a background run, the nightly lock **taken**) and every part of that
 departure is forced — research R16 has the reasoning.
 
-- [ ] **T030** [P] [US3] `application/RegisterRegenerationServiceTest` (new) — **`GenerateRegisterCli`'s
+- [x] **T030** [P] [US3] `application/RegisterRegenerationServiceTest` (new) — **`GenerateRegisterCli`'s
       orchestration, moved and unchanged**, its existing cases re-pointed from the CLI class.
       Cases: narrowing by court house and by batch id; a FAILED batch released; a batch withheld
       `key-in-flight` when its key has one in flight; a batch withheld `outside-the-bound` when the
@@ -792,10 +792,29 @@ departure is forced — research R16 has the reasoning.
       registers, batches, requested, deferred — matching the command's counts exactly for the same
       inputs. Seams: `application/RegisterRegenerationService` and its `Selection` and
       `RegenerationTally` records. Red: the withheld-reason case.
-- [ ] **T031** [US3] `application/RegisterRegenerationService` — the body of
+- [x] **T031** [US3] `application/RegisterRegenerationService` — the body of
       `GenerateRegisterCli.generate`, `narrowed`, `released`, `withheldReason`, `registers` and
       `request`, with the printing replaced by the tally record. `Selection` moves with it. **Does
       not touch `RegisterGenerationJob` or `GenerationReconciler`** (004's). Green: T030.
+      (Landed with T030 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. Green: `RegisterRegenerationServiceTest` 18 tests, 0 failures; Checkstyle and PMD
+      clean on main and test. The five methods moved character for character with two changes and
+      no third: the printing became `RegenerationTally`, and the two withheld reasons became
+      `OperationsReason.KEY_IN_FLIGHT` / `OUTSIDE_THE_BOUND` rather than the command's own string
+      constants - the same characters on the wire, now from the one closed set the status map is
+      built on. `Selection` and `RegenerationTally` are public nested records of the service rather
+      than two more files, which keeps the increment's file set exactly what the coordination
+      contract names.
+      **The flag is read nowhere in here, and that is the one departure from the task's wording.**
+      T031's own list of moved methods is `generate`, `narrowed`, `released`, `withheldReason`,
+      `registers` and `request` - `gated` is not among them - and T033 says the launcher reads the
+      flag. It has to be the launcher: `FLAG_OFF` is a `409` the caller sees (data-model §4), so
+      the read happens before the `202`, and a second read in here would be a second reader of the
+      one lever with different semantics. The service is told `overridden` and carries it on the
+      tally.
+      A run that stops leaves through `OperationsRefusedException(GENERATION_FAILED)` carrying the
+      counts it had reached, which is "the day stands as whatever this run had already written
+      down" as a bounded extras map rather than as a printed line.)
 - [ ] **T032** [P] [US3] `application/OperationsRunLauncherTest` (new) — **the lock is taken, not
       asked about** (research R12). With a `LockProvider` mock: the run id is minted and recorded
       **before** the work is submitted (ids before calls); the launcher attempts the lock with the
