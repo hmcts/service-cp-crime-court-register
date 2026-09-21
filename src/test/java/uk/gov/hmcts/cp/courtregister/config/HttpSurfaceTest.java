@@ -25,31 +25,42 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.NestedTestConfiguration;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 import tools.jackson.databind.JsonNode;
 import uk.gov.hmcts.cp.courtregister.support.WorkloadIdentityStub;
 
 /**
  * The whole HTTP surface of this service, asserted rather than assumed (constitution Principle III).
  *
- * <p>This service has no business API at all. Its inbound contract is a queue message and its
- * outbound one is a POST it makes; the only HTTP it <em>serves</em> is the operational actuator set —
- * health with its liveness and readiness groups, info, metrics and the Prometheus scrape. There is
- * deliberately no replay endpoint: replay is resubmitting a parked message, not calling a URL.
+ * <p>This service has no <strong>business</strong> API: its inbound contract is a queue message and
+ * what it produces goes into its own store. The HTTP it serves is two things and nothing else - the
+ * operational actuator set (health with its liveness and readiness groups, info, metrics and the
+ * Prometheus scrape) and the seven named operator actions under {@code /operations/**} that replaced
+ * the CLI in increment 005. There is deliberately no replay endpoint: replay is resubmitting a
+ * parked message, not calling a URL.
  *
- * <p>The surface is asserted from what the application actually publishes rather than from the
- * property that configures it. A property assertion re-states the configuration file; the link list
- * is the thing an operator, a scanner and an attacker all see, and it is what changes when somebody
- * adds an endpoint by adding a dependency. Principle III says a business endpoint here needs a
- * constitution amendment rather than a spec — this is the test that notices one arriving.
+ * <p><strong>The claim is made over the mapped paths, not over the controller beans.</strong> Until
+ * increment 005 it could be "no controller of ours exists", which a bean count says exactly; now
+ * that seven paths are permitted, a bean count says only how many classes there are and nothing
+ * about what they serve. So {@link #mappedPaths} reads what the handler mapping actually publishes:
+ * every path is under {@code /actuator} or {@code /operations}, the {@code /operations} ones are
+ * exactly the seven this service owns, and none of them submits a hearing, reads a register out or
+ * creates a batch. That is the form that stops caring how many controllers there are - and it is
+ * the test that stops the next increment from quietly adding a business endpoint, because
+ * Principle III makes one a constitution amendment rather than a spec.
  *
- * <p>Run under the {@code test} profile: the surface is a property of the application, not of the
- * broker or the store, so it needs neither.
+ * <p>The actuator half is asserted from the link list rather than from the property that configures
+ * it. A property assertion re-states the configuration file; the link list is the thing an operator,
+ * a scanner and an attacker all see, and it is what changes when somebody adds an endpoint by adding
+ * a dependency.
  *
- * <p><strong>Asserted on both shapes of the service.</strong> The link list and the controller beans
- * are checked here on a plain context, and again in {@link OnAGeneratingPod} on a context with the
- * downstream half switched on - because that is the half whose operations (regenerate, resend, list,
- * supersede, check the flag) an API would have been the obvious home for, and FR-016 puts them in a
- * command in the image instead.
+ * <p><strong>Asserted on four shapes of the service.</strong> The enclosing class runs under the
+ * {@code test} profile, where the controllers are deliberately not registered at all;
+ * {@link OnAGeneratingPod} is the full deployment and is where the path sweep lives, because that
+ * is the only shape that holds every one of the seven; {@link OnAPodThatRendersNothing} is a pod
+ * without the generating half, and {@link WithTheOperationsApiSwitchedOff} is one with the surface
+ * withdrawn.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -98,13 +109,44 @@ class HttpSurfaceTest {
      * these and nothing else", so a controller arriving from a dependency, or a business endpoint
      * arriving without the constitution amendment Principle III requires, still fails here.
      *
-     * <p>The list grows with the phases; T056 re-points this suite from naming beans to asserting
-     * that every mapped path is under {@code /actuator} or {@code /operations}, which is the form
-     * that stops caring how many controllers there are.
+     * <p>It is kept beside {@link #THE_SEVEN} rather than replaced by it, because the two say
+     * different things and both are worth saying: this one is which classes a shape of the pod
+     * holds, and that one is what they serve. A controller withdrawn by a switch shows up here; a
+     * path added to a controller that is already held shows up there.
      */
     private static final List<String> OPERATIONS_CONTROLLERS =
             List.of("flagController", "batchesController", "registersController",
                     "exceptionReportsController");
+
+    /**
+     * The seven paths this service is permitted to serve under {@code /operations}, with the method
+     * each answers on, and nothing else.
+     *
+     * <p>A closed list rather than a rule about what is forbidden, for the reason every other sweep
+     * in this repository is: a rule catches the shapes somebody thought of, and the endpoint nobody
+     * thought of is the one that gets added. Adding a row here is a deliberate act, and
+     * {@code .specify/memory/constitution.md} Principle III says what has to happen before one is.
+     *
+     * <p>Spelled with the path-variable placeholder the handler mapping publishes, not with a
+     * sample id: this is a statement about the mapping and not about a request.
+     */
+    private static final Set<String> THE_SEVEN = Set.of(
+            "GET /operations/flag",
+            "GET /operations/batches",
+            "GET /operations/registers/recorded-while-off",
+            "POST /operations/batches/generate",
+            "POST /operations/batches/{batchId}/notify",
+            "POST /operations/registers/supersede",
+            "POST /operations/exception-reports");
+
+    /**
+     * The roots every mapped path of this service must sit under.
+     *
+     * <p>{@code /error} is the framework's own and is the third: it is where the authorisation
+     * filter's {@code sendError} forwards to, and what {@link OperationsErrorAttributes} renders the
+     * body of. It publishes no route of this service's.
+     */
+    private static final String ERROR_PATH = "/error";
 
     /**
      * The same list on a pod with no generation half, where {@code batchesController} is not one.
@@ -155,14 +197,13 @@ class HttpSurfaceTest {
     }
 
     @Test
-    @DisplayName("no bean on the context serves a route of this service's")
+    @DisplayName("the test profile registers none of the operations controllers")
     void should_hold_no_controller_but_the_error_fallback() {
         assertThat(controllerBeans(context))
-                .as("the link list says what is reachable; this says there is nothing of ours to "
-                        + "reach. Principle III makes a business endpoint here a constitution "
-                        + "amendment and a controller is how one arrives - the one class in this "
-                        + "service whose name ends in Controller is a lifecycle component and is "
-                        + "not annotated")
+                .as("every operations controller carries @Profile(\"!test\") because the store and "
+                        + "its repositories do, so this profile holds none of them - which is a "
+                        + "fact about this profile and not the surface claim. The surface claim is "
+                        + "made over the mapped paths on a deployed shape, in OnAGeneratingPod")
                 .containsExactly(ERROR_FALLBACK);
     }
 
@@ -230,6 +271,34 @@ class HttpSurfaceTest {
                             + "would have to precede it, and this is where it is noticed")
                     .containsExactlyInAnyOrderElementsOf(Stream.concat(
                             OPERATIONS_CONTROLLERS.stream(), Stream.of(ERROR_FALLBACK)).toList());
+        }
+
+        @Test
+        @DisplayName("maps nothing outside the actuator and /operations")
+        void every_mapped_path_should_be_under_the_actuator_or_the_operations_root() {
+            assertThat(mappedPaths(context).stream()
+                            .map(mapped -> mapped.split(" ", 2)[1])
+                            .filter(path -> !path.startsWith("/actuator"))
+                            .filter(path -> !path.startsWith("/operations"))
+                            .filter(path -> !ERROR_PATH.equals(path))
+                            .toList())
+                    .as("the whole HTTP surface is the actuator and the named operator actions; a "
+                            + "path outside both is a business endpoint arriving without the "
+                            + "constitution amendment that would have to precede it")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("serves exactly the seven operator actions, and no hearing, register or batch")
+        void the_operations_paths_should_be_exactly_the_seven() {
+            assertThat(mappedPaths(context).stream()
+                            .filter(mapped -> mapped.contains(" /operations"))
+                            .toList())
+                    .as("no hearing is submitted over HTTP, no register is read out and no batch "
+                            + "is created by a caller: the three shapes this service is not "
+                            + "allowed to grow into are excluded by the list being closed, not by "
+                            + "a rule about what they would look like")
+                    .containsExactlyInAnyOrderElementsOf(THE_SEVEN);
         }
 
         @Test
@@ -467,6 +536,53 @@ class HttpSurfaceTest {
                         Arrays.stream(context.getBeanNamesForAnnotation(RestController.class)))
                 .distinct()
                 .toList();
+    }
+
+    /**
+     * Every path this context's handler mapping publishes, as {@code "METHOD /path"}.
+     *
+     * <p>Read off {@link RequestMappingHandlerMapping} rather than off the controllers' annotations,
+     * because what is under assertion is what the application <em>serves</em>: a path contributed by
+     * a dependency's auto-configuration carries no annotation of ours and is exactly the arrival
+     * this suite exists to notice.
+     *
+     * <p>A mapping that names several methods, or none, yields one entry per method and one
+     * {@code "* /path"} respectively - a mapping with no method condition answers every verb, which
+     * is a surface fact and not a formatting one.
+     *
+     * <p><strong>Every such mapping on the context, not the one named
+     * {@code requestMappingHandlerMapping}.</strong> The actuator contributes a second of this type
+     * for its own controller endpoints, and a sweep that asked for one bean would either fail to
+     * resolve or - worse, once somebody "fixed" it by name - read the application's paths and miss
+     * whatever a dependency published beside them.
+     *
+     * @param context the context to read
+     * @return the mapped paths, one entry per method
+     */
+    private static List<String> mappedPaths(final ApplicationContext context) {
+        return context.getBeansOfType(RequestMappingHandlerMapping.class).values().stream()
+                .flatMap(mapping -> mapping.getHandlerMethods().keySet().stream())
+                .flatMap(HttpSurfaceTest::spell)
+                .distinct()
+                .sorted()
+                .toList();
+    }
+
+    /**
+     * One mapping, spelled once per method and path it answers on.
+     *
+     * @param info the mapping
+     * @return {@code "METHOD /path"} for every combination it covers
+     */
+    private static Stream<String> spell(final RequestMappingInfo info) {
+        final Set<String> patterns = info.getPathPatternsCondition() == null
+                ? Set.of()
+                : info.getPathPatternsCondition().getPatternValues();
+        final Set<String> methods = info.getMethodsCondition().getMethods().stream()
+                .map(Enum::name)
+                .collect(Collectors.toUnmodifiableSet());
+        final Set<String> verbs = methods.isEmpty() ? Set.of("*") : methods;
+        return patterns.stream().flatMap(path -> verbs.stream().map(verb -> verb + " " + path));
     }
 
     /**

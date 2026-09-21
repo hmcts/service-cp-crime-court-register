@@ -1446,10 +1446,36 @@ a deletion has no red run, and its evidence is the green build with the replaced
       scratch file passed in `COMPOSE_FILE` and is not in the tree — and the smoke connects to that
       database over the compose network, so the published port is for a developer's psql and not
       for this script.)
-- [ ] **T056** [US5] `config/HttpSurfaceTest` — re-pointed from "no controller exists" to "actuator
+- [x] **T056** [US5] `config/HttpSurfaceTest` — re-pointed from "no controller exists" to "actuator
       and `/operations/**`, and nothing else": every mapped path is under one of the two, and no
       path submits a hearing, reads a register out or creates a batch. This is the test that stops
       the next increment from quietly adding a business endpoint.
+      (Done, test-first and with a real red. Green: `HttpSurfaceTest` 15 tests, 0 failures;
+      Checkstyle and PMD clean on test.
+      **The red was made rather than found, and that is the point of the task.** The sweep passed
+      the moment it compiled, because there is no business endpoint to find - a green sweep over a
+      clean tree says nothing about whether it would notice one. So a scratch
+      `@RestController` mapping `POST /hearings` was contributed to the test sources, the suite run,
+      and the failure recorded: *`Expecting empty but was: ["/hearings"]`*, on
+      `every_mapped_path_should_be_under_the_actuator_or_the_operations_root`. The scratch class was
+      then deleted; it is in no commit. That is the assertion the task asks for - a hearing
+      submitted over HTTP is noticed - demonstrated rather than asserted about.
+      **The claim moved from beans to paths.** `THE_SEVEN` is a closed list of `METHOD /path`,
+      spelled with the path-variable placeholder the handler mapping publishes, and the second case
+      asserts the `/operations` mappings are exactly it. A closed list rather than a rule about
+      forbidden shapes, for the reason every sweep in this repository gives: a rule catches what
+      somebody thought of. No hearing, register-read-out or batch-create endpoint is excluded by
+      matching its shape - it is excluded by not being on the list.
+      **Two things the sweep had to get right to be worth anything.** It reads **every** bean of
+      type `RequestMappingHandlerMapping`, not the one named `requestMappingHandlerMapping`: the
+      actuator contributes a second, and asking for one bean either fails to resolve (which it did,
+      first run) or, once somebody "fixes" that by name, reads the application's paths and misses
+      whatever a dependency published beside them. And it spells a mapping with no method condition
+      as `* /path`, because a mapping that answers every verb is a surface fact.
+      The bean-level cases are **kept** beside it rather than replaced: they say which classes a
+      shape of the pod holds, which is a different claim from what those classes serve. The
+      enclosing class's case is re-pointed to say what it actually proves - that the `test` profile
+      registers none of them - rather than to claim a surface the profile is hiding.)
 - [ ] **T057** [A] [US5] Full `./gradlew build` behind the `flock`: compile, the whole suite, PMD
       main and test, Checkstyle main and test, and the JaCoCo gate at the **unchanged** thresholds
       (LINE ≥ 0.88, BRANCH ≥ 0.85 — the ratchet is never loosened to admit a controller). Records
