@@ -71,6 +71,16 @@ class RegistersControllerTest {
 
     private static final Instant BOUND = Instant.parse(TYPED_BOUND);
 
+    /**
+     * The same instant, spelled with the milliseconds ISO-8601 admits and this service drops.
+     *
+     * <p>Sent where a case is about the {@code sharedBefore} a success record carries: the
+     * canonical spelling answered with the same characters would read identically whether the
+     * instant was parsed or the string copied, and a parseable spelling that is not the canonical
+     * one can only come back canonical if it was parsed (FR-025).
+     */
+    private static final String THE_SAME_INSTANT_SPELLED_OTHERWISE = "2026-09-04T17:00:00.000Z";
+
     /** A value nothing else in this repository produces, so a leak can only be this one. */
     private static final String NOT_AN_INSTANT = "ZQX7NOTANINSTANT";
 
@@ -232,7 +242,8 @@ class RegistersControllerTest {
                     .thenReturn(new Supersession(SUPERSEDED, BOUND, false));
 
             mvc.perform(post(SUPERSEDE).contentType(MediaType.APPLICATION_JSON)
-                            .content("{\"sharedBefore\":\"" + TYPED_BOUND + "\"}"))
+                            .content("{\"sharedBefore\":\""
+                                    + THE_SAME_INSTANT_SPELLED_OTHERWISE + "\"}"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.superseded").value(SUPERSEDED))
                     .andExpect(jsonPath("$.sharedBefore").value(TYPED_BOUND))

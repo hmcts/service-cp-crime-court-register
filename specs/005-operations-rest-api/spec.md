@@ -530,9 +530,17 @@ command printed.
 - **FR-024**: Every non-`2xx` response MUST be a `ProblemDetail` carrying a **bounded** `reason`
   code from a closed set named in the OpenAPI document — the code the command printed where there
   was one.
-- **FR-025**: No response and no log line MUST contain a value the caller supplied. A refusal over
-  an argument names the **argument**, by this service's own name for it, never the value. No
-  exception message and no throwable this service did not write MUST reach either.
+- **FR-025**: No response and no log line MUST **echo** a value the caller supplied. A refusal over
+  an argument names the **argument**, by this service's own name for it, never the value
+  (constitution Principle III(d)); a value that would not read reaches no body, no log line and no
+  metric label at all. What a **success** record may carry is this service's own **parse** of an
+  identifier or an instant — the batch it resolved, the register date it read, the bound it
+  superseded from, each of them a field the OpenAPI document types as a uuid, a date or a
+  date-time. It is rendered from the parsed value and never from the characters that arrived, and a
+  request made in a non-canonical but parseable spelling therefore comes back in the canonical one.
+  That is what tells a parse from an echo, and it is how each of these fields is tested: pinning
+  the identical characters back would prove nothing either way. No exception message and no
+  throwable this service did not write MUST reach either.
 - **FR-026**: No response MUST contain defendant detail of any kind, an unmasked recipient address,
   a payload, a register document or a fragment of one.
 - **FR-027**: An unknown or unmapped path or method MUST answer as the framework does, without a

@@ -124,7 +124,10 @@ private RedisHearingPayloadAdapter adapter;
   and the identity client stubbed — one case that the caller without "Second Line Support" is
   refused, one that the caller with it is served, and one per refusal the endpoint can answer with.
   A contract test asserts the controllers against `src/main/resources/courtregister-openapi.yaml`. No test asserts
-  a response body that carries a value the request supplied
+  a response body that echoes the caller's own characters back. A success record may carry this
+  service's own parse of an identifier or instant (FR-025); the case that covers such a field
+  sends a non-canonical but parseable spelling and expects the canonical rendering, so what is
+  pinned is the parse and not an echo
 - **Golden-parity tests**: Jest fixtures copied byte-identical into `src/test/resources/fixtures/`;
   one JUnit twin per Jest case; comparison field-order-insensitive, array-order-sensitive,
   BigDecimal-tolerant; registered deviations asserted explicitly

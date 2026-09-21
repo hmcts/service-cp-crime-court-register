@@ -13,6 +13,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
@@ -73,6 +74,17 @@ class BatchesControllerTest {
 
     private static final LocalDate DATE = LocalDate.parse(TYPED_DATE);
 
+    /**
+     * The same day, spelled the other way ISO_LOCAL_DATE admits.
+     *
+     * <p>Sent where a case is about the {@code date} a success record carries, because a request
+     * made in the canonical spelling and answered with the same characters proves nothing either
+     * way: it reads identically whether this service parsed the day or copied the string. A
+     * parseable spelling that is not the canonical one can only come back canonical if it was
+     * parsed (FR-025).
+     */
+    private static final String THE_SAME_DAY_SPELLED_OTHERWISE = "+002026-09-04";
+
     /** A value nothing else in this repository produces, so a leak can only be this one. */
     private static final String NOT_A_DATE = "ZQX7NOTADATE";
 
@@ -113,7 +125,7 @@ class BatchesControllerTest {
                     List.of(new BatchListing.Recipient("j***@yot.example.gov.uk",
                             NotificationStatus.ACCEPTED)))));
 
-            mvc.perform(get(PATH).param("date", TYPED_DATE))
+            mvc.perform(get(PATH).param("date", THE_SAME_DAY_SPELLED_OTHERWISE))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.date").value(TYPED_DATE))
                     .andExpect(jsonPath("$.batches.length()").value(1))
@@ -329,7 +341,7 @@ class BatchesControllerTest {
         void an_accepted_run_should_answer_202_with_the_run_id() throws Exception {
             when(launcher.launch(any())).thenReturn(new RunAccepted(RUN_ID, DATE, false));
 
-            mvc.perform(asking("{\"date\":\"" + TYPED_DATE + "\"}"))
+            mvc.perform(asking("{\"date\":\"" + THE_SAME_DAY_SPELLED_OTHERWISE + "\"}"))
                     .andExpect(status().isAccepted())
                     .andExpect(jsonPath("$.runId").value(RUN_ID))
                     .andExpect(jsonPath("$.date").value(TYPED_DATE))
@@ -501,7 +513,10 @@ class BatchesControllerTest {
             when(notifier.resendFailed(BATCH))
                     .thenReturn(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
 
-            mvc.perform(post(NOTIFY))
+            // Carried in upper case, which a UUID reads and never writes back: the identifier on
+            // the answer is the one this endpoint resolved, not the characters that arrived.
+            mvc.perform(post("/operations/batches/"
+                    + BATCH.toString().toUpperCase(Locale.ROOT) + "/notify"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.batchId").value(BATCH.toString()))
                     .andExpect(jsonPath("$.accepted").value(3))
