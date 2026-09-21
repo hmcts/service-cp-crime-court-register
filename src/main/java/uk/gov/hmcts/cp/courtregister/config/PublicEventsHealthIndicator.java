@@ -19,8 +19,8 @@ import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DeliveryObserver;
  *
  * <p>What it reports is the subscription's state and the age of the last delivery. The second is the
  * one that matters at 18:30: a subscription that is connected and has heard nothing since the run
- * began is a broker problem the reconciler is about to paper over, and the {@code reconciled} count
- * beside it is the same story told from the other end.
+ * began is a broker problem nothing else will report until the next run gives up on every batch of
+ * the night at once, which is a day later and a court centre's document late.
  *
  * <p><strong>Silence is reported, never judged.</strong> The status follows the subscription alone,
  * because this service hears from {@code public.event} only when somebody else renders something:

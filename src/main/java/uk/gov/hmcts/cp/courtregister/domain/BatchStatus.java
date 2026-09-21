@@ -32,7 +32,7 @@ public enum BatchStatus {
     /** The payload is in the file service and the render request was accepted with a 202. */
     GENERATING,
 
-    /** The document exists, learned from the public event or from the reconciler's query. */
+    /** The document exists, learned from the public event, which is the one way it is learned. */
     GENERATED,
 
     /** Every recipient of the batch was accepted by notificationnotify. */
@@ -63,10 +63,11 @@ public enum BatchStatus {
      * old identity attached to a batch being rendered again.
      *
      * <p>{@code PENDING -> GENERATED} is the one arrow that is not this service moving its own
-     * batch along. It is the reconciler's stale-PENDING sweep: a render systemdocgenerator accepted
-     * and whose {@code markRequested} never landed leaves a batch that says nobody asked and a
-     * document that exists, and the sweep finds it by the payload id the row does carry. Refusing
-     * the move would mean throwing the document away rather than sending it.
+     * batch along. It is an outcome arriving for a batch whose {@code markRequested} never landed:
+     * a render systemdocgenerator accepted, and a pod that died between the 202 and the mark,
+     * leaves a batch that says nobody asked and a document that exists. The event carries the batch
+     * identity, so the sink reaches it anyway. Refusing the move would mean throwing the document
+     * away rather than sending it.
      *
      * @return the permitted next states of every drawn state, unmodifiable
      */

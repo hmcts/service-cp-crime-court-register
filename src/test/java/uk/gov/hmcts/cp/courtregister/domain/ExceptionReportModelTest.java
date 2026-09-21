@@ -222,7 +222,7 @@ class ExceptionReportModelTest {
     }
 
     /**
-     * What a report and its entries refuse to be, and what a run of five kinds counts to.
+     * What a report and its entries refuse to be, and what a run of every kind counts to.
      */
     @Nested
     @DisplayName("the report and its entries")
@@ -236,18 +236,19 @@ class ExceptionReportModelTest {
                     exception(ExceptionKind.BATCH_LATE));
 
             softly.assertThat(counts(report))
-                    .as("five numbers always, so an empty kind is a nought a dashboard can read "
-                            + "rather than an absence it has to interpret")
+                    .as("one number per kind always, so an empty kind is a nought a dashboard "
+                            + "can read rather than an absence it has to interpret")
                     .containsOnly(
                             entry(ExceptionKind.REQUEST_FAILED, 2),
                             entry(ExceptionKind.REQUEST_LATE, 0),
                             entry(ExceptionKind.BATCH_LATE, 1),
                             entry(ExceptionKind.BATCH_FAILED, 0),
-                            entry(ExceptionKind.NOTIFICATION_FAILED, 0));
+                            entry(ExceptionKind.NOTIFICATION_FAILED, 0),
+                            entry(ExceptionKind.BATCH_RELEASED, 0));
             softly.assertThat(counts(report()))
-                    .as("and a morning with nothing wrong is five zeroes - every one of them "
-                            + "read, because a map holding one nought among four absences would "
-                            + "satisfy a weaker assertion and tell a dashboard nothing")
+                    .as("and a morning with nothing wrong is a nought for every kind - every one "
+                            + "of them read, because a map holding one nought among five absences "
+                            + "would satisfy a weaker assertion and tell a dashboard nothing")
                     .containsOnlyKeys(ExceptionKind.values())
                     .allSatisfy((kind, count) -> softly.assertThat(count)
                             .as("the count of %s on a morning with nothing wrong", kind)
@@ -258,7 +259,7 @@ class ExceptionReportModelTest {
         void an_entry_without_a_kind_is_refused() {
             softly.assertThatThrownBy(() -> new ExceptionEntry(null, null, null, null, null, null,
                             null, null, null, null, null, null, 0))
-                    .as("the kind is the one field every one of the five carries, so an entry "
+                    .as("the kind is the one field every one of them carries, so an entry "
                             + "without one is a row no count can be taken of, no query can select "
                             + "and no CSV column can hold")
                     .isInstanceOf(NullPointerException.class);

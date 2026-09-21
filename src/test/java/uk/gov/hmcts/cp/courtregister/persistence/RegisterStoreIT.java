@@ -1,5 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.persistence;
 
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.awaitility.Awaitility.await;
 
@@ -11,6 +12,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -45,6 +48,9 @@ import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RecordedCompletion;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseProgress;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
@@ -61,6 +67,7 @@ import uk.gov.hmcts.cp.courtregister.domain.ReasonCode;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
+import uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 import uk.gov.hmcts.cp.courtregister.domain.RequestFingerprint;
 import uk.gov.hmcts.cp.courtregister.domain.RunClaim;
@@ -165,6 +172,9 @@ class RegisterStoreIT {
     /** The bound parameter every batch-keyed read below names the identity by. */
     private static final String BATCH_ID = "batchId";
 
+    /** The single batch row a fixture ageing a batch is expected to touch. */
+    private static final int ONE_BATCH = 1;
+
     /**
      * What a day's second document is filed under, as {@code BatchAssembler} builds the name.
      *
@@ -255,7 +265,36 @@ class RegisterStoreIT {
     private static final String GENERATING = "GENERATING";
     private static final String GENERATED = "GENERATED";
     private static final String NOTIFIED = "NOTIFIED";
+    private static final String PARTIALLY_NOTIFIED = "PARTIALLY_NOTIFIED";
+    private static final String NOTIFIED_NOBODY = "NOTIFIED_NOBODY";
     private static final String FAILED = "FAILED";
+
+    /** The status a batch is assembled into, spelled out because {@code PENDING} is taken here. */
+    private static final String PENDING_STATUS = "PENDING";
+
+    /** The index one hearing's active register is kept unique by, named where a case asserts it. */
+    private static final String ACTIVE_REGISTER_KEY = "idx_output_active_register_key";
+
+    /** The bounded classification a release refused by a key it does not account for carries. */
+    private static final String UNACCOUNTED_KEY = "a unique key";
+
+    /** The bounded classification a release refused by a rule that is no key at all carries. */
+    private static final String UNACCOUNTED_RULE = "an integrity rule that is no key";
+
+    /** The package no refusal may still be travelling as by the time it crosses the port. */
+    private static final String SPRING_DAO = "org.springframework.dao";
+
+    /**
+     * The words Postgres quotes a whole refused row under, which a register's row must never carry.
+     *
+     * <p>{@code FAIL_AND_RELEASE_STALE} writes {@code processed_output}, and a
+     * {@code processed_output} row holds the register document itself - so a CHECK constraint
+     * refusing one is reported with every value of that row on the detail line.
+     */
+    private static final String FAILING_ROW = "Failing row contains";
+
+    /** The words Postgres quotes a refused <em>key</em>'s values under, which name the row too. */
+    private static final String REFUSED_KEY_DETAIL = "already exists";
 
     /** The state increment 001 writes an output row in before it POSTs the register. */
     private static final String POST_PENDING = "PENDING";
@@ -300,7 +339,7 @@ class RegisterStoreIT {
 
     private final RegisterStore store =
             new JdbcRegisterStore(ProcessedLogTestSupport.jdbcClient(),
-                    ProcessedLogTestSupport.transactions());
+                    ProcessedLogTestSupport.transactionManager());
 
     @BeforeAll
     static void migrate() {
@@ -1625,7 +1664,7 @@ class RegisterStoreIT {
                         requestedAtOn(MONDAY).plus(ROUND_TRIP), CompletedBy.EVENT);
                 store.markRequested(withRefusal.batchId(), SECOND_PAYLOAD_FILE_ID);
                 store.markFailed(withRefusal.batchId(), BatchFailureReason.GENERATION_FAILED,
-                        SDG_REASON, CompletedBy.RECONCILER);
+                        SDG_REASON, CompletedBy.EVENT);
             }).as(WALKED).doesNotThrowAnyException();
 
             softly.assertThat(batchesOn(MONDAY))
@@ -1681,38 +1720,38 @@ class RegisterStoreIT {
         /**
          * Which mechanism learned the outcome, written by the mark that learned it.
          *
-         * <p>{@code completed_by} is what the {@code reconciled} metric counts, and a run whose
-         * outcomes all arrive by RECONCILER is a broker or a subscription somebody has to look at.
-         * Nothing else in the flow records it, so a batch that does not carry it is a batch whose
-         * completion mechanism is lost.
+         * <p>{@code completed_by} is the only record of it. Nothing else in the flow says which
+         * mechanism delivered an outcome, so a batch that does not carry it is a batch whose
+         * completion mechanism is lost - and a night whose outcomes are all missing it is a broker
+         * or a subscription somebody has to look at, with nothing to look at it by.
          *
          * <p>It cannot be a second write. Batch state changes are compare-and-set through
          * {@code BatchStatus}: written before the mark, the batch is still GENERATING and the update
          * would be guessing at an outcome that has not arrived; written after it, the only move left
          * is GENERATED to GENERATED, which the machine refuses. The mark therefore carries it, and
-         * this case asserts that the mark's own statement is where it lands - both endings that
-         * somebody outside this service reported, so the EVENT path and the RECONCILER path are
-         * pinned by the same test rather than by one and an assumption.
+         * this case asserts that the mark's own statement is where it lands - on <em>both</em> marks
+         * that take an attribution, the generated one and the failed one, rather than on one of
+         * them and an assumption about the other.
          */
         @Test
         void generation_records_who_completed_the_batch() {
-            final DistributionCommand listenedFor = seededCommand(HEARING_ONE, MONDAY_SHARED);
-            final DistributionCommand reconciledFor = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+            final DistributionCommand announced = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand refused = seededCommand(HEARING_THREE, TUESDAY_SHARED);
 
             softly.assertThatCode(() -> {
-                record(listenedFor, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                record(announced, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
-                record(reconciledFor, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                record(refused, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
                         RecordedFlagState.ON);
                 final List<RegisterRecord> waiting = mine(store.activeUnbatched());
-                final RegisterBatch listened = assembled(MONDAY, recordsOn(waiting, MONDAY));
-                final RegisterBatch reconciled = assembled(TUESDAY, recordsOn(waiting, TUESDAY));
-                store.markRequested(listened.batchId(), PAYLOAD_FILE_ID);
-                store.markGenerated(listened.batchId(), DOCUMENT_FILE_ID, GENERATED_AT,
+                final RegisterBatch generated = assembled(MONDAY, recordsOn(waiting, MONDAY));
+                final RegisterBatch failed = assembled(TUESDAY, recordsOn(waiting, TUESDAY));
+                store.markRequested(generated.batchId(), PAYLOAD_FILE_ID);
+                store.markGenerated(generated.batchId(), DOCUMENT_FILE_ID, GENERATED_AT,
                         CompletedBy.EVENT);
-                store.markRequested(reconciled.batchId(), SECOND_PAYLOAD_FILE_ID);
-                store.markFailed(reconciled.batchId(), BatchFailureReason.GENERATION_FAILED,
-                        SDG_REASON, CompletedBy.RECONCILER);
+                store.markRequested(failed.batchId(), SECOND_PAYLOAD_FILE_ID);
+                store.markFailed(failed.batchId(), BatchFailureReason.GENERATION_FAILED,
+                        SDG_REASON, CompletedBy.EVENT);
             }).as(WALKED).doesNotThrowAnyException();
 
             softly.assertThat(completedByOn(MONDAY))
@@ -1720,9 +1759,9 @@ class RegisterStoreIT {
                             + "is generated says so in the same breath")
                     .contains("EVENT");
             softly.assertThat(completedByOn(TUESDAY))
-                    .as("and the failure the grace-period reconciler went and asked for is the "
-                            + "other mechanism, which is the one the metric exists to count")
-                    .contains("RECONCILER");
+                    .as("and the refusal arrived the same way, on the other mark that takes an "
+                            + "attribution: the failing path records the mechanism too")
+                    .contains("EVENT");
         }
 
         /**
@@ -1731,8 +1770,7 @@ class RegisterStoreIT {
          * <p>A document exists because some mechanism outside this service said so, and the row that
          * records the document is the only place that says which one. A GENERATED row with no
          * {@code completed_by} is therefore not an incomplete row but a contradictory one: it claims
-         * an answer arrived and denies that anything delivered it, and the {@code reconciled} metric
-         * counts it as neither.
+         * an answer arrived and denies that anything delivered it.
          *
          * <p>The refusal has to come before the statement. The mark is a compare-and-set that also
          * moves this batch's registers to GENERATED, and there is no second write afterwards that
@@ -1774,10 +1812,11 @@ class RegisterStoreIT {
     /**
      * The ending where no document was ever produced, and what it does to the rows.
      *
-     * <p>Six bounded reasons, and the store treats two of them differently from the other four. The
-     * two that say the batch never left this service - the payload was not stored, the assembly
+     * <p>Seven bounded reasons, and the store treats three of them differently from the other four.
+     * The two that say the batch never left this service - the payload was not stored, the assembly
      * itself failed - release the stamp, so the registers become unbatched again and tonight's
-     * failure is tomorrow's first batch. The other four leave the stamp exactly where it is:
+     * failure is tomorrow's first batch, and so does the third, which says the next run began
+     * before this batch finished. The other four leave the stamp exactly where it is:
      * systemdocgenerator was asked, a document may yet exist under that correlation, and re-rendering
      * one is a decision a person makes through the operations CLI rather than one a schedule makes
      * silently at 18:00.
@@ -1798,6 +1837,14 @@ class RegisterStoreIT {
     @Nested
     @DisplayName("failing a batch")
     class Failure {
+
+        /**
+         * A share of the hearing stamped before the register the batch already holds.
+         *
+         * <p>Earlier than {@code MONDAY_SHARED} and on the same register date, because it is the
+         * ordering and not the day that decides which of two shares of one hearing is current.
+         */
+        private static final Instant MONDAY_OVERTAKEN = Instant.parse("2026-08-24T07:15:00Z");
 
         @Test
         void a_failed_batch_always_carries_its_failed_at() {
@@ -1854,6 +1901,110 @@ class RegisterStoreIT {
         }
 
         @Test
+        void a_failure_that_never_left_should_supersede_the_share_it_overtook() {
+            final DistributionCommand batched = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_OVERTAKEN);
+
+            softly.assertThatCode(() -> {
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                // The hearing's earlier share is delivered after the later one is already in the
+                // batch, so the recorder writes it active: a batched register is not its to
+                // supersede. It then holds the day's active-register key against the release.
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_OVERTAKEN), APPLICANT,
+                        RecordedFlagState.ON);
+                store.markFailed(monday.batchId(),
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the failure is recorded whatever the overtaken share did: a mark the "
+                            + "active-row index refused would leave the batch claiming to be in "
+                            + "flight under a run that had already given up on it")
+                    .contains(new BatchOutcome(FAILED, "PAYLOAD_STORE_UNAVAILABLE", null));
+            softly.assertThat(supersessionOf(overtaken).map(SupersessionPair::supersededBy))
+                    .as("and the earlier share is superseded against the register being given "
+                            + "back, which is the ordering read the other way - the same rule the "
+                            + "stale-batch release keeps, and the same one the recorder applies "
+                            + "when it is the one that meets the two")
+                    .contains(outputIdOf(batched).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("so the key keeps exactly one active row, as it does after every other "
+                            + "write in this store")
+                    .containsExactlyInAnyOrder(RECORDED, SUPERSEDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("the stamp is released, because a batch that never left this service "
+                            + "holds no register hostage to a document that cannot exist")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("and the register the day is still to render is the one that came back, "
+                            + "rather than the share it had already overtaken")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(batched).orElse(null));
+        }
+
+        /**
+         * The same arrangement under a reason that keeps the stamp, where the release does nothing.
+         *
+         * <p>The negative arm of the clause above, and it is a case rather than an inference: the
+         * {@code overtaken} clause is guarded by {@code :releaseRows} through {@code stamped}, so
+         * three of the six reasons displace nothing at all. That guard is what makes the two
+         * halves of statement 9 one rule - a reason that keeps the stamp keeps the register too,
+         * and a register still in its batch has overtaken nobody's key. Superseding the earlier
+         * share here would withdraw the day's one assemblable register for a document that may yet
+         * arrive, and leave the court centre with neither.
+         *
+         * <p>{@code GENERATION_FAILED} because it is the reason a person is most likely to meet the
+         * pair under: systemdocgenerator answered about the render, the batch keeps its rows
+         * pending a decision somebody makes through the operations CLI, and the hearing was shared
+         * again in the meantime.
+         */
+        @Test
+        void a_failure_holding_the_stamp_should_leave_the_share_it_overtook_alone() {
+            final DistributionCommand batched = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_OVERTAKEN);
+
+            softly.assertThatCode(() -> {
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                // The hearing's earlier share arrives behind the register already in the batch, so
+                // the recorder writes it active: a batched register is not its to supersede.
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_OVERTAKEN), APPLICANT,
+                        RecordedFlagState.ON);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the batch is failed under the reason the event named, and systemdocgenerator's "
+                            + "own word for it is kept beside it")
+                    .contains(new BatchOutcome(FAILED, "GENERATION_FAILED", SDG_REASON));
+            softly.assertThat(supersessionOf(overtaken))
+                    .as("and the earlier share is not touched: nothing was given back, so nothing "
+                            + "overtook it, and superseding it would withdraw the day's one "
+                            + "assemblable register for a document that may yet arrive")
+                    .contains(new SupersessionPair(null, null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("both rows stay RECORDED, which is the arrangement the failure found: one "
+                            + "the batch is still holding and one the day is still to render")
+                    .containsExactly(RECORDED, RECORDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("the stamp stays on, because a reason that keeps it is a reason a document "
+                            + "may yet exist under, and re-rendering that day is a decision a "
+                            + "person makes through the operations CLI")
+                    .isEqualTo(1);
+            softly.assertThat(activeUnbatched())
+                    .as("so the register the next run picks up is the overtaken share alone, the "
+                            + "batched one being neither active nor unbatched")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(overtaken).orElse(null));
+        }
+
+
+        @Test
         void a_failure_that_never_left_should_supersede_a_register_a_re_share_has_replaced() {
             final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
             final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
@@ -1894,6 +2045,75 @@ class RegisterStoreIT {
                     .extracting(RegisterRecord::outputId)
                     .containsExactly(outputIdOf(reshare).orElse(null));
         }
+
+        /**
+         * All three rows at once, which is where the {@code overtaken} clause has to stand down.
+         *
+         * <p>The two cases above are each one row beside the failing batch's: a re-share that came
+         * after it, or a share it overtook. A day can hold both, though only by the route a live
+         * batch key leaves open - one batch per court centre day at a time, so the re-share's own
+         * batch has to have ended first. It ends under a reason that keeps its stamp, which leaves
+         * that register RECORDED and unsuperseded and therefore still a successor. The register
+         * this batch holds then arrives behind it, is recorded active because no unbatched row is
+         * there to weigh it against, and is assembled in its turn; and a share older than either
+         * arrives behind that, active for the same reason.
+         *
+         * <p>The two clauses are then asking opposite questions about one register, and only one of
+         * them may answer. {@code overtaken} is guarded on the successor search coming back empty
+         * for exactly this: a register that is itself being superseded is leaving the active index
+         * as it goes, so it takes no key and displaces nobody. Without the guard the older share
+         * would be superseded against a register this same statement is superseding - pointed at a
+         * row nothing will ever render - and the day would be left with no active register at all,
+         * which no later run and no {@code generate-register} could recover.
+         */
+        @Test
+        void a_failure_should_displace_nothing_where_the_register_is_itself_superseded() {
+            final DistributionCommand batched = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_OVERTAKEN);
+
+            softly.assertThatCode(() -> {
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch earlier = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(earlier.batchId(), SECOND_PAYLOAD_FILE_ID);
+                // A reason that keeps the stamp: the re-share stays RECORDED and unsuperseded, so
+                // it is still a successor, and its batch is terminal so the day may batch again.
+                store.markFailed(earlier.batchId(), BatchFailureReason.GENERATION_FAILED,
+                        SDG_REASON, CompletedBy.EVENT);
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                // Both of the key's other rows are stamped by now, so the late share meets no
+                // active unbatched incumbent and is recorded active itself.
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_OVERTAKEN), APPLICANT,
+                        RecordedFlagState.ON);
+                store.markFailed(monday.batchId(),
+                        BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, null, null);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(supersessionOf(batched).map(SupersessionPair::supersededBy))
+                    .as("the register the failing batch held is superseded against the one that "
+                            + "replaced it, exactly as it is when that register is the key's only "
+                            + "other row")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(supersessionOf(overtaken))
+                    .as("and the share it had overtaken is left alone: a register on its way out "
+                            + "of the active index takes no key, so there is nothing for it to "
+                            + "displace, and displacing it would point the older row at a row "
+                            + "nothing will render")
+                    .contains(new SupersessionPair(null, null));
+            softly.assertThat(activeUnbatched())
+                    .as("so the day keeps exactly one assemblable register - the late share, the "
+                            + "re-share still being stamped into the batch that failed holding it")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(overtaken).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("one SUPERSEDED and two RECORDED, of which only one is active: the "
+                            + "invariant is one active row per key, not one row")
+                    .containsExactlyInAnyOrder(SUPERSEDED, RECORDED, RECORDED);
+        }
+
 
         /**
          * The pair the other way round, which is the arrangement the successor search can invert.
@@ -2239,7 +2459,8 @@ class RegisterStoreIT {
          * systemdocgenerator's decision rather than this service's. The column is bounded, so the
          * bound has to be applied before the write: an unbounded write against a bounded column
          * fails the whole failure statement, and the batch that could not say why it failed then
-         * stays GENERATING until the reconciler gives up on it - the failure lost twice over.
+         * stays GENERATING until the next run's stale-batch pass gives up on it - the failure lost
+         * twice over.
          */
         @Test
         void a_reason_longer_than_the_column_should_be_bounded_before_it_is_written() {
@@ -2269,13 +2490,12 @@ class RegisterStoreIT {
         }
 
         /**
-         * The two endings somebody outside this service reported, and what they must carry.
+         * The one ending somebody outside this service reported, and what it must carry.
          *
-         * <p>GENERATION_FAILED is systemdocgenerator's own verdict about the render and
-         * GENERATION_TIMED_OUT is the reconciler's verdict about systemdocgenerator's silence. Both
-         * are learned by a named mechanism, and the {@code reconciled} metric is the count of which
-         * one: a batch that ends under either of them without naming it is the one row the metric
-         * cannot be computed from, and no later write can supply it.
+         * <p>GENERATION_FAILED is systemdocgenerator's own verdict about the render, learned on its
+         * {@code generation-failed} event. The row is the only place that says which mechanism
+         * brought it, so a batch that ends under it without naming one is a row that claims
+         * somebody answered and refuses to say who, and no later write can supply it.
          */
         @Test
         void a_generator_failure_without_attribution_is_refused() {
@@ -2304,13 +2524,14 @@ class RegisterStoreIT {
         }
 
         /**
-         * The four endings this service reached on its own, and what they must not carry.
+         * The five endings this service reached on its own, and what they must not carry.
          *
-         * <p>The payload was never stored, the request was never delivered, it was refused, or the
-         * batch could not be assembled at all. Nobody outside this service was ever in a position to
-         * answer, so naming EVENT or RECONCILER on one of these credits a decision that mechanism
-         * never made - and the {@code reconciled} metric, which exists to say how many outcomes had
-         * to be gone and asked for, counts an outcome nobody delivered.
+         * <p>The payload was never stored, the request was never delivered, it was refused, the
+         * batch could not be assembled at all, or the next scheduled run began and the answer still
+         * had not come. Nobody outside this service was ever in a position to answer, so naming
+         * EVENT on one of these credits a decision that mechanism never made, and leaves the one
+         * column that says which mechanism delivered an outcome naming one for an outcome nobody
+         * delivered.
          */
         @Test
         void a_service_failure_with_attribution_is_refused() {
@@ -2340,87 +2561,12 @@ class RegisterStoreIT {
                     .isEqualTo(1);
         }
 
-        /**
-         * The second generator-attributed ending, in the direction that refuses.
-         *
-         * <p>GENERATION_TIMED_OUT is the only one of the six the reconciler itself decides: the
-         * grace period passed and systemdocgenerator still had no verdict, so the reconciler's
-         * having gone and asked is the whole of what the row records about the ending. A timeout
-         * that names nobody is a row saying an outcome was chased and refusing to say by what, and
-         * the {@code reconciled} metric - which exists to count exactly these - cannot be computed
-         * from it. The store answers for both attributed reasons alike, and the case that pins the
-         * other one would not have noticed had this one been left out of the rule.
-         */
-        @Test
-        void a_timed_out_generation_without_attribution_is_refused() {
-            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
-
-            softly.assertThatCode(() -> {
-                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
-                        RecordedFlagState.ON);
-                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
-                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
-            }).as(WALKED).doesNotThrowAnyException();
-            final UUID batchId = batchIdOn(MONDAY);
-
-            softly.assertThatThrownBy(() -> store.markFailed(batchId,
-                            BatchFailureReason.GENERATION_TIMED_OUT, null, null))
-                    .as("the grace period passing is a verdict somebody reached by going and "
-                            + "looking, and the row is the only place that says who looked")
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("GENERATION_TIMED_OUT");
-            softly.assertThat(batchOn(MONDAY))
-                    .as("and nothing is written: the batch is still the one the reconciler is "
-                            + "waiting on")
-                    .contains(new BatchOutcome(GENERATING, null, null));
-            softly.assertThat(completedByOn(MONDAY))
-                    .as("nothing was attributed, because nothing was written")
-                    .isEmpty();
-        }
-
-        /**
-         * And the direction that accepts, which is the ordinary path the reconciler walks.
-         *
-         * <p>RECONCILER rather than EVENT: a timeout is by definition an ending no event carried,
-         * so the mechanism that learned it is always the one that went and asked. The row keeps the
-         * bounded code, the attribution and the stamp on its registers, because systemdocgenerator
-         * was asked and a document may yet exist under that correlation.
-         */
-        @Test
-        void a_timed_out_generation_the_reconciler_reported_should_be_recorded_as_its_verdict() {
-            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
-
-            softly.assertThatCode(() -> {
-                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
-                        RecordedFlagState.ON);
-                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
-                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
-                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_TIMED_OUT, null,
-                        CompletedBy.RECONCILER);
-            }).as(WALKED).doesNotThrowAnyException();
-
-            softly.assertThat(batchOn(MONDAY))
-                    .as("the bounded code is what the batches counter labels the outcome with, and "
-                            + "the renderer said nothing for sdg_reason to hold")
-                    .contains(new BatchOutcome(FAILED, "GENERATION_TIMED_OUT", null));
-            softly.assertThat(completedByOn(MONDAY))
-                    .as("a timeout is an ending no event carried, so the mechanism that learned it "
-                            + "is always the one that went and asked")
-                    .contains("RECONCILER");
-            softly.assertThat(stampedRowsOn(MONDAY))
-                    .as("and the stamp stays: systemdocgenerator was asked, so a document may yet "
-                            + "exist under that correlation and re-rendering is a person's decision")
-                    .isEqualTo(1);
-            softly.assertThat(statusesOn(MONDAY))
-                    .as("the register was never sent, so it stays exactly what it was")
-                    .containsExactly(RECORDED);
-        }
     }
 
     /**
      * The other half of {@code markFailed}, and the only write here a person types by hand.
      *
-     * <p>Four of the six reasons leave the stamp in place because systemdocgenerator was asked and a
+     * <p>Three of the six reasons leave the stamp in place because systemdocgenerator was asked and
      * document may yet exist, so no later run will ever pick those registers up again: a stamped row
      * is not active and unbatched. Re-rendering that day is therefore a decision a person makes, and
      * this is the statement the decision is written as.
@@ -2444,6 +2590,128 @@ class RegisterStoreIT {
     @Nested
     @DisplayName("giving a failed batch's registers back")
     class Releasing {
+
+        /**
+         * A share of the hearing stamped before the register the batch already holds.
+         *
+         * <p>Earlier than {@code MONDAY_SHARED} and on the same register date, because it is the
+         * ordering and not the day that decides which of two shares of one hearing is current.
+         */
+        private static final Instant MONDAY_OVERTAKEN = Instant.parse("2026-08-24T07:15:00Z");
+
+        @Test
+        void a_release_should_supersede_the_share_it_overtook() {
+            final DistributionCommand batched = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_OVERTAKEN);
+            final List<RegisterRecord> released = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+                // The hearing's earlier share is delivered after the later one is already in the
+                // batch, so the recorder writes it active: a batched register is not its to
+                // supersede. It then holds the day's active-register key against the release an
+                // operator types.
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_OVERTAKEN), APPLICANT,
+                        RecordedFlagState.ON);
+                released.addAll(store.releaseFailed(monday.batchId()));
+            }).as(SEAM).doesNotThrowAnyException();
+
+            softly.assertThat(released)
+                    .as("the register the day is still to render is the one the batch held: the "
+                            + "share it overtook is the earlier of the two, and a key the release "
+                            + "cannot decide is a day an operator could never regenerate")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(batched).orElse(null));
+            softly.assertThat(supersessionOf(overtaken).map(SupersessionPair::supersededBy))
+                    .as("so the earlier share is superseded against the register coming back, "
+                            + "which is the same total order read the other way")
+                    .contains(outputIdOf(batched).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("one SUPERSEDED and one RECORDED, which is the invariant the whole batch "
+                            + "half is written against: at most one active row per key")
+                    .containsExactlyInAnyOrder(RECORDED, SUPERSEDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("and the stamp is gone, because the batch that failed holds nothing now")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("so the day's one assemblable register is the one that came back")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(batched).orElse(null));
+        }
+
+        /**
+         * All three rows at once, which is where the {@code overtaken} clause has to stand down.
+         *
+         * <p>The two cases above are each one row beside the released one: a re-share that came
+         * after it, or a share it overtook. A day can hold both. The batch fails on a reason that
+         * keeps its stamp, the hearing is re-shared and that re-share is assembled into a batch of
+         * its own, and only then does a share older than either arrive - recorded active, because
+         * by that point there is no active unbatched row for the recorder to weigh it against.
+         *
+         * <p>The two clauses are then asking opposite questions about one register, and only one of
+         * them may answer. {@code overtaken} is guarded on the successor search coming back empty
+         * for exactly this: a register that is itself being superseded is leaving the active index
+         * as it goes, so it takes no key and displaces nobody. Without that guard the older share
+         * would be superseded against a register the same statement is superseding - pointed at a
+         * row nothing will ever render - and the day would be left with no active register at all,
+         * which no run and no {@code generate-register} could recover.
+         */
+        @Test
+        void a_release_should_displace_nothing_where_the_register_is_itself_superseded() {
+            final DistributionCommand batched = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_OVERTAKEN);
+            final List<RegisterRecord> released = new ArrayList<>();
+
+            softly.assertThatCode(() -> {
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), PAYLOAD_FILE_ID);
+                store.markFailed(monday.batchId(), BatchFailureReason.GENERATION_FAILED, SDG_REASON,
+                        CompletedBy.EVENT);
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch second = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(second.batchId(), SECOND_PAYLOAD_FILE_ID);
+                // Both of the key's other rows are stamped by now, so the late share meets no
+                // active unbatched incumbent and is recorded active itself.
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_OVERTAKEN), APPLICANT,
+                        RecordedFlagState.ON);
+                released.addAll(store.releaseFailed(monday.batchId()));
+            }).as(SEAM).doesNotThrowAnyException();
+
+            softly.assertThat(released)
+                    .as("nothing comes back: the register this batch held has been replaced, and "
+                            + "rendering the day from it would put a superseded document behind "
+                            + "the current one")
+                    .isEmpty();
+            softly.assertThat(supersessionOf(batched).map(SupersessionPair::supersededBy))
+                    .as("it is superseded against the register that replaced it, exactly as it is "
+                            + "when that register is the only other row of the key")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(supersessionOf(overtaken))
+                    .as("and the share it had overtaken is left alone: a register on its way out "
+                            + "of the active index takes no key, so there is nothing for it to "
+                            + "displace, and displacing it would point the older row at a row "
+                            + "nothing will render")
+                    .contains(new SupersessionPair(null, null));
+            softly.assertThat(activeUnbatched())
+                    .as("so the day keeps exactly one assemblable register - the late share, the "
+                            + "re-share being stamped into the batch in flight")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(overtaken).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("one SUPERSEDED and two RECORDED, of which only one is active: the "
+                            + "invariant is one active row per key, not one row")
+                    .containsExactlyInAnyOrder(SUPERSEDED, RECORDED, RECORDED);
+        }
+
 
         @Test
         void a_register_a_re_share_has_replaced_should_be_superseded_rather_than_given_back() {
@@ -2536,7 +2804,7 @@ class RegisterStoreIT {
          * ordinary path: a first batch is notified, the hearing is shared again - the recording
          * predicate supersedes an incumbent that is RECORDED and unbatched, and a notified row is
          * neither - and the re-share is assembled into a batch of its own, which then fails under
-         * one of the four reasons that keep the stamp. The release an operator then types is
+         * one of the three reasons that keep the stamp. The release an operator then types is
          * against the batch holding the <em>newer</em> row, and the only other row of the key is the
          * register that was sent this morning.
          *
@@ -2970,6 +3238,786 @@ class RegisterStoreIT {
                             + "wrong, and an empty release would have the regeneration report a day "
                             + "given back that this service never held")
                     .isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+
+    /**
+     * The ending a run gives a batch that was still waiting for its render when the next one began.
+     *
+     * <p>One statement, whose {@code WHERE} clause <em>is</em> the staleness rule: it fails every
+     * matching batch under {@code NOT_COMPLETED_BY_NEXT_RUN} and releases its registers in the same
+     * transaction, and answers with the batches it actually changed. There is no read followed by a
+     * mark, and the two failures that shape is open to are the two properties asserted here.
+     *
+     * <p><strong>A lost register.</strong> A mark that landed while its release did not would leave
+     * registers stamped to a terminal batch, and {@code ACTIVE_UNBATCHED}'s predicate is
+     * {@code batch_id IS NULL} - so no later run and no command would ever see them again. That is
+     * the precise failure this increment exists to end, and
+     * {@link #the_mark_and_the_release_are_one_transaction()} refuses the release on purpose to
+     * watch the mark go down with it.
+     *
+     * <p><strong>A refused mark ending the night.</strong> A batch that stopped being stale between
+     * the decision and the write must simply not match, rather than be marked and refused: run
+     * inline in a night's generation, one refusal would cost every court centre its document.
+     * {@link #a_batch_that_no_longer_matches_yields_zero_rows_and_no_error()} is that property read
+     * the way a caller reads it - zero rows is an answer.
+     *
+     * <p>The ages are written by the database's own clock, as the stamps themselves are: a case
+     * ages the batch it seeded and then states a cutoff, which is exactly the shape the pass has.
+     * No case states a cutoff in the future, so no case can reach a batch another suite sharing the
+     * container is holding.
+     */
+    @Nested
+    @DisplayName("releasing the batches a run gave up on")
+    class StaleRelease {
+
+        /** Older than any cutoff stated here, which is what the night between two runs leaves. */
+        private static final Duration LAST_NIGHT = Duration.ofHours(2);
+
+        /** Younger than any cutoff stated here: the render an operator started a moment ago. */
+        private static final Duration MOMENTS_AGO = Duration.ofMinutes(5);
+
+        /** Old enough for the scheduled cutoff and young enough for the manual one (FR-017). */
+        private static final Duration BETWEEN_THE_CUTOFFS = Duration.ofMinutes(45);
+
+        /** What a run gives up after, and the cutoff every case but the manual one states. */
+        private static final Duration STALE_AFTER = Duration.ofMinutes(30);
+
+        /** The longer grace a batch an operator asked for is given (FR-017). */
+        private static final Duration MANUAL_GRACE = Duration.ofMinutes(60);
+
+        /** The bounded code the pass writes, as the column holds it. */
+        private static final String NOT_COMPLETED = "NOT_COMPLETED_BY_NEXT_RUN";
+
+        /**
+         * A share of the hearing stamped before the register the batch already holds.
+         *
+         * <p>Earlier than {@code MONDAY_SHARED} and on the same register date, because it is the
+         * ordering and not the day that decides which of two shares of one hearing is current.
+         */
+        private static final Instant MONDAY_OVERTAKEN = Instant.parse("2026-08-24T07:15:00Z");
+
+        @Test
+        void a_generating_batch_past_its_cutoff_is_failed_and_its_registers_released() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
+            final AtomicReference<StaleReleaseOutcome> measured = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), UUID.randomUUID());
+                // The assembly is a night old and the request is not, which is the batch a run
+                // assembled yesterday and asked about again a moment ago.
+                ageBatch(monday.batchId(), LAST_NIGHT, Duration.ZERO);
+                measured.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
+                ageBatch(monday.batchId(), Duration.ZERO, LAST_NIGHT);
+                released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(mineReleased(measured.get()))
+                    .as("a GENERATING batch is measured from when its render was requested and not "
+                            + "from when it was assembled: a day re-requested a moment ago is a "
+                            + "render in progress, and failing it would orphan one")
+                    .isEmpty();
+            softly.assertThat(batchOn(MONDAY))
+                    .as("so the run stops waiting only once the request itself is old enough, and "
+                            + "says why in the one bounded code that means the passage of time")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("nothing was ever sent about these registers, so nothing about them moved")
+                    .containsExactly(RECORDED, RECORDED);
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("and the stamp is gone in the same act as the failure, because a register "
+                            + "stamped to a terminal batch is invisible to every later run")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("which is what puts the court centre's day in tonight's batch after all")
+                    .extracting(RegisterRecord::hearingId)
+                    .containsExactlyInAnyOrder(HEARING_ONE, HEARING_TWO);
+            softly.assertThat(mineReleased(released.get()))
+                    .as("and the run is told what it gave back, by key and by count")
+                    .extracting(ReleasedBatch::registerDate, ReleasedBatch::releasedRegisters)
+                    .containsExactly(tuple(MONDAY, 2));
+        }
+
+        @Test
+        void a_pending_batch_past_its_cutoff_is_failed_and_its_registers_released() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markPayloadMinted(monday.batchId(), UUID.randomUUID());
+                ageBatch(monday.batchId(), LAST_NIGHT);
+                store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(requestedAtOn(MONDAY))
+                    .as("the batch never reached the renderer, so it has no requested_at at all "
+                            + "and is measured from the assembly instead")
+                    .isEmpty();
+            softly.assertThat(batchOn(MONDAY))
+                    .as("whether the request ever left is not a question this service can ask any "
+                            + "more, and both endings are the same: it did not complete in time")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("released in the same act, exactly as a GENERATING batch's registers are")
+                    .isZero();
+            softly.assertThat(activeUnbatched())
+                    .as("so the day is assemblable again by the run that gave up on it")
+                    .extracting(RegisterRecord::hearingId)
+                    .containsExactly(HEARING_ONE);
+        }
+
+        @Test
+        void a_pending_batch_with_no_payload_id_is_released_too() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                ageBatch(monday.batchId(), LAST_NIGHT);
+                store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(payloadFileIdOn(MONDAY))
+                    .as("the batch minted no payload at all, which is the row the retired reads "
+                            + "excluded by asking about a payload id they had to have")
+                    .isEmpty();
+            softly.assertThat(batchOn(MONDAY))
+                    .as("staleness is state and age, not progress (FR-020): without this the batch "
+                            + "sits in flight for ever and defers its court centre day at every run")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+            softly.assertThat(activeUnbatched())
+                    .as("and its register is the next run's to batch, rather than nobody's")
+                    .extracting(RegisterRecord::hearingId)
+                    .containsExactly(HEARING_ONE);
+        }
+
+        @Test
+        void a_generated_batch_is_never_matched_at_any_age() {
+            final DistributionCommand monday = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand tuesday = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(tuesday, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> active = mine(store.activeUnbatched());
+                final RegisterBatch generated =
+                        assembled(MONDAY, recordsOn(active, MONDAY));
+                walkedToGenerated(generated, UUID.randomUUID(), UUID.randomUUID());
+                final RegisterBatch waiting = assembled(TUESDAY, recordsOn(active, TUESDAY));
+                ageBatch(generated.batchId(), LAST_NIGHT);
+                ageBatch(waiting.batchId(), LAST_NIGHT);
+                released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("a batch that holds a document is never failed by this pass at any age: "
+                            + "somebody is owed e-mails about that document, and failing it would "
+                            + "throw it away")
+                    .contains(new BatchOutcome(GENERATED, null, null));
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("so its registers keep the stamp that says which document they are in")
+                    .isEqualTo(1);
+            softly.assertThat(batchOn(TUESDAY))
+                    .as("and the statement did run: the day of the same age that was still waiting "
+                            + "for its render is the one it gave up on")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+            softly.assertThat(mineReleased(released.get()))
+                    .as("which is the only day the run is told it released")
+                    .extracting(ReleasedBatch::registerDate)
+                    .containsExactly(TUESDAY);
+        }
+
+        @Test
+        void a_manually_generated_batch_uses_the_longer_cutoff() {
+            final DistributionCommand monday = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand tuesday = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+            final AtomicReference<StaleReleaseOutcome> first = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> second = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(tuesday, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> active = mine(store.activeUnbatched());
+                final RegisterBatch schedules = assembled(MONDAY, recordsOn(active, MONDAY));
+                final List<RegisterRecord> operators = recordsOn(active, TUESDAY);
+                final RegisterBatch typed = store.assemble(
+                        manualBatchFor(TUESDAY, operators), operators);
+                ageBatch(schedules.batchId(), BETWEEN_THE_CUTOFFS);
+                ageBatch(typed.batchId(), BETWEEN_THE_CUTOFFS);
+                first.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(MANUAL_GRACE)));
+                second.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(mineReleased(first.get()))
+                    .as("a manual generation holds no run lock and has the whole requesting "
+                            + "deadline to ask for its renders (FR-017), so the schedule's batch of "
+                            + "the same age goes and the operator's stays")
+                    .extracting(ReleasedBatch::registerDate)
+                    .containsExactly(MONDAY);
+            softly.assertThat(mineReleased(second.get()))
+                    .as("and the two cutoffs are genuinely two: the same batch matches once the "
+                            + "cutoff it is judged by reaches it")
+                    .extracting(ReleasedBatch::registerDate)
+                    .containsExactly(TUESDAY);
+        }
+
+        @Test
+        void a_batch_inside_its_cutoff_is_not_matched() {
+            final DistributionCommand monday = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand tuesday = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(tuesday, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> active = mine(store.activeUnbatched());
+                final RegisterBatch old = assembled(MONDAY, recordsOn(active, MONDAY));
+                final RegisterBatch fresh = assembled(TUESDAY, recordsOn(active, TUESDAY));
+                store.markRequested(old.batchId(), UUID.randomUUID());
+                store.markRequested(fresh.batchId(), UUID.randomUUID());
+                ageBatch(old.batchId(), LAST_NIGHT);
+                ageBatch(fresh.batchId(), MOMENTS_AGO);
+                released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(TUESDAY))
+                    .as("a render minutes old is very probably about to succeed, and the pass is "
+                            + "only a safety net because of the age: without it the run would be a "
+                            + "nightly destruction of whatever the evening was doing")
+                    .contains(new BatchOutcome(GENERATING, null, null));
+            softly.assertThat(stampedRowsOn(TUESDAY))
+                    .as("so nothing about it is released, and the existing rule still defers its "
+                            + "court centre day")
+                    .isEqualTo(1);
+            softly.assertThat(mineReleased(released.get()))
+                    .as("while the batch that has been waiting since last night is given up on")
+                    .extracting(ReleasedBatch::registerDate)
+                    .containsExactly(MONDAY);
+        }
+
+        @Test
+        void each_released_batch_is_announced_where_it_is_settled() {
+            final DistributionCommand monday = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand tuesday = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+            final List<UUID> told = new ArrayList<>();
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(tuesday, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> active = mine(store.activeUnbatched());
+                final RegisterBatch first = assembled(MONDAY, recordsOn(active, MONDAY));
+                final RegisterBatch second = assembled(TUESDAY, recordsOn(active, TUESDAY));
+                store.markRequested(first.batchId(), UUID.randomUUID());
+                store.markRequested(second.batchId(), UUID.randomUUID());
+                ageBatch(first.batchId(), LAST_NIGHT);
+                ageBatch(second.batchId(), LAST_NIGHT);
+                released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER),
+                        recording(told)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(told)
+                    .as("every batch is committed by itself, so the caller is told about each one "
+                            + "where it is settled rather than in an answer a later batch's "
+                            + "refusal could take away with it - a walk that threw halfway would "
+                            + "otherwise leave a night's released registers unaccounted for")
+                    .containsExactlyElementsOf(released.get().released().stream()
+                            .map(ReleasedBatch::batchId)
+                            .toList());
+            softly.assertThat(mineReleased(released.get()))
+                    .as("and the two days this case stood up are both in it")
+                    .hasSize(2);
+        }
+
+        @Test
+        void a_batch_stamped_exactly_at_its_cutoff_is_stale() {
+            final DistributionCommand monday = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand tuesday = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+            final Instant exactly = cutoff(STALE_AFTER).truncatedTo(ChronoUnit.MILLIS);
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(monday, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(tuesday, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> active = mine(store.activeUnbatched());
+                final RegisterBatch onIt = assembled(MONDAY, recordsOn(active, MONDAY));
+                final RegisterBatch justInside = assembled(TUESDAY, recordsOn(active, TUESDAY));
+                stampBatch(onIt.batchId(), exactly);
+                stampBatch(justInside.batchId(), exactly.plusSeconds(1));
+                released.set(store.failAndReleaseStale(exactly, exactly));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("a batch stamped at exactly the cutoff is stale: the rule is at or before "
+                            + "it, so the batch that has waited precisely the minimum age is the "
+                            + "first one the pass is for, not the last one it misses")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+            softly.assertThat(batchOn(TUESDAY))
+                    .as("and one second the younger side of it is not, which is the other half of "
+                            + "the same boundary")
+                    .contains(new BatchOutcome(PENDING_STATUS, null, null));
+            softly.assertThat(mineReleased(released.get()))
+                    .as("so the run is told about the one day and not the other")
+                    .extracting(ReleasedBatch::registerDate)
+                    .containsExactly(MONDAY);
+        }
+
+        @Test
+        void no_batch_a_run_has_finished_with_is_ever_matched_at_any_age() {
+            final AtomicReference<UUID> failed = new AtomicReference<>();
+            final AtomicReference<UUID> notified = new AtomicReference<>();
+            final AtomicReference<UUID> partlyNotified = new AtomicReference<>();
+            final AtomicReference<UUID> toldNobody = new AtomicReference<>();
+            final AtomicReference<UUID> waiting = new AtomicReference<>();
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(seededCommand(HEARING_ONE, MONDAY_SHARED),
+                        document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch generationFailed =
+                        assembled(MONDAY, mine(store.activeUnbatched()));
+                failed.set(generationFailed.batchId());
+                store.markRequested(generationFailed.batchId(), UUID.randomUUID());
+                store.markFailed(generationFailed.batchId(), BatchFailureReason.GENERATION_FAILED,
+                        SDG_REASON, CompletedBy.EVENT);
+
+                record(seededCommand(HEARING_TWO, MONDAY_RESHARED),
+                        document(HEARING_TWO, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch sent = assembled(MONDAY, mine(store.activeUnbatched()));
+                notified.set(sent.batchId());
+                walkedToNotified(sent, UUID.randomUUID(), UUID.randomUUID());
+
+                record(seededCommand(HEARING_FOUR, MONDAY_SHARED),
+                        document(HEARING_FOUR, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch someTold = assembled(MONDAY, mine(store.activeUnbatched()));
+                partlyNotified.set(someTold.batchId());
+                walkedToSettled(someTold, UUID.randomUUID(), UUID.randomUUID(),
+                        new NotificationSummary(1, 1, BatchStatus.PARTIALLY_NOTIFIED));
+
+                record(seededCommand(HEARING_FOUR, MONDAY_RESHARED),
+                        document(HEARING_FOUR, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch nobodyToTell =
+                        assembled(MONDAY, mine(store.activeUnbatched()));
+                toldNobody.set(nobodyToTell.batchId());
+                walkedToSettled(nobodyToTell, UUID.randomUUID(), UUID.randomUUID(),
+                        new NotificationSummary(0, 0, BatchStatus.NOTIFIED_NOBODY));
+
+                record(seededCommand(HEARING_THREE, TUESDAY_SHARED),
+                        document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch stillWaiting =
+                        assembled(TUESDAY, mine(store.activeUnbatched()));
+                waiting.set(stillWaiting.batchId());
+
+                ageBatch(generationFailed.batchId(), LAST_NIGHT);
+                ageBatch(sent.batchId(), LAST_NIGHT);
+                ageBatch(someTold.batchId(), LAST_NIGHT);
+                ageBatch(nobodyToTell.batchId(), LAST_NIGHT);
+                ageBatch(stillWaiting.batchId(), LAST_NIGHT);
+                released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(outcomeOf(failed.get()))
+                    .as("PENDING and GENERATING is the whole of the predicate, and a batch already "
+                            + "FAILED is not in it at any age: re-failing it would overwrite the "
+                            + "reason support is reading and hand back registers a person may have "
+                            + "asked for on the resend surface")
+                    .contains(new BatchOutcome(FAILED, "GENERATION_FAILED", SDG_REASON));
+            softly.assertThat(stampedWith(failed.get()))
+                    .as("so its register keeps the stamp that reason leaves it, untouched by this "
+                            + "pass")
+                    .isEqualTo(1);
+            softly.assertThat(outcomeOf(notified.get()))
+                    .as("and a batch whose Youth Offending Teams have been told is no more in it "
+                            + "than a GENERATED one: there is nothing left to give back, and a "
+                            + "failure written over it would say a night that worked did not")
+                    .contains(new BatchOutcome(NOTIFIED, null, null));
+            softly.assertThat(outcomeOf(partlyNotified.get()))
+                    .as("nor is the ending where some of the day's Youth Offending Teams were told "
+                            + "and the rest are resendable: the ones that were told were told, and "
+                            + "the rest are a resend of this batch rather than a reason to render "
+                            + "the day again under another one")
+                    .contains(new BatchOutcome(PARTIALLY_NOTIFIED, null, null));
+            softly.assertThat(outcomeOf(toldNobody.get()))
+                    .as("and neither is the ending where there was nobody to tell, which is a "
+                            + "night that worked as much as any other: the document exists, it is "
+                            + "simply that no team subscribed to that court centre day")
+                    .contains(new BatchOutcome(NOTIFIED_NOBODY, null, null));
+            softly.assertThat(outcomeOf(waiting.get()))
+                    .as("while the day of the very same age that was still waiting for its render "
+                            + "is the one the pass is about")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+            softly.assertThat(mineReleased(released.get()))
+                    .as("which is the only day the run is told it released")
+                    .extracting(ReleasedBatch::registerDate)
+                    .containsExactly(TUESDAY);
+        }
+
+        @Test
+        void the_mark_and_the_release_are_one_transaction() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand second = seededCommand(HEARING_TWO, MONDAY_SHARED);
+            final AtomicReference<UUID> batchId = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(second, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), UUID.randomUUID());
+                ageBatch(monday.batchId(), LAST_NIGHT);
+                batchId.set(monday.batchId());
+            }).as(WALKED).doesNotThrowAnyException();
+
+            final AtomicReference<Throwable> refusal = new AtomicReference<>();
+            withOneUnbatchedRegisterAllowed(() -> refusal.set(catchThrowable(() ->
+                    store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)))));
+
+            softly.assertThat(refusal.get())
+                    .as("the release meets an index it cannot satisfy, and the refusal is not "
+                            + "swallowed - as this package's own translation of the store's "
+                            + "refusal, rather than as whatever class a later change happens to "
+                            + "leave escaping. The class that has to read it is the pass in "
+                            + "batch/, which may name no org.springframework.dao type, so an "
+                            + "untranslated refusal could only be caught there as RuntimeException "
+                            + "- the catch that swallows every programming error beside it")
+                    .isInstanceOf(RegisterNotReleasedException.class)
+                    .hasMessageNotContaining(ACTIVE_REGISTER_KEY)
+                    .as("classified by the kind of rule that refused it and not by the "
+                            + "active-register key, which is the difference the pass acts on: a "
+                            + "refusal on a rule this operation does not account for is the store "
+                            + "saying the write may never be made, and no fresh snapshot changes "
+                            + "that, so it is raised rather than made again three times and then "
+                            + "reported contended")
+                    .hasMessageContaining(UNACCOUNTED_KEY)
+                    .as("and it travels alone. The driver's own exception is not attached, "
+                            + "because the statement it was raised from writes processed_output - "
+                            + "the table the register document itself sits in - and Postgres "
+                            + "reports a refusal by quoting the row")
+                    .hasNoCause();
+            nothingOfTheDriverTravels(refusal.get());
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("and the mark goes down with it. A mark that survived its own release "
+                            + "would leave the batch FAILED with its registers still stamped to "
+                            + "it - unbatched means batch_id IS NULL, so no later run and no "
+                            + "command would ever see them again")
+                    .contains(new BatchOutcome(GENERATING, null, null));
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("nothing intermediate is observable, because there is no intermediate "
+                            + "state to observe: one statement, and it either happened or it did not")
+                    .isEqualTo(2);
+
+            softly.assertThatCode(() ->
+                            store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)))
+                    .as("with the index gone the same call is made again")
+                    .doesNotThrowAnyException();
+            softly.assertThat(batchOn(MONDAY))
+                    .as("and this time both halves land together")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("which is the release, in the same act as the failure")
+                    .isZero();
+            softly.assertThat(stampedWith(batchId.get()))
+                    .as("and the batch that failed holds no register hostage to a document that "
+                            + "nothing will now produce")
+                    .isZero();
+        }
+
+        @Test
+        void a_refusal_that_is_not_a_key_at_all_is_the_domains_own_class_too() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), UUID.randomUUID());
+                ageBatch(monday.batchId(), LAST_NIGHT);
+            }).as(WALKED).doesNotThrowAnyException();
+
+            final AtomicReference<Throwable> refusal = new AtomicReference<>();
+            withThisCourtCentresFailureRefused(() -> refusal.set(catchThrowable(() ->
+                    store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)))));
+
+            softly.assertThat(refusal.get())
+                    .as("a unique key is not the only rule a store can refuse a write on: a CHECK "
+                            + "constraint the failure reason does not satisfy - which is what a "
+                            + "pod running against a store V6 never reached would meet on every "
+                            + "batch - is refused as a DataIntegrityViolationException that is no "
+                            + "DuplicateKeyException, and it is translated at the same boundary "
+                            + "for the same reason. The pass in batch/ may name no "
+                            + "org.springframework.dao type (Principle V), so a refusal that "
+                            + "crossed the port untranslated could only be read there as "
+                            + "RuntimeException")
+                    .isInstanceOf(RegisterNotReleasedException.class)
+                    .as("classified apart from the key race this operation retries, and apart "
+                            + "from a key it does not account for: no fresh snapshot changes a "
+                            + "rule, so it is raised rather than attempted three times and then "
+                            + "reported contended")
+                    .hasMessageContaining(UNACCOUNTED_RULE)
+                    .hasMessageNotContaining(UNACCOUNTED_KEY)
+                    .as("and the driver's refusal is not attached here either. A CHECK constraint "
+                            + "is the one Postgres reports with 'Failing row contains' and the "
+                            + "whole row after it, and the rows this statement writes are the "
+                            + "rows a youth register is recorded in")
+                    .hasNoCause();
+            nothingOfTheDriverTravels(refusal.get());
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("and the mark goes down with the release it was refused beside, exactly as "
+                            + "it does for a key: one statement, so there is no batch left FAILED "
+                            + "with its registers still stamped to it")
+                    .contains(new BatchOutcome(GENERATING, null, null));
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("with its register still its own, and still reachable by the run that "
+                            + "follows once the rule is put right")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void the_failure_names_no_completion_mechanism() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), UUID.randomUUID());
+                ageBatch(monday.batchId(), LAST_NIGHT);
+                store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(completedByOn(MONDAY))
+                    .as("nobody outside this service reported anything about this batch: no event "
+                            + "arrived and nothing was asked, so naming a completion mechanism "
+                            + "would credit a decision nobody made. The reason is not generator-"
+                            + "attributed, so the attribution rule is satisfied with null and "
+                            + "register_batch_completed_by_shape_chk admits the row")
+                    .isEmpty();
+            softly.assertThat(batchOn(MONDAY))
+                    .as("and systemdocgenerator's own words are absent for the same reason: it "
+                            + "said nothing, because after this increment it is never asked")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+        }
+
+        @Test
+        void a_release_supersedes_against_a_later_re_share() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand reshare = seededCommand(HEARING_ONE, MONDAY_RESHARED);
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), UUID.randomUUID());
+                // The hearing is shared again while the first register is stamped into the batch,
+                // so the day holds two RECORDED rows for one key rather than one.
+                record(reshare, document(HEARING_ONE, MONDAY, MONDAY_RESHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                ageBatch(monday.batchId(), LAST_NIGHT);
+                released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the release is recorded whatever the re-share did: a statement refused by "
+                            + "the active-row index would leave the batch in flight under a run "
+                            + "that had already given up on it")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+            softly.assertThat(supersessionOf(first).map(SupersessionPair::supersededBy))
+                    .as("so supersession decides, exactly as it does for the two reasons that "
+                            + "release today: the stale register is superseded as its stamp is "
+                            + "cleared, and by the register that replaced it")
+                    .contains(outputIdOf(reshare).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("a release never makes two registers active for one hearing")
+                    .containsExactlyInAnyOrder(SUPERSEDED, RECORDED);
+            softly.assertThat(activeUnbatched())
+                    .as("and tonight's batch is the re-share alone")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(reshare).orElse(null));
+            softly.assertThat(mineReleased(released.get()))
+                    .as("the count is what came back to be rendered, so the superseded register is "
+                            + "not in it: nothing will put it in tonight's batch, and a number the "
+                            + "run report reads as registers it re-batched must not include it")
+                    .extracting(ReleasedBatch::registerDate, ReleasedBatch::releasedRegisters)
+                    .containsExactly(tuple(MONDAY, 0));
+        }
+
+        /**
+         * The mirror of the case above: the share the batched register overtook.
+         *
+         * <p>A share delivered out of order - a redelivery that arrived behind the register it
+         * belongs in front of - is recorded <strong>active</strong>, because the recorder's
+         * incumbent search is over unbatched rows and the register the batch holds is batched, so
+         * there was nothing for it to supersede. The key then has an active row that is
+         * <em>earlier</em> than the register the release has to give back, and handing that
+         * register back beside it is the second active row {@code idx_output_active_register_key}
+         * refuses.
+         *
+         * <p>So the release decides it, the same way and in the same direction the recorder
+         * decides it: the later share wins. The register being given back is the later one, so the
+         * release supersedes the earlier row against it in the same statement. Latest share wins in
+         * both directions, and neither a recorder nor a release ever leaves a key with two active
+         * rows.
+         *
+         * <p>Without this the batch is contended on every run for ever: no fresh snapshot removes
+         * the earlier row, and the recorder will not supersede a batched register on its behalf, so
+         * the court centre day waits for a release no run can make.
+         */
+        @Test
+        void a_release_supersedes_the_share_it_overtook() {
+            final DistributionCommand batched = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand overtaken = seededCommand(HEARING_ONE, MONDAY_OVERTAKEN);
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(batched, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), UUID.randomUUID());
+                // The hearing's earlier share is delivered after the later one is already in the
+                // batch, so the recorder writes it active: a batched register is not its to
+                // supersede.
+                record(overtaken, document(HEARING_ONE, MONDAY, MONDAY_OVERTAKEN), APPLICANT,
+                        RecordedFlagState.ON);
+                ageBatch(monday.batchId(), LAST_NIGHT);
+                released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(batchOn(MONDAY))
+                    .as("the batch is released like any other: a key the release cannot decide is "
+                            + "a court centre day contended on every run for ever, because no "
+                            + "fresh snapshot removes a row that was committed before the "
+                            + "statement began")
+                    .contains(new BatchOutcome(FAILED, NOT_COMPLETED, null));
+            softly.assertThat(mineContended(released.get()))
+                    .as("so it is not reported as contended, which is what it was while the "
+                            + "release could only supersede in one direction")
+                    .isEmpty();
+            softly.assertThat(supersessionOf(overtaken).map(SupersessionPair::supersededBy))
+                    .as("and the earlier share is superseded against the register being given "
+                            + "back, which is the same ordering the recorder applies when it is "
+                            + "the one that meets the two: the later share wins")
+                    .contains(outputIdOf(batched).orElse(null));
+            softly.assertThat(statusesOn(MONDAY))
+                    .as("so the key keeps exactly one active row, as it does after every other "
+                            + "write in this store")
+                    .containsExactlyInAnyOrder(RECORDED, SUPERSEDED);
+            softly.assertThat(activeUnbatched())
+                    .as("and the register the day is still to render is the one that came back, "
+                            + "rather than the share it had already overtaken")
+                    .extracting(RegisterRecord::outputId)
+                    .containsExactly(outputIdOf(batched).orElse(null));
+            softly.assertThat(mineReleased(released.get()))
+                    .as("which is the one register the run is told it gave back")
+                    .extracting(ReleasedBatch::registerDate, ReleasedBatch::releasedRegisters)
+                    .containsExactly(tuple(MONDAY, 1));
+        }
+
+        @Test
+        void a_batch_that_no_longer_matches_yields_zero_rows_and_no_error() {
+            final DistributionCommand first = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(first, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final RegisterBatch monday = assembled(MONDAY, mine(store.activeUnbatched()));
+                store.markRequested(monday.batchId(), UUID.randomUUID());
+                released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(mineReleased(released.get()))
+                    .as("a batch that is not stale is a batch the operation did not change, which "
+                            + "is a number and not an error (FR-003a). A read-then-mark shape would "
+                            + "instead be refused by the state machine and throw out of the run, "
+                            + "and one batch that came good in the wrong second would cost every "
+                            + "court centre its document that night")
+                    .isEmpty();
+            softly.assertThat(mineContended(released.get()))
+                    .as("and it is not reported as contended either: contention is a race for the "
+                            + "day's active-register key that every attempt lost, and a batch "
+                            + "nothing was attempted against lost nothing")
+                    .isEmpty();
+            softly.assertThat(batchOn(MONDAY))
+                    .as("nothing about it is written, so nothing about it has to be undone")
+                    .contains(new BatchOutcome(GENERATING, null, null));
+            softly.assertThat(stampedRowsOn(MONDAY))
+                    .as("and its register is still in the batch the renderer was asked about")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void the_operation_returns_what_it_changed_with_its_register_counts() {
+            final DistributionCommand mondayFirst = seededCommand(HEARING_ONE, MONDAY_SHARED);
+            final DistributionCommand mondaySecond = seededCommand(HEARING_TWO, MONDAY_SHARED);
+            final DistributionCommand tuesdayFirst = seededCommand(HEARING_THREE, TUESDAY_SHARED);
+            final AtomicReference<StaleReleaseOutcome> released = new AtomicReference<>();
+            final AtomicReference<UUID> monday = new AtomicReference<>();
+            final AtomicReference<UUID> tuesday = new AtomicReference<>();
+
+            softly.assertThatCode(() -> {
+                record(mondayFirst, document(HEARING_ONE, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(mondaySecond, document(HEARING_TWO, MONDAY, MONDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                record(tuesdayFirst, document(HEARING_THREE, TUESDAY, TUESDAY_SHARED), APPLICANT,
+                        RecordedFlagState.ON);
+                final List<RegisterRecord> active = mine(store.activeUnbatched());
+                final RegisterBatch two = assembled(MONDAY, recordsOn(active, MONDAY));
+                final RegisterBatch one = assembled(TUESDAY, recordsOn(active, TUESDAY));
+                store.markRequested(two.batchId(), UUID.randomUUID());
+                ageBatch(two.batchId(), LAST_NIGHT);
+                ageBatch(one.batchId(), LAST_NIGHT);
+                monday.set(two.batchId());
+                tuesday.set(one.batchId());
+                released.set(store.failAndReleaseStale(cutoff(STALE_AFTER), cutoff(STALE_AFTER)));
+            }).as(WALKED).doesNotThrowAnyException();
+
+            softly.assertThat(mineReleased(released.get()))
+                    .as("each batch the operation changed, with the key the pass writes its line "
+                            + "about and the count the run report carries beside its own accounts. "
+                            + "A batch is one document and one e-mail; a register is one hearing's "
+                            + "youth defendants, and neither number answers the other's question")
+                    .extracting(ReleasedBatch::batchId, ReleasedBatch::courtCentreId,
+                            ReleasedBatch::registerDate, ReleasedBatch::releasedRegisters)
+                    .containsExactly(
+                            tuple(monday.get(), courtCentre, MONDAY, 2),
+                            tuple(tuesday.get(), courtCentre, TUESDAY, 1));
+            softly.assertThat(mineContended(released.get()))
+                    .as("and neither of them is reported as contended, because every batch the "
+                            + "operation looked at is accounted for in exactly one of the two "
+                            + "lists: a released day is not also a day the pass could not release")
+                    .isEmpty();
         }
     }
 
@@ -3620,8 +4668,26 @@ class RegisterStoreIT {
      */
     private void walkedToNotified(final RegisterBatch batch, final UUID payloadFileId,
             final UUID documentFileId) {
+        walkedToSettled(batch, payloadFileId, documentFileId,
+                new NotificationSummary(1, 0, BatchStatus.NOTIFIED));
+    }
+
+    /**
+     * The same walk, settled on a tally the case chooses rather than on the everybody-was-told one.
+     *
+     * <p>Three states settle a notification run - everybody was told, somebody was not, and there
+     * was nobody to tell - and all three are endings a run has finished with. A case that can only
+     * reach the first of them can only claim the predicate about the first of them.
+     *
+     * @param batch          the batch assembly left at PENDING
+     * @param payloadFileId  the payload the render was asked for
+     * @param documentFileId the document systemdocgenerator produced
+     * @param summary        the tally and the terminal state it produces
+     */
+    private void walkedToSettled(final RegisterBatch batch, final UUID payloadFileId,
+            final UUID documentFileId, final NotificationSummary summary) {
         walkedToGenerated(batch, payloadFileId, documentFileId);
-        store.markNotified(batch.batchId(), new NotificationSummary(1, 0, BatchStatus.NOTIFIED));
+        store.markNotified(batch.batchId(), summary);
     }
 
     private static List<RegisterRecord> recordsOn(
@@ -3820,6 +4886,339 @@ class RegisterStoreIT {
     private RegisterBatch assembled(
             final LocalDate registerDate, final List<RegisterRecord> records) {
         return store.assemble(firstBatchFor(registerDate, records), records);
+    }
+
+    /**
+     * The batch an operator typed for rather than the schedule made, otherwise as the assembler
+     * decides a day's first one.
+     *
+     * <p>{@code system_generated} is the only difference, and it is the whole of what the longer
+     * manual cutoff is chosen by: a manual generation holds no run lock and has the requesting
+     * deadline to work in (FR-017).
+     *
+     * @param registerDate the day being batched, at this case's court centre
+     * @param records      the registers it groups, the first of which names the file
+     * @return the batch the store is asked to write
+     */
+    private RegisterBatch manualBatchFor(
+            final LocalDate registerDate, final List<RegisterRecord> records) {
+        return new RegisterBatch(UUID.randomUUID(), courtCentre, null, null, registerDate,
+                records.isEmpty() ? null : records.getFirst().fileName(), null, null,
+                BatchStatus.PENDING, null, null, false, null, null, null, null, null, null, 0,
+                null, 0);
+    }
+
+    /**
+     * A cutoff of a given age, as the pass computes one from its clock and its settings.
+     *
+     * <p>Always in the past, so a case here can only reach a batch it aged itself: the several
+     * suites share one container, and a cutoff in the future would name every batch in it.
+     *
+     * @param age how long a batch may be in flight before this cutoff calls it stale
+     * @return the instant a stamp at or before which is stale
+     */
+    private static Instant cutoff(final Duration age) {
+        return Instant.now().minus(age);
+    }
+
+    /**
+     * Ages both of a batch's in-flight stamps, as the night between two runs does.
+     *
+     * @param batchId the batch to age
+     * @param age     how far into the past to move its stamps
+     */
+    private void ageBatch(final UUID batchId, final Duration age) {
+        ageBatch(batchId, age, age);
+    }
+
+    /**
+     * Ages a batch's two in-flight stamps separately, so the {@code COALESCE} can be told apart.
+     *
+     * <p>By the database's own clock and in its own units, exactly as the stamps were written.
+     * {@code requested_at} is left null where it is null - a PENDING batch has none, and that is
+     * the case the coalesce is for.
+     *
+     * @param batchId   the batch to age
+     * @param assembled how far into the past to move {@code assembled_at}
+     * @param requested how far into the past to move {@code requested_at}
+     * @throws IllegalStateException if there was no batch to age, since a fixture that quietly
+     *                               does nothing would turn a case green for the wrong reason
+     */
+    private void ageBatch(final UUID batchId, final Duration assembled, final Duration requested) {
+        final int aged = ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        UPDATE register_batch
+                           SET assembled_at = assembled_at - make_interval(secs => :assembled),
+                               requested_at = requested_at - make_interval(secs => :requested)
+                         WHERE batch_id = :batchId
+                        """)
+                .param("assembled", (double) assembled.toSeconds())
+                .param("requested", (double) requested.toSeconds())
+                .param(BATCH_ID, batchId)
+                .update();
+        if (aged != ONE_BATCH) {
+            throw new IllegalStateException(
+                    "expected one batch to age for " + batchId + ", aged " + aged);
+        }
+    }
+
+    /**
+     * Writes a batch's in-flight stamps to an exact instant, so a cutoff can be put on the boundary.
+     *
+     * <p>{@link #ageBatch} moves a stamp by a duration, which is what a case about "a night old"
+     * wants and is no use at all to a case about "at exactly the cutoff": the two instants would
+     * differ by however long the fixture itself took. Here the case names one instant and both the
+     * stamp and the cutoff are it. It is truncated to the millisecond by the caller, because the
+     * column keeps microseconds and would round a nanosecond-precision instant either way.
+     *
+     * <p>{@code requested_at} is written only where it is not null, so a PENDING batch stays the
+     * {@code COALESCE}'s other case rather than being quietly turned into a GENERATING one's shape.
+     *
+     * @param batchId the batch to stamp
+     * @param stamp   the instant both of its in-flight stamps are written to
+     * @throws IllegalStateException if there was no batch to stamp, since a fixture that quietly
+     *                               does nothing would turn a case green for the wrong reason
+     */
+    private void stampBatch(final UUID batchId, final Instant stamp) {
+        final int stamped = ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        UPDATE register_batch
+                           SET assembled_at = :stamp,
+                               requested_at = CASE WHEN requested_at IS NULL THEN NULL
+                                                   ELSE :stamp END
+                         WHERE batch_id = :batchId
+                        """)
+                .param("stamp", stamp.atOffset(ZoneOffset.UTC))
+                .param(BATCH_ID, batchId)
+                .update();
+        if (stamped != ONE_BATCH) {
+            throw new IllegalStateException(
+                    "expected one batch to stamp for " + batchId + ", stamped " + stamped);
+        }
+    }
+
+    /**
+     * A batch's outcome read by its identity, for a case holding more than one batch on a day.
+     *
+     * <p>{@link #batchOn(LocalDate)} reads by the day, which a case that fails a batch and then
+     * assembles another for the same day cannot use - the day holds two rows and the read would
+     * refuse them both.
+     *
+     * @param batchId the batch to read
+     * @return its status and the two reason columns, or nothing where there is no such batch
+     */
+    private static Optional<BatchOutcome> outcomeOf(final UUID batchId) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT status, failure_reason, sdg_reason
+                          FROM register_batch
+                         WHERE batch_id = :batchId
+                        """)
+                .param(BATCH_ID, batchId)
+                .query((rs, rowNumber) -> new BatchOutcome(rs.getString("status"),
+                        rs.getString("failure_reason"), rs.getString("sdg_reason")))
+                .optional();
+    }
+
+    /**
+     * An observer that writes down the batches it is told about, in the order it is told.
+     *
+     * @param told where each released batch's identity is recorded
+     * @return the observer to hand the release
+     */
+    private static StaleReleaseProgress recording(final List<UUID> told) {
+        return new StaleReleaseProgress() {
+
+            @Override
+            public void recordReleased(final ReleasedBatch released) {
+                told.add(released.batchId());
+            }
+
+            @Override
+            public void recordContended(final UUID batchId) {
+                // No case here stands a batch up that every attempt loses its day's key on;
+                // StaleReleaseConcurrencyIT is where that ending is driven.
+            }
+        };
+    }
+
+    /**
+     * The released batches of this case's court centre, and none of another suite's.
+     *
+     * <p>The operation answers for the whole store, as the pass needs it to; a case asserts on its
+     * own court centre for the same reason {@link #mine(List)} exists. Null is answered as nothing
+     * rather than thrown on, so a red run reports the assertion that was being made and not the
+     * seam that had not been implemented yet.
+     *
+     * @param released what the operation answered with, or {@code null} where it refused
+     * @return the records naming this case's court centre, in the order they came back
+     */
+    private List<ReleasedBatch> mineReleased(final StaleReleaseOutcome release) {
+        return release == null ? List.of() : release.released().stream()
+                .filter(batch -> courtCentre.equals(batch.courtCentreId()))
+                .toList();
+    }
+
+    /**
+     * The contended batches of this case's court centre, and none of another suite's.
+     *
+     * <p>Contention is reported by identity alone, so the court centre is read back out of the row
+     * rather than carried on the answer - which is the same filter {@link #mineReleased} makes, for
+     * the same reason: the operation answers for the whole store and a case may only speak for its
+     * own court centre.
+     *
+     * @param release what the operation answered with, or {@code null} where it refused
+     * @return the contended batches of this case's court centre, in the order they came back
+     */
+    private List<UUID> mineContended(final StaleReleaseOutcome release) {
+        return release == null ? List.of() : release.contended().stream()
+                .filter(batchId -> courtCentre.equals(courtCentreOf(batchId)))
+                .toList();
+    }
+
+    /** The court centre a batch was assembled for, read straight out of {@code register_batch}. */
+    private UUID courtCentreOf(final UUID batchId) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("SELECT court_centre_id FROM register_batch WHERE batch_id = :batchId")
+                .param(BATCH_ID, batchId)
+                .query(UUID.class)
+                .single();
+    }
+
+    /**
+     * Runs the body with an index that refuses a second unbatched register at this court centre.
+     *
+     * <p>Partial and on this case's court centre, so it is invisible to every other suite sharing
+     * the container, and created while both registers are stamped so that it is empty until the
+     * release tries to clear them. What it buys is the one thing a single-threaded case cannot
+     * otherwise see: a release that fails after its mark would leave the batch FAILED with its
+     * registers stamped to it, and this is how the mark is watched going down with the release.
+     *
+     * <p>Dropped whatever the body does: an index left behind would refuse the next case here.
+     *
+     * @param refused what is expected to meet the index
+     */
+    private void withOneUnbatchedRegisterAllowed(final Runnable refused) {
+        final String index = testOnlyUnbatchedIndex();
+        ProcessedLogTestSupport.jdbcClient()
+                .sql("CREATE UNIQUE INDEX " + index + " ON processed_output (court_centre_id) "
+                        + "WHERE batch_id IS NULL AND court_centre_id = '" + courtCentre + "'")
+                .update();
+        try {
+            refused.run();
+        } finally {
+            ProcessedLogTestSupport.jdbcClient().sql("DROP INDEX " + index).update();
+        }
+    }
+
+    /**
+     * Runs the body with a rule that is not a key refusing this court centre's batch failures.
+     *
+     * <p>The other half of {@link #withOneUnbatchedRegisterAllowed}: a unique index is one thing a
+     * store can refuse a write on, and a CHECK constraint is another - and Spring reports the two
+     * as different classes, only one of which is a {@code DuplicateKeyException}. A pod whose store
+     * never reached {@code V6} meets exactly this on every stale batch, because the bounded reason
+     * the pass writes is one {@code register_batch_failure_reason_chk} did not admit until then.
+     *
+     * <p>Narrowed to this case's court centre and added {@code NOT VALID}, so no row any other
+     * suite sharing the container holds is looked at, let alone refused; dropped whatever the body
+     * does, because a constraint left behind would refuse every failure after it.
+     *
+     * @param refused what is expected to meet the constraint
+     */
+    private void withThisCourtCentresFailureRefused(final Runnable refused) {
+        final String constraint = "test_only_no_failure_" + courtCentre.toString().replace("-", "");
+        ProcessedLogTestSupport.jdbcClient()
+                .sql("ALTER TABLE register_batch ADD CONSTRAINT " + constraint
+                        + " CHECK (court_centre_id <> '" + courtCentre + "'::uuid "
+                        + "OR failure_reason IS NULL) NOT VALID")
+                .update();
+        try {
+            refused.run();
+        } finally {
+            ProcessedLogTestSupport.jdbcClient()
+                    .sql("ALTER TABLE register_batch DROP CONSTRAINT " + constraint)
+                    .update();
+        }
+    }
+
+    /**
+     * The name {@link #withOneUnbatchedRegisterAllowed} gives its index, so a case may name it too.
+     *
+     * <p>A case that asserts <em>which</em> rule refused a write has to know what that rule is
+     * called. Derived here rather than written down twice, because the two spellings drifting apart
+     * would leave the assertion passing against a refusal it was never about.
+     *
+     * @return the index name, unique to this case's court centre
+     */
+    private String testOnlyUnbatchedIndex() {
+        return "test_only_unbatched_" + courtCentre.toString().replace("-", "");
+    }
+
+    /**
+     * Asserts that nothing the driver said travels with a refusal, as a class or as a word.
+     *
+     * <p><strong>Why the whole chain and not only the exception itself.</strong> A cause is how a
+     * driver's detail line reaches a stack trace, and a stack trace is written whole: naming the
+     * top-level class would leave a later change free to re-attach the refusal underneath it and
+     * this suite green. So the chain is walked, and both things are asked of every link - that it
+     * is not an {@code org.springframework.dao} type, which is what Principle V forbids crossing
+     * the port, and that nothing it says is anything Postgres quoted back.
+     *
+     * <p>Postgres reports a refused row two ways and both are checked: {@code Failing row contains
+     * (...)} for a CHECK, and {@code Key (...)=(...) already exists} for a unique index. The
+     * statement writes {@code processed_output}, whose row holds the register document, so what
+     * those lines would quote is a child's name and date of birth - which may not reach a log
+     * index at INFO or above, and a refusal raised out of the nightly run is written at ERROR
+     * (constitution Principle VII).
+     *
+     * @param refusal what the release threw
+     */
+    private void nothingOfTheDriverTravels(final Throwable refusal) {
+        softly.assertThat(everyClassIn(refusal))
+                .as("no refusal crosses the port as a Spring data-access type, at any depth: the "
+                        + "pass in batch/ may name none of them, so one that did could only be "
+                        + "caught there as RuntimeException")
+                .isNotEmpty()
+                .noneMatch(travelling -> travelling.startsWith(SPRING_DAO));
+        softly.assertThat(everythingSaidBy(refusal))
+                .as("and nothing the driver said travels either - not the detail line it quotes a "
+                        + "refused row under, not the court centre, and above all nothing of the "
+                        + "child the register is about")
+                .doesNotContain(FAILING_ROW, REFUSED_KEY_DETAIL, courtCentre.toString(),
+                        "SMITH, John", "2008-04-11");
+    }
+
+    /** Every class a refusal travels as: the exception itself, and every cause beneath it. */
+    private static List<String> everyClassIn(final Throwable refusal) {
+        final List<String> travelling = new ArrayList<>();
+        for (Throwable link = refusal; link != null; link = link.getCause()) {
+            travelling.add(link.getClass().getName());
+        }
+        return travelling;
+    }
+
+    /** Everything a refusal says: its own message, and every message beneath it, run together. */
+    private static String everythingSaidBy(final Throwable refusal) {
+        final StringBuilder said = new StringBuilder();
+        for (Throwable link = refusal; link != null; link = link.getCause()) {
+            said.append(String.valueOf(link.getMessage())).append('\n');
+        }
+        return said.toString();
+    }
+
+    /** The moment a batch's render was asked for, read back out of {@code register_batch}. */
+    private Optional<OffsetDateTime> requestedAtOn(final LocalDate registerDate) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT requested_at
+                          FROM register_batch
+                         WHERE court_centre_id = :courtCentre AND register_date = :registerDate
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("registerDate", registerDate)
+                .query(OffsetDateTime.class)
+                .optional();
     }
 
     /** The payload id a batch carries, read back out of {@code register_batch}. */

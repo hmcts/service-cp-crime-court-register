@@ -11,6 +11,7 @@ import javax.sql.DataSource;
 import org.springframework.boot.jdbc.DataSourceBuilder;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.support.JdbcTransactionManager;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.cp.courtregister.application.IdempotencyGuard;
@@ -74,7 +75,20 @@ public final class ProcessedLogTestSupport {
      * nothing while appearing to.
      */
     public static TransactionOperations transactions() {
-        return new TransactionTemplate(new JdbcTransactionManager(dataSource()));
+        return new TransactionTemplate(transactionManager());
+    }
+
+    /**
+     * A transaction manager over the pooled connection, for the classes that build their own.
+     *
+     * <p>{@code JdbcRegisterStore} is one: it needs two boundaries over the one data source and
+     * only one of them is the ordinary kind, so it takes the manager and makes both rather than
+     * being handed a template it could not vary.
+     *
+     * @return a manager over {@link #dataSource()}, and over no other
+     */
+    public static PlatformTransactionManager transactionManager() {
+        return new JdbcTransactionManager(dataSource());
     }
 
     /**

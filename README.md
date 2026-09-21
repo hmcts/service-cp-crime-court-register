@@ -69,7 +69,8 @@ This repository carries no design narrative of its own. What it does carry:
   the register store, with supersession enforced at the write; the nightly job assembles one batch
   per (court centre, register date), writes the PDF payload into the file service, asks
   systemdocgenerator for the unchanged `OEE_Layout5` render, learns the outcome from the
-  `public.event` topic — with a grace-period reconciler for the outcomes that never arrive — and
+  `public.event` topic — with a grace-period reconciler for the outcomes that never arrive, since
+  retired by 004 in favour of the next run releasing a stale batch — and
   sends one notificationnotify e-mail per matched Youth Offending Team. The flag gate, the five
   operations commands and the run report land with it, and the progression-leg `P` rows are appended
   to the defect-fix register. The consolidation audit reproduces the recorded progression corpus by
@@ -95,6 +96,23 @@ This repository carries no design narrative of its own. What it does carry:
   nothing, and startup refuses the switch with no template, no recipients, no file-service URL or
   no notificationnotify endpoint. No `doc/DEFECT-FIXES.md` row is added or amended — a new
   capability is not a deviation from a legacy oracle.
+- **Increment 004 — release-stale-batches: complete.** A batch whose render outcome never arrived
+  is no longer waited on: the nightly run's **first act** fails every PENDING or GENERATING batch
+  older than its cutoff under the bounded `NOT_COMPLETED_BY_NEXT_RUN` and gives its registers back,
+  so the same run re-batches them and the court centre gets its document that night instead of the
+  next one. One fenced statement per batch, so nothing about one batch can end a night; a batch
+  every attempt at lost the day's active-register key is reported contended and reached again by
+  the next run. The cutoff is `courtregister.generation.stale-after` for the schedule's own
+  batches and the longer of that and the run lock for a batch an operator asked for, which holds no
+  run lock and has the whole requesting deadline to work in. The grace-period reconciler and
+  systemdocgenerator's query endpoint are retired with it — there is nothing left to ask, so
+  `GENERATION_TIMED_OUT` leaves the vocabulary and the store's constraints — and `BatchAgeSweep`
+  takes over the three in-flight batch-age gauges the reconciler used to refresh, on its own fixed
+  delay in every non-command JVM that carries the generation half, and under no lock. An outcome that arrives for a batch this
+  service had already ended moves nothing and is counted under `terminal-batch`, which is what
+  stops a Youth Offending Team being e-mailed twice about one day; the 07:00 report tells a
+  released batch from a failed one, reporting it as the informational `BATCH_RELEASED`. Task-level
+  detail is the checkbox state in `specs/004-release-stale-batches/tasks.md`.
 - **Cutover** is a separate step now that both increments are signed off: the producer's queue
   publisher and the legacy kill-switch already exist as patterns; the flag is the only lever. Two
   register rows are tracked to conclusion first — P6 and P7 depend on progression's retirement PR

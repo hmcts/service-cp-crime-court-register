@@ -13,7 +13,7 @@ import org.springframework.context.annotation.Import;
 
 /**
  * Holds the morning report's settings to the values the plan's configuration table documents, and
- * holds the one undefaulted duration to the resolution data-model.md writes down for it.
+ * holds the rendering limit to a value of its own rather than to the generation half's.
  *
  * <p>The binding half of the report's configuration surface. What the settings <em>refuse</em> is
  * {@code ConfigurationValidationTest.ReportRefusals}, in the suite that owns every other startup
@@ -106,9 +106,9 @@ class ReportPropertiesTest {
             assertThat(report.requestTerminalWithin()).isEqualTo(Duration.ofMinutes(30));
             assertThat(report.notifiedWithin()).isEqualTo(Duration.ofMinutes(15));
             assertThat(report.batchGeneratedWithin())
-                    .as("the one undefaulted duration: unset binds null and is resolved, never"
-                            + " written twice")
-                    .isNull();
+                    .as("its own value since 004, because the generation half's threshold it used"
+                            + " to borrow now answers a different question")
+                    .isEqualTo(Duration.ofMinutes(10));
             assertThat(report.maxEntries())
                     .as("the entry cap: five thousand exceptions is far past the morning anybody"
                             + " reads one by one, and a report with no ceiling is one bad night"
@@ -127,51 +127,46 @@ class ReportPropertiesTest {
         });
     }
 
+    /**
+     * FR-014, and the case that would otherwise have silently tripled this threshold.
+     *
+     * <p>The rendering limit had no default of its own and resolved from the generation half's grace
+     * period, which 004 renames and lengthens from ten minutes to thirty. Had the resolution been
+     * left in place, the 07:00 report would have started calling a batch late after thirty minutes
+     * instead of ten as a side effect of an increment about something else. The two durations answer
+     * different questions now - "when should support be told a render is late" and "when does a run
+     * give up and re-batch" - so the report keeps ten minutes of its own, and the context this is
+     * asserted over has the generation half set to thirty so that a threshold that followed it would
+     * be visible here rather than anywhere else.
+     */
     @Test
-    @DisplayName("an unset rendering limit is the generation half's grace period, not a second copy")
-    void an_unset_batch_generated_within_resolves_to_the_generation_grace_period() {
-        runner.run(context -> {
+    @DisplayName("the rendering limit is ten minutes of the report's own, whatever the run waits")
+    void batch_generated_within_defaults_to_ten_minutes_without_reading_the_generation_half() {
+        runner.withPropertyValues("courtregister.generation.stale-after=30m").run(context -> {
             assertThat(context).hasNotFailed();
-            final ReportProperties report = context.getBean(ReportProperties.class);
             final GenerationProperties generation = context.getBean(GenerationProperties.class);
 
-            assertThat(PropertiesValidator.resolvedBatchGeneratedWithin(report, generation))
-                    .isEqualTo(generation.gracePeriod())
-                    .isEqualTo(Duration.ofMinutes(10));
-        });
-
-        // And it follows the grace period rather than a literal ten minutes, which is the whole
-        // reason the key has no default: one answer to "how long is too long for a render", moved
-        // in one place.
-        runner.withPropertyValues("courtregister.generation.grace-period=25m").run(context -> {
-            assertThat(context).hasNotFailed();
-            assertThat(PropertiesValidator.resolvedBatchGeneratedWithin(
-                    context.getBean(ReportProperties.class),
-                    context.getBean(GenerationProperties.class)))
-                    .isEqualTo(Duration.ofMinutes(25));
+            assertThat(context.getBean(ReportProperties.class).batchGeneratedWithin())
+                    .as("ten minutes, which is what the report has always used, and not the"
+                            + " thirty the run now waits before it gives up on a batch")
+                    .isEqualTo(Duration.ofMinutes(10))
+                    .isNotEqualTo(generation.staleAfter());
         });
     }
 
     /**
-     * The other half of the resolution rule, and the half that says the borrowing is a default
-     * rather than an override: a deployment that states its own rendering limit gets its own, and
-     * the grace period sitting beside it does not quietly win. One answer applies at a time, which
-     * is the whole reason the key has no default of its own.
+     * A deployment that states its own rendering limit gets its own. The default in the record is a
+     * default and not a constant, which is what makes the threshold per environment.
      */
     @Test
-    @DisplayName("an explicitly set rendering limit is the deployment's own, not the grace period")
+    @DisplayName("an explicitly set rendering limit is the deployment's own")
     void an_explicit_batch_generated_within_is_honoured() {
-        runner.withPropertyValues("courtregister.report.batch-generated-within=20m",
-                "courtregister.generation.grace-period=10m").run(context -> {
+        runner.withPropertyValues("courtregister.report.batch-generated-within=20m")
+                .run(context -> {
                     assertThat(context).hasNotFailed();
-                    final GenerationProperties generation =
-                            context.getBean(GenerationProperties.class);
 
-                    assertThat(PropertiesValidator.resolvedBatchGeneratedWithin(
-                            context.getBean(ReportProperties.class), generation))
-                            .isEqualTo(Duration.ofMinutes(20))
-                            .as("the deployment's own limit, not the grace period beside it")
-                            .isNotEqualTo(generation.gracePeriod());
+                    assertThat(context.getBean(ReportProperties.class).batchGeneratedWithin())
+                            .isEqualTo(Duration.ofMinutes(20));
                 });
     }
 

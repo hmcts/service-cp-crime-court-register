@@ -42,7 +42,9 @@ spring:
     pub-sub-domain: true
     # A DURABLE subscription, so events published while every pod is down or redeploying are still
     # delivered afterwards. A batch's completion arrives exactly once and there is no second chance
-    # to hear it; the reconciler is the safety net, not the transport.
+    # to hear it, and since 004 there is no second informant either: a batch no event reaches
+    # is released as stale by the next run rather than asked after, so the subscription is the
+    # only way an outcome arrives.
     subscription-durable: true
     # There is deliberately NO `client-id`. The subscription is SHARED (set in PublicEventsConfig,
     # for which Spring binds no property), so it is keyed by its name alone and needs none - and a
@@ -89,7 +91,7 @@ courtregister:
     # ITS OWN KEY, on the intake record, and NOT under courtregister.report: the sweep belongs to the
     # intake half and runs in every JVM that is not a command, whichever of the other two halves this
     # deployment switched on. A pod with both of them off binds neither of their records, so a value
-    # borrowed from courtregister.generation.grace-period would be a value it could not read.
+    # borrowed from courtregister.generation.batch-age-refresh would be a value it could not read.
     # Written here as well as on the record because @Scheduled(fixedDelayString = ...) resolves it
     # through the placeholder resolver, which cannot see a record's @DefaultValue.
     gauge-refresh: 10m
@@ -308,14 +310,22 @@ courtregister:
     # documents and two e-mails for every court centre in the country. Lengthening run-deadline
     # without lengthening this is refused at startup rather than discovered at 18:00.
     lock-at-most-for: 70m
-    # How long a batch may sit in GENERATING before the reconciler asks systemdocgenerator's query
-    # API what happened to it. Past it with no answer, the batch fails GENERATION_TIMED_OUT.
-    grace-period: 10m
-    # event | poll-only. `event` learns each outcome from the public-event topic and is the platform
-    # pattern; the reconciler above is its safety net. `poll-only` is an escape hatch for a broker
-    # outage, is logged loudly at every run, and makes the SDG query API this flow's only synchronous
-    # coupling. `event` additionally requires the broker configuration above at startup.
-    completion: event
+    # How long a batch the schedule made may be awaiting its render before the next run gives up on
+    # it: the run's first act fails every PENDING or GENERATING batch at least this old under
+    # NOT_COMPLETED_BY_NEXT_RUN and releases its registers, so the same run assembles them again and
+    # the court centre gets its document tonight. A batch an operator asked for by hand is given the
+    # longer of this and lock-at-most-for above, because a manual generation holds no run lock and
+    # has the whole requesting deadline to work in. Refused at startup if it is not positive - it is
+    # destructive, and a zero would fail every batch a run could see.
+    stale-after: 30m
+    # How often the three batch-age readings - the oldest batch awaiting a render, the oldest that
+    # never reached the renderer, and the oldest holding an unnotified document - are refreshed
+    # between runs. Written here as well as on the record for the reason
+    # courtregister.intake.gauge-refresh is: @Scheduled(fixedDelayString = ...) resolves it through
+    # the placeholder resolver, which cannot see a record's @DefaultValue. Refused at startup if it
+    # is not positive, because a Micrometer gauge never decays and a reading nobody takes again is
+    # three gauges holding whatever they last said.
+    batch-age-refresh: 10m
     # LIVE | STUB, one per downstream, with the same rule the 001 modes carry: LIVE is what an
     # environment that says nothing gets, and startup refuses STUB wherever the deployed credential
     # source (servicebus.namespace) is in use or generation is enabled. The stubs exist for local
@@ -333,9 +343,9 @@ courtregister:
     # records - and this is how long a notifier that has stopped renewing is given before something
     # else may take the batch over.
     #
-    # Its own setting rather than the reconciler's grace-period above, which answers a different
-    # question: how long a batch may hold a document before the safety net looks is no bound at all
-    # on telling that batch's recipients, whose cost is the number of Youth Offending Teams the
+    # Its own setting rather than the stale-after above, which answers a different question: how
+    # long a batch may be awaiting its render before a run gives up on it is no bound at all on
+    # telling a generated batch's recipients, whose cost is the number of Youth Offending Teams the
     # batch is addressed to times whatever notificationnotify makes of each of them.
     #
     # The claim is renewed before EVERY POST - the retries of one recipient included - before each
@@ -402,8 +412,8 @@ courtregister:
 
   endpoints:
     # The internal mesh hosts of the two downstreams. HOSTS ONLY: each client appends its own
-    # contract path (systemdocgenerator's command generate-document and query document/{id};
-    # notificationnotify's send-email-notification), so a path written here would be appended to.
+    # contract path (systemdocgenerator's one command, generate-document; notificationnotify's
+    # send-email-notification), so a path written here would be appended to.
     # Empty by default rather than pointed at localhost: an endpoint this service invents is an
     # endpoint a deployment can forget to set and still start. With generation enabled, startup
     # refuses without them.
@@ -480,8 +490,8 @@ courtregister:
     zone-override-acknowledged: false
     # How long the ShedLock lock over the morning run is held, and the value the job's
     # @SchedulerLock reads as a placeholder - which is why this key is written here as well as on
-    # the record, unlike batch-generated-within below: the annotation's attribute is resolved by the
-    # placeholder resolver and cannot see a @DefaultValue. It is the fixed five-minute run budget
+    # the record: the annotation's attribute is resolved by the placeholder resolver and cannot see
+    # a @DefaultValue. It is the fixed five-minute run budget
     # (PropertiesValidator.REPORT_RUN_BUDGET) plus the ten-minute SCHEDULER_LOCK_MARGIN the nightly
     # run's 70m already uses. Anything lower is refused at startup rather than discovered as support
     # being sent the same morning twice by two replicas.
@@ -495,15 +505,13 @@ courtregister:
     # late. Without it a document that was rendered and never e-mailed looks exactly like one that
     # was e-mailed, which is the failure this report exists to surface.
     notified-within: 15m
-    #
-    # There is deliberately NO batch-generated-within key here, and no placeholder for one. The
-    # rendering limit resolves from courtregister.generation.grace-period in PropertiesValidator,
-    # because that is already the interval after which the reconciler decides a render has not
-    # happened, and two different answers to "how long is too long for a render" is the shape that
-    # makes an alert argue with a batch state. Nothing reads it through the placeholder resolver, so
-    # a copy written here would be a second place for the number to live and a morning for the two to
-    # disagree. An environment that genuinely wants its own limit sets the key; a set zero is
-    # refused, because unset and zero are different things to mean.
+    # The rendering limit. A batch still PENDING or GENERATING for longer than this is reported late.
+    # Its own value since 004: it used to resolve from the generation half's grace-period, and that
+    # setting is now stale-after and answers a different question - when a run gives up on a batch
+    # and re-batches its registers, rather than when support should be told a render is late.
+    # Following it would have moved this threshold from ten minutes to thirty as a side effect.
+    # Refused at startup if it is not positive, under this key.
+    batch-generated-within: 10m
     #
     # There is also NO window key. The window is the cron above.
     #

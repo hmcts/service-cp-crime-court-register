@@ -2,6 +2,9 @@ package uk.gov.hmcts.cp.courtregister.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -15,6 +18,13 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.transaction.CannotCreateTransactionException;
+import org.springframework.transaction.IllegalTransactionStateException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionException;
+import org.springframework.transaction.TransactionSystemException;
+import org.springframework.transaction.UnexpectedRollbackException;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 
 /**
@@ -77,6 +87,48 @@ class StoreOutageTest {
         }
 
         @Test
+        @DisplayName("a transaction that cannot be begun is the store going away too")
+        void a_transaction_that_cannot_be_begun_becomes_the_domains_own_signal() {
+            // The stale-batch release takes a REQUIRES_NEW boundary of its own between the read of
+            // the stale batches and each batch's own statement, so a store lost in that gap refuses
+            // at `getTransaction` rather than at a statement - and `CannotCreateTransactionException`
+            // is a `org.springframework.transaction` type, outside every branch the list above
+            // names. Untranslated it crosses the port as itself, against `failAndReleaseStale`'s
+            // own `@throws`, and reaches a pass in `batch/` that may name no Spring type at all
+            // (constitution Principle V).
+            final PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
+            when(transactions.getTransaction(any()))
+                    .thenThrow(new CannotCreateTransactionException(DRIVER_TEXT));
+            final TransactionTemplate boundary = new TransactionTemplate(transactions);
+
+            assertThatThrownBy(() -> StoreOutage.translating(STATEMENT,
+                    () -> boundary.execute(own -> "released")))
+                    .as("a store that will not begin a transaction is a store that went away, and "
+                            + "the pass reads that signal and no other")
+                    .isInstanceOf(StoreUnavailableException.class)
+                    .hasMessageContaining(STATEMENT)
+                    .hasMessageNotContaining(DRIVER_TEXT)
+                    .hasCauseInstanceOf(CannotCreateTransactionException.class);
+        }
+
+        @Test
+        @DisplayName("a transaction that could not be committed is the same outage one step later")
+        void a_transaction_that_cannot_be_committed_becomes_the_domains_own_signal() {
+            // The other end of the same boundary. `DataSourceTransactionManager` reports a commit
+            // the driver would not take as `TransactionSystemException`, so a store lost between
+            // the release's last statement and its commit refuses here rather than at a statement.
+            // An ambiguous write is retried by preference (design rules: prefer a duplicate that
+            // supersession absorbs over a loss that is silent), and the retry is what reading this
+            // as the store's own signal buys.
+            assertThatThrownBy(() -> StoreOutage.translating(STATEMENT, () -> {
+                throw new TransactionSystemException(DRIVER_TEXT);
+            }))
+                    .isInstanceOf(StoreUnavailableException.class)
+                    .hasMessageContaining(STATEMENT)
+                    .hasMessageNotContaining(DRIVER_TEXT);
+        }
+
+        @Test
         @DisplayName("a statement whose answer nobody reads is translated the same way")
         void an_update_is_translated_the_same_way() {
             assertThatThrownBy(() -> StoreOutage.translatingUpdate(STATEMENT, () -> {
@@ -130,6 +182,43 @@ class StoreOutageTest {
                 throw refused;
             }))
                     .isSameAs(refused);
+        }
+
+        /**
+         * The rest of the {@code TransactionException} family, which is not an outage at all.
+         *
+         * <p>Two of that family say the store would not do the work -
+         * {@link CannotCreateTransactionException} and {@link TransactionSystemException}, asserted
+         * above - and they are named one at a time for exactly this reason: the rest of it is
+         * configuration or a programming fault. {@link IllegalTransactionStateException} is a
+         * propagation this code asked for and cannot have, and
+         * {@link UnexpectedRollbackException} is a transaction some participant had already marked
+         * rollback-only. Neither is a store that went away, and reading them as one would abandon
+         * the message and redeliver it into the same defect five times on the intake leg, and write
+         * a nightly outage line about a run that was never near the store's health. They belong to
+         * the arm above them, which dead-letters with a reason and says what it was.
+         */
+        @Test
+        @DisplayName("a transaction fault that is not the store going away travels as it was thrown")
+        void a_transaction_usage_fault_is_handed_on_unchanged() {
+            for (final TransactionException fault : everyTransactionFaultThatIsNotAnOutage()) {
+                assertThatThrownBy(() -> StoreOutage.translating(STATEMENT, () -> {
+                    throw fault;
+                }))
+                        .as("a %s reached the core as an outage", fault.getClass().getSimpleName())
+                        .isSameAs(fault);
+            }
+        }
+
+        /**
+         * The transaction failures that are this service's own fault rather than the store's.
+         *
+         * @return one of each
+         */
+        private List<TransactionException> everyTransactionFaultThatIsNotAnOutage() {
+            return List.of(
+                    new IllegalTransactionStateException("no existing transaction to join"),
+                    new UnexpectedRollbackException("the transaction was marked rollback-only"));
         }
 
         @Test

@@ -9,9 +9,11 @@ package uk.gov.hmcts.cp.courtregister.domain;
  * available to support and is never logged at INFO, because it is another system's text about a
  * document whose every defendant is a child (constitution Principle VII).
  *
- * <p>The six are six different investigations. Two of them say no payload was ever stored to render
- * from, two say the renderer refused to start, and two say it started and did not finish - and only
- * the first pair leaves the batch's rows RECORDED for the next run to re-assemble.
+ * <p>The six are six different investigations. Two of them say no payload was ever stored to
+ * render from or that the batch could not be assembled at all, two say the renderer refused to
+ * start, one says it started and said it had failed, and one says this service stopped waiting for
+ * it - and only the first pair and the last leave the batch's rows RECORDED for the next run to
+ * re-assemble.
  *
  * <p><strong>What none of them says is whether the render request left this service.</strong>
  * {@link #RENDER_REQUEST_FAILED} is the ending of a request that was made and answered nothing
@@ -35,36 +37,54 @@ public enum BatchFailureReason {
     /** The render request was answered with something other than the contract's 202. */
     RENDER_REQUEST_REJECTED,
 
-    /** systemdocgenerator said the generation failed, by event or by query. */
+    /** systemdocgenerator said the generation failed, on its {@code generation-failed} event. */
     GENERATION_FAILED,
 
-    /** The grace period passed and systemdocgenerator still had no verdict. */
-    GENERATION_TIMED_OUT,
-
     /** The batch could not be assembled into a payload at all (defect fix P5). */
-    ASSEMBLY_FAILED;
+    ASSEMBLY_FAILED,
+
+    /**
+     * The next scheduled run began and the batch was still waiting for its render.
+     *
+     * <p>This service's own verdict, and the only one of the six that is about the passage of
+     * time rather than about something that happened: the batch had been in flight longer than
+     * {@code courtregister.generation.stale-after}, so the run stopped waiting for it, failed it
+     * and gave its registers back to be re-assembled tonight.
+     *
+     * <p>It names no completion mechanism, because none was involved - no event arrived and nothing
+     * was asked. It says nothing about whether systemdocgenerator ever received the request either,
+     * and deliberately so: that is not a question this service can ask, and the ending is the same
+     * either way. A register that is late is recoverable; a register stranded in a batch nothing
+     * will finish is not, and this reason is how the second is turned into the first.
+     */
+    NOT_COMPLETED_BY_NEXT_RUN;
 
     /**
      * Whether this ending was reported by a completion mechanism outside this service.
      *
-     * <p>The two that were: {@link #GENERATION_FAILED} is systemdocgenerator's own verdict about
-     * the render, and {@link #GENERATION_TIMED_OUT} is the reconciler's verdict about the renderer's
-     * silence. Each of them arrived because something went and learned it, so each names the
-     * mechanism that did - which is what {@code register_batch.completed_by} holds and what the
-     * {@code reconciled} metric counts.
+     * <p>{@link #GENERATION_FAILED} is the one that is: systemdocgenerator's own verdict about the
+     * render, carried on the {@code generation-failed} event. It arrived because the renderer said
+     * so, so the row names the mechanism that brought it - which is what
+     * {@code register_batch.completed_by} holds.
      *
-     * <p>The other four are this service's own verdict about a render it could not ask for or could
-     * not hear about, and naming a mechanism on one of them would credit a decision nobody outside
-     * this service made.
+     * <p>There were two while the grace-period reconciler existed, the second being its verdict
+     * about the renderer's silence. Nothing goes and asks any more, so no ending can arrive that
+     * way, and a batch nothing is learned about is failed {@link #NOT_COMPLETED_BY_NEXT_RUN} by the
+     * next scheduled run instead - this service deciding for itself, and therefore attributed to
+     * nobody.
+     *
+     * <p>The other five are this service's own verdict about a render it could not ask for, could
+     * not hear about, or stopped waiting for, and naming a mechanism on one of them would credit a
+     * decision nobody outside this service made.
      *
      * <p>Stated here once, and asked here by everything that enforces it: {@code JdbcRegisterStore}
      * refuses a mark whose attribution disagrees with its reason, and
-     * {@code register_batch_completed_by_shape_chk} enumerates the same two reasons for the writers
-     * that do not go through the store.
+     * {@code register_batch_completed_by_shape_chk} names the same reason for the writers that do
+     * not go through the store.
      *
      * @return true where the ending carries a {@link CompletedBy}, and false where it must not
      */
     public boolean isGeneratorAttributed() {
-        return this == GENERATION_FAILED || this == GENERATION_TIMED_OUT;
+        return this == GENERATION_FAILED;
     }
 }

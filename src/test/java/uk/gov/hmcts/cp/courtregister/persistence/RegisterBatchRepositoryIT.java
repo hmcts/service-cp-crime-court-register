@@ -28,7 +28,7 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  * <p>{@link JdbcRegisterStore} owns the writes that have to move {@code processed_output} in the
  * same statement; what is left is this repository, and it is the half every other collaborator
  * reaches the batch through - the read by the identity every outcome is attributed by, the
- * reconciler's two overdue reads, the operations CLI's own assembly, and the whole-row write that
+ * the three in-flight age reads, the operations CLI's own assembly, and the whole-row write that
  * carries the facts the port's {@code mark} signatures do not. Each of its five statements is
  * round-tripped here, because nothing else will: the phases that consume them mock the store, so a
  * column dropped from one of these statements would first be noticed by a batch that could not say
@@ -61,8 +61,8 @@ class RegisterBatchRepositoryIT {
     private static final Instant NOTIFIED_AT = Instant.parse("2026-08-24T17:04:19Z");
     private static final Instant FAILED_AT = Instant.parse("2026-08-24T17:09:31Z");
 
-    /** The far edge of the grace period the reconciler reads behind. */
-    private static final Instant GRACE_EDGE = Instant.parse("2026-08-24T17:30:00Z");
+    /** The cutoff the three in-flight reads answer behind: older than this is late. */
+    private static final Instant AGE_CUTOFF = Instant.parse("2026-08-24T17:30:00Z");
 
     private static final UUID DOCUMENT_FILE_ID =
             UUID.fromString("3a7f1c92-6d84-4b05-9e73-1c2b8a4e07d5");
@@ -202,19 +202,21 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch second = requested(TUESDAY, secondPayloadFileId,
                     REQUESTED_AT.plusSeconds(90));
 
-            assertThat(mine(repository.generatingSince(GRACE_EDGE)))
-                    .as("a run that cannot reconcile all of them reconciles the ones that have "
-                            + "been waiting longest, which are the registers already missing")
+            assertThat(mine(repository.generatingSince(AGE_CUTOFF)))
+                    .as("oldest first, so a caller that can take only some of them takes the "
+                            + "ones that have been waiting longest, which are the registers "
+                            + "already missing")
                     .containsExactly(first, second);
         }
 
         @Test
-        void generating_since_should_exclude_a_batch_still_inside_its_grace_period() {
-            requested(MONDAY, payloadFileId, GRACE_EDGE.plusSeconds(1));
+        void generating_since_should_exclude_a_batch_inside_the_cutoff() {
+            requested(MONDAY, payloadFileId, AGE_CUTOFF.plusSeconds(1));
 
-            assertThat(mine(repository.generatingSince(GRACE_EDGE)))
-                    .as("systemdocgenerator is allowed the grace period before anybody asks it "
-                            + "again; reconciling inside it would double the render requests")
+            assertThat(mine(repository.generatingSince(AGE_CUTOFF)))
+                    .as("a render asked for a moment ago is a render systemdocgenerator is still "
+                            + "allowed to be working on, and a reading that counted it would say "
+                            + "an ordinary night was late")
                     .isEmpty();
         }
 
@@ -222,9 +224,9 @@ class RegisterBatchRepositoryIT {
         void generating_since_should_exclude_a_batch_that_was_never_requested() {
             repository.insert(assembled(MONDAY));
 
-            assertThat(mine(repository.generatingSince(GRACE_EDGE)))
+            assertThat(mine(repository.generatingSince(AGE_CUTOFF)))
                     .as("a PENDING batch is waiting for this service, not for systemdocgenerator, "
-                            + "and querying its outcome would ask about a render nobody requested")
+                            + "and reading it here would age a render nobody requested")
                     .isEmpty();
         }
     }
@@ -233,10 +235,11 @@ class RegisterBatchRepositoryIT {
      * The batches that never reached the renderer, which the overdue read above cannot see.
      *
      * <p>A batch whose payload id was minted and whose {@code markRequested} never landed stays
-     * PENDING with its rows stamped, and nothing revisits it: {@code generatingSince} reads
-     * GENERATING, the stamped rows are outside {@code activeUnbatched}, and the live-key index
-     * defers every later re-share of that key behind it. This read is what the safety net finds it
-     * with, and the payload id is what makes it answerable at all.
+     * PENDING with its rows stamped, and neither of the other two reads can see it:
+     * {@code generatingSince} reads GENERATING, the stamped rows are outside
+     * {@code activeUnbatched}, and the live-key index defers every later re-share of that key
+     * behind it. This read is what publishes its age, and the payload id is what makes it
+     * answerable at all.
      */
     @Nested
     @DisplayName("the batches that never reached the renderer")
@@ -248,17 +251,17 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch second =
                     minted(TUESDAY, secondPayloadFileId, ASSEMBLED_AT.plusSeconds(90));
 
-            assertThat(pendingSince(GRACE_EDGE))
+            assertThat(pendingSince(AGE_CUTOFF))
                     .as("oldest first, for the same reason the overdue read is: the ones that have "
                             + "been stuck longest are the registers already missing")
                     .containsExactly(first, second);
         }
 
         @Test
-        void pending_since_should_exclude_a_batch_assembled_inside_the_grace_period() {
-            minted(MONDAY, payloadFileId, GRACE_EDGE.plusSeconds(1));
+        void pending_since_should_exclude_a_batch_assembled_inside_the_cutoff() {
+            minted(MONDAY, payloadFileId, AGE_CUTOFF.plusSeconds(1));
 
-            assertThat(pendingSince(GRACE_EDGE))
+            assertThat(pendingSince(AGE_CUTOFF))
                     .as("a batch assembled a moment ago is a batch the run is still working "
                             + "through, not one it left behind")
                     .isEmpty();
@@ -268,9 +271,9 @@ class RegisterBatchRepositoryIT {
         void pending_since_should_exclude_a_batch_whose_payload_was_never_minted() {
             repository.insert(assembled(MONDAY));
 
-            assertThat(pendingSince(GRACE_EDGE))
-                    .as("systemdocgenerator is asked about a payload; a batch that minted none is "
-                            + "a batch there is nothing to ask about")
+            assertThat(pendingSince(AGE_CUTOFF))
+                    .as("this read is about a batch that minted a payload and never sent it; a "
+                            + "batch that minted none never reached that state at all")
                     .isEmpty();
         }
 
@@ -278,9 +281,9 @@ class RegisterBatchRepositoryIT {
         void pending_since_should_exclude_a_batch_that_did_reach_the_renderer() {
             requested(MONDAY, payloadFileId, REQUESTED_AT);
 
-            assertThat(pendingSince(GRACE_EDGE))
-                    .as("a GENERATING batch is the overdue read's, and asking about it twice would "
-                            + "apply one outcome through two passes")
+            assertThat(pendingSince(AGE_CUTOFF))
+                    .as("a GENERATING batch is the overdue read's, and a batch counted by two "
+                            + "readings is one late batch reported as two")
                     .isEmpty();
         }
     }
@@ -304,17 +307,17 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch second =
                     parked(TUESDAY, secondPayloadFileId, GENERATED_AT.plusSeconds(90));
 
-            assertThat(generatedSince(GRACE_EDGE))
+            assertThat(generatedSince(AGE_CUTOFF))
                     .as("oldest first, for the same reason the other two reads are: the ones that "
                             + "have held a document longest are the registers already missing")
                     .containsExactly(first, second);
         }
 
         @Test
-        void generated_since_should_exclude_a_batch_generated_inside_the_grace_period() {
-            parked(MONDAY, payloadFileId, GRACE_EDGE.plusSeconds(1));
+        void generated_since_should_exclude_a_batch_generated_inside_the_cutoff() {
+            parked(MONDAY, payloadFileId, AGE_CUTOFF.plusSeconds(1));
 
-            assertThat(generatedSince(GRACE_EDGE))
+            assertThat(generatedSince(AGE_CUTOFF))
                     .as("a batch whose document arrived a moment ago is a batch the notifying leg "
                             + "is still working through, not one it left behind")
                     .isEmpty();
@@ -329,7 +332,7 @@ class RegisterBatchRepositoryIT {
                     REQUESTED_AT, GENERATED_AT, NOTIFIED_AT, null, 1, null, 0),
                     BatchStatus.GENERATED);
 
-            assertThat(generatedSince(GRACE_EDGE))
+            assertThat(generatedSince(AGE_CUTOFF))
                     .as("a batch that reached a notified state is a batch nothing is owed about, "
                             + "and a reading that kept it would never come back down")
                     .isEmpty();
@@ -362,7 +365,7 @@ class RegisterBatchRepositoryIT {
             assertThat(repository.findById(assembled.batchId()))
                     .as("a caller that read a batch, decided about it and wrote it back cannot "
                             + "leave half of its decision behind - completed_by above all, which "
-                            + "is what the reconciled metric counts and nothing else records")
+                            + "is the only record of which mechanism learned the outcome")
                     .contains(notified);
         }
 
@@ -373,7 +376,7 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch failed = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, SDG_REASON, true,
-                    CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null, null,
+                    CompletedBy.EVENT, ASSEMBLED_AT, REQUESTED_AT, null, null,
                     FAILED_AT, 2, null, 0);
 
             assertThat(repository.compareAndSet(failed, BatchStatus.PENDING)).isTrue();
@@ -397,7 +400,7 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch failed = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, OVERSIZED_SDG_REASON,
-                    true, CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null,
+                    true, CompletedBy.EVENT, ASSEMBLED_AT, REQUESTED_AT, null,
                     null, FAILED_AT, 2, null, 0);
 
             assertThat(repository.compareAndSet(failed, BatchStatus.PENDING))
@@ -438,7 +441,7 @@ class RegisterBatchRepositoryIT {
             final RegisterBatch failed = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
                     BatchStatus.FAILED, BatchFailureReason.GENERATION_FAILED, SDG_REASON, true,
-                    CompletedBy.RECONCILER, ASSEMBLED_AT, REQUESTED_AT, null, null,
+                    CompletedBy.EVENT, ASSEMBLED_AT, REQUESTED_AT, null, null,
                     FAILED_AT, 2, null, 0);
             repository.compareAndSet(failed, BatchStatus.PENDING);
             final RegisterBatch revived = generating(assembled, payloadFileId, REQUESTED_AT);
@@ -479,10 +482,10 @@ class RegisterBatchRepositoryIT {
         /**
          * The move that leaves the batch still waiting, and what it must not carry.
          *
-         * <p>GENERATING is the state the reconciler reads precisely because nothing has completed
-         * the batch yet: the render was asked for and the answer has not come back. A whole-row
-         * write that carried an attribution into it would say the answer had already arrived, and
-         * the batch would be chased by a reconciler that had supposedly already reported it.
+         * <p>GENERATING is a batch whose render was asked for and whose answer has not come back,
+         * so nothing has completed it. A whole-row write that carried an attribution into it would
+         * say the answer had already arrived, and the next run's stale-batch pass would be reading
+         * a row that claims to have been reported on already.
          */
         @Test
         void moving_a_batch_to_generating_with_an_attribution_should_be_refused() {
@@ -490,7 +493,7 @@ class RegisterBatchRepositoryIT {
             repository.insert(assembled);
             final RegisterBatch attributed = new RegisterBatch(assembled.batchId(), courtCentre,
                     OU_CODE, COURT_HOUSE, MONDAY, fileName(MONDAY), payloadFileId, null,
-                    BatchStatus.GENERATING, null, null, true, CompletedBy.RECONCILER, ASSEMBLED_AT,
+                    BatchStatus.GENERATING, null, null, true, CompletedBy.EVENT, ASSEMBLED_AT,
                     REQUESTED_AT, null, null, null, 1, null, 0);
 
             assertThatThrownBy(() -> repository.compareAndSet(attributed, BatchStatus.PENDING))
@@ -498,7 +501,7 @@ class RegisterBatchRepositoryIT {
                             + "outcome for a mechanism to have learned")
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("GENERATING")
-                    .hasMessageContaining("RECONCILER");
+                    .hasMessageContaining("EVENT");
             assertThat(repository.findById(assembled.batchId()))
                     .as("and the batch is exactly where the insert left it")
                     .contains(assembled);
@@ -532,9 +535,9 @@ class RegisterBatchRepositoryIT {
          * A batch is assembled, not completed, so the row that starts it names no mechanism.
          *
          * <p>{@code completed_by} says which mechanism learned the outcome, and at PENDING there is
-         * no outcome: nothing has been asked of the renderer, so no event and no query can have
-         * answered about it. A row inserted with one credits a decision nobody made, and the
-         * {@code reconciled} metric counts an outcome nobody delivered.
+         * no outcome: nothing has been asked of the renderer, so nothing can have announced one. A
+         * row inserted with one credits a decision nobody made, and leaves the only column that
+         * records which mechanism delivered an outcome naming one for an outcome nobody delivered.
          */
         @Test
         void inserting_a_batch_that_already_names_a_mechanism_should_be_refused() {
@@ -650,7 +653,7 @@ class RegisterBatchRepositoryIT {
         /**
          * And the lease, which is the answer to a pod that died holding a claim.
          *
-         * <p>A claim nothing can ever take is a batch no resend and no reconciliation could pick
+         * <p>A claim nothing can ever take is a batch no resend and no later run could pick
          * up. The expiry is decided by the database comparing its own {@code now()} against the
          * stored instant, never by a JVM clock reading, which is why this case waits rather than
          * writing an old timestamp: what it exercises is the statement's own predicate.
@@ -1016,7 +1019,7 @@ class RegisterBatchRepositoryIT {
      * assertion rather than as the exception it is, which is what the red-run convention asks of a
      * case written against a seam.
      *
-     * @param cutoff the far edge of the grace period
+     * @param cutoff the far edge of the age window: older than this is late
      * @return this case's stale PENDING batches, oldest first
      */
     private List<RegisterBatch> pendingSince(final Instant cutoff) {
@@ -1056,7 +1059,7 @@ class RegisterBatchRepositoryIT {
      * <p>Made through {@code assertThatCode} for the reason {@link #pendingSince(Instant)} is: a
      * seam's refusal is recorded as a failing assertion rather than as the exception it is.
      *
-     * @param cutoff the far edge of the grace period
+     * @param cutoff the far edge of the age window: older than this is late
      * @return this case's parked batches, oldest first
      */
     private List<RegisterBatch> generatedSince(final Instant cutoff) {
@@ -1067,7 +1070,7 @@ class RegisterBatchRepositoryIT {
         return mine(answered.get());
     }
 
-    /** An inserted batch already GENERATING, which is the state the reconciler reads. */
+    /** An inserted batch already GENERATING, which is the state the overdue read answers on. */
     private RegisterBatch requested(final LocalDate registerDate, final UUID payloadFileId,
             final Instant requestedAt) {
         final RegisterBatch assembled = assembled(registerDate);
@@ -1080,8 +1083,9 @@ class RegisterBatchRepositoryIT {
     /**
      * The overdue read, narrowed to the case that asked.
      *
-     * <p>The reconciler reads the whole table because it reconciles the whole service; the suites
-     * sharing one container do not, so the case that asked is the only one that may be asserted on.
+     * <p>The read answers over the whole table, because a reading of the service's in-flight work
+     * is about the whole service; the suites sharing one container are not, so the case that asked
+     * is the only one that may be asserted on.
      */
     private List<RegisterBatch> mine(final List<RegisterBatch> batches) {
         return batches.stream()

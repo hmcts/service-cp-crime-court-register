@@ -76,16 +76,24 @@ class LogEventReportSinkTest {
     private static final int ATTEMPTS = 3;
 
     /**
-     * The eleven fields the summary event carries, stated once in data-model.md and once here.
+     * The twelve fields the summary event carries, stated once in data-model.md and once here.
      *
      * <p>Eleven since the entry cap: a report that dropped entries has to say so in the same line
      * as its counts, because the counts are the full ones and a reader comparing them against the
      * exception events would otherwise find events missing and nothing saying why.
+     *
+     * <p><strong>Twelve since increment 004</strong>, which added the sixth kind. The list is one
+     * count per {@link ExceptionKind} plus the five fields around them, and it has to stay that
+     * way for the reason the {@code truncated} field exists at all: the counts are of what the
+     * reads found and the events are of what the report carries, so a count this line leaves out
+     * is a morning whose events outnumber its counts, which is the shape of a sink that broke.
+     * A released batch is exactly such a morning - the one kind that can be the only thing a night
+     * produced - so its absence here was not a cosmetic gap.
      */
-    private static final List<String> THE_ELEVEN_SUMMARY_FIELDS = List.of(
+    private static final List<String> THE_TWELVE_SUMMARY_FIELDS = List.of(
             "event", "run_id", "window_from", "window_to", "snapshot_at",
             "request_failed", "request_late", "batch_late", "batch_failed", "notification_failed",
-            "truncated");
+            "batch_released", "truncated");
 
     /**
      * What an identifier, a bounded code, a date or a number looks like, and what free text does
@@ -130,14 +138,14 @@ class LogEventReportSinkTest {
         }
 
         @Test
-        void one_summary_event_carries_its_eleven_fields() {
+        void one_summary_event_carries_its_twelve_fields() {
             final Map<String, String> fields = fieldsOf(summaryFrom(reportOf(requestFailed())));
 
             assertThat(fields)
-                    .as("eleven is the number data-model.md states, and this is the assertion that "
+                    .as("twelve is the number data-model.md states, and this is the assertion that "
                             + "holds it: a field added here is a field a saved query does not read "
                             + "and a field removed is one it reads as absent")
-                    .containsOnlyKeys(THE_ELEVEN_SUMMARY_FIELDS.toArray(new String[0]));
+                    .containsOnlyKeys(THE_TWELVE_SUMMARY_FIELDS.toArray(new String[0]));
             assertThat(fields)
                     .containsEntry("event", "courtregister_exception_report")
                     .containsEntry("run_id", RUN_ID)
@@ -150,7 +158,31 @@ class LogEventReportSinkTest {
                     .containsEntry("request_late", "0")
                     .containsEntry("batch_late", "0")
                     .containsEntry("batch_failed", "0")
-                    .containsEntry("notification_failed", "0");
+                    .containsEntry("notification_failed", "0")
+                    .containsEntry("batch_released", "0");
+        }
+
+        /**
+         * The regression the T046 walkthrough found: a released batch counted nowhere on the line.
+         *
+         * <p>Increment 004 added {@code BATCH_RELEASED} and extended the CSV sink's header and the
+         * command's counts line to six, and left this one at five. A morning whose only exception
+         * was a released batch therefore wrote a summary of five noughts beside one
+         * {@code courtregister_exception} event - which is precisely what this sink's own contract
+         * says never happens, and what a reader is told to treat as a sink that broke. It is a
+         * regression of 004 against 003 and not a legacy defect, so it earns no
+         * {@code DEFECT-FIXES.md} row; it earns this case.
+         */
+        @Test
+        void a_released_batch_is_counted_on_the_summary_line() {
+            final Map<String, String> fields = fieldsOf(summaryFrom(reportOf(batchReleased())));
+
+            assertThat(fields)
+                    .as("the one kind that can be the whole of a morning: if it is not counted "
+                            + "here, the summary says nothing was wrong beside an event saying "
+                            + "something was, and no query can tell that from a lost write")
+                    .containsEntry("batch_released", "1")
+                    .containsEntry("batch_failed", "0");
         }
 
         @Test
@@ -167,14 +199,15 @@ class LogEventReportSinkTest {
                     .satisfies(only -> {
                         assertThat(fieldsOf(only))
                                 .containsEntry("event", "courtregister_exception_report")
-                                .containsOnlyKeys(THE_ELEVEN_SUMMARY_FIELDS.toArray(new String[0]));
+                                .containsOnlyKeys(THE_TWELVE_SUMMARY_FIELDS.toArray(new String[0]));
                         assertThat(fieldsOf(only))
-                                .as("and the five counts are five noughts, present and readable")
+                                .as("and the six counts are six noughts, present and readable")
                                 .containsEntry("request_failed", "0")
                                 .containsEntry("request_late", "0")
                                 .containsEntry("batch_late", "0")
                                 .containsEntry("batch_failed", "0")
-                                .containsEntry("notification_failed", "0");
+                                .containsEntry("notification_failed", "0")
+                                .containsEntry("batch_released", "0");
                     });
         }
 
@@ -398,6 +431,12 @@ class LogEventReportSinkTest {
         return new ExceptionEntry(ExceptionKind.BATCH_FAILED, null, null, null, null, BATCH_ID,
                 null, COURT_CENTRE, REGISTER_DATE, BatchStatus.FAILED.name(), null,
                 BatchFailureReason.GENERATION_FAILED.name(), AGE_SECONDS);
+    }
+
+    private static ExceptionEntry batchReleased() {
+        return new ExceptionEntry(ExceptionKind.BATCH_RELEASED, null, null, null, null, BATCH_ID,
+                null, COURT_CENTRE, REGISTER_DATE, BatchStatus.FAILED.name(), null,
+                BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN.name(), AGE_SECONDS);
     }
 
     private static ExceptionEntry notificationFailed() {

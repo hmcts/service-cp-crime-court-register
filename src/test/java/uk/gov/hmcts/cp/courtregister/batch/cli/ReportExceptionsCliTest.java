@@ -538,11 +538,14 @@ class ReportExceptionsCliTest {
             command(withoutEmail(), logSink).run(List.of("--since", "2h"));
 
             softly.assertThat(printed)
-                    .as("five numbers, zeroes included, so an empty morning is distinguishable "
-                            + "from a morning the report did not run - and the window they are "
-                            + "over, because a count with no window is a number about nothing")
+                    .as("one number per kind, zeroes included, so an empty morning is "
+                            + "distinguishable from a morning the report did not run - and the "
+                            + "window they are over, because a count with no window is a number "
+                            + "about nothing. Six since increment 004: batch_released is the one "
+                            + "informational kind, a batch a run gave up on and re-rendered the "
+                            + "same night (FR-019)")
                     .contains("counts request_failed=0 request_late=1 batch_late=0 batch_failed=1"
-                            + " notification_failed=1"
+                            + " notification_failed=1 batch_released=0"
                             + " window_from=" + NOW.minus(Duration.ofHours(2))
                             + " window_to=" + NOW);
         }
@@ -565,8 +568,9 @@ class ReportExceptionsCliTest {
                             + "answer rather than as a command that did not run")
                     .isEqualTo("exceptions=none");
             softly.assertThat(printed)
-                    .as("and all three lines are still written: the saying-so line, the five "
-                            + "zeroes with the window they are over, and the run's own line - a "
+                    .as("and all three lines are still written: the saying-so line, the "
+                            + "per-kind zeroes with the window they are over, and the run's own "
+                            + "line - a "
                             + "quiet window is the shape that most looks like a command that never "
                             + "ran, so it is the one that has to say the most")
                     .hasSize(3);

@@ -37,8 +37,8 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
  * for the second the outcome arrived in. That hand-back is only worth anything if the message is
  * still the broker's to offer again: a {@code DefaultMessageListenerContainer} left at the default
  * {@code AUTO_ACKNOWLEDGE} acknowledges before it invokes the listener, so the exception would reach
- * a container with nothing left to roll back and the outcome would be lost until the grace-period
- * reconciler noticed it ten minutes later. Boot's own
+ * a container with nothing left to roll back and the outcome would be lost until the next run
+ * gave up on the batch it was about. Boot's own
  * {@code DefaultJmsListenerContainerFactoryConfigurer} sets this for precisely that reason and is
  * not used here, so it is set here instead
  * ({@code DocumentEventListenerIT.an_outcome_the_sink_could_not_apply_should_be_offered_again}).
@@ -57,12 +57,16 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
  * on proxy for shared Connection}); the client id has since gone and the unwrapping has not, because
  * the double caching was always the better half of the reason.
  *
- * <p><strong>Its auto-startup is tied to {@code courtregister.generation.enabled} and to
- * {@code completion=event}.</strong> A deployment running the intake half alone has no use for
- * outcomes and should hold no durable subscription: an unread durable subscription accumulates every
- * matching event on the broker until somebody notices. The first half of the rule is this class's
- * own condition, so an intake-only pod builds none of this at all; the second is the
- * {@code poll-only} escape hatch, which asks for no broker and must therefore subscribe to nothing.
+ * <p><strong>Its auto-startup is tied to {@code courtregister.generation.enabled}, and to nothing
+ * else.</strong> A deployment running the intake half alone has no use for outcomes and should hold
+ * no durable subscription: an unread durable subscription accumulates every matching event on the
+ * broker until somebody notices. That is the whole of the rule, and it is also this class's own
+ * condition, so an intake-only pod builds none of this at all. There used to be a second conjunct -
+ * a setting by which a deployment said it learned outcomes by asking systemdocgenerator instead, and
+ * so subscribed to nothing - and 004 removed it with the query it depended on: a pod in that shape
+ * would now learn no outcome at all and re-render every court centre every night, which is strictly
+ * worse than refusing to start (FR-013). The subscription is the one way a batch learns what became
+ * of its render, and startup refuses a generating deployment that names no broker.
  *
  * <p><strong>The subscription is shared, and that is what lets the deployment have replicas.</strong>
  * A <em>non-shared</em> durable subscription admits exactly one consumer: the second pod's container
@@ -88,10 +92,11 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
  *
  * <p><strong>And none of it on a JVM started to run one operations command.</strong> A command that
  * subscribed would be one more consumer the broker load-balances outcomes to - and it would take
- * deliveries it is about to exit without finishing, leaving each of them to a redelivery or to the
- * reconciler's grace period. The whole configuration goes rather than the listener alone, because
- * the container factory is here too and a factory with no {@code @JmsListener} to create a container
- * from is a half-absence to reason about ({@link CliModeConfig}).
+ * deliveries it is about to exit without finishing, leaving each of them to a redelivery, or to
+ * the next run giving up on the batch they were about. The whole configuration goes rather than the
+ * listener alone, because the container factory is here too and a factory with no
+ * {@code @JmsListener} to create a container from is a half-absence to reason about
+ * ({@link CliModeConfig}).
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
@@ -117,7 +122,9 @@ public class PublicEventsConfig {
      *                          container caches a connection of its own rather than sharing one
      * @param jms               Spring's own JMS settings: the topic domain and the durable flag.
      *                          {@code spring.jms.client-id} is deliberately not read - see above
-     * @param generation        the downstream half's settings, for the completion mechanism
+     * @param generation        the downstream half's settings, read for the master switch alone:
+     *                          the subscription exists where the generation half does, because it
+     *                          is the only way a batch learns what became of its render
      * @return the factory: durable, shared and topic-scoped
      */
     @Bean(LISTENER_CONTAINER_FACTORY)
@@ -140,8 +147,7 @@ public class PublicEventsConfig {
         // something to hand back to.
         factory.setSessionTransacted(true);
         factory.setErrorHandler(PublicEventsConfig::notApplied);
-        factory.setAutoStartup(
-                GenerationProperties.COMPLETION_EVENT.equals(generation.completion()));
+        factory.setAutoStartup(generation.enabled());
         return factory;
     }
 

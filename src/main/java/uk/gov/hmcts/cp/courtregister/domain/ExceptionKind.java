@@ -1,11 +1,13 @@
 package uk.gov.hmcts.cp.courtregister.domain;
 
 /**
- * The five things the exception report says can be wrong.
+ * The five things the exception report says can be wrong, and the one it says was put right.
  *
  * <p>Closed, and the {@code kind} field of every event, the {@code kind} column of the CSV and the
- * {@code kind} label of {@code courtregister_exceptions_reported_total}. A sixth kind is a spec
- * change and not an addition: the report's whole claim is that these five are what can be wrong.
+ * {@code kind} label of {@code courtregister_exceptions_reported_total}. A seventh kind is a spec
+ * change and not an addition: the report's whole claim is that these are what a morning can find.
+ * {@link #BATCH_RELEASED} was the sixth, added by increment 004 against FR-019 and the only one
+ * of them that is informational rather than a thing to act on.
  *
  * <p>The two intake kinds are disjoint by construction - FAILED is terminal and RECEIVED and
  * RETRYING are not - which is what makes a request that was late and has since failed appear once,
@@ -26,7 +28,22 @@ public enum ExceptionKind {
     BATCH_FAILED,
 
     /** A recipient's e-mail that was refused or never answered, inside the window. */
-    NOTIFICATION_FAILED;
+    NOTIFICATION_FAILED,
+
+    /**
+     * A batch a run gave up on and gave the registers back from, inside the window.
+     *
+     * <p><strong>The one informational kind, and the only one that says something was put
+     * right.</strong> It is a FAILED batch like {@link #BATCH_FAILED}, read by the same statement
+     * over the same window, and the reason on its row is what tells them apart. What makes it
+     * different is what happened next: the same run that failed it released its registers, and
+     * they were batched and rendered that night, so the court centre has its document and nobody
+     * is owed anything. It is reported because support should know a court centre needed two
+     * attempts; reporting it as a failure would send somebody after a document that exists, and
+     * would make a genuinely refused render one entry harder to see on the same morning
+     * (FR-019).
+     */
+    BATCH_RELEASED;
 
     /**
      * Whether a run that did not report this kind would be asked about it again.
@@ -45,7 +62,7 @@ public enum ExceptionKind {
     public boolean recursEveryRun() {
         return switch (this) {
             case REQUEST_LATE, BATCH_LATE -> true;
-            case REQUEST_FAILED, BATCH_FAILED, NOTIFICATION_FAILED -> false;
+            case REQUEST_FAILED, BATCH_FAILED, NOTIFICATION_FAILED, BATCH_RELEASED -> false;
         };
     }
 }

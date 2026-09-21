@@ -11,16 +11,17 @@ import org.slf4j.MDC;
  * unit of work it belongs to. For a delivery that is {@code requestId} and {@code hearingId}. A run
  * has neither and cannot: it is one unit of work across many hearings and many batches, and those
  * identifiers belong to the deliveries that recorded the registers, not to the night that renders
- * them. Before this the eleven lines a night writes - the job's and the reconciler's - carried no
- * correlation at all, so a night could not be pulled out of the estate's index as one thing. On an
- * evening where the grace-period sweep is also settling batches from earlier nights, that is the
- * difference between reading a run and reading a haystack.
+ * them. Before this the lines a night writes carried no correlation at all, so a night could not be
+ * pulled out of the estate's index as one thing. On an evening where a run is releasing batches
+ * from earlier nights as well as assembling tonight's, that is the difference between reading a run
+ * and reading a haystack.
  *
- * <p><strong>Nesting is the whole reason this is a type rather than two calls.</strong> There are
- * two independently scheduled units here - {@code RegisterGenerationJob.run()} and
- * {@code GenerationReconciler.reconcileScheduled()} - and the first calls into the second. A sweep
- * reached through a run is part of that run and must carry its id; a sweep that fired on its own
- * schedule is a unit of work in its own right and needs one of its own. So the work adopts an
+ * <p><strong>Nesting is the whole reason this is a type rather than two calls.</strong> A unit of
+ * work reached from inside another is part of it and must carry its id; the same unit fired on a
+ * schedule of its own is a unit of work in its own right and needs one of its own. That is not
+ * hypothetical here: {@code StaleBatchReleaser} opens a correlation of its own and is called from
+ * inside {@code RegisterGenerationJob.run()}, which has already opened one, so the pass adopts the
+ * run's id rather than minting a second for the same night's work. The work therefore adopts an
  * ambient correlation where there is one, and only the call that put one there takes it away again.
  *
  * <p>The removal matters as much as the minting, which is why the work is handed in rather than the

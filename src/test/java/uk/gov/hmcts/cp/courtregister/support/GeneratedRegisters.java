@@ -197,6 +197,75 @@ public final class GeneratedRegisters {
                 .optional();
     }
 
+    /**
+     * The state one named batch of this court centre's is in.
+     *
+     * <p>The readings above answer for a court centre that holds one batch, which is every suite
+     * written before a run could give a batch back. A night that released one and assembled
+     * another leaves this court centre holding two, and what either of them says about the other
+     * is the whole of what such a case asserts - so those cases name the batch they are asking
+     * about (T037).
+     *
+     * @param batchId the batch being asked about
+     * @return its status, or empty where this court centre holds no such batch
+     */
+    public Optional<String> statusOf(final UUID batchId) {
+        return column("status", String.class, batchId);
+    }
+
+    /**
+     * The payload id one named batch of this court centre's was given.
+     *
+     * @param batchId the batch being asked about
+     * @return the id its render was asked for under, where it has one
+     */
+    public Optional<UUID> payloadFileIdOf(final UUID batchId) {
+        return column("payload_file_id", UUID.class, batchId);
+    }
+
+    /**
+     * The document id one named batch of this court centre's ended with.
+     *
+     * @param batchId the batch being asked about
+     * @return the rendered document's id, where the batch reached one
+     */
+    public Optional<UUID> documentFileIdOf(final UUID batchId) {
+        return column("document_file_id", UUID.class, batchId);
+    }
+
+    /**
+     * The bounded reason one named batch of this court centre's was failed under.
+     *
+     * @param batchId the batch being asked about
+     * @return the reason, where it failed
+     */
+    public Optional<String> failureReasonOf(final UUID batchId) {
+        return column("failure_reason", String.class, batchId);
+    }
+
+    /**
+     * One column of one batch of this court centre's.
+     *
+     * <p>The court centre is in the predicate as well as the identity, because these fixtures are
+     * scoped to a court centre and a reading that answered about another suite's batch would be a
+     * case asserting about rows it did not write.
+     *
+     * @param column  the column wanted
+     * @param type    what it comes back as
+     * @param batchId the batch being asked about
+     * @param <T>     the column's type
+     * @return the value, or empty where this court centre holds no such batch
+     */
+    private <T> Optional<T> column(final String column, final Class<T> type, final UUID batchId) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("SELECT " + column + " FROM register_batch"
+                        + " WHERE court_centre_id = :courtCentre AND batch_id = :batchId")
+                .param("courtCentre", courtCentre)
+                .param("batchId", batchId)
+                .query(type)
+                .optional();
+    }
+
     /** Which mechanism this court centre's only batch was completed by, where it is complete. */
     public Optional<String> completedBy() {
         return ProcessedLogTestSupport.jdbcClient()
@@ -269,12 +338,12 @@ public final class GeneratedRegisters {
     /**
      * Puts this court centre's batches' render request further into the past than it was.
      *
-     * <p>The only way a suite can reach the grace-period reconciler without shortening the grace
-     * period itself, and it is the honest one: the rule is "how long ago was the render asked for",
-     * so a batch that has been waiting longer than the grace allows is the input, and moving the
-     * stamp is how a test states that without waiting ten real minutes. Shortening the configured
-     * grace instead would make every other suite's in-flight batch overdue as well, on a store all
-     * of them share.
+     * <p>The only way a suite can reach the staleness rule without shortening
+     * {@code courtregister.generation.stale-after} itself, and it is the honest one: the rule is
+     * "how long ago was the render asked for", so a batch that has been waiting longer than the
+     * setting allows is the input, and moving the stamp is how a test states that without waiting
+     * half an hour. Shortening the configured setting instead would make every other suite's
+     * in-flight batch stale as well, on a store all of them share.
      *
      * @param waited how long ago the render should look as though it was asked for
      */
@@ -286,6 +355,75 @@ public final class GeneratedRegisters {
                          WHERE court_centre_id = :courtCentre
                         """)
                 .param("waited", waited.toSeconds() + " seconds")
+                .param("courtCentre", courtCentre)
+                .update();
+    }
+
+    /**
+     * How many of this court centre's registers are in no batch and waiting for a run.
+     *
+     * <p>A register's own status is not the batch's - it stays RECORDED while the batch that holds
+     * it is GENERATING, and moves when the document does - so what a deferred court centre day
+     * looks like in the store is a recorded register with no batch behind it, which is this
+     * reading and not {@link #statuses()}.
+     *
+     * @return the active, unbatched registers of this court centre
+     */
+    public int registersWaiting() {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT count(*)
+                          FROM processed_output
+                         WHERE court_centre_id = :courtCentre
+                           AND status = 'RECORDED'
+                           AND superseded_at IS NULL
+                           AND batch_id IS NULL
+                        """)
+                .param("courtCentre", courtCentre)
+                .query(Integer.class)
+                .single();
+    }
+
+    /**
+     * How many registers one named batch of this court centre's holds.
+     *
+     * @param batchId the batch being asked about
+     * @return the registers stamped into it, which a release would give back
+     */
+    public int registersIn(final UUID batchId) {
+        return ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        SELECT count(*)
+                          FROM processed_output
+                         WHERE court_centre_id = :courtCentre AND batch_id = :batchId
+                        """)
+                .param("courtCentre", courtCentre)
+                .param("batchId", batchId)
+                .query(Integer.class)
+                .single();
+    }
+
+    /**
+     * Says of this court centre's batches what an operator's regeneration says of its own.
+     *
+     * <p>{@code system_generated} is progression's own flag and the one thing that tells a batch
+     * the schedule assembled from a batch a person asked for. The release pass judges the second
+     * kind by the longer of the two cutoffs, because a manual generation holds no run lock and has
+     * the whole requesting deadline to work in (FR-017) - so a suite that wants to reach that arm
+     * has to be able to say a batch was asked for by hand.
+     *
+     * <p>Stamped on the row rather than driven through the CLI for the reason the registers are
+     * recorded through the store: the operations command has its own suite and its own stack, and
+     * standing it up here would make a case about the release pass depend on the command's
+     * argument parsing.
+     */
+    public void wasAskedForByAnOperator() {
+        ProcessedLogTestSupport.jdbcClient()
+                .sql("""
+                        UPDATE register_batch
+                           SET system_generated = false
+                         WHERE court_centre_id = :courtCentre
+                        """)
                 .param("courtCentre", courtCentre)
                 .update();
     }

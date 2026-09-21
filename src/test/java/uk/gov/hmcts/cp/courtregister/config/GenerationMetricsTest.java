@@ -10,7 +10,10 @@ import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
@@ -22,6 +25,7 @@ import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision.Unreadable;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision.UnreadableReason;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
+import uk.gov.hmcts.cp.courtregister.domain.SweepFailureReason;
 
 /**
  * One case per instrument of the downstream half: the name, the type, the label set and the
@@ -34,9 +38,9 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
  *
  * <p>Three of them exist because a nightly, event-completed flow cannot be read from counters of
  * work that happened. The skipped counter separates "the flag is off" from "the flag could not be
- * read", which look identical from outside and are not the same night. The reconciled counter
- * separates an outcome that arrived from one that had to be fetched, because a run whose outcomes
- * all come from the reconciler is a broker to look at rather than a renderer. And the three age
+ * read", which look identical from outside and are not the same night. The released counters say
+ * what a run's first act had to give back, in batches and in registers, because a batch is one
+ * document and one e-mail while a register is one hearing's youth defendants. And the three age
  * gauges are the only reading that moves when nothing happens at all - a record that is never
  * batched, a batch whose document never comes, or a batch whose render request was never recorded,
  * touches no counter here, which is exactly the
@@ -214,8 +218,8 @@ class GenerationMetricsTest {
 
         @Test
         void every_batch_should_be_timed_however_its_outcome_arrived() {
-            // One distribution, not one per completion route: whether the event or the reconciler
-            // brought the answer is the reconciled counter's question, not this one's.
+            // One distribution, not one per completion route: a batch is timed from the request
+            // to the outcome, whatever the outcome turned out to be.
             metrics.generationLatency(Duration.ofSeconds(30));
             metrics.generationLatency(Duration.ofSeconds(60));
 
@@ -232,29 +236,57 @@ class GenerationMetricsTest {
     }
 
     /**
-     * The counter that says the completion path is not working.
+     * The three counters that say what a night's first act had to give back.
      *
-     * <p>A reconciled outcome is a correct outcome, so nothing else in the flow marks it as
-     * unusual. A night where every batch had to be fetched by the grace-period query is a durable
-     * subscription that is not delivering, and this series is the only place it shows.
+     * <p><strong>[A]</strong> - characterisations of the series Phase 3 landed, asserted here
+     * because this suite is where the published surface is held: the names are what dashboards and
+     * alert rules are written against, and a batch id may never be a label on any of them. They
+     * stand where {@code courtregister_generation_reconciled_total} stood, which said how much of
+     * a night the grace-period query had to fetch and now describes a mechanism that does not
+     * exist.
+     *
+     * <p>Three series rather than one with a label, because a batch is one document and one e-mail
+     * while a register is one hearing's youth defendants, and a batch nothing could be given back
+     * from is neither: it is a night's undone work, and nought is the expected reading.
      */
     @Nested
-    @DisplayName("courtregister_generation_reconciled_total")
-    class Reconciled {
+    @DisplayName("the released and contended counters")
+    class Released {
 
         @Test
-        void an_outcome_the_reconciler_fetched_should_count_on_its_own_series() {
-            metrics.reconciled();
-            metrics.reconciled();
+        void what_a_run_gave_back_should_count_on_two_series_of_its_own() {
+            metrics.staleBatchesReleased(2);
+            metrics.staleRegistersReleased(7);
 
-            assertThat(counter(GenerationMetrics.GENERATION_RECONCILED)).isEqualTo(2);
+            assertThat(counter(GenerationMetrics.RELEASED_BATCHES))
+                    .as("the batches, which is how much of the estate a lost outcome cost")
+                    .isEqualTo(2);
+            assertThat(counter(GenerationMetrics.RELEASED_REGISTERS))
+                    .as("and the registers inside them, which no count of batches can answer for")
+                    .isEqualTo(7);
         }
 
         @Test
-        void it_should_carry_no_label() {
-            metrics.reconciled();
+        void what_a_run_could_not_give_back_should_count_on_a_third() {
+            metrics.staleBatchesContended(1);
 
-            assertThat(tagKeysOf(GenerationMetrics.GENERATION_RECONCILED)).isEmpty();
+            assertThat(counter(GenerationMetrics.RELEASE_CONTENDED))
+                    .as("a path that leaves something undone moves a counter, and without this the "
+                            + "only trace of a court centre day nothing can give back is a WARN")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void none_of_the_three_should_carry_a_label() {
+            metrics.staleBatchesReleased(1);
+            metrics.staleRegistersReleased(1);
+            metrics.staleBatchesContended(1);
+
+            assertThat(tagKeysOf(GenerationMetrics.RELEASED_BATCHES)).isEmpty();
+            assertThat(tagKeysOf(GenerationMetrics.RELEASED_REGISTERS)).isEmpty();
+            assertThat(tagKeysOf(GenerationMetrics.RELEASE_CONTENDED))
+                    .as("a batch id is an identifier and identifiers are never a label here")
+                    .isEmpty();
         }
     }
 
@@ -529,7 +561,9 @@ class GenerationMetricsTest {
                             GenerationMetrics.BATCHES,
                             GenerationMetrics.GENERATION_REQUEST,
                             GenerationMetrics.GENERATION_LATENCY,
-                            GenerationMetrics.GENERATION_RECONCILED,
+                            GenerationMetrics.RELEASED_BATCHES,
+                            GenerationMetrics.RELEASED_REGISTERS,
+                            GenerationMetrics.RELEASE_CONTENDED,
                             GenerationMetrics.GENERATION_SKIPPED,
                             GenerationMetrics.NOTIFICATIONS,
                             GenerationMetrics.OLDEST_RECORDED_UNBATCHED_AGE,
@@ -539,6 +573,7 @@ class GenerationMetricsTest {
                             GenerationMetrics.PENDING_AFTER_DEADLINE,
                             GenerationMetrics.DEFERRED_KEYS,
                             GenerationMetrics.DEFERRED_REGISTERS,
+                            GenerationMetrics.BATCH_SWEEP_FAILURES,
                             GenerationMetrics.FLAG_READ_OK);
         }
 
@@ -574,6 +609,43 @@ class GenerationMetricsTest {
                             "notified-nobody", "202", "unreadable-timed-out", "accepted");
         }
 
+        /**
+         * And no series for the mechanism the increment retired.
+         *
+         * <p>A retirement is only done when nothing can quietly put it back, and the surface case
+         * above cannot say so: it lists the instruments {@code exerciseEveryInstrument} exercises,
+         * so a {@code reconciled()} re-added to {@code GenerationMetrics} and called by a
+         * re-added writer would register a series no case here ever asks for. The name is
+         * therefore asserted by absence, and the two things that could reach it - the constant a
+         * dashboard would be written against and the method a caller would reach for - are
+         * asserted absent too, because a name that exists is a name something will use.
+         *
+         * <p>The series was {@code courtregister_generation_reconciled_total}: outcomes the
+         * grace-period pass fetched rather than received. Nothing is asked of systemdocgenerator
+         * between runs any more (FR-006), so it counts a mechanism this service does not have.
+         */
+        @Test
+        void no_series_should_be_named_for_the_retired_reconciler() {
+            exerciseEveryInstrument();
+
+            assertThat(registry.find("courtregister_generation_reconciled_total").meter())
+                    .as("no vocabulary outlives the thing it names: an outcome this service "
+                            + "fetched is a thing that no longer happens")
+                    .isNull();
+            assertThat(Arrays.stream(GenerationMetrics.class.getDeclaredFields())
+                            .map(Field::getName)
+                            .toList())
+                    .as("the constant is what a dashboard and an alert rule are written against, "
+                            + "and one that still compiles is one a later change will reach for")
+                    .doesNotContain("GENERATION_RECONCILED");
+            assertThat(Arrays.stream(GenerationMetrics.class.getDeclaredMethods())
+                            .map(Method::getName)
+                            .toList())
+                    .as("and the method is what would register it again on first call, since a "
+                            + "counter comes into being when something increments it")
+                    .doesNotContain("reconciled");
+        }
+
         @Test
         void there_should_be_no_instrument_for_the_renderers_own_reason_text() {
             // sdg_reason is another system's prose about a document whose every defendant is a
@@ -588,7 +660,9 @@ class GenerationMetricsTest {
             metrics.batchCompleted(BatchStatus.NOTIFIED);
             metrics.generationRequested(202);
             metrics.generationLatency(Duration.ofSeconds(30));
-            metrics.reconciled();
+            metrics.staleBatchesReleased(1);
+            metrics.staleRegistersReleased(2);
+            metrics.staleBatchesContended(1);
             metrics.runSkipped(FlagDecision.OFF);
             metrics.notificationSettled(NotificationStatus.ACCEPTED, 202);
             metrics.oldestRecordedUnbatchedAge(Duration.ofHours(1));
@@ -598,6 +672,7 @@ class GenerationMetricsTest {
             metrics.pendingAfterDeadline(1);
             metrics.deferredKeys(1);
             metrics.deferredRegisters(1);
+            metrics.batchSweepFailure(SweepFailureReason.STORE_UNAVAILABLE);
             metrics.flagRead(FlagDecision.OFF);
         }
     }
@@ -701,11 +776,11 @@ class GenerationMetricsTest {
 
         @Test
         @DisplayName("the unlabelled counter scrapes as a single, unlabelled series")
-        void the_reconciled_counter_should_scrape_without_a_label_set() {
-            scraped.reconciled();
+        void the_released_batches_counter_should_scrape_without_a_label_set() {
+            scraped.staleBatchesReleased(1);
 
-            assertThat(samplesOf(GenerationMetrics.GENERATION_RECONCILED))
-                    .containsExactly(GenerationMetrics.GENERATION_RECONCILED);
+            assertThat(samplesOf(GenerationMetrics.RELEASED_BATCHES))
+                    .containsExactly(GenerationMetrics.RELEASED_BATCHES);
         }
 
         @Test
@@ -717,7 +792,7 @@ class GenerationMetricsTest {
             scraped.batchCompleted(BatchStatus.NOTIFIED_NOBODY);
             scraped.generationRequested(202);
             scraped.generationLatency(Duration.ofSeconds(30));
-            scraped.reconciled();
+            scraped.staleBatchesReleased(1);
             scraped.runSkipped(new Unreadable(UnreadableReason.MALFORMED));
             scraped.notificationSettled(NotificationStatus.FAILED, null);
 

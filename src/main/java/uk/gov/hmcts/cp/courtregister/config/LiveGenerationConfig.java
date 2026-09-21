@@ -46,7 +46,7 @@ public class LiveGenerationConfig {
     private static final String LIVE = "LIVE";
 
     /**
-     * The renderer port, served by systemdocgenerator's command and query APIs.
+     * The renderer port, served by systemdocgenerator's command API.
      *
      * <p>Both timeouts are set deliberately, as they are on every other client this service builds:
      * the render request is spent inside the run's deadline, and a POST with no read timeout can

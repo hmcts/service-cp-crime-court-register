@@ -13,6 +13,7 @@ import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision.Unreadable;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
+import uk.gov.hmcts.cp.courtregister.domain.SweepFailureReason;
 
 /**
  * The instrument surface of the downstream half, declared in one place.
@@ -25,9 +26,9 @@ import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
  *
  * <p>Two of these answer questions nothing else in the flow can. A skipped run is counted by the
  * reason it was skipped, because "the flag is off" and "the flag could not be read" look identical
- * from outside and are not the same night; and a reconciled completion is counted separately from an
- * ordinary one, because a run whose outcomes all arrive by reconciliation is a broker to look at
- * rather than a renderer.
+ * from outside and are not the same night; and what a run's first act had to give back is counted
+ * in batches and in registers, because a batch is one document and one e-mail while a register is
+ * one hearing's youth defendants and neither answers the other's question.
  *
  * <p>The eight gauges are the state a nightly flow cannot be understood without between runs: how
  * old the oldest unbatched record is, how long the oldest batch has been waiting for a document,
@@ -56,7 +57,10 @@ public class GenerationMetrics {
     public static final String BATCHES = "courtregister_batches_total";
     public static final String GENERATION_REQUEST = "courtregister_generation_request_total";
     public static final String GENERATION_LATENCY = "courtregister_generation_latency";
-    public static final String GENERATION_RECONCILED = "courtregister_generation_reconciled_total";
+    public static final String RELEASED_BATCHES = "courtregister_generation_released_batches_total";
+    public static final String RELEASED_REGISTERS =
+            "courtregister_generation_released_registers_total";
+    public static final String RELEASE_CONTENDED = "courtregister_generation_contended_total";
     public static final String GENERATION_SKIPPED = "courtregister_generation_skipped_total";
     public static final String NOTIFICATIONS = "courtregister_notifications_total";
     public static final String NOTIFICATIONS_IGNORED =
@@ -65,6 +69,8 @@ public class GenerationMetrics {
             "courtregister_public_events_ignored_total";
     public static final String GENERATION_UNRECORDED =
             "courtregister_generation_unrecorded_total";
+    public static final String BATCH_SWEEP_FAILURES =
+            "courtregister_batch_sweep_failures_total";
     public static final String OLDEST_RECORDED_UNBATCHED_AGE =
             "courtregister_oldest_recorded_unbatched_age";
     public static final String OLDEST_GENERATING_AGE = "courtregister_oldest_generating_age";
@@ -128,6 +134,52 @@ public class GenerationMetrics {
     public static final String PAYLOAD_MISMATCH = "payload-mismatch";
 
     /**
+     * The {@code reason} label of an outcome of ours that is missing what it is an outcome about.
+     *
+     * <p>A {@code document-available} that names no document or no instant, and a
+     * {@code generation-failed} that names no instant. Both identifiers are there and both check
+     * out, so it is neither {@link #UNKNOWN_CORRELATION} nor {@link #MISSING_PAYLOAD_ID}: what is
+     * missing is the announcement's own subject, which is a renderer or a broker to look at rather
+     * than a correlation to go chasing. One reason for both shapes because they are one fault, with
+     * the event's name on the WARN beside it for whoever reads further.
+     *
+     * <p>It reads nought on a healthy estate and it is the reading that says a batch went nowhere
+     * for a reason nobody would otherwise see: nothing re-asks systemdocgenerator about a batch any
+     * more, so an incomplete announcement is the whole of what was ever said about that render, and
+     * the batch waits for the next run to give it back.
+     */
+    public static final String INCOMPLETE_OUTCOME = "incomplete-outcome";
+
+    /**
+     * The {@code reason} label of an outcome for a batch this service has already ended.
+     *
+     * <p>A {@code document-available} for a batch the run gave up on and released, or a refusal
+     * for one already FAILED, or either for a batch whose teams have been told: the batch stands
+     * in a state the machine draws no move out of, so it is left where it is and the outcome is
+     * dropped. Until 004 that drop was a WARN and nothing else - the one
+     * acknowledged-and-dropped path on the subscription that moved no counter, which the design
+     * rules forbid.
+     *
+     * <p><strong>Ended, and not merely unmoved.</strong> A redelivered outcome for a batch
+     * standing mid-journey where that outcome already put it - GENERATED, told a second time that
+     * its document exists - is the redelivery a durable subscription is for, and it is not
+     * counted here: it is expected, said at DEBUG, and nought is what this series has to read on a
+     * healthy estate for an alert to be worth writing on it.
+     *
+     * <p>It is counted now because the drop is a <em>guarantee</em> rather than a curiosity: it is
+     * what stops a Youth Offending Team being told twice about one court centre and register date
+     * after a released batch's late outcome arrives (SC-003, SC-010). A guarantee that moves no
+     * counter cannot be alerted on.
+     *
+     * <p><strong>Not one of the notification counter's late-* labels.</strong>
+     * {@link #LATE_ACCEPTANCE_IGNORED} and {@link #LATE_FAILURE_IGNORED} are on
+     * {@link #NOTIFICATIONS_IGNORED} and describe two notifiers racing over one recipient's row -
+     * a different event entirely, one leg further on. Reusing them here would hide a rendering
+     * fact inside a notification series.
+     */
+    public static final String TERMINAL_BATCH = "terminal-batch";
+
+    /**
      * The {@code reason} label of a delivery whose body would not parse at all.
      *
      * <p>The four readings above are all taken from an envelope this service read: they say what a
@@ -169,9 +221,9 @@ public class GenerationMetrics {
      * <p>The same gap one leg along: a lost sample leaves {@code courtregister_generation_latency}
      * quietly under-counting, and a series that is under-counting looks exactly like a series that
      * is healthy. Counting the loss is what lets a dashboard say the latency reading is incomplete
-     * rather than good. Both legs that take the reading count it here - the sink for an outcome
-     * that arrived and the reconciler for one that had to be fetched - because the question is how
-     * many samples the series is missing and not which leg missed them.
+     * rather than good. The one leg that takes the reading counts it here, and the label says how
+     * many samples the series is missing rather than which leg missed them: a second leg that came
+     * to take the reading would count the same loss under the same label.
      */
     public static final String LATENCY_SAMPLE = "latency-sample";
 
@@ -324,10 +376,81 @@ public class GenerationMetrics {
     }
 
     /**
-     * Counts an outcome the grace-period reconciler had to fetch rather than receive.
+     * Counts the batches one run gave up on and released.
+     *
+     * <p>The night's account of what it had to undo: a batch counted here is a court centre day
+     * whose render outcome never arrived, and a series that is flat at zero is a topic delivering
+     * every outcome it should. Every run moves it, by nought where it released nothing, so the
+     * series exists to be alerted on from the first night rather than appearing the first time
+     * something goes wrong.
+     *
+     * @param batches how many batches this run failed and released
      */
-    public void reconciled() {
-        counter(GENERATION_RECONCILED).increment();
+    public void staleBatchesReleased(final int batches) {
+        counter(RELEASED_BATCHES).increment(batches);
+    }
+
+    /**
+     * Counts the registers that came back with those batches.
+     *
+     * <p>Its own series rather than a label on the one above, because a batch is one document and
+     * one e-mail while a register is one hearing's youth defendants: the count of batches says how
+     * much of the estate a lost outcome cost and this says how many children's registers were in
+     * it. Neither is added to the run's own row totals - the same run re-batches these registers,
+     * so they are already inside them (FR-009).
+     *
+     * @param registers how many released registers are still the day's to render
+     */
+    public void staleRegistersReleased(final int registers) {
+        counter(RELEASED_REGISTERS).increment(registers);
+    }
+
+    /**
+     * Counts the batches a run could not release, having lost the day's key on every attempt.
+     *
+     * <p>A path that leaves something undone moves a counter: the batch is stale still and
+     * untouched, the run goes on to assemble, and without this series the only trace of a court
+     * centre day nothing can give back would be a WARN in the log index. Nought is the expected
+     * reading, and anything that stays above it across runs is a day a person has to decide about.
+     *
+     * @param batches how many batches the pass left exactly as it found them
+     */
+    public void staleBatchesContended(final int batches) {
+        counter(RELEASE_CONTENDED).increment(batches);
+    }
+
+    /**
+     * Counts a batch-age refresh that could not be taken, under the reason it refused.
+     *
+     * <p>The generation half's copy of {@link ProcessingMetrics#intakeSweepFailure}, and its twin
+     * for the same reason: the three readings are telemetry, and a round-trip reading that cannot
+     * be taken may not cost a Youth Offending Team its e-mail, so the refusal stops where it
+     * happens. This counter is what makes that an absorption rather than a swallow - the gauges
+     * keep their last reading rather than dropping to a zero the store never said, and this series
+     * says how long ago that reading was true.
+     *
+     * <p>Its own series and not the intake sweep's, because the two describe different halves of
+     * the service running in different pods: a deployment with the generation half switched off
+     * publishes one of them and not the other, and one counter for both would make a generating
+     * pod's outage indistinguishable from an intake pod's.
+     *
+     * @param reason the bounded code this refresh is counted under
+     */
+    public void batchSweepFailure(final SweepFailureReason reason) {
+        counter(BATCH_SWEEP_FAILURES, REASON_TAG, code(reason)).increment();
+    }
+
+    /**
+     * Counts an outcome for a batch this service had already ended, which moved nothing.
+     *
+     * <p>The drop that stops a second e-mail. A batch the run released is FAILED, and the
+     * {@code document-available} systemdocgenerator may still deliver for it must not re-stamp it:
+     * its registers are in tonight's batch and that batch is what tells the court centre's Youth
+     * Offending Teams. Nought is the expected reading, and a series that moves is the number of
+     * times the guarantee was needed.
+     */
+    public void terminalBatchIgnored() {
+        counter(PUBLIC_EVENTS_IGNORED, REASON_TAG, TERMINAL_BATCH).increment();
     }
 
     /**
@@ -387,6 +510,23 @@ public class GenerationMetrics {
     }
 
     /**
+     * Counts an outcome of ours that is missing the thing it is an outcome about.
+     *
+     * <p>The correlation is this service's own and the payload cross-checks, so there is nothing
+     * wrong with the announcement's addressing: what is absent is the document, or the instant the
+     * batch's ending would be stamped with. It is dropped like the other two absences and counted
+     * under a reason of its own, because the fault is systemdocgenerator publishing an incomplete
+     * event and not a correlation this service lost.
+     *
+     * <p>Without the series the batch's whole story would be a WARN and a silence: the next run
+     * gives the batch back under NOT_COMPLETED_BY_NEXT_RUN, and nothing anywhere would say that an
+     * outcome for it had arrived and could not be used.
+     */
+    public void incompleteOutcomeIgnored() {
+        counter(PUBLIC_EVENTS_IGNORED, REASON_TAG, INCOMPLETE_OUTCOME).increment();
+    }
+
+    /**
      * Counts a delivery whose body could not be parsed at all.
      *
      * <p>The four readings above are taken from an envelope this service read; this one is taken
@@ -428,10 +568,9 @@ public class GenerationMetrics {
      *
      * <p>{@link #GENERATION_LATENCY} under-counting looks exactly like {@link #GENERATION_LATENCY}
      * healthy - the count is lower and every reading in it is real - so the loss is counted here
-     * and a dashboard can say the series is short rather than assume it is complete. Both legs that
-     * take the reading count it, the sink for an outcome that arrived and the reconciler for one
-     * that had to be fetched, because the question is how many samples are missing and not which
-     * leg missed them.
+     * and a dashboard can say the series is short rather than assume it is complete. The reading is
+     * taken where an outcome is applied, which is one place, and what the label answers is how many
+     * samples are missing rather than which leg missed them.
      */
     public void latencySampleUnrecorded() {
         counter(GENERATION_UNRECORDED, REASON_TAG, LATENCY_SAMPLE).increment();

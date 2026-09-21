@@ -20,7 +20,6 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
-import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 import uk.gov.hmcts.cp.courtregister.pipeline.PdfPayloadMapper;
@@ -29,7 +28,7 @@ import uk.gov.hmcts.cp.courtregister.pipeline.PdfPayloadMapper;
  * The downstream half's own classes, put on the context that is going to run them.
  *
  * <p>Everything here is this service's, with no transport of its own: the grouping, the ported
- * payload generator, the one code path an outcome takes, the safety net and the requesting leg. The
+ * payload generator, the one code path an outcome takes, and the requesting leg. The
  * adapters they speak through are chosen separately - {@link LiveGenerationConfig} where a
  * deployment means it, {@link StubGenerationConfig} where a local run does not - which is why the
  * two are two files: what a batch <em>is</em> does not change with the mode, and a configuration
@@ -148,8 +147,7 @@ public class GenerationConfig {
     }
 
     /**
-     * The one code path a rendering outcome takes, whether the topic delivered it or the reconciler
-     * fetched it.
+     * The one code path a rendering outcome takes, and there is one way an outcome arrives.
      *
      * @param store    where the batch and its rows are moved
      * @param batches  the {@code register_batch} table, read to correlate an outcome to a batch
@@ -162,32 +160,6 @@ public class GenerationConfig {
             final RegisterBatchRepository batches, final GenerationMetrics metrics,
             final RegisterNotifierService notifier) {
         return new DocumentOutcomeSinkImpl(store, batches, metrics, notifier);
-    }
-
-    /**
-     * The grace-period safety net, which carries a schedule and a lock of its own.
-     *
-     * <p>It has to be a bean for that schedule to exist at all: {@code @Scheduled} is read off a
-     * bean, and a reconciler nothing constructed would leave every batch whose public event went
-     * missing GENERATING until somebody noticed by hand.
-     *
-     * @param batches    the {@code register_batch} table, read for the batches whose outcome is
-     *                   overdue
-     * @param renderer   systemdocgenerator, asked what became of a payload it was given
-     * @param sink       where an answer is applied, the same port the listener drives
-     * @param store      where a silence is applied, as this service's own verdict
-     * @param metrics    the downstream half's instruments
-     * @param properties the settings it works to; it takes the one duration it reads
-     * @param clock      the clock the grace period is measured back from
-     * @return the reconciler
-     */
-    @Bean
-    public GenerationReconciler generationReconciler(final RegisterBatchRepository batches,
-            final DocumentRenderer renderer, final DocumentOutcomeSink sink,
-            final RegisterStore store, final GenerationMetrics metrics,
-            final GenerationProperties properties, final Clock clock) {
-        return new GenerationReconciler(batches, renderer, sink, store, metrics,
-                properties.gracePeriod(), clock);
     }
 
     /**

@@ -12,6 +12,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
@@ -22,15 +23,22 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.ConcurrencyFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.RecordOutcome;
 import uk.gov.hmcts.cp.courtregister.application.RecordedCompletion;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseProgress;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
@@ -43,6 +51,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterNotRecordedException;
+import uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 
 /**
@@ -59,7 +68,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * supersession therefore cannot see the row being inserted beside it, so a recording can never
  * supersede itself (research §8).
  *
- * <p><strong>Two of them take a transaction as well, and for two different reasons.</strong>
+ * <p><strong>Three of them take a transaction as well, and for three different reasons.</strong>
  * Assembly's statement is one statement too, but the decision about it is not in the statement:
  * whether the batch is the batch that was asked for is a count compared in Java, and under
  * autocommit that comparison happens after the batch row and the stamps are already committed. A
@@ -68,7 +77,11 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
  * inside a transaction and the refusal rolls it back: the batch is assembled or it never existed.
  * Recording runs inside one because it may be issued more than once - a re-share that loses the
  * race for its key is refused by {@code idx_output_active_register_key} and tried again on a fresh
- * snapshot - and the supersession the refused attempt had already made has to go with it.
+ * snapshot - and the supersession the refused attempt had already made has to go with it. Each
+ * stale batch's release runs inside one for a reason that is not about its own statement at all,
+ * which is one statement like the rest: the boundary is {@code REQUIRES_NEW}, so that a caller
+ * already inside a transaction cannot fold every court centre's release into one that a single
+ * refusal aborts (FR-003a).
  *
  * <p>The clauses are chained through their output, which is what orders them: Postgres does not
  * otherwise say which clause runs first. In the recording statement {@code recorded} counts
@@ -131,6 +144,20 @@ public class JdbcRegisterStore implements RegisterStore {
 
     /** V3's key on the day's active register: one RECORDED, unsuperseded, unbatched row per key. */
     private static final String ACTIVE_ROW_KEY = "idx_output_active_register_key";
+
+    /**
+     * The two kinds of rule a release refused by something it cannot retry is reported under.
+     *
+     * <p>A classification and not a constraint name, because the name is only in the driver's
+     * message and that message is where a refused row's values are - see
+     * {@link #unaccountedForRelease(UUID, DataIntegrityViolationException)}. Two values, both
+     * written here, so a reader is told whether a key or a plain rule said no without a word of
+     * the store's own travelling with it.
+     */
+    private static final String UNACCOUNTED_KEY = "a unique key";
+
+    /** The other one: a CHECK, a foreign key, a NOT NULL - anything that is no unique index. */
+    private static final String UNACCOUNTED_RULE = "an integrity rule that is no key";
 
     /** The four statuses the recorder writes, and the only ones a recorded register can be in. */
     private static final Set<String> RECORDER_STATUSES =
@@ -580,13 +607,15 @@ public class JdbcRegisterStore implements RegisterStore {
      * <p>{@code sdg_reason} is bounded on the way in, by the rule the domain states once
      * ({@link RegisterBatch#boundedReason(String)}). How long systemdocgenerator's message is is
      * systemdocgenerator's decision, and an unbounded write against a bounded column would fail
-     * this whole statement: the batch would stay GENERATING, unable to say why it failed, until the
-     * reconciler gave up on it.
+     * this whole statement: the batch would stay GENERATING, unable to say why it failed, until
+     * the next run gave up on it.
      *
-     * <p>The rows stay RECORDED whatever the reason, because nothing was ever sent about them. Two
-     * of the six reasons say the batch never left this service, and only for those is the stamp
+     * <p>The rows stay RECORDED whatever the reason, because nothing was ever sent about them.
+     * Three of the six reasons leave no document to wait for, and only for those is the stamp
      * released: the rows become unbatched again and the next run re-assembles them under a fresh
-     * batch identity (data-model.md). The other four leave the stamp in place - systemdocgenerator
+     * batch identity (data-model.md). Two of the three say the batch never left this service; the
+     * third says the next run began and this one had not finished, which is the same thing for the
+     * register - nothing is coming. The other three leave the stamp in place - systemdocgenerator
      * was asked, so a document may yet exist, and re-rendering it is a decision a person makes.
      *
      * <p><strong>A released register the estate has already replaced is superseded rather than
@@ -600,7 +629,7 @@ public class JdbcRegisterStore implements RegisterStore {
      * statement 9a does for the release a person types.
      *
      * <p><strong>And only a row that genuinely came later may be that successor.</strong> The key
-     * can hold the pair either way round: a first batch that failed under one of the four reasons
+     * can hold the pair either way round: a first batch that failed under one of the three reasons
      * that keep the stamp leaves its register RECORDED and stamped, so the batch failing here may
      * be the one holding the <em>newer</em> row with the stale one still beside it. A search that
      * asked only for another unsuperseded row would then write the current register SUPERSEDED
@@ -633,11 +662,32 @@ public class JdbcRegisterStore implements RegisterStore {
      * column at seven statuses, this store writes four of them and SUPERSEDED is the one of those
      * four that is by definition not live, and PENDING, POSTED and FAILED are 001's.
      *
+     * <p><strong>And the same ordering read the other way, which is {@code overtaken}.</strong> The
+     * key can also hold a share the batched register <em>overtook</em>: a delivery that arrived
+     * behind the register it belongs in front of is recorded active and unbatched, because the
+     * recorder's incumbent search is over unbatched rows and a batched register is not its to
+     * supersede. The register being given back is then the later of the two, so it supersedes that
+     * earlier row rather than being handed back beside it - the mirror of what
+     * {@link #RECORD_REGISTER} does when it is the recorder that meets the pair, and the rule
+     * {@link #FAIL_AND_RELEASE_STALE} keeps for the same index. Without it the key holds two active
+     * rows the moment the stamp is cleared, the index refuses the write, and this statement's
+     * failure mark goes down with the release it is a branch of.
+     *
+     * <p>It is guarded by {@code :releaseRows} through {@code stamped}, which already carries that
+     * guard: a reason that keeps the stamp releases nothing and therefore displaces nothing. It runs
+     * only where the register being given back has no successor of its own, because a register that
+     * is itself being superseded is leaving the index as it goes and takes no key. And it is
+     * <strong>chained ahead of</strong> {@code released}, as {@link #RECORD_REGISTER} chains
+     * {@code replaced} ahead of its insert: the row being superseded holds the key until its update
+     * takes it out of the index, so a release issued first would collide with the very row it is
+     * about to supersede, and Postgres does not otherwise say which clause of one statement runs
+     * first.
+     *
      * <p>{@code completed_by} is written here for the same reason it is written by statement 6, and
-     * it is null for most of these endings: only a {@code generation-failed} event and a reconciled
-     * query are somebody else's answer about the render. The other four are this service's own
-     * verdict about a render it could not ask for or could not hear about, and naming a completion
-     * mechanism for those would credit a decision nobody outside this service made. Which is which
+     * it is null for most of these endings: only a {@code generation-failed} event is somebody
+     * else's answer about the render. The others are this service's own verdict about a render it
+     * could not ask for, could not hear about, or stopped waiting for, and naming a completion
+     * mechanism for those would credit a decision nobody made. Which is which
      * is {@link BatchFailureReason#isGeneratorAttributed()}, and a mark that disagrees with it is
      * refused before this statement is issued rather than persisted contradicting itself.
      */
@@ -653,6 +703,11 @@ public class JdbcRegisterStore implements RegisterStore {
                 RETURNING batch_id
             ), stamped AS (
                 SELECT recorded.output_id,
+                       recorded.hearing_id,
+                       recorded.court_centre_id,
+                       recorded.register_date,
+                       recorded.register_time,
+                       recorded.created_at,
                        (SELECT successor.output_id
                           FROM processed_output successor
                          WHERE successor.hearing_id = recorded.hearing_id
@@ -673,6 +728,24 @@ public class JdbcRegisterStore implements RegisterStore {
                   JOIN failed ON failed.batch_id = recorded.batch_id
                  WHERE recorded.status = 'RECORDED'
                    AND CAST(:releaseRows AS boolean)
+            ), overtaken AS (
+                UPDATE processed_output earlier
+                   SET status = 'SUPERSEDED',
+                       superseded_at = now(),
+                       superseded_by = stamped.output_id,
+                       updated_at = now()
+                  FROM stamped
+                 WHERE stamped.successor_id IS NULL
+                   AND earlier.hearing_id = stamped.hearing_id
+                   AND earlier.court_centre_id = stamped.court_centre_id
+                   AND earlier.register_date = stamped.register_date
+                   AND earlier.output_id <> stamped.output_id
+                   AND earlier.status = 'RECORDED'
+                   AND earlier.superseded_at IS NULL
+                   AND earlier.batch_id IS NULL
+                   AND (earlier.register_time, earlier.created_at, earlier.output_id)
+                       < (stamped.register_time, stamped.created_at, stamped.output_id)
+                RETURNING earlier.output_id
             ), released AS (
                 UPDATE processed_output recorded
                    SET batch_id = NULL,
@@ -682,7 +755,8 @@ public class JdbcRegisterStore implements RegisterStore {
                                             THEN NULL ELSE now() END,
                        superseded_by = stamped.successor_id,
                        updated_at = now()
-                  FROM stamped
+                  FROM stamped,
+                       (SELECT count(*) FROM overtaken) AS chained(overtaken_rows)
                  WHERE recorded.output_id = stamped.output_id
                 RETURNING recorded.output_id
             )
@@ -692,8 +766,8 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * Statement 9a - the registers of a FAILED batch given back, so the day may be rendered again.
      *
-     * <p>The other half of statement 9. Two of the six reasons release the stamp as they fail; the
-     * other four leave it, because systemdocgenerator was asked and a document may yet exist - so no
+     * <p>The other half of statement 9. Three of the six reasons release the stamp as they fail;
+     * the other three leave it, because systemdocgenerator was asked and a document may yet exist - so no
      * later run will ever pick those registers up, a stamped row being neither active nor unbatched.
      * Re-rendering that day is a decision a person makes, and this is the statement it is written as.
      *
@@ -749,7 +823,7 @@ public class JdbcRegisterStore implements RegisterStore {
      * PENDING, POSTED and FAILED are 001's.
      *
      * <p><strong>Later, because the key can hold the pair either way round.</strong> A first batch
-     * that failed under one of the four reasons that keep the stamp, or one that reached NOTIFIED,
+     * that failed under one of the three reasons that keep the stamp, or one that reached NOTIFIED,
      * leaves its register beside the re-share rather than superseded by it - so the batch a person
      * releases may be the one holding the <em>newer</em> row, with the stale or the sent one still
      * beside it. A search that asked only for another unsuperseded row would write the current
@@ -768,10 +842,35 @@ public class JdbcRegisterStore implements RegisterStore {
      * register that replaced it, and {@code idx_output_active_register_key} refuses the write - so
      * the whole regeneration fails on a key nothing said was wrong. The identity stays as the last
      * tie-break, for two rows the database clock could not separate.
+     *
+     * <p><strong>And the same ordering read the other way, which is {@code overtaken}.</strong> The
+     * key can hold a share the batched register <em>overtook</em> just as easily as one that
+     * replaced it: a delivery that arrived behind the register it belongs in front of is recorded
+     * active and unbatched, because the recorder's incumbent search is over unbatched rows and a
+     * batched register is not its to supersede. The register coming back is then the later of the
+     * two, so this statement supersedes that earlier row against it - the same rule
+     * {@link #FAIL_AND_RELEASE_STALE} keeps, and the mirror of {@link #RECORD_REGISTER}'s own. Read
+     * one way only, an operator's release would clear the stamp beside the earlier active row,
+     * {@code idx_output_active_register_key} would refuse the second active row for the day, and
+     * the command would fail on a key nothing said was wrong - for ever, because no re-run removes
+     * a row committed before it.
+     *
+     * <p>It runs only where the released register has no successor of its own: a register that is
+     * itself being superseded is leaving the index as it goes, so it takes no key and displaces
+     * nothing. And it is <strong>chained ahead of</strong> {@code released}, as
+     * {@link #RECORD_REGISTER} chains {@code replaced} ahead of its insert and for the same index -
+     * the row being superseded holds the key until its update takes it out, so a release issued
+     * first would collide with the very row it is about to supersede, and Postgres does not
+     * otherwise order the clauses of one statement.
      */
     private static final String RELEASE_FAILED = """
             WITH stamped AS (
                 SELECT recorded.output_id,
+                       recorded.hearing_id,
+                       recorded.court_centre_id,
+                       recorded.register_date,
+                       recorded.register_time,
+                       recorded.created_at,
                        (SELECT successor.output_id
                           FROM processed_output successor
                          WHERE successor.hearing_id = recorded.hearing_id
@@ -793,6 +892,24 @@ public class JdbcRegisterStore implements RegisterStore {
                  WHERE failed.batch_id = :batchId
                    AND failed.status = 'FAILED'
                    AND recorded.status = 'RECORDED'
+            ), overtaken AS (
+                UPDATE processed_output earlier
+                   SET status = 'SUPERSEDED',
+                       superseded_at = now(),
+                       superseded_by = stamped.output_id,
+                       updated_at = now()
+                  FROM stamped
+                 WHERE stamped.successor_id IS NULL
+                   AND earlier.hearing_id = stamped.hearing_id
+                   AND earlier.court_centre_id = stamped.court_centre_id
+                   AND earlier.register_date = stamped.register_date
+                   AND earlier.output_id <> stamped.output_id
+                   AND earlier.status = 'RECORDED'
+                   AND earlier.superseded_at IS NULL
+                   AND earlier.batch_id IS NULL
+                   AND (earlier.register_time, earlier.created_at, earlier.output_id)
+                       < (stamped.register_time, stamped.created_at, stamped.output_id)
+                RETURNING earlier.output_id
             ), released AS (
                 UPDATE processed_output recorded
                    SET batch_id = NULL,
@@ -802,7 +919,8 @@ public class JdbcRegisterStore implements RegisterStore {
                                             THEN NULL ELSE now() END,
                        superseded_by = stamped.successor_id,
                        updated_at = now()
-                  FROM stamped
+                  FROM stamped,
+                       (SELECT count(*) FROM overtaken) AS chained(overtaken_rows)
                  WHERE recorded.output_id = stamped.output_id
                 RETURNING recorded.output_id, recorded.hearing_id, recorded.hearing_date,
                           recorded.court_centre_id, recorded.register_date,
@@ -815,6 +933,224 @@ public class JdbcRegisterStore implements RegisterStore {
               FROM released
              WHERE superseded_at IS NULL
              ORDER BY register_time, output_id
+            """;
+
+    /**
+     * Statement 9b - the batches a run found still waiting, named so each can be its own statement.
+     *
+     * <p><strong>This read decides nothing.</strong> It is the same predicate {@link
+     * #FAIL_AND_RELEASE_STALE} carries, asked once so the pass has a list to walk, and every batch
+     * it names is judged again by the statement that writes the row. A batch that stopped being
+     * stale in between therefore matches nothing and is changed by nothing: the fence is the
+     * write's own {@code WHERE}, and this list is only the order the writes are made in.
+     *
+     * <p>Ordered by register date so the oldest day is given back first, and by batch identity so
+     * the order is total rather than merely mostly decided - two batches of one date must not swap
+     * places between runs, or the run report's lines would be a different account of the same
+     * night each time.
+     */
+    private static final String STALE_BATCHES = """
+            SELECT batch_id
+              FROM register_batch
+             WHERE status IN ('PENDING', 'GENERATING')
+               AND COALESCE(requested_at, assembled_at)
+                     <= CASE WHEN system_generated THEN :scheduledCutoff
+                             ELSE :manualCutoff END
+             ORDER BY register_date, batch_id
+            """;
+
+    /**
+     * Statement 9c - one batch the next run found still waiting, failed and released in one act.
+     *
+     * <p><strong>One statement per batch, whose {@code WHERE} clause is the staleness rule
+     * itself.</strong> That is the whole design, and it is a correctness requirement rather than a
+     * tidiness preference. A read followed by a per-batch {@code markFailed} - the shape the
+     * retired reconciler used - fails in two ways this one cannot:
+     *
+     * <ul>
+     *   <li><strong>A lost register.</strong> {@code markFailed} and {@link #releaseFailed} are two
+     *       operations with a status read between them. A crash landing between a mark and a
+     *       release leaves registers stamped to a terminal batch, and {@code ACTIVE_UNBATCHED}'s
+     *       predicate is {@code batch_id IS NULL} - so those rows are invisible to every later run
+     *       and to every command, and the hearing's youth defendants never reach a court register
+     *       again. That is the precise failure this pass exists to end, reintroduced by the fix
+     *       for it.</li>
+     *   <li><strong>A refused mark ending the night.</strong> Between the read and the mark the
+     *       outcome sink can commit a {@code markGenerated}. {@link #permitted} would then throw,
+     *       and run inline in the night's generation that refusal propagates out of the run: one
+     *       batch that came good in the wrong second would cost every court centre its document.
+     *       Here a batch that stopped being stale simply does not match, and zero rows is an
+     *       answer rather than an error.</li>
+     * </ul>
+     *
+     * <p><strong>The predicate is in the UPDATE's own {@code WHERE}, and not in a CTE that feeds
+     * it.</strong> Under READ COMMITTED an {@code UPDATE} that meets a row another transaction has
+     * just committed re-evaluates its own qualification against the new version and skips the row
+     * where it no longer matches. A staleness rule computed in a preceding {@code SELECT} would be
+     * evaluated once, against the statement's snapshot, and the update would then fail a batch
+     * whose render had been accepted in between - the very race the fence exists for. The rule is
+     * therefore written where the re-check can see it.
+     *
+     * <p>{@code COALESCE(requested_at, assembled_at)} is "the stamp for whichever state it is in"
+     * in one expression: a GENERATING batch has a {@code requested_at} and is measured from it, a
+     * PENDING one has none and is measured from the assembly. The column is {@code assembled_at} -
+     * there is no {@code created_at} on this table. A PENDING batch with a null
+     * {@code payload_file_id} is deliberately included: staleness is state and age, not progress,
+     * and the batch that never minted a payload is the one the retired reads excluded and left
+     * deferring its court centre day at every subsequent run (FR-020).
+     *
+     * <p>{@code GENERATED} is in neither list, at any age. It holds a document somebody is owed
+     * e-mails about, and failing it would throw that document away.
+     *
+     * <p>{@code system_generated} picks the cutoff. A batch the schedule made is judged by
+     * {@code stale-after}; a batch an operator asked for is judged by the longer of that and the
+     * run's own lock duration, because a manual generation holds no run lock and may legitimately
+     * still be asking for its renders when the schedule fires (FR-017). Failing its batch would
+     * orphan a render it is making and refuse its own record of having made it.
+     *
+     * <p>{@code completed_by} is written NULL, because nobody outside this service reported
+     * anything: no event arrived and nothing was asked. The reason is not generator-attributed, so
+     * {@link BatchFailureReason#isGeneratorAttributed()} and
+     * {@code register_batch_completed_by_shape_chk} agree on the null, and a row written otherwise
+     * is refused by the constraint rather than by a rule this class keeps of its own.
+     *
+     * <p><strong>And one batch at a time, which is the other half of the same requirement.</strong>
+     * One statement over every stale batch is atomic in the wrong unit: a refusal met on any one
+     * court centre's registers rolls back every other court centre's release with it, so one
+     * hearing the estate re-shared at the wrong moment costs the whole country its documents that
+     * night. FR-003a says no single batch's outcome may end the run, and a shared transaction is a
+     * way of ending it that no amount of care in the caller can undo. Each batch is therefore its
+     * own statement, its own transaction and its own bounded retry, and the failure and the release
+     * of that batch stay one act - which is what the requirement was ever about.
+     *
+     * <p>The release is statement 9's own branch, narrowed to this batch: the same successor
+     * search, the same total order {@code (register_time, created_at, output_id)}, and the same
+     * reason for all three of it. A register the estate replaced while the batch was in flight is
+     * superseded as its stamp is cleared rather than handed back - the key would otherwise hold two
+     * active rows and {@code idx_output_active_register_key} would refuse the write, taking the
+     * failure mark down with it and leaving the batch calling itself in flight under a run that had
+     * already given up on it.
+     *
+     * <p><strong>And the same ordering read the other way, which is {@code overtaken}.</strong> The
+     * key can also hold a share the batched register <em>overtook</em>: a delivery that arrived
+     * behind the register it belongs in front of is recorded active and unbatched, because the
+     * recorder's incumbent search is over unbatched rows and a batched register is not its to
+     * supersede. The register being given back is then the later of the two, so this statement
+     * supersedes that earlier row against it - the mirror of what {@link #RECORD_REGISTER} does
+     * when it is the recorder that meets the pair, and the same rule: the later share is the one
+     * the day is still to render, whichever of the two writers is the one that finds them
+     * together. Without it the key holds two active rows the moment the stamp is cleared, the index
+     * refuses the write, and no fresh snapshot ever changes that - the batch would be reported
+     * contended by every run for ever, and no run could give its registers back.
+     *
+     * <p>It runs only where the given-back register has no successor of its own. A register that is
+     * being superseded is leaving the index as it goes, so it takes no key and displaces nothing,
+     * and superseding an earlier row against a row that is itself superseded would say the wrong
+     * register replaced it.
+     *
+     * <p><strong>{@code overtaken} is chained ahead of {@code released}, and that order is the
+     * statement's to keep</strong> - the same requirement {@link #RECORD_REGISTER} has, for the
+     * same index. The row being superseded still holds the key until its update takes it out of
+     * the index, so a release issued first collides with the very row it is about to supersede.
+     * The release's source therefore counts {@code overtaken}'s rows, which cannot be counted until
+     * every one of its updates has been made; Postgres does not otherwise say which clause runs
+     * first.
+     *
+     * <p><strong>The successor search sees one snapshot, and a re-share can commit after it.</strong>
+     * Every clause here reads the table as it stood when the statement began, so a register
+     * re-shared while this statement is running is a successor it cannot find - and the release
+     * then clears the stale register's stamp beside the replacement it could not see, which is the
+     * second active row the index refuses. There is no predicate that can fence it, because the
+     * write it collides with is not in the snapshot the predicate is evaluated against. It is
+     * settled outside the statement instead: {@link #failAndReleaseStale} makes this batch's
+     * statement again on a fresh snapshot, which has the re-share in it and supersedes against it.
+     *
+     * <p>The count answered is the registers that are <em>still this day's to render</em>, which is
+     * what the same run re-assembles. A superseded one is not counted: the run report states it
+     * beside its own accounts as the registers it re-batched, and a number that included a register
+     * nothing will batch would not be that.
+     */
+    private static final String FAIL_AND_RELEASE_STALE = """
+            WITH failed AS (
+                UPDATE register_batch
+                   SET status = 'FAILED',
+                       failure_reason = :reason,
+                       completed_by = NULL,
+                       failed_at = now()
+                 WHERE batch_id = :batchId
+                   AND status IN ('PENDING', 'GENERATING')
+                   AND COALESCE(requested_at, assembled_at)
+                         <= CASE WHEN system_generated THEN :scheduledCutoff
+                                 ELSE :manualCutoff END
+                RETURNING batch_id, court_centre_id, register_date
+            ), stamped AS (
+                SELECT recorded.output_id,
+                       failed.batch_id,
+                       recorded.hearing_id,
+                       recorded.court_centre_id,
+                       recorded.register_date,
+                       recorded.register_time,
+                       recorded.created_at,
+                       (SELECT successor.output_id
+                          FROM processed_output successor
+                         WHERE successor.hearing_id = recorded.hearing_id
+                           AND successor.court_centre_id = recorded.court_centre_id
+                           AND successor.register_date = recorded.register_date
+                           AND successor.output_id <> recorded.output_id
+                           AND successor.superseded_at IS NULL
+                           AND successor.status IN ('RECORDED', 'GENERATED', 'NOTIFIED')
+                           AND (successor.register_time, successor.created_at,
+                                successor.output_id)
+                               > (recorded.register_time, recorded.created_at,
+                                  recorded.output_id)
+                         ORDER BY successor.register_time DESC,
+                                  successor.created_at DESC,
+                                  successor.output_id DESC
+                         LIMIT 1) AS successor_id
+                  FROM processed_output recorded
+                  JOIN failed ON failed.batch_id = recorded.batch_id
+                 WHERE recorded.status = 'RECORDED'
+            ), overtaken AS (
+                UPDATE processed_output earlier
+                   SET status = 'SUPERSEDED',
+                       superseded_at = now(),
+                       superseded_by = stamped.output_id,
+                       updated_at = now()
+                  FROM stamped
+                 WHERE stamped.successor_id IS NULL
+                   AND earlier.hearing_id = stamped.hearing_id
+                   AND earlier.court_centre_id = stamped.court_centre_id
+                   AND earlier.register_date = stamped.register_date
+                   AND earlier.output_id <> stamped.output_id
+                   AND earlier.status = 'RECORDED'
+                   AND earlier.superseded_at IS NULL
+                   AND earlier.batch_id IS NULL
+                   AND (earlier.register_time, earlier.created_at, earlier.output_id)
+                       < (stamped.register_time, stamped.created_at, stamped.output_id)
+                RETURNING earlier.output_id
+            ), released AS (
+                UPDATE processed_output recorded
+                   SET batch_id = NULL,
+                       status = CASE WHEN stamped.successor_id IS NULL
+                                     THEN 'RECORDED' ELSE 'SUPERSEDED' END,
+                       superseded_at = CASE WHEN stamped.successor_id IS NULL
+                                            THEN NULL ELSE now() END,
+                       superseded_by = stamped.successor_id,
+                       updated_at = now()
+                  FROM stamped,
+                       (SELECT count(*) FROM overtaken) AS chained(overtaken_rows)
+                 WHERE recorded.output_id = stamped.output_id
+                   AND recorded.status = 'RECORDED'
+                RETURNING stamped.batch_id AS batch_id,
+                          stamped.successor_id AS successor_id
+            )
+            SELECT failed.batch_id, failed.court_centre_id, failed.register_date,
+                   (SELECT count(*)
+                      FROM released
+                     WHERE released.batch_id = failed.batch_id
+                       AND released.successor_id IS NULL) AS released_registers
+              FROM failed
+             ORDER BY failed.register_date, failed.batch_id
             """;
 
     /**
@@ -921,9 +1257,23 @@ public class JdbcRegisterStore implements RegisterStore {
     private static final Set<BatchStatus> NOTIFICATION_OUTCOMES = Set.of(
             BatchStatus.NOTIFIED, BatchStatus.PARTIALLY_NOTIFIED, BatchStatus.NOTIFIED_NOBODY);
 
-    /** The two failures that never left this service, and so give their rows back to the next run. */
+    /**
+     * The three failures that leave no document to wait for, and so give their rows back.
+     *
+     * <p>Two of them never left this service at all - no payload was stored, or the batch could not
+     * be assembled into one. The third is the next run's verdict that this batch had not finished:
+     * whether its request ever reached systemdocgenerator is a question this service can no longer
+     * ask, and the register's position is the same either way. Holding a register against a
+     * document nothing will now produce is what strands it.
+     *
+     * <p>Named here rather than at each call site, so the fenced statement, a person's per-batch
+     * {@code markFailed} from the operations surface and {@link #releaseFailed} all release on one
+     * rule. A reason that joined the set in one of the three and not the others would be a register
+     * given back by one path and held by another.
+     */
     private static final Set<BatchFailureReason> RELEASING_REASONS = Set.of(
-            BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, BatchFailureReason.ASSEMBLY_FAILED);
+            BatchFailureReason.PAYLOAD_STORE_UNAVAILABLE, BatchFailureReason.ASSEMBLY_FAILED,
+            BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN);
 
     /**
      * The connection every statement in this class is issued through.
@@ -952,15 +1302,38 @@ public class JdbcRegisterStore implements RegisterStore {
     private final TransactionOperations transactions;
 
     /**
+     * The boundary each stale batch's release is made inside, whatever the caller had open.
+     *
+     * <p>{@code PROPAGATION_REQUIRES_NEW}, and that is the whole point of it being a second
+     * template. FR-003a says no single batch's outcome may end the run, and
+     * {@link #failAndReleaseStale(Instant, Instant)} keeps that promise by giving each batch its
+     * own statement, its own transaction and its own bounded retry - which is true only for as
+     * long as those attempts are not folded into somebody else's transaction. A caller inside one
+     * would have the first refusal abort it, every attempt after that made inside an aborted
+     * transaction, and every court centre already released rolled back at the end: the exact
+     * run-ending outcome the per-batch shape exists to prevent, reached without a line of this
+     * class changing. So the boundary is taken here rather than asked for in a javadoc: the
+     * caller's transaction is suspended for the length of an attempt and resumed after it.
+     */
+    private final TransactionOperations perBatchTransactions;
+
+    /**
      * Binds the store to this service's own Postgres.
      *
-     * @param jdbcClient   the client every statement in this class is issued through
-     * @param transactions the transaction {@link #assemble(RegisterBatch, List)} runs in, over the
-     *                     same data source as the client
+     * @param jdbcClient         the client every statement in this class is issued through
+     * @param transactionManager the manager over the same data source as the client, from which
+     *                           both of this class's boundaries are built - the one
+     *                           {@link #assemble(RegisterBatch, List)} and the recording run in,
+     *                           and the {@code REQUIRES_NEW} one each stale batch's release is
+     *                           made inside
      */
-    public JdbcRegisterStore(final JdbcClient jdbcClient, final TransactionOperations transactions) {
+    public JdbcRegisterStore(final JdbcClient jdbcClient,
+            final PlatformTransactionManager transactionManager) {
         this.jdbcClient = jdbcClient;
-        this.transactions = transactions;
+        this.transactions = new TransactionTemplate(transactionManager);
+        final TransactionTemplate perBatch = new TransactionTemplate(transactionManager);
+        perBatch.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.perBatchTransactions = perBatch;
         this.objectMapper = JacksonConfig.contractObjectMapper();
     }
 
@@ -1521,7 +1894,7 @@ public class JdbcRegisterStore implements RegisterStore {
     /**
      * {@inheritDoc}
      *
-     * <p>The four reasons {@link #RELEASING_REASONS} does not name are the ones this statement
+     * <p>The three reasons {@link #RELEASING_REASONS} does not name are the ones this statement
      * exists for, and nothing but a person's own command may issue it.
      *
      * <p><strong>The state is read before anything is written, and that read is the refusal.</strong>
@@ -1572,6 +1945,230 @@ public class JdbcRegisterStore implements RegisterStore {
             throw new IllegalStateException(BATCH + batchId + " is " + current + " rather than "
                     + BatchStatus.FAILED + ", so its registers are not a person's to take back");
         }
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>No state is read before the write and no transition is asked of {@link BatchStatus}: the
+     * staleness rule is the statement's own predicate, so a batch that ceased to match between the
+     * call and the row being written is one this operation did not change rather than one it was
+     * refused over. <strong>No batch that stopped being stale can therefore end a run</strong>,
+     * which is the point - the caller goes on to assemble whatever the release gave back.
+     *
+     * <p><strong>The stale batches are read first, and each is then its own write.</strong> The
+     * read carries the same predicate and decides nothing: every batch it names is judged again by
+     * the statement that writes its row, so a batch that stopped being stale in between matches
+     * nothing and is left alone. What the read buys is the unit of atomicity. One statement over
+     * every stale batch would make one court centre's refusal every court centre's rollback, which
+     * is the run-ending outcome FR-003a forbids, reached through the transaction rather than
+     * through an exception.
+     *
+     * <p><strong>The one thing the predicate cannot fence, and what is done about it.</strong> A
+     * statement reads one snapshot, so a hearing re-shared after this one began is a successor the
+     * {@code stamped} search cannot see, however plainly it is one by the time the write lands. The
+     * release would then clear the stale register's stamp <em>beside</em> its replacement rather
+     * than superseding against it, and {@value #ACTIVE_ROW_KEY} refuses the second active row for
+     * the key. That is a lost race and not a rule this operation can never meet, so it is retried
+     * the way {@link #recordAndComplete} retries the same index: this batch's statement is made
+     * again, on a fresh snapshot that has the re-share in it, up to {@value #RECORD_ATTEMPTS}
+     * times. The rolled-back attempt changed nothing, so each retry starts from the store as it
+     * stands.
+     *
+     * <p><strong>Exhaustion is reported, never thrown.</strong> A batch whose every attempt met the
+     * same refusal is left exactly as it was found and named in
+     * {@link StaleReleaseOutcome#contended()}, and the operation goes on to the batches after it
+     * and answers normally. The alternative was an exception, and an exception here is the run-
+     * ending outcome again: the pass runs inline in the night's generation, so one hearing shared
+     * at the wrong moment would cost every court centre its document. A contended batch is stale
+     * still and untouched, so the next run reaches it again, and the 07:00 report names its court
+     * centre day as a late batch every morning meanwhile.
+     *
+     * <p><strong>Each attempt is its own transaction, and this method takes that boundary rather
+     * than asking to be called outside one.</strong> Wrapped in a caller's transaction the first
+     * refusal would abort that transaction, every retry would be made inside an aborted one and
+     * all three would fail - and the other batches would go down with them, which is the very
+     * thing the per-batch shape is for. A precondition nothing enforces is a comment, so each
+     * attempt runs through {@link #perBatchTransactions} with
+     * {@code PROPAGATION_REQUIRES_NEW}: whatever the caller had open is suspended for the length
+     * of the attempt and resumed afterwards, and an attempt commits or rolls back by itself
+     * whoever called this and from where.
+     *
+     * <p>A refusal on any other rule - another unique key, or a constraint that is no key at all,
+     * such as the bounded reason a store left short of {@code V6} does not admit - is the store
+     * saying this write may never be made, which no retry changes; it is raised, translated into
+     * this package's own
+     * {@link uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException} so that no refusal
+     * crosses the port into {@code batch/} as an {@code org.springframework.dao} type, where the
+     * pass that calls this may name none (constitution Principle V). It is a fault in the schema or in
+     * this statement rather than a race, and it is allowed to end the run the way any programming
+     * error is: what FR-003a forbids is one batch's <em>ordinary</em> ending - a lost race for the
+     * day's key - taking the other court centres' releases with it, and that ending is the
+     * contended one above.
+     */
+    @Override
+    public StaleReleaseOutcome failAndReleaseStale(final Instant scheduledCutoff,
+            final Instant manualCutoff, final StaleReleaseProgress progress) {
+        return StoreOutage.translating("fail and release the stale batches",
+                () -> eachStaleBatch(scheduledCutoff, manualCutoff, progress));
+    }
+
+    /**
+     * Every stale batch in turn, each accounted for as released or as contended.
+     *
+     * <p><strong>Each is announced where it is settled, and not only in the answer.</strong> Every
+     * attempt commits by itself, so a batch this walk has passed is durably failed and released
+     * whatever becomes of the batch after it. A walk that ends in a throw - a store that went away
+     * between two batches, or a refusal no retry can settle - would otherwise take the account of
+     * every batch before it with it, and the caller would publish a night that released nothing on
+     * a night when it released some. The return value is the same account, whole, for a walk that
+     * reached the end.
+     *
+     * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
+     * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
+     * @param progress        told about each batch as its own transaction commits
+     * @return what was released, and what every attempt was refused over
+     */
+    private StaleReleaseOutcome eachStaleBatch(final Instant scheduledCutoff,
+            final Instant manualCutoff, final StaleReleaseProgress progress) {
+        final List<ReleasedBatch> released = new ArrayList<>();
+        final List<UUID> contended = new ArrayList<>();
+        for (final UUID batchId : staleBatches(scheduledCutoff, manualCutoff)) {
+            final StaleReleaseOutcome one =
+                    attemptedRelease(batchId, scheduledCutoff, manualCutoff);
+            released.addAll(one.released());
+            contended.addAll(one.contended());
+            one.released().forEach(progress::recordReleased);
+            one.contended().forEach(progress::recordContended);
+        }
+        return new StaleReleaseOutcome(List.copyOf(released), List.copyOf(contended));
+    }
+
+    /**
+     * The batches the staleness rule names, read once so each can be written separately.
+     *
+     * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
+     * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
+     * @return their identities, oldest day first
+     */
+    private List<UUID> staleBatches(final Instant scheduledCutoff, final Instant manualCutoff) {
+        return jdbcClient.sql(STALE_BATCHES)
+                .param("scheduledCutoff", offsetOf(scheduledCutoff))
+                .param("manualCutoff", offsetOf(manualCutoff))
+                .query(UUID.class)
+                .list();
+    }
+
+    /**
+     * One batch's release, made again on a fresh snapshot for as long as a re-share keeps beating
+     * it, and reported rather than thrown where none of the attempts got through.
+     *
+     * @param batchId         the batch this release is about, and the only row it may touch
+     * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
+     * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
+     * @return this one batch's account: released by the winning attempt, or contended
+     * @throws uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException if the store
+     *         refused the release over a rule this operation does not account for - another unique
+     *         key, or a constraint that is no key at all
+     */
+    private StaleReleaseOutcome attemptedRelease(final UUID batchId, final Instant scheduledCutoff,
+            final Instant manualCutoff) {
+        List<ReleasedBatch> released = null;
+        for (int attempt = 0; released == null && attempt < RECORD_ATTEMPTS; attempt++) {
+            try {
+                released = perBatchTransactions.execute(
+                        own -> release(batchId, scheduledCutoff, manualCutoff));
+            } catch (DuplicateKeyException collision) {
+                if (!violates(collision, ACTIVE_ROW_KEY)) {
+                    throw unaccountedForRelease(batchId, collision);
+                }
+            } catch (DataIntegrityViolationException refused) {
+                // A rule that is no key at all - a CHECK the bounded reason does not satisfy, which
+                // is what a store V6 never reached refuses every stale batch on. Not a race, so it
+                // is not attempted again; translated here so that no org.springframework.dao type
+                // crosses the port into batch/ (constitution Principle V).
+                throw unaccountedForRelease(batchId, refused);
+            }
+        }
+        return released == null
+                ? new StaleReleaseOutcome(List.of(), List.of(batchId))
+                : new StaleReleaseOutcome(released, List.of());
+    }
+
+    /**
+     * The refusal a release may never make again, in the vocabulary the pass can read.
+     *
+     * <p>The mirror of {@link #unaccountedFor(DistributionCommand, DuplicateKeyException)} one
+     * operation above, and for the same reason: the release knows one key it can act on, and a
+     * rule outside it is one nobody wrote this statement against. Making the statement again would
+     * spend three attempts reaching the same refusal and then report the batch as contended, which
+     * says a hearing was re-shared at the wrong moment - and the next run, and every run after it,
+     * would say the same about a batch no run can ever release.
+     *
+     * <p><strong>Every refusal, and not only the ones that are keys.</strong> A unique index is
+     * one rule a store can refuse this write on and a CHECK constraint is another - a pod whose
+     * store never reached {@code V6} meets {@code register_batch_failure_reason_chk} on every
+     * stale batch it tries - and Spring reports the second as a bare
+     * {@link DataIntegrityViolationException}. Both are translated here, because what the port
+     * promises is that a refusal is readable in this package's own vocabulary: the pass in
+     * {@code batch/} may name no {@code org.springframework.dao} type, so anything crossing
+     * untranslated could only be caught there as {@code RuntimeException}, which is the catch that
+     * swallows every programming error beside it (constitution Principle V).
+     *
+     * <p><strong>The store's own refusal does not travel with it, and that is the difference from
+     * {@link #unaccountedFor(DistributionCommand, DuplicateKeyException)}.</strong> That one is
+     * raised out of an {@code INSERT} whose refusal Postgres reports against the row being
+     * inserted; this one is raised out of a statement that <em>updates</em>
+     * {@code processed_output}, and a {@code processed_output} row holds the register document -
+     * so a CHECK refusing it is reported with {@code Failing row contains (...)} and every column
+     * of that row behind it, a youth defendant's name and date of birth included. A cause is how
+     * that message reaches a stack trace, and this failure is raised out of the nightly run and
+     * written at ERROR into the estate's log index (constitution Principle VII). So the driver's
+     * words are dropped here, as they are for {@code StoreRefusedRowException}.
+     *
+     * <p>What is carried instead is bounded and written in this repository: which <em>kind</em> of
+     * rule refused the write, and the batch's identity. The constraint's own name is not among it,
+     * because the one idiom this class has for naming a constraint safely -
+     * {@link #violates(DuplicateKeyException, String)} - asks the driver whether the refusal is a
+     * key <em>this class already knows by name</em>, and a refusal that got this far is by
+     * construction none of them. Reading a name back out of the message would be reading the
+     * message, which is the thing that may not be kept.
+     *
+     * @param batchId the batch whose release was refused
+     * @param refusal the store's own refusal, read for its kind and for nothing else
+     * @return the failure to raise
+     */
+    private static RegisterNotReleasedException unaccountedForRelease(final UUID batchId,
+            final DataIntegrityViolationException refusal) {
+        final String rule = refusal instanceof DuplicateKeyException
+                ? UNACCOUNTED_KEY : UNACCOUNTED_RULE;
+        return new RegisterNotReleasedException("the release of a stale batch was refused by "
+                + rule + " this store does not account for, so no attempt at it can be made again "
+                + "either; batchId=" + batchId);
+    }
+
+    /**
+     * One attempt at one batch's release, which is one statement inside a transaction of its own.
+     *
+     * @param batchId         the batch this attempt is about
+     * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
+     * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
+     * @return the one record where this attempt changed the batch, and nothing where the batch had
+     *         stopped being stale
+     */
+    private List<ReleasedBatch> release(final UUID batchId, final Instant scheduledCutoff,
+            final Instant manualCutoff) {
+        return jdbcClient.sql(FAIL_AND_RELEASE_STALE)
+                .param(BATCH_ID, batchId)
+                .param("reason", BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN.name())
+                .param("scheduledCutoff", offsetOf(scheduledCutoff))
+                .param("manualCutoff", offsetOf(manualCutoff))
+                .query((rs, rowNumber) -> new ReleasedBatch(
+                        rs.getObject("batch_id", UUID.class),
+                        rs.getObject(COURT_CENTRE_ID_COLUMN, UUID.class),
+                        rs.getObject(REGISTER_DATE_COLUMN, LocalDate.class),
+                        rs.getInt("released_registers")))
+                .list();
     }
 
     /**
