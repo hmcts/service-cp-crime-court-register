@@ -18,6 +18,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.search.Search;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
 import org.assertj.core.api.SoftAssertions;
@@ -36,8 +37,10 @@ import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.Ordered;
 import org.springframework.http.MediaType;
 import org.springframework.jms.UncategorizedJmsException;
 import org.springframework.jms.core.JmsTemplate;
@@ -62,6 +65,7 @@ import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
 /**
  * What the audit context is actually told about each of the seven, end to end. <strong>[A]</strong>
@@ -123,6 +127,9 @@ class OperationsAuditIT {
 
     /** What the audit transport said, which belongs to the library that raised it. */
     private static final String A_BROKERS_OWN_WORDS = "ZQX7BROKER tcp://audit:61616";
+
+    /** The header one case asks the innermost test filter to take the caller away on. */
+    private static final String GONE_AWAY = "X-Test-Client-Gone-Away";
 
     /** The register date every case that needs one is about. */
     private static final LocalDate A_DATE = LocalDate.of(2026, 9, 4);
@@ -455,6 +462,79 @@ class OperationsAuditIT {
     }
 
     /**
+     * What a failure <em>after</em> the work costs, which is nothing and must stay nothing.
+     *
+     * <p>FR-043. Every one of these three endpoints has done something by the time its answer is
+     * written - a run has been accepted, e-mail has been re-requested, a period of registers has
+     * been given up - so a response that cannot reach its caller is not a refusal of anything and
+     * there is nothing to refuse. The two rules are that it is not reported as one, and that the
+     * work is not attempted a second time to make up for an answer nobody read.
+     *
+     * @param action  what the call is, for the case name
+     * @param call    the call
+     * @throws Exception the failure written into the response, which is the point of the case
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("theThreeThatChangeSomething")
+    void a_response_that_cannot_be_written_should_refuse_nothing_and_repeat_nothing(
+            final String action, final MockHttpServletRequestBuilder call) throws Exception {
+
+        final List<String> lines;
+        final MockHttpServletResponse response;
+        try (CapturedLog log = CapturedLog.everything()) {
+            response = mvc.perform(call.header(IDENTITY, A_CALLER).header(GONE_AWAY, "true"))
+                    .andReturn().getResponse();
+            lines = log.renderings();
+        }
+
+        softly.assertThat(response.getStatus())
+                .as("the answer the endpoint had already decided stands: the work happened, and a "
+                        + "body nobody could read does not un-happen it or turn it into a refusal")
+                .isIn(200, 202);
+        softly.assertThat(response.getContentAsString())
+                .as("and nothing was written, because there was nowhere to write it")
+                .isEmpty();
+        softly.assertThat(lines.stream()
+                        .filter(line -> line.contains("reason=")).toList())
+                .as("no bounded code from this surface's closed set is written about it: a "
+                        + "refusal code here would say the call was refused, and it was not")
+                .noneMatch(line -> Arrays.stream(OperationsReason.values())
+                        .anyMatch(code -> line.contains("reason=" + code.wire())));
+        softly.assertThat(invocationsOn(launcher) + invocationsOn(notifier)
+                        + invocationsOn(supersession))
+                .as("exactly one application service was asked exactly once; nothing retries the "
+                        + "work to make up for an answer that was never read (FR-043)")
+                .isEqualTo(1);
+        softly.assertThat(action).isNotBlank();
+    }
+
+    /**
+     * How many times one mocked application service was asked anything at all.
+     *
+     * @param service the mock
+     * @return its invocation count, stubbing aside
+     */
+    private static int invocationsOn(final Object service) {
+        return Mockito.mockingDetails(service).getInvocations().size();
+    }
+
+    /**
+     * The three endpoints that have changed something by the time their answer is written.
+     *
+     * @return one call per endpoint
+     */
+    static Stream<Arguments> theThreeThatChangeSomething() {
+        return Stream.of(
+                Arguments.of("generate-register", post("/operations/batches/generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"date\":\"2026-09-04\"}")),
+                Arguments.of("notify-register", post("/operations/batches/" + BATCH + "/notify")),
+                Arguments.of("supersede-before", post("/operations/registers/supersede")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sharedBefore\":\"2026-09-04T17:00:00Z\"}")));
+    }
+
+    /**
      * The controllers, contributed by hand for the reason {@code OperationsAuthzIT} states.
      */
     @TestConfiguration(proxyBeanMethods = false)
@@ -463,6 +543,33 @@ class OperationsAuditIT {
         @Bean
         FlagController flagController(final FeatureFlagReader reader) {
             return new FlagController(reader);
+        }
+
+        /**
+         * The caller that went away, innermost so the dispatcher writes through it.
+         *
+         * <p>Registered at the lowest precedence, which puts it inside every filter this service
+         * has: what the controller's answer is written to is then the wrapper, and the failure
+         * happens at exactly the moment FR-043 is about - after the application service returned
+         * and while its answer is being written.
+         *
+         * @return the registration
+         */
+        @Bean
+        FilterRegistrationBean<jakarta.servlet.Filter> theClientThatGoesAway() {
+            final FilterRegistrationBean<jakarta.servlet.Filter> registration =
+                    new FilterRegistrationBean<>((request, response, chain) -> {
+                        final jakarta.servlet.http.HttpServletRequest asked =
+                                (jakarta.servlet.http.HttpServletRequest) request;
+                        if (asked.getHeader(GONE_AWAY) == null) {
+                            chain.doFilter(request, response);
+                        } else {
+                            chain.doFilter(request, new GoneAway(
+                                    (jakarta.servlet.http.HttpServletResponse) response));
+                        }
+                    });
+            registration.setOrder(Ordered.LOWEST_PRECEDENCE);
+            return registration;
         }
 
         @Bean
@@ -481,6 +588,26 @@ class OperationsAuditIT {
         ExceptionReportsController exceptionReportsController(
                 final OnDemandExceptionReportService reportService) {
             return new ExceptionReportsController(reportService);
+        }
+
+        /** A response whose body cannot be written, because nobody is there to read it. */
+        static final class GoneAway
+                extends jakarta.servlet.http.HttpServletResponseWrapper {
+
+            GoneAway(final jakarta.servlet.http.HttpServletResponse response) {
+                super(response);
+            }
+
+            @Override
+            public jakarta.servlet.ServletOutputStream getOutputStream()
+                    throws java.io.IOException {
+                throw new java.io.IOException("the client went away");
+            }
+
+            @Override
+            public java.io.PrintWriter getWriter() throws java.io.IOException {
+                throw new java.io.IOException("the client went away");
+            }
         }
     }
 }
