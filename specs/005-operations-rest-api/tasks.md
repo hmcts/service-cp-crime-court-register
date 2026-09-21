@@ -1584,10 +1584,41 @@ a deletion has no red run, and its evidence is the green build with the replaced
 
 ## Phase 11: Close-out (2 tasks)
 
-- [ ] **T059** [A] After the rebase onto `main` (004 merges first, per the plan's merge order):
+- [x] **T059** [A] After the rebase onto `main` (004 merges first, per the plan's merge order):
       re-run the `spec-validator` agent against the amended constitution, and `/speckit-analyze`
       against this spec. Gate 8 of `workflow.md` — the operations API's four conditions — is the one
       to read carefully. Records the verdicts.
+      (`/speckit-analyze` run against this spec, 2026-09-21, read-only. The `spec-validator` pass is
+      the gate's and is not re-run here. **Verdict: 1 CRITICAL, 1 HIGH, 3 MEDIUM, 2 LOW over 49 FR,
+      12 SC and 61 tasks; coverage 60/61 (98.4%).** Gate 8's four conditions are carried — every
+      endpoint has a drools allow rule, the audit filter's scope covers all seven, the flag is read
+      at least as strictly as the command it replaced, and every response is bounded.
+      **D1, CRITICAL, and it is a stale success criterion rather than a defect.** `SC-010` still
+      reads "Start-up refuses when the operations API is enabled and HTTP audit is not". Constitution
+      5.0.0 **removed** that refusal and FR-045 now says start-up MUST NOT refuse on the combination.
+      The code follows FR-045; SC-010 is the only artefact still asking for the deleted behaviour,
+      and it reads as an unmet acceptance gate. One sentence to rewrite, to the amendment's own
+      wording: the pod starts and says so at WARN naming both settings.
+      **I1, HIGH, the same shape.** `FR-048` says "the three conditionals that read it"; T054's
+      enumeration against the merged tree is nine, two of them written by this increment after
+      FR-048 was drafted. A reviewer checking the removal against FR-048 would check three.
+      **I3, MEDIUM, and the only finding that is a code change.** Three refusals are logged as the
+      enum constant while the wire carries `wire()` — `EMAIL_OUTPUT_DISABLED` /
+      `email-output-disabled`, `EMAIL_OUTPUT_NOT_WIRED` / `email-output-not-wired`,
+      `FLAG_UNREADABLE` / `flag-unreadable` — so an alert keyed on `reason=` and a runbook keyed on
+      the body disagree. Seven other sites call `.wire()`. This is the same thing T053 hit
+      empirically when the bounded-reason vocabulary had to admit both spellings.
+      **G1, MEDIUM.** `FR-043` (a failure after an endpoint's side effects is not reported as a
+      refusal and is not retried) maps to no task and no named test. The second half holds by
+      construction; the first is asserted nowhere.
+      **I2, MEDIUM.** `data-model.md` says the OpenAPI document "normalises the spelling to one
+      convention"; the `Reason` schema deliberately carries two, and says so.
+      **A1 and I4, LOW.** FR-029–FR-032 do not exist and nothing records why; FR-001 says "no other
+      HTTP path besides Spring Boot Actuator" and omits `/error`, which T056's sweep allows
+      explicitly and `OperationsErrorAttributes` exists to render.
+      **Nothing was edited** — the command is read-only, and every finding above is carried into
+      T060 rather than fixed here. Four of the seven are one-sentence spec corrections; one is three
+      one-line code edits; none blocks the five deployment gates.)
 - [ ] **T060** [A] The handover note: the five deployment gates from `spec.md`, the one open item
       (the estate's audit header allowlist), and the behaviour 004 owes 005 (its pre-batching pass
       skipping operator-initiated batches). This increment **must not be deployed to STE** until the
