@@ -3165,6 +3165,24 @@ thirteen more lines and two more covered branches out of two more - the observer
 the interrupted line, all of them driven. The two new cases are the pass's interrupted account and
 the store's announcement of each batch where it settles it. **The gate was not touched.**
 
+**Gate round 2 (2026-09-21) sent back no finding about the code.** All three reviewers returned
+nothing at all - twice each - and the round's three BLOCKERs are that absence, filed against
+`(workflow)` with the hint "rerun the gate; check the reviewer prompt and tools". There is nothing
+in this tree to fix for them: the three definitions under `.claude/agents/` are intact and
+untouched by this range, and a reviewer that returns no result is a harness failure rather than a
+defect of the branch. The round was therefore a verification, and it found the range where round 1
+left it - fifty tasks ticked (T007 `[~]`, moved to Phase 5 as T050, which is ticked), the tree
+clean at `5296c20e`, the ratchet in `gradle/test.gradle` untouched at LINE 0.88 / BRANCH 0.85, and
+the boundary holding: `CLAUDE.md`'s net diff over the range is empty, `CliModeConfig`'s is
+comment-only as the contract permits, and no commit in the range touches `batch/cli`, an `api/`
+package, `openapi.yaml`, `acl/`, `docker/startup.sh`, the constitution or the build files.
+
+**Re-gated after round 2** (`flock -w 7200 … ./gradlew build -Dtest.noFailFast=true`) →
+**BUILD SUCCESSFUL, exit 0, 4m 13s, 3672 tests over 580 suites, 0 failures, 0 errors, 0 skipped**,
+with `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and `jacocoTestCoverageVerification`
+all run and all green. Identical to round 1's re-gate in every count, which is what a round that
+changed no code should read.
+
 ---
 
 ## Dependencies & execution order
