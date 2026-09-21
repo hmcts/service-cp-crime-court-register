@@ -3290,6 +3290,38 @@ what this phase added: T037's one, T038's two and T039's one.
       sink writes a hand-listed set of `value(...)` calls rather than a switch, which is how a sixth
       kind passed it.
 
+      **CLOSED the same day, on the coordinator's ruling, test-first.** Not a `DEFECT-FIXES.md` row:
+      the register's two oracles are the function app and progression's leg, and this is neither -
+      it is **004 regressing against 003**, caught by 004's own walkthrough, so it is recorded here
+      where the walkthrough that found it is recorded.
+      *Red*: `LogEventReportSinkTest`'s `THE_ELEVEN_SUMMARY_FIELDS` became
+      `THE_TWELVE_SUMMARY_FIELDS` with `batch_released` in it, the empty-morning case went from five
+      noughts to six, and a new case - `a_released_batch_is_counted_on_the_summary_line` - asserts
+      `batch_released=1` on a report whose only entry is a released batch, which is the morning the
+      walkthrough actually produced. `ExceptionReportEndToEndIT`'s `ELEVEN_SUMMARY_FIELDS` became
+      `TWELVE_SUMMARY_FIELDS`.
+      `flock … ./gradlew test --tests '*LogEventReportSinkTest*'` → **12 tests completed, 3 failed**,
+      all three assertion failures and none a compile error, as the red convention requires.
+      *Green*: one `value("batch_released", counts.get(ExceptionKind.BATCH_RELEASED))` between
+      `notification_failed` and `truncated`, the message text's *"five counts"* now *"six counts"*,
+      and the class javadoc restated as **one count per `ExceptionKind`** with the regression named
+      in it so the next kind does not repeat it.
+      `flock … ./gradlew test --tests '*LogEventReportSinkTest*' --tests '*ExceptionReportEndToEndIT*'
+      --tests '*EmailReportSinkTest*' --tests '*ReportExceptionsCliTest*'
+      --tests '*ExceptionReportServiceTest*' checkstyleMain checkstyleTest pmdMain` →
+      **BUILD SUCCESSFUL, exit 0**; `ExceptionReportEndToEndIT` 4 tests / 0 failures,
+      `LogEventReportSinkTest$TheSummary` 5 tests / 0 failures.
+      **The other two surfaces were already right** and are left alone: `EmailReportSink`'s CSV
+      header has carried six since 004 (*"Six since increment 004"*) and `ReportExceptionsCli`'s
+      counts line prints six. All three now agree.
+      **Four numbers in increment 003's documents moved with it**, dated, because they state the
+      shape of a line 004 changed and would otherwise contradict the code:
+      `003/data-model.md`'s *"Eleven fields"* (the one place the number is stated),
+      `003/plan.md`'s summary sentence and its `LogEventReportSinkTest` matrix row, and
+      `003/quickstart.md`'s KQL, which now projects `batchReleased`. Ratification (d) in the
+      close note is the precedent: a completed increment's document that describes behaviour this
+      increment changed is amended with a dated clause rather than left wrong.
+
       **The tick stays `[~]`.** The walkthrough ran end to end and the service behaved correctly at
       every step - the release, the re-batching, the ignored late outcome, the deferral, the three
       refusals and the V7 refusal all as designed. What keeps it from `[x]` is that two steps did

@@ -184,7 +184,7 @@ ContainerLogV2
 ```
 
 ```kusto
-// did the report run, and what did it find - the summary event, eleven fields
+// did the report run, and what did it find - the summary event, twelve fields since 004
 ContainerLogV2
 | where TimeGenerated > ago(7d)
 | where LogMessage.event == "courtregister_exception_report"
@@ -198,6 +198,10 @@ ContainerLogV2
           batchLate        = toint(LogMessage.batch_late),
           batchFailed      = toint(LogMessage.batch_failed),
           notificationFailed = toint(LogMessage.notification_failed),
+          // increment 004's sixth kind, and informational: a batch a run gave up on whose
+          // registers went out the same night. Counted here so the counts still add up to the
+          // courtregister_exception events a query finds
+          batchReleased      = toint(LogMessage.batch_released),
           // dropped LATE entries only - the cap never drops a failure, so a shortfall on
           // request_failed, batch_failed or notification_failed is a sink that broke
           truncated          = toint(LogMessage.truncated)
