@@ -1374,7 +1374,7 @@ a deletion has no red run, and its evidence is the green build with the replaced
       of its spellings - the kebab-case wire form a `ProblemDetail` carries and the constant a log
       line writes through `Enum::toString` - which is a difference worth having recorded: the same
       refusal is spelled two ways depending on whether it is being answered or logged.)
-- [ ] **T054** [US5] Delete `config/CliModeConfig` and `config/CliModeConfigTest`; remove
+- [x] **T054** [US5] Delete `config/CliModeConfig` and `config/CliModeConfigTest`; remove
       `courtregister.cli` from `application.yaml`; make **every** conditional that reads it
       unconditional. **`PublicEventsConfig`'s javadoc about a CLI JVM not subscribing goes with
       it** — the rule is retired with the JVM it was about. Evidence: the build is green; a context
@@ -1398,6 +1398,33 @@ a deletion has no red run, and its evidence is the green build with the replaced
       gone at T053. Every one of them is re-grepped for `CliModeConfig`, `courtregister.cli` and
       `cliMode` after the rebase, and the list in this task is corrected in the same commit —
       a stale enumeration here is a conditional left behind on a property that no longer exists.
+      (Done. The deletion exemption applies. Green: every suite under `config/` and `api/` - the
+      wiring contexts, the two scheduling suites, `TelemetryPrivacyTest`, `HttpSurfaceTest` and the
+      seven endpoints' - 0 failures; Checkstyle and PMD clean on main and test.
+      **The enumeration, re-made against this tree, and it is nine rather than the seven this task
+      predicted.** Production, every one of them a class-level
+      `@Conditional(CliModeConfig.NotCliMode.class)` that is now simply absent:
+      `inbound/ServiceBusConsumerConfig`, `config/SchedulingConfig`,
+      `config/SchedulingInfrastructureConfig`, `config/ReportSchedulingConfig`,
+      `config/IntakeSweepConfig`, `config/BatchSweepConfig` (004's, as the warning said it would
+      be), `config/PublicEventsConfig`, and two this task did not predict because they were written
+      after it - `config/OperationsWebConfig.GenerationBackedOperations`, which holds the
+      regeneration launcher, and `api/BatchesController`, which holds the endpoint that calls it.
+      `config/ProcessedLogConfig` named the condition in a javadoc and carried none, so it is a
+      prose correction and not a conditional. Tests: `config/CliModeConfigTest` deleted with the
+      class; `config/GenerationWiringContextTest` loses its `ACommandJvm` context and the
+      `CLI_ON` property it was the only user of; `config/ReportSchedulingConfigTest`,
+      `e2e/OperationsConcurrencyIT` and five production javadocs lose the paragraph about a JVM that
+      no longer exists. `e2e/CliDispatchIT` is T055's.
+      **`PublicEventsConfig`'s rule is retired rather than moved**, as this task requires: what
+      replaces it is the statement that every JVM running this application subscribes and an
+      operations endpoint must never bring up a second subscription of its own.
+      **One thing worth recording about what the removal leaves.** `SchedulingInfrastructureConfig`
+      and `IntakeSweepConfig` were the two configurations this condition was the *only* switch on.
+      They are now conditional on the profile alone, which is what their own javadoc always said
+      they should be: the gauges refresh wherever the intake half runs. Nothing else changes
+      shape - every other configuration keeps the enabled-flag condition it already had.)
+
 - [ ] **T055** [US5] `docker/startup.sh` — the command dispatch, the `CLI_MAIN`, `CLI_COMMANDS` and
       `BOOT_LAUNCHER` variables and the whole `case` go; the entrypoint starts the application, full
       stop. Delete `e2e/CliDispatchIT`. `scripts/container-smoke.sh` calls `GET /operations/flag`

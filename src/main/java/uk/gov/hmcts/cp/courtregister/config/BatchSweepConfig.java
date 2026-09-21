@@ -3,7 +3,6 @@ package uk.gov.hmcts.cp.courtregister.config;
 import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.TaskScheduler;
@@ -20,11 +19,6 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
  * compete, under the {@code max()} an alert aggregates them with, with the readings of the pod
  * that can actually hold a batch - which is the one shape in which adding a reading makes the
  * estate blinder rather than clearer.
- *
- * <p>Not on a JVM started to run one operations command, for the reason {@link CliModeConfig}
- * gives about all six of the configurations that carry its condition. A command's copy of these
- * three gauges is not a duplicate reading but a competing one, taken by a process that holds no
- * batch and is about to exit.
  *
  * <p><strong>A scheduler of its own, single-threaded.</strong> The sweep runs on a fixed delay and
  * the run and the report do not, so sharing a thread with them would mean a ten-minute reading
@@ -43,7 +37,6 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 @Profile("!test")
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled",
         havingValue = "true")
-@Conditional(CliModeConfig.NotCliMode.class)
 public class BatchSweepConfig {
 
     /**

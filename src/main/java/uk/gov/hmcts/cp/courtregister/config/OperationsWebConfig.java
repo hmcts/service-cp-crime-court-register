@@ -11,7 +11,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.Ordered;
@@ -282,14 +281,9 @@ public class OperationsWebConfig {
      * not contributed is a context that will not refresh. A pod without them answers the two
      * endpoints {@code 501 command-not-wired} through {@code api/NotWiredController} instead,
      * which is exactly what the command they replace answered there.
-     *
-     * <p>{@code NotCliMode} beside it for the reason {@code SchedulingConfig} carries it: the
-     * generation scheduler this launcher submits to is not built in a JVM started to run one
-     * command, and a launcher over an executor that does not exist is the same refresh failure.
      */
     @Configuration(proxyBeanMethods = false)
     @Profile(NOT_TEST)
-    @Conditional(CliModeConfig.NotCliMode.class)
     @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled",
             havingValue = "true")
     public static class GenerationBackedOperations {

@@ -172,10 +172,10 @@ public class ProcessedLogConfig {
      * The morning exception report: eight reads over the tables declared above it, and no writes.
      *
      * <p>Here rather than in {@link ReportSchedulingConfig} on purpose. The report is asked for by
-     * two callers that never share a context - the 07:00 job, which only exists where the schedule
-     * is switched on, and the operations command, which runs on a JVM that contributes no
-     * scheduling configuration at all ({@link CliModeConfig}) - so a report declared beside the
-     * schedule would be a report the command could not ask for. It is a read of exactly the tables
+     * two callers, and one of them exists where the other does not: the 07:00 job only where the
+     * schedule is switched on, and {@code POST /operations/exception-reports} wherever the
+     * operations surface is - an incident does not wait for morning. A report declared beside the
+     * schedule would be a report the endpoint could not ask for. It is a read of exactly the tables
      * this configuration declares the readers for, so this is also where it reads from: the two
      * halves of the processed log, the batches, the notifications and the register store, over one
      * client and one clock.

@@ -77,8 +77,8 @@ import uk.gov.hmcts.cp.courtregister.support.ProcessedLogTestSupport;
  * What the separate CLI JVM used to make impossible, over the real store and the real lock.
  *
  * <p>An endpoint is served by a pod where the consumer, both schedulers and the public-event
- * listener are all running - which is exactly what {@code CliModeConfig} switched off for a
- * command, and what Phase 9 exists to prove is safe (FR-040). Four races, and not one of them is
+ * listener are all running - which is exactly what a command JVM used to switch off, and what
+ * Phase 9 exists to prove is safe (FR-040). Four races, and not one of them is
  * arbitrated by anything this increment invented: the notifier's claim decides two concurrent
  * notifies, the register-generation lock decides a regeneration against the schedule, and the live
  * -key index and {@code releaseFailed} decide two regenerations for one date.

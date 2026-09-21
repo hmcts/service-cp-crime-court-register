@@ -9,7 +9,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.jms.ConnectionFactoryUnwrapper;
 import org.springframework.boot.jms.autoconfigure.JmsProperties;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DeliveryObserver;
@@ -107,17 +106,15 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentOutcomeSink;
  * record and is counted rather than re-stamped, and the store's compare-and-set refuses the second
  * of two marks ({@code DocumentOutcomeSinkImpl}).
  *
- * <p><strong>And none of it on a JVM started to run one operations command.</strong> A command that
- * subscribed would be one more consumer the broker load-balances outcomes to - and it would take
- * deliveries it is about to exit without finishing, leaving each of them to a redelivery, or to
- * the next run giving up on the batch they were about. The whole configuration goes rather than the
- * listener alone, because the container factory is here too and a factory with no
- * {@code @JmsListener} to create a container from is a half-absence to reason about
- * ({@link CliModeConfig}).
+ * <p><strong>Every JVM that runs this application subscribes, and there is no longer any other
+ * kind.</strong> Until increment 005 a JVM started to run one command was kept off the topic, for a
+ * good reason: it would have been one more consumer the broker load-balances outcomes to, taking
+ * deliveries a process about to exit will not finish. No such JVM exists now - an operations call
+ * is served by a pod that is already subscribed - so the rule is retired with it, and what remains
+ * is that an operations endpoint must never bring up a second subscription of its own.
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
-@Conditional(CliModeConfig.NotCliMode.class)
 public class PublicEventsConfig {
 
     /**

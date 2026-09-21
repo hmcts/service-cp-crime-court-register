@@ -4,7 +4,6 @@ import java.time.Clock;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.TaskScheduler;
@@ -33,15 +32,14 @@ import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
  * worth reading. One thread, because the run is sequential and a pool would only make it look
  * otherwise.
  *
- * <p>Not on a JVM started to run one operations command, for the reason {@link CliModeConfig}
- * gives about all five of the configurations that carry its condition: a command that ran until
- * 07:00 London would e-mail support a second copy of the morning's exceptions and write them to the
- * estate's index twice. The command has a report of its own, and it is asked for rather than fired.
+ * <p>The schedule is not the only caller of the report: {@code POST /operations/exception-reports}
+ * asks for one over the same reads, and it is contributed in {@code ProcessedLogConfig} rather than
+ * here, so a pod with this schedule switched off can still answer what is wrong with what it
+ * recorded.
  */
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
 @ConditionalOnProperty(prefix = "courtregister.report", name = "enabled", havingValue = "true")
-@Conditional(CliModeConfig.NotCliMode.class)
 public class ReportSchedulingConfig {
 
     /**

@@ -6,7 +6,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.TaskScheduler;
@@ -50,18 +49,13 @@ import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
  * order are on the context, for the reason {@link PublicEventsConfig} gives about the listener - a
  * schedule with nothing to run is a fire alarm nobody wired to anything.
  *
- * <p><strong>And not on a JVM started to run one operations command.</strong> The lock makes the
- * 18:00 run one run, so a CLI process holding a scheduler would be a second replica of it, and a
- * command running long enough to reach 18:00 London would generate the night twice. The condition
- * stays on the whole configuration rather than on the job alone: a scheduler with nothing on it is
- * a half-absence to reason about instead of a plain one. The claim that a command schedules
- * <em>nothing</em> now rests on {@link SchedulingInfrastructureConfig}, which owns the annotation
- * and carries the same condition ({@link CliModeConfig}).
+ * <p>The generation scheduler is also where {@code POST /operations/batches/generate} does its
+ * work: {@code OperationsWebConfig} takes this scheduler by name, so a regeneration and a scheduled
+ * run cannot interleave on one pod even before the 18:00 lock is considered.
  */
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled", havingValue = "true")
-@Conditional(CliModeConfig.NotCliMode.class)
 public class SchedulingConfig {
 
     /**
