@@ -8,7 +8,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
-import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
 import uk.gov.hmcts.cp.courtregister.application.StaleReleaseProgress;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 
@@ -53,6 +52,9 @@ import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 public class StaleBatchReleaser {
 
     private static final Logger LOG = LoggerFactory.getLogger(StaleBatchReleaser.class);
+
+    /** A pass that was told about no batch at all, which is not the same as a quiet night. */
+    private static final ReleaseTally NOTHING = new ReleaseTally(0, 0, 0);
 
     /** The store, asked once per run for the fenced release of every stale batch. */
     private final RegisterStore store;
@@ -116,27 +118,56 @@ public class StaleBatchReleaser {
      */
     private ReleaseTally release() {
         final Instant now = clock.instant();
-        final StaleReleaseOutcome outcome = store.failAndReleaseStale(
-                now.minus(staleAfter), now.minus(manualGrace()), StaleReleaseProgress.NONE);
-
-        int registers = 0;
-        for (final ReleasedBatch released : outcome.released()) {
-            registers += released.releasedRegisters();
-            said(released);
+        final Account account = new Account();
+        boolean reachedTheEnd = false;
+        try {
+            store.failAndReleaseStale(now.minus(staleAfter), now.minus(manualGrace()), account);
+            reachedTheEnd = true;
+        } finally {
+            publish(account.tally(), reachedTheEnd);
         }
-        for (final UUID contended : outcome.contended()) {
-            saidContended(contended);
-        }
+        return account.tally();
+    }
 
-        final ReleaseTally tally =
-                new ReleaseTally(outcome.released().size(), registers, outcome.contended().size());
-        metrics.staleBatchesReleased(tally.batches());
-        metrics.staleRegistersReleased(tally.registers());
-        metrics.staleBatchesContended(tally.contended());
-        LOG.info("The stale-batch pass gave back what the night before had not finished, and the "
-                + "run goes on to assemble it. released_batches={} released_registers={} "
-                + "contended={}", tally.batches(), tally.registers(), tally.contended());
-        return tally;
+    /**
+     * Moves the three counters and writes the summary line, for a pass that ended either way.
+     *
+     * <p>In a {@code finally} and not only on the way out, because the numbers are of writes that
+     * are already committed: the store tells this pass about each batch where it settles it, so a
+     * store that went away between two batches leaves an account of the batches before it that is
+     * every bit as true as a whole night's. Nothing is caught here and nothing is absorbed - what
+     * ended the pass goes on leaving it, and this only makes sure the part that happened is said
+     * before it does.
+     *
+     * <p><strong>A pass that learned nothing publishes nothing.</strong> A run that never got an
+     * answer out of the store is not a quiet night, and creating the three series at zero for it
+     * would put a reading on a dashboard the store never gave. The ordinary quiet night - the pass
+     * that ran and found nothing stale - still writes its three zeros, because that is a night,
+     * and a series that only appears the first time something goes wrong is not an alerting
+     * surface.
+     *
+     * @param tally         what the pass was told about before it ended
+     * @param reachedTheEnd whether the walk got to the last stale batch rather than ending in a
+     *                      throw partway
+     */
+    private void publish(final ReleaseTally tally, final boolean reachedTheEnd) {
+        if (reachedTheEnd || !NOTHING.equals(tally)) {
+            metrics.staleBatchesReleased(tally.batches());
+            metrics.staleRegistersReleased(tally.registers());
+            metrics.staleBatchesContended(tally.contended());
+            if (reachedTheEnd) {
+                LOG.info("The stale-batch pass gave back what the night before had not finished, "
+                        + "and the run goes on to assemble it. released_batches={} "
+                        + "released_registers={} contended={}",
+                        tally.batches(), tally.registers(), tally.contended());
+            } else {
+                LOG.warn("The stale-batch pass did not reach the end, so these are the batches it "
+                        + "had already given back and not a whole night's account; what is counted "
+                        + "here is committed, and the next run reaches the rest. "
+                        + "released_batches={} released_registers={} contended={}",
+                        tally.batches(), tally.registers(), tally.contended());
+            }
+        }
     }
 
     /**
@@ -187,6 +218,45 @@ public class StaleBatchReleaser {
         LOG.warn("Batch {} could not be given back: every attempt at it lost the race for its "
                 + "day's active register, so it is left exactly as it was found and the next run "
                 + "reaches it again. The rest of this pass is unaffected.", batchId);
+    }
+
+    /**
+     * The account this pass keeps, written as the store settles each batch rather than after.
+     *
+     * <p>This is where the per-batch lines are said, because where a batch is announced is where
+     * it is known to be committed: a line written from the answer is a line a later batch's
+     * refusal can stop being written at all. Nothing here decides anything - it counts what it is
+     * told and says it once.
+     */
+    private static final class Account implements StaleReleaseProgress {
+
+        private int batches;
+
+        private int registers;
+
+        private int contended;
+
+        @Override
+        public void recordReleased(final ReleasedBatch released) {
+            batches++;
+            registers += released.releasedRegisters();
+            said(released);
+        }
+
+        @Override
+        public void recordContended(final UUID batchId) {
+            contended++;
+            saidContended(batchId);
+        }
+
+        /**
+         * What this pass has been told about so far.
+         *
+         * @return the three numbers, of batches already committed
+         */
+        private ReleaseTally tally() {
+            return new ReleaseTally(batches, registers, contended);
+        }
     }
 
     /**

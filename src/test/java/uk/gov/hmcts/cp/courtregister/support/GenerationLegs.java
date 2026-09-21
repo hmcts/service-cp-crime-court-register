@@ -554,6 +554,28 @@ public final class GenerationLegs implements AutoCloseable {
             return new StaleReleaseOutcome(List.of(given), List.of(CONTENDED_BATCH_ID));
         });
         whateverItAnswers(releaser::releaseStale);
+        aStaleBatchPassTheStoreLeftPartWayThrough();
+    }
+
+    /**
+     * The pass the store went away in the middle of, after a batch had already been given back.
+     *
+     * <p>Its own line, because the numbers it carries are not a night's: each batch commits by
+     * itself, so what the pass was told about before the store stopped answering is committed and
+     * has to be said, and said as a part rather than as a whole. Identities and counts again -
+     * the line names the three numbers and nothing else, and the refusal that ended the pass is
+     * the run's own to report.
+     */
+    private void aStaleBatchPassTheStoreLeftPartWayThrough() {
+        reset(store);
+        when(store.failAndReleaseStale(any(), any(), any())).thenAnswer(call -> {
+            call.getArgument(2, StaleReleaseProgress.class).recordReleased(
+                    new ReleasedBatch(BATCH_ID, COURT_CENTRE, REGISTER_DATE, 2));
+            throw new StoreUnavailableException(
+                    "the store could not be reached to fail and release the stale batches",
+                    new IllegalStateException("the connection was refused"));
+        });
+        whateverItAnswers(releaser::releaseStale);
     }
 
     // --- the requesting leg ----------------------------------------------------------------------

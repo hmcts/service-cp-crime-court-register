@@ -5021,17 +5021,6 @@ class RegisterStoreIT {
     }
 
     /**
-     * The released batches of this case's court centre, and none of another suite's.
-     *
-     * <p>The operation answers for the whole store, as the pass needs it to; a case asserts on its
-     * own court centre for the same reason {@link #mine(List)} exists. Null is answered as nothing
-     * rather than thrown on, so a red run reports the assertion that was being made and not the
-     * seam that had not been implemented yet.
-     *
-     * @param released what the operation answered with, or {@code null} where it refused
-     * @return the records naming this case's court centre, in the order they came back
-     */
-    /**
      * An observer that writes down the batches it is told about, in the order it is told.
      *
      * @param told where each released batch's identity is recorded
@@ -5053,6 +5042,17 @@ class RegisterStoreIT {
         };
     }
 
+    /**
+     * The released batches of this case's court centre, and none of another suite's.
+     *
+     * <p>The operation answers for the whole store, as the pass needs it to; a case asserts on its
+     * own court centre for the same reason {@link #mine(List)} exists. Null is answered as nothing
+     * rather than thrown on, so a red run reports the assertion that was being made and not the
+     * seam that had not been implemented yet.
+     *
+     * @param released what the operation answered with, or {@code null} where it refused
+     * @return the records naming this case's court centre, in the order they came back
+     */
     private List<ReleasedBatch> mineReleased(final StaleReleaseOutcome release) {
         return release == null ? List.of() : release.released().stream()
                 .filter(batch -> courtCentre.equals(batch.courtCentreId()))

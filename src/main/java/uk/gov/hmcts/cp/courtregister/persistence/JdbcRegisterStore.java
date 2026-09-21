@@ -2010,18 +2010,27 @@ public class JdbcRegisterStore implements RegisterStore {
     public StaleReleaseOutcome failAndReleaseStale(final Instant scheduledCutoff,
             final Instant manualCutoff, final StaleReleaseProgress progress) {
         return StoreOutage.translating("fail and release the stale batches",
-                () -> eachStaleBatch(scheduledCutoff, manualCutoff));
+                () -> eachStaleBatch(scheduledCutoff, manualCutoff, progress));
     }
 
     /**
      * Every stale batch in turn, each accounted for as released or as contended.
      *
+     * <p><strong>Each is announced where it is settled, and not only in the answer.</strong> Every
+     * attempt commits by itself, so a batch this walk has passed is durably failed and released
+     * whatever becomes of the batch after it. A walk that ends in a throw - a store that went away
+     * between two batches, or a refusal no retry can settle - would otherwise take the account of
+     * every batch before it with it, and the caller would publish a night that released nothing on
+     * a night when it released some. The return value is the same account, whole, for a walk that
+     * reached the end.
+     *
      * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
      * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
+     * @param progress        told about each batch as its own transaction commits
      * @return what was released, and what every attempt was refused over
      */
     private StaleReleaseOutcome eachStaleBatch(final Instant scheduledCutoff,
-            final Instant manualCutoff) {
+            final Instant manualCutoff, final StaleReleaseProgress progress) {
         final List<ReleasedBatch> released = new ArrayList<>();
         final List<UUID> contended = new ArrayList<>();
         for (final UUID batchId : staleBatches(scheduledCutoff, manualCutoff)) {
@@ -2029,6 +2038,8 @@ public class JdbcRegisterStore implements RegisterStore {
                     attemptedRelease(batchId, scheduledCutoff, manualCutoff);
             released.addAll(one.released());
             contended.addAll(one.contended());
+            one.released().forEach(progress::recordReleased);
+            one.contended().forEach(progress::recordContended);
         }
         return new StaleReleaseOutcome(List.copyOf(released), List.copyOf(contended));
     }
