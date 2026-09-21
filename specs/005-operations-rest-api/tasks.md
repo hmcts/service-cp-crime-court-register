@@ -1537,7 +1537,7 @@ a deletion has no red run, and its evidence is the green build with the replaced
       **README's generation section was left alone**, as the task requires, beyond the one stale
       phrase the grep is for.)
 
-- [ ] **T061** [US5] `README.md` — an **Operations API** section (design owner, 2026-09-20), placed
+- [x] **T061** [US5] `README.md` — an **Operations API** section (design owner, 2026-09-20), placed
       where the CLI paragraphs were, that a support engineer can work from without the spec: one
       table row per endpoint with method, path, request body fields, the 2xx answer and every
       refusal code it can return (`FLAG_OFF`, `FLAG_UNREADABLE`, `OVERRIDE_REQUIRES_BATCH`,
@@ -1553,6 +1553,32 @@ a deletion has no red run, and its evidence is the green build with the replaced
       `HTTP_AUDIT_ENABLED` (default true, switched off only by local and test configuration).
       Markdown only; exempt from the build loop but reviewed by the gate for accuracy against the
       controllers and `openapi.yaml`.
+      (Done. Markdown only.
+      **`README.md` gains an `## Operations API` section of its own**, where the two CLI paragraphs
+      were, in six parts a support engineer can work from without the spec: who may call and how the
+      identity reaches the pod; what is audited and what never leaves in a response; the
+      endpoint table; the flag rule per endpoint; a `curl` example per endpoint against the compose
+      stack; the five deployment gates; and the switches with their defaults.
+      **The table is one row per endpoint** with method, path, body fields, the 2xx shape and every
+      refusal code with its status — read off `courtregister-openapi.yaml`, the controllers and the
+      application services rather than off the spec, so what is documented is what is served. The
+      four the *surface* answers (`401`, `403`, `415`, `503 AUDIT_UNAVAILABLE`) are stated once
+      above the table instead of repeated in all seven rows, with `501 command-not-wired` explained
+      as a pod without the generating half rather than as a refusal about a request.
+      **`CP_AUDIT_INITIAL_CONNECT_ATTEMPTS` is in the switches table with the reason for its
+      value**, because the reason is the whole point of it: the request event is published on the
+      caller's own thread before the action, so the library's ten attempts are two minutes of a held
+      servlet thread before the caller is told `503`. It changes how long a refusal takes and not
+      what is refused.
+      **`CLAUDE.md`.** The Message-Contract Rule already named the operations API and
+      `courtregister-openapi.yaml` as the third owned contract, and no "exposes NO REST API"
+      sentence remained - both landed in `d73ef50`, and this task is where that was checked rather
+      than assumed. What was missing is the Deployment section, which now names
+      `AUTHZ_HTTP_ENABLED` and `HTTP_AUDIT_ENABLED` defaulting `true` and switched off only by local
+      and test configuration, the third key `CP_AUDIT_ENABLED` that being audited actually takes,
+      and the five gates. Build & Test had no CLI rows left to replace, so it gains the line that
+      says where the operational surface is instead. The Cutover Rule already had the generate
+      endpoint's override in place of the command's.)
 
 ---
 

@@ -91,6 +91,23 @@ notification enabled against production data outside cutover.
   keys, no committed connection strings, no secret in a Helm value or an environment default.
 - The STE wiring (helmsman entry, values, queue terraform, MI exports) lives in the sibling infra
   repos, not here.
+- **The operations API's two filter switches default ON.** `AUTHZ_HTTP_ENABLED` and
+  `HTTP_AUDIT_ENABLED` both read `true` in `application.yaml` against library defaults of off, so a
+  deployment that says nothing is authorised. They are switched off **only by local and test
+  configuration** — `docker-compose.yml` and `application-test.yaml`, each saying why where it does
+  it — and never by a deployed values file. Start-up never refuses on the combination; what it
+  refuses is a value that cannot mean what it says.
+- **Being audited takes a third key, and that one is the deployment's.** `HTTP_AUDIT_ENABLED` builds
+  nothing on its own: every `audit.http.*` bean sits inside the auto-configuration
+  `CP_AUDIT_ENABLED` gates, and this service ships it `false` so a laptop with no broker starts. A
+  deployed values file sets `CP_AUDIT_ENABLED=true` with the broker's connection from Key Vault, or
+  the API is served unaudited and the pod says so at WARN. `CP_AUDIT_INITIAL_CONNECT_ATTEMPTS`
+  (default `2`) bounds how long a call waits before it is refused `503`, because the request event
+  is published on the caller's own thread.
+- **Five deployment gates sit outside this repository**, and the service has no operational surface
+  until they land: the internal route for `/operations/**`, the gateway injecting `CJSCPPUID`, the
+  Istio `AuthorizationPolicy` and `NetworkPolicy`, usersgroups reachable from the pod, and the
+  Artemis audit connection. See `README.md`'s Operations API section.
 
 ## Build & Test
 ```bash
@@ -107,6 +124,12 @@ notification enabled against production data outside cutover.
                              # still leaves a report saying which lines were missed
 ./gradlew bootRun            # Run locally
 ```
+
+The operational surface is HTTP, not a command in the image: `docker compose up -d app`, then
+`curl -s localhost:8082/operations/flag` and the other six paths. `docker-compose.yml` switches both
+estate filters off for the local loop, so no `CJSCPPUID` is needed there. `README.md`'s Operations
+API section is the endpoint-by-endpoint table; `specs/005-operations-rest-api/quickstart.md` shows
+every refusal.
 
 ## Repository Conventions
 - Conventional Commits; no AI attribution in commits, PRs, comments or docs.

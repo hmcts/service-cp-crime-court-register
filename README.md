@@ -119,24 +119,170 @@ This repository carries no design narrative of its own. What it does carry:
   merging, which nothing in this repository can assert — alongside the legacy-repo items C18a, C28
   and C34, the producer-repo item C18b and the SIT→STE replay gate.
 
+## Operations API
+
 This service exposes **no business REST API**: no hearing is submitted to it over HTTP, no register
 is read out of it, no batch is created by a caller. Its HTTP surface is Spring Boot Actuator and,
-since increment 005, the **operations API** under `/operations/**` — the named operator actions
-(read the cutover flag, list a date's batches, review rows recorded while the flag was off,
-regenerate a date, resend a batch's failed notifications, supersede what was recorded before an
-instant, pull the exception report for a window) that replaced the CLI the image used to carry.
+since increment 005, seven named operator actions under `/operations/**` — the actions that were a
+CLI in the image until then, reached by `kubectl exec`. They are described in
+`src/main/resources/courtregister-openapi.yaml`, which this repository owns and versions.
 
-Every one of those endpoints is behind two estate starters: `cp-auth-rules-filter`, which evaluates
-drools rules in `src/main/resources/acl/operations-rules.drl` against the caller's usersgroups
-membership (identity from the `CJSCPPUID` header; **"Second Line Support" only**, on every
-endpoint), and `cp-audit-filter-springboot`, which publishes every request and response as an audit
-event to the audit context. They are described in `src/main/resources/courtregister-openapi.yaml`, which this
-repository owns and versions. Nothing an endpoint answers carries defendant detail, an exception
-message or a value the caller supplied: bounded codes, counts and identifiers only.
+### Who may call, and how identity reaches the pod
 
-**Deployment gate:** because the CLI is removed, a pod is only operable once the ingress route for
-`/operations/**`, the usersgroups path for the identity client and the Artemis audit connection are
-in place in the infrastructure repositories.
+**"Second Line Support", on every endpoint, and no other group.** The rules are drools, in
+`src/main/resources/acl/operations-rules.drl`, one per action; an action with no rule is denied, so
+an endpoint added without one is unreachable rather than open.
+
+The caller is named by the **`CJSCPPUID`** header, and that header is the **gateway's assertion,
+never a client's claim**: the gateway authenticates the caller, strips whatever `CJSCPPUID` arrived
+on the wire and injects the authenticated identity. `cp-auth-rules-filter` resolves that identity's
+groups against usersgroups. Every denial is default-deny — a missing or blank identity is `401`, and
+a caller in another group, an identity service that cannot be asked, and an action with no rule are
+all `403`.
+
+The **action** a request is authorised against is derived by this service from the path and the
+method, and overwrites whatever action header or vendor media type the caller sent. A caller
+admitted to the listing cannot reach the regeneration by naming it in a header.
+
+### What is audited, and what never leaves in a response
+
+`cp-audit-filter-springboot` publishes **two** events per call — one before the action and one
+after — carrying the caller, the derived action, the outcome, and this service's own bounded
+additions: whether the cutover flag was overridden, the run id a regeneration answered with, and the
+count a supersession gave up. A call whose request event cannot be published is **refused**
+`503 AUDIT_UNAVAILABLE` rather than taken: an endpoint reachable unaudited is an endpoint that may
+not exist.
+
+Nothing a caller typed comes back, in a body or in a log line. A refusal names the **argument**, by
+this service's own name for it, and never the value. No exception message, no store's or far end's
+own words, no defendant detail, and recipient addresses masked exactly as the `list-batches` command
+masked them. The `CJSCPPUID` value appears in **no** log line: the audit event is the one place the
+caller is named on purpose.
+
+### The seven endpoints
+
+Every row's refusals are additional to the four the surface itself answers: `401` no identity,
+`403` not admitted, `415 UNSUPPORTED_CONTENT_TYPE` for a `Content-Type` beginning `multipart/`, and
+`503 AUDIT_UNAVAILABLE` where the call could not be audited. Every non-2xx answer is a
+`ProblemDetail` carrying a bounded `reason`. `500 UNEXPECTED` is the advice's single fallback and
+means a defect: a `500` this service can explain is a `409`, a `503` or a `502` it failed to
+classify.
+
+| Action | Method and path | Body | 2xx | Refusals |
+|---|---|---|---|---|
+| Read the cutover flag | `GET /operations/flag` | — | `200` `{flag, reason?}` — `ON`, `OFF` or `UNREADABLE`, the last with its own bounded cause | none of its own: `UNREADABLE` is a **reading**, answered `200`, not an outage |
+| List a date's batches | `GET /operations/batches?date=` | — | `200` `{date, batches[]}` — per batch: id, court house, state, record count, masked recipients with outcomes | `400 missing-argument` / `unreadable-argument` (`date`); `503 listing-failed`; `501 command-not-wired` |
+| Review what was recorded while the flag was off | `GET /operations/registers/recorded-while-off` | — | `200` `{records[]}` | `503 listing-failed` |
+| Regenerate a register date | `POST /operations/batches/generate` | `{date, courtHouse?, batchId?, recordedBefore?, ignoreFlag?}` | **`202`** `{runId, date, overridden}` — the renders happen in the background on the generation scheduler, under the 18:00 lock | `400 missing-argument` / `unreadable-argument`; `400 OVERRIDE_REQUIRES_BATCH`; `409 flag-off`; `409 flag-unreadable`; `409 SCHEDULE_RUNNING`; `409 KEY_IN_FLIGHT`; `409 OUTSIDE_THE_BOUND`; `500 generation-failed`; `501 command-not-wired` |
+| Re-request a batch's owed recipients | `POST /operations/batches/{batchId}/notify` | — | `200` `{batchId, accepted, failed, state, disposition}` | `400 unreadable-argument`; `404 UNKNOWN_BATCH`; `409 already-notifying`; `500 claim-lost` / `incomplete` / `resend-failed`; `502 DOWNSTREAM_REFUSED`; `503 STORE_UNAVAILABLE`; `504 DOWNSTREAM_UNAVAILABLE`; `501 command-not-wired` |
+| Supersede what was recorded before an instant | `POST /operations/registers/supersede` | `{sharedBefore, dryRun?}` | `200` `{superseded, sharedBefore, dryRun}` | `400 missing-argument` / `unreadable-argument`; `400 SUPERSEDE_INSTANT_IN_FUTURE`; `400 SUPERSEDE_INSTANT_TOO_OLD`; `409 FLAG_ON`; `409 flag-unreadable`; `503 supersession-failed` |
+| Pull the exception report | `POST /operations/exception-reports` | `{since?, email?}` | `200` `{runId, window, entries[], counts, truncated, delivered, outcome, durationMs}` | `400 unreadable-argument` (`since`); `409 email-output-disabled`; `409 email-output-not-wired`; `500 report-not-built`; `500 report-not-delivered` |
+
+`501 command-not-wired` is not a refusal about the request: it is a pod deployed **without** the
+generating half (`courtregister.generation.enabled=false`) saying it does not hold the machinery,
+which is exactly what the command it replaced answered there.
+
+### The flag, per endpoint
+
+There is **one** cutover lever, the App Configuration flag `CourtRegisterService`, and no endpoint
+is a second one. Each reads it where the command it replaced read it, or more strictly — never more
+loosely:
+
+- **`GET /operations/flag`** reads it because that is what it is for.
+- **`POST /operations/batches/generate`** reads it through the same `FeatureFlagGate` the 18:00 run
+  uses, once per run and uncached, and refuses `409 flag-off` — unless the body carries
+  `ignoreFlag: true`, which is the per-request break-glass `--ignore-flag` was. The override
+  requires a **`batchId`**: `ignoreFlag` without one is `400 OVERRIDE_REQUIRES_BATCH`, so a
+  break-glass is one batch and never a whole day. The override is recorded in the audit event and
+  printed on the run report.
+- **`POST /operations/registers/supersede`** reads it **although its command did not**, and is
+  admitted only while it says **OFF** — `409 FLAG_ON` otherwise, `409 flag-unreadable` when it
+  cannot be read, and no override at all. It also takes a `dryRun` and refuses an instant older than
+  `courtregister.operations.supersede-max-age` or in the future. An unconditional HTTP mutation that
+  gives a period of registers up is a second lever however well authorised.
+- **`POST /operations/exception-reports`** reads it **nowhere**, as `report-exceptions` did not: a
+  pod that renders nothing still says what is wrong with what it recorded.
+- The three listings read it nowhere.
+
+### Calling it
+
+Deployed, against the internal route, with the identity the gateway injects:
+
+```bash
+BASE=https://<internal-host>/courtregister     # internal only; never exposed outside the estate
+H='-H Content-Type:application/json'
+```
+
+Locally, `docker compose up -d app` and then `localhost:8082` — `docker-compose.yml` switches
+`AUTHZ_HTTP_ENABLED` and `HTTP_AUDIT_ENABLED` **off** for the local loop (a laptop has no
+usersgroups and no audit broker), so no header is needed and nothing is audited:
+
+```bash
+curl -s localhost:8082/operations/flag
+# {"flag":"ON"}
+
+curl -s "localhost:8082/operations/batches?date=2026-09-04"
+# {"date":"2026-09-04","batches":[...]}
+
+curl -s localhost:8082/operations/registers/recorded-while-off
+# {"records":[...]}
+
+curl -s -X POST -H 'Content-Type: application/json' \
+  localhost:8082/operations/batches/generate -d '{"date":"2026-09-04"}'
+# 202 {"runId":"1b9e…","date":"2026-09-04","overridden":false}
+
+curl -s -X POST localhost:8082/operations/batches/2f1c…/notify
+# 200 {"batchId":"2f1c…","accepted":3,"failed":0,"state":"NOTIFIED","disposition":"settled"}
+
+curl -s -X POST -H 'Content-Type: application/json' \
+  localhost:8082/operations/registers/supersede -d '{"sharedBefore":"2026-09-04T17:00:00Z","dryRun":true}'
+# 200 {"superseded":47,"sharedBefore":"2026-09-04T17:00:00Z","dryRun":true}   <- nothing changed
+
+curl -s -X POST -H 'Content-Type: application/json' \
+  localhost:8082/operations/exception-reports -d '{"since":"6h"}'
+# 200 {"runId":"…","counts":{...},"entries":[...],"delivered":{"LOG":"delivered","EMAIL":"skipped"}}
+```
+
+`specs/005-operations-rest-api/quickstart.md` is the same walkthrough with every refusal shown.
+
+### Deployment gates — the service has no operational surface until these land
+
+The CLI is **removed**, so a pod deployed without these has no operational surface at all; and
+because the identity header is an assertion, a pod deployed without gates 2 and 3 has a surface that
+is **worse** than none. **This increment must not be deployed to STE before all five land**, and
+none of them is in this repository:
+
+1. An internal ingress / APIM route for `/operations/**` in the `cpp-aks-deploy` values, not exposed
+   outside the estate.
+2. The gateway **strips any client-supplied `CJSCPPUID` and injects the authenticated identity**.
+   Without this, the authorisation is a caller's own claim about itself.
+3. An Istio `AuthorizationPolicy` and a `NetworkPolicy` restricting `/operations/**` to that
+   gateway, so no other workload in the mesh can reach it directly.
+4. usersgroups reachable from the pod for the auth filter's identity client, with whatever network
+   policy that requires.
+5. The Artemis audit connection in the STE values — `CP_AUDIT_ENABLED=true` with the broker's hosts,
+   port, credentials and TLS material from Key Vault.
+
+### The switches, and what they default to
+
+| Setting | Default | What it does |
+|---|---|---|
+| `AUTHZ_HTTP_ENABLED` | **`true`** | `cp-auth-rules-filter`. A deployment that says nothing is authorised. |
+| `HTTP_AUDIT_ENABLED` | **`true`** | `cp-audit-filter-springboot`. On its own it builds nothing — see below. |
+| `CP_AUDIT_ENABLED` | `false` | The audit **transport**. Every `audit.http.*` bean sits inside the auto-configuration this gates, so a values file without it serves the API unaudited, and the pod says so at WARN on start-up. Deployment gate 5. |
+| `CP_AUDIT_INITIAL_CONNECT_ATTEMPTS` | `2` | How many times the audit JMS connection is attempted before the call is refused `503`. The library ships ten over a rising interval, which is **two minutes of a held servlet thread** before the caller is told — because the request event is published on the caller's own thread, before the action. Two attempts says the same thing in about two seconds; it changes how long a refusal takes, not what is refused. |
+| `courtregister.operations.enabled` | `true` | Whether the seven paths are served at all. Deployment shape, **not** a cutover lever. |
+
+The first two are switched off only by local and test configuration — `docker-compose.yml` and
+`application-test.yaml`, each saying why where it does it. Start-up **never refuses** on the
+combination: an operator may turn either off, and the pod always comes up. What is refused is a
+*value* that cannot mean what it says — an audit transport switched on with no host or a port
+outside 1..65535, an audit filter switched on with no OpenAPI document to resolve, and an unusable
+`supersede-max-age` or `lock-wait`.
+
+One item is an **estate decision rather than a deployment step**, and is open:
+`cp-audit-filter-springboot` captures every request header verbatim, and its own README says a
+header allowlist should be agreed with the Audit team before rolling this out broadly.
 
 ## Prerequisites
 
