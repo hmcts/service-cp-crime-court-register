@@ -57,7 +57,7 @@ while every endpoint satisfies four conditions — (a) behind `cp-auth-rules-fil
 allow rule naming the groups admitted, (b) audited by `cp-audit-filter-springboot`, (c) gated by the
 `CourtRegisterService` flag **at least as strictly** as the CLI command it replaces was, with any
 override recorded in the audit event and on the run report, and (d) answering under Principle VII.
-`src/main/resources/openapi.yaml` becomes a third contract this service owns.
+`src/main/resources/courtregister-openapi.yaml` becomes a third contract this service owns.
 
 **Version**: MAJOR (4.0.0). A previously forbidden endpoint is now permitted, the CLI the principle
 named as the operational surface ceases to exist, and the repository gains an owned OpenAPI
@@ -389,9 +389,9 @@ command printed.
 - **FR-001**: The service MUST expose exactly seven endpoints under `/operations/**`, one per
   operator action, and no other HTTP path besides Spring Boot Actuator.
 - **FR-002**: Every endpoint MUST be described in an OpenAPI 3 document at
-  `src/main/resources/openapi.yaml`, owned and versioned by this repository, covering its request,
-  its success shape and every bounded `reason` it can refuse under. A contract test MUST assert that
-  the controllers and the document agree in both directions.
+  `src/main/resources/courtregister-openapi.yaml`, owned and versioned by this repository, covering
+  its request, its success shape and every bounded `reason` it can refuse under. A contract test
+  MUST assert that the controllers and the document agree in both directions.
 - **FR-003**: The HTTP layer MUST be an inbound adapter in `uk.gov.hmcts.cp.courtregister.api`: it
   parses, calls application services, and maps the answer. It MUST NOT hold a repository, an HTTP
   client, a broker client or a business decision, and no logic MUST be rewritten on the way in —
