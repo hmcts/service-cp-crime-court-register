@@ -5,6 +5,8 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -12,6 +14,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.client.WireMock;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.search.Search;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -35,6 +39,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.MediaType;
+import org.springframework.jms.UncategorizedJmsException;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.jms.core.MessagePostProcessor;
 import org.springframework.test.context.ActiveProfiles;
@@ -115,6 +120,9 @@ class OperationsAuditIT {
     /** What an unclassified defect said, which must reach neither the caller nor the event. */
     private static final String A_DEFECTS_OWN_WORDS = "ZQX7 jdbc:postgresql://secret";
 
+    /** What the audit transport said, which belongs to the library that raised it. */
+    private static final String A_BROKERS_OWN_WORDS = "ZQX7BROKER tcp://audit:61616";
+
     /** The register date every case that needs one is about. */
     private static final LocalDate A_DATE = LocalDate.of(2026, 9, 4);
 
@@ -148,9 +156,13 @@ class OperationsAuditIT {
 
     private final MockMvc mvc;
 
+    /** Where the lost-response-event counter is registered, which is the recorded shortfall. */
+    private final MeterRegistry meters;
+
     @Autowired
-    OperationsAuditIT(final MockMvc mockMvc) {
+    OperationsAuditIT(final MockMvc mockMvc, final MeterRegistry meterRegistry) {
         this.mvc = mockMvc;
+        this.meters = meterRegistry;
     }
 
     @BeforeAll
@@ -245,6 +257,90 @@ class OperationsAuditIT {
                 .as("no defendant detail could be here and no body is: the payload switch is off, "
                         + "and what this service adds is five bounded fields (FR-046)")
                 .allSatisfy(event -> softly.assertThat(event).doesNotContain("\"_payload\":\"{"));
+    }
+
+    /**
+     * The refusal every endpoint can answer, taken where it is actually taken: on the wire.
+     *
+     * <p>The request event is published by {@code AuditFilter} <strong>before</strong> the chain,
+     * on the caller's own thread and outside the {@code DispatcherServlet}. So the refusal
+     * {@link OperationsAuditService} raises reaches no {@code @RestControllerAdvice} at all: it
+     * leaves the audit filter, is caught by {@code OperationsActionFilter} and is rendered from
+     * the one status map. {@code OperationsAuditFactsTest} asserts that the publisher throws;
+     * nothing but this asserts that what the caller is answered is a {@code 503} with a bounded
+     * reason rather than the container's own 500 with the path they typed in it.
+     *
+     * @param action what the call is, for the case name
+     * @param call   the call
+     * @throws Exception where the call cannot be made, which no case here expects
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("theSevenEndpoints")
+    void a_request_event_that_cannot_be_published_should_refuse_the_call(final String action,
+            final MockHttpServletRequestBuilder call) throws Exception {
+
+        doThrow(new UncategorizedJmsException(A_BROKERS_OWN_WORDS)).when(audit)
+                .convertAndSend(any(jakarta.jms.Destination.class), any(),
+                        any(MessagePostProcessor.class));
+
+        final var response = mvc.perform(call.header(IDENTITY, A_CALLER)).andReturn()
+                .getResponse();
+        final String body = response.getContentAsString();
+
+        softly.assertThat(response.getStatus())
+                .as("a call that cannot be audited must not proceed as though it had been "
+                        + "(Principle III(b)); the request event is the last moment there is "
+                        + "still something to refuse")
+                .isEqualTo(503);
+        softly.assertThat(body)
+                .as("and it says so in the bounded code every other refusal on this surface "
+                        + "carries, from the same status map")
+                .contains(OperationsReason.AUDIT_UNAVAILABLE.wire());
+        softly.assertThat(body)
+                .as("no path, no typed value, no broker's own words (FR-025)")
+                .doesNotContain("/operations").doesNotContain(BATCH)
+                .doesNotContain("2026-09-04").doesNotContain(A_BROKERS_OWN_WORDS);
+        softly.assertThat(action).isNotBlank();
+        Mockito.verifyNoInteractions(flag, listings, launcher, notifier, supersession, reports);
+    }
+
+    /**
+     * The other half of the same rule: a response event nobody can publish changes no answer.
+     *
+     * <p>The action has happened by then and no status can say so to a caller whose work is done,
+     * so the shortfall is recorded rather than refused - said at ERROR, and counted, because being
+     * in the log index is not an alerting surface.
+     *
+     * @throws Exception where the call cannot be made, which this case does not expect
+     */
+    @org.junit.jupiter.api.Test
+    void a_response_event_that_cannot_be_published_should_leave_the_answer_standing()
+            throws Exception {
+
+        final double before = unpublishedResponseEvents();
+        doNothing().doThrow(new UncategorizedJmsException(A_BROKERS_OWN_WORDS)).when(audit)
+                .convertAndSend(any(jakarta.jms.Destination.class), any(),
+                        any(MessagePostProcessor.class));
+
+        final int status = mvc.perform(get("/operations/flag").header(IDENTITY, A_CALLER))
+                .andReturn().getResponse().getStatus();
+
+        softly.assertThat(status)
+                .as("the call was served and answered; there is nothing left to refuse")
+                .isEqualTo(200);
+        softly.assertThat(unpublishedResponseEvents() - before)
+                .as("a path that drops something moves a counter")
+                .isEqualTo(1.0d);
+    }
+
+    /**
+     * What the lost-response-event counter reads now.
+     *
+     * @return its count, or zero where nothing has yet registered it
+     */
+    private double unpublishedResponseEvents() {
+        final Search found = meters.find("courtregister_operations_audit_unpublished");
+        return found.counter() == null ? 0.0d : found.counter().count();
     }
 
     /**
