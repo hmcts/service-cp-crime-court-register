@@ -751,13 +751,29 @@ was confirmed by the design owner on 2026-09-19 and is a requirement, not a prec
       one statement instead of two, but `application/RegisterStore` and `persistence/*` belong to
       the 004 tree under this increment's coordination contract; the seam is noted for after the
       merge.)
-- [ ] **T028** [P] [US6] `api/RegistersControllerTest` (extend) — the supersede slice cases of
+- [x] **T028** [P] [US6] `api/RegistersControllerTest` (extend) — the supersede slice cases of
       data-model §6: `200` with the count, the instant and `dryRun`; `400 missing-argument` for an
       absent instant — **never defaulted**; `400 unreadable-argument` with `argument: sharedBefore`;
       `400 SUPERSEDE_INSTANT_IN_FUTURE`; `400 SUPERSEDE_INSTANT_TOO_OLD`; `409 FLAG_ON`;
       `409 flag-unreadable`; `503 supersession-failed`. Red: the mapping.
-- [ ] **T029** [US6] `api/RegistersController#supersede` and its request/response records. Green:
+      (Landed with T029 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. `RegistersControllerTest` 20 tests, 0 failures, of which 10 are the rollback: the
+      `200` with the count, the bound and `dryRun: false`; the dry run; the absent instant; the
+      unreadable instant asserted against the whole response text and with the service never
+      reached; both `400` bound codes; `409 FLAG_ON`; `409 flag-unreadable`;
+      `503 supersession-failed` with no count in the body; and `ignoreFlag: true` refused as a
+      field this request does not take, which is the closed contract making "there is no override
+      here and there never will be" a property of the wire rather than of a document.)
+- [x] **T029** [US6] `api/RegistersController#supersede` and its request/response records. Green:
       T028.
+      (Green: `RegistersControllerTest` 20 tests, 0 failures. `sharedBefore` is carried as a
+      **string** on the request record and parsed in the controller, so a value that will not read
+      is this service's own `400 unreadable-argument` naming the argument rather than a binder
+      message quoting the caller's characters back; the response carries the parsed instant, not
+      those characters. `SupersedeRequest` joins `ExceptionReportRequest` in
+      `OperationsRequestBodies`'s closed set. The service is contributed in
+      `config/OperationsWebConfig` beside the other two, taking the flag reader that T040/T041's
+      decision made unconditional.)
 
 ---
 

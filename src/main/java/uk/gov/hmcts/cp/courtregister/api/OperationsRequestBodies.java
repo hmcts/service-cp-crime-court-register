@@ -9,6 +9,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 import uk.gov.hmcts.cp.courtregister.api.dto.ExceptionReportRequest;
+import uk.gov.hmcts.cp.courtregister.api.dto.SupersedeRequest;
 import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 
 /**
@@ -36,7 +37,8 @@ import uk.gov.hmcts.cp.courtregister.config.JacksonConfig;
 public class OperationsRequestBodies implements WebMvcConfigurer {
 
     /** Every request record an operations endpoint takes a body as. */
-    private static final Set<Class<?>> REQUEST_RECORDS = Set.of(ExceptionReportRequest.class);
+    private static final Set<Class<?>> REQUEST_RECORDS =
+            Set.of(ExceptionReportRequest.class, SupersedeRequest.class);
 
     /** The contract's own mapper: this service's defaults, and an unknown field is a failure. */
     private static final JsonMapper CLOSED = JacksonConfig.applyContractDefaults(JsonMapper.builder())

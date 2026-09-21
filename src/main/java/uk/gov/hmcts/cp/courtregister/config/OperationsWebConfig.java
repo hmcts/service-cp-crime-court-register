@@ -13,7 +13,9 @@ import uk.gov.hmcts.cp.courtregister.api.OperationsErrorAttributes;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
 import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
 import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
+import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.OnDemandExceptionReportService;
+import uk.gov.hmcts.cp.courtregister.application.OperationsSupersessionService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
@@ -49,6 +51,15 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 @Configuration(proxyBeanMethods = false)
 public class OperationsWebConfig {
 
+    /** The prefix of the one switch that decides whether this service answers /operations/**. */
+    private static final String OPERATIONS = "courtregister.operations";
+
+    /** Its name under that prefix. */
+    private static final String ENABLED = "enabled";
+
+    /** And the value that switches it on, which is also what an absent setting means. */
+    private static final String ON = "true";
+
     /**
      * Registers the action filter first in the chain, for every request.
      *
@@ -59,8 +70,8 @@ public class OperationsWebConfig {
      * @return the registration, ordered ahead of both estate filters
      */
     @Bean
-    @ConditionalOnProperty(prefix = "courtregister.operations", name = "enabled",
-            havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = OPERATIONS, name = ENABLED,
+            havingValue = ON, matchIfMissing = true)
     public FilterRegistrationBean<OperationsActionFilter> operationsActionFilter() {
         final FilterRegistrationBean<OperationsActionFilter> registration =
                 new FilterRegistrationBean<>(new OperationsActionFilter());
@@ -99,8 +110,8 @@ public class OperationsWebConfig {
      */
     @Bean
     @Profile("!test")
-    @ConditionalOnProperty(prefix = "courtregister.operations", name = "enabled",
-            havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = OPERATIONS, name = ENABLED,
+            havingValue = ON, matchIfMissing = true)
     public BatchListingService batchListingService(final RegisterBatchRepository batchRepository,
             final RegisterNotificationRepository notificationRepository,
             final RegisterStore registerStore) {
@@ -132,13 +143,40 @@ public class OperationsWebConfig {
      */
     @Bean
     @Profile("!test")
-    @ConditionalOnProperty(prefix = "courtregister.operations", name = "enabled",
-            havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = OPERATIONS, name = ENABLED,
+            havingValue = ON, matchIfMissing = true)
     public OnDemandExceptionReportService onDemandExceptionReportService(
             final ExceptionReportService reporting, final List<ExceptionReportSink> sinks,
             final ReportProperties report, final Clock clock) {
 
         return new OnDemandExceptionReportService(reporting, sinks, report.cron(), report.zone(),
                 report.email().enabled(), clock);
+    }
+
+    /**
+     * The rollback, with the flag read and the two bounds it is admitted under.
+     *
+     * <p>It takes the one lever's reader although its command took none: supersede is the endpoint
+     * that gives a period of registers up, and it is admitted only while an uncached read says the
+     * legacy is what generates. The reader is contributed wherever this service runs, so this bean
+     * needs no condition beyond the operations switch and the {@code !test} profile the store
+     * carries.
+     *
+     * @param registers  the registers, through the store's own port
+     * @param flag       the one lever
+     * @param operations the operations settings, for how far back a rollback may reach
+     * @param clock      the clock both bounds are taken against
+     * @return the rollback
+     */
+    @Bean
+    @Profile("!test")
+    @ConditionalOnProperty(prefix = OPERATIONS, name = ENABLED,
+            havingValue = ON, matchIfMissing = true)
+    public OperationsSupersessionService operationsSupersessionService(
+            final RegisterStore registers, final FeatureFlagReader flag,
+            final OperationsProperties operations, final Clock clock) {
+
+        return new OperationsSupersessionService(registers, flag, operations.supersedeMaxAge(),
+                clock);
     }
 }

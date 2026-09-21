@@ -1,11 +1,17 @@
 package uk.gov.hmcts.cp.courtregister.api;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.sql.SQLException;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -19,25 +25,32 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+import uk.gov.hmcts.cp.courtregister.application.OperationsSupersessionService;
 import uk.gov.hmcts.cp.courtregister.application.RecordedWhileOff;
+import uk.gov.hmcts.cp.courtregister.application.Supersession;
+import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
+import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 
 /**
- * What {@code GET /operations/registers/recorded-while-off} answers.
+ * What the two register endpoints answer: what is waiting, and what a rollback gives up.
  *
- * <p>The rows a rollback has to account for. The endpoint takes nothing, so the whole of its
- * surface is the shape of the answer and the one refusal it can make.
+ * <p>The listing takes nothing, so the whole of its surface is the shape of the answer and the one
+ * refusal it can make. The rollback is the opposite: almost all of its surface is refusals, and
+ * every one of them is a guard that has to <strong>stop the write</strong> rather than merely
+ * report on it.
  */
 @WebMvcTest(controllers = RegistersController.class, properties = {
     "authz.http.enabled=false",
     "audit.http.enabled=false",
     "cp.audit.enabled=false",
 })
-@DisplayName("the recorded-while-off endpoint")
+@DisplayName("the register endpoints")
 class RegistersControllerTest {
 
     /** The path, written out so a change to it fails here rather than silently 404ing. */
@@ -50,8 +63,24 @@ class RegistersControllerTest {
     @Autowired
     private MockMvc mvc;
 
+    /** The rollback's path, written out so a change to it fails here rather than 404ing. */
+    private static final String SUPERSEDE = "/operations/registers/supersede";
+
+    /** A bound inside the age a rollback may reach back over. */
+    private static final String TYPED_BOUND = "2026-09-04T17:00:00Z";
+
+    private static final Instant BOUND = Instant.parse(TYPED_BOUND);
+
+    /** A value nothing else in this repository produces, so a leak can only be this one. */
+    private static final String NOT_AN_INSTANT = "ZQX7NOTANINSTANT";
+
+    private static final int SUPERSEDED = 47;
+
     @MockitoBean
     private BatchListingService listings;
+
+    @MockitoBean
+    private OperationsSupersessionService supersession;
 
     @Nested
     @DisplayName("what is waiting")
@@ -183,6 +212,152 @@ class RegistersControllerTest {
             Assertions.assertThatThrownBy(() -> mvc.perform(get(PATH)))
                     .rootCause()
                     .isInstanceOf(InvalidDataAccessApiUsageException.class);
+        }
+    }
+
+    @Nested
+    @DisplayName("the rollback")
+    class TheRollback {
+
+        @Test
+        @DisplayName("it answers the count, the bound and whether anything was written")
+        void it_should_answer_the_count_and_the_bound() throws Exception {
+            when(supersession.supersede(BOUND, false))
+                    .thenReturn(new Supersession(SUPERSEDED, BOUND, false));
+
+            mvc.perform(post(SUPERSEDE).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"sharedBefore\":\"" + TYPED_BOUND + "\"}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.superseded").value(SUPERSEDED))
+                    .andExpect(jsonPath("$.sharedBefore").value(TYPED_BOUND))
+                    .andExpect(jsonPath("$.dryRun").value(false));
+        }
+
+        @Test
+        @DisplayName("a dry run says so and carries the count it would have taken")
+        void a_dry_run_should_say_so() throws Exception {
+            when(supersession.supersede(BOUND, true))
+                    .thenReturn(new Supersession(SUPERSEDED, BOUND, true));
+
+            mvc.perform(post(SUPERSEDE).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"sharedBefore\":\"" + TYPED_BOUND
+                                    + "\",\"dryRun\":true}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.superseded").value(SUPERSEDED))
+                    .andExpect(jsonPath("$.dryRun").value(true));
+        }
+
+        @Test
+        @DisplayName("an absent instant is a 400 and is never defaulted")
+        void an_absent_instant_should_be_refused_by_name() throws Exception {
+            when(supersession.supersede(eq(null), anyBoolean())).thenThrow(
+                    new OperationsRefusedException(OperationsReason.MISSING_ARGUMENT,
+                            "sharedBefore", null));
+
+            mvc.perform(post(SUPERSEDE).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("missing-argument"))
+                    .andExpect(jsonPath("$.argument").value("sharedBefore"));
+        }
+
+        @Test
+        @DisplayName("an instant that will not read is a 400 naming the argument, not the value")
+        void an_unreadable_instant_should_not_be_echoed() throws Exception {
+            final String answered = mvc.perform(post(SUPERSEDE)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"sharedBefore\":\"" + NOT_AN_INSTANT + "\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("unreadable-argument"))
+                    .andExpect(jsonPath("$.argument").value("sharedBefore"))
+                    .andReturn().getResponse().getContentAsString();
+
+            Assertions.assertThat(answered)
+                    .as("the parse is this controller's, so the refusal is this service's own "
+                            + "words about its own argument (FR-025)")
+                    .doesNotContain(NOT_AN_INSTANT);
+            verifyNoInteractions(supersession);
+        }
+
+        @Test
+        @DisplayName("an instant that has not happened yet is a 400 under its own code")
+        void an_instant_in_the_future_should_answer_400() throws Exception {
+            when(supersession.supersede(any(), anyBoolean())).thenThrow(
+                    new OperationsRefusedException(
+                            OperationsReason.SUPERSEDE_INSTANT_IN_FUTURE, "sharedBefore", null));
+
+            mvc.perform(post(SUPERSEDE).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"sharedBefore\":\"" + TYPED_BOUND + "\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("SUPERSEDE_INSTANT_IN_FUTURE"))
+                    .andExpect(jsonPath("$.argument").value("sharedBefore"));
+        }
+
+        @Test
+        @DisplayName("an instant older than the configured bound is a 400 under its own code")
+        void an_instant_too_old_should_answer_400() throws Exception {
+            when(supersession.supersede(any(), anyBoolean())).thenThrow(
+                    new OperationsRefusedException(
+                            OperationsReason.SUPERSEDE_INSTANT_TOO_OLD, "sharedBefore", null));
+
+            mvc.perform(post(SUPERSEDE).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"sharedBefore\":\"" + TYPED_BOUND + "\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("SUPERSEDE_INSTANT_TOO_OLD"));
+        }
+
+        @Test
+        @DisplayName("the flag ON is a 409 - this service is the implementation that generates")
+        void the_flag_on_should_answer_409() throws Exception {
+            when(supersession.supersede(any(), anyBoolean()))
+                    .thenThrow(new OperationsRefusedException(OperationsReason.FLAG_ON));
+
+            mvc.perform(post(SUPERSEDE).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"sharedBefore\":\"" + TYPED_BOUND + "\"}"))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.reason").value("FLAG_ON"));
+        }
+
+        @Test
+        @DisplayName("a flag that cannot be read is a 409, fail-closed")
+        void an_unreadable_flag_should_answer_409() throws Exception {
+            when(supersession.supersede(any(), anyBoolean()))
+                    .thenThrow(new OperationsRefusedException(OperationsReason.FLAG_UNREADABLE));
+
+            mvc.perform(post(SUPERSEDE).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"sharedBefore\":\"" + TYPED_BOUND + "\"}"))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.reason").value("flag-unreadable"));
+        }
+
+        @Test
+        @DisplayName("a store that will not answer is a 503 and never a count")
+        void a_store_that_refused_should_answer_503() throws Exception {
+            when(supersession.supersede(any(), anyBoolean())).thenThrow(
+                    new OperationsRefusedException(OperationsReason.SUPERSESSION_FAILED));
+
+            mvc.perform(post(SUPERSEDE).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"sharedBefore\":\"" + TYPED_BOUND + "\"}"))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.reason").value("supersession-failed"))
+                    .andExpect(jsonPath("$.superseded").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("a field this endpoint does not take is refused and is not quoted back")
+        void an_unknown_field_should_be_refused() throws Exception {
+            final String answered = mvc.perform(post(SUPERSEDE)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"sharedBefore\":\"" + TYPED_BOUND
+                                    + "\",\"ignoreFlag\":true}"))
+                    .andExpect(status().isBadRequest())
+                    .andReturn().getResponse().getContentAsString();
+
+            Assertions.assertThat(answered)
+                    .as("there is no override here and there never will be, so ignoreFlag is a "
+                            + "field this request does not take (FR-021, FR-028)")
+                    .contains("unreadable-argument")
+                    .doesNotContain("ignoreFlag");
+            verifyNoInteractions(supersession);
         }
     }
 }
