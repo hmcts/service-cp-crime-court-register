@@ -116,6 +116,19 @@ class OperationsAuditFactsTest {
     }
 
     /**
+     * One event whose content node the library did not build, which is a defect in its builder.
+     *
+     * @return the payload, with no content to write the bounded facts onto
+     */
+    private AuditPayload anEventWithNoContent() {
+        return new AuditPayload(null, "courtregister-service", "courtregister-service",
+                "2026-09-21T09:00:00Z",
+                new Metadata(UUID.randomUUID(), "audit.events.audit-recorded",
+                        "2026-09-21T09:00:00Z", Optional.empty(),
+                        Optional.of(new Metadata.Context("a-caller"))));
+    }
+
+    /**
      * What the template was asked to send, as JSON.
      *
      * @param call which of the sends to read, counting from one
@@ -334,10 +347,17 @@ class OperationsAuditFactsTest {
         }
 
         @Test
-        void a_publish_of_nothing_should_be_said_rather_than_sent() {
+        void a_request_event_of_nothing_should_refuse_the_call_rather_than_let_it_proceed() {
             final List<String> lines;
             try (CapturedLog log = CapturedLog.capturing(OperationsAuditService.class)) {
-                service.postMessageToArtemis(null);
+                assertThatThrownBy(() -> service.postMessageToArtemis(null))
+                        .as("an event the library did not build is a request event that was not "
+                                + "published, and a call that cannot be audited must not proceed "
+                                + "as though it had been - the same answer a transport failure "
+                                + "gets, because it is the same fact")
+                        .isInstanceOf(OperationsRefusedException.class)
+                        .extracting(refused -> ((OperationsRefusedException) refused).reason())
+                        .isEqualTo(OperationsReason.AUDIT_UNAVAILABLE);
                 lines = log.renderings();
             }
 
@@ -345,6 +365,41 @@ class OperationsAuditFactsTest {
                     .convertAndSend(any(jakarta.jms.Destination.class), eq(null),
                             any(MessagePostProcessor.class));
             softly.assertThat(lines).isNotEmpty();
+        }
+
+        @Test
+        void an_event_with_no_content_should_refuse_the_call_too() {
+            assertThatThrownBy(() -> service.postMessageToArtemis(anEventWithNoContent()))
+                    .as("the bounded facts are written onto the content node, so an event without "
+                            + "one would reach the audit context carrying no action and no "
+                            + "outcome - an event that says nothing is not an audited call")
+                    .isInstanceOf(OperationsRefusedException.class)
+                    .extracting(refused -> ((OperationsRefusedException) refused).reason())
+                    .isEqualTo(OperationsReason.AUDIT_UNAVAILABLE);
+        }
+
+        @Test
+        void a_response_event_of_nothing_should_be_counted_rather_than_refused() {
+            facts.regeneration(false, RUN_ID);
+            assertThatThrownBy(() -> service.postMessageToArtemis(null))
+                    .isInstanceOf(OperationsRefusedException.class);
+
+            final List<String> lines;
+            try (CapturedLog log = CapturedLog.capturing(OperationsAuditService.class)) {
+                assertThatCode(() -> service.postMessageToArtemis(null))
+                        .as("the action has already happened and no status can say so to a caller "
+                                + "whose work is done")
+                        .doesNotThrowAnyException();
+                lines = log.renderings();
+            }
+
+            softly.assertThat(lines)
+                    .anyMatch(line -> line.contains("action=" + ACTION)
+                            && line.contains("run_id=" + RUN_ID));
+            softly.assertThat(registry.get("courtregister_operations_audit_unpublished")
+                            .counter().count())
+                    .as("a path that drops something moves a counter")
+                    .isEqualTo(1.0d);
         }
     }
 }

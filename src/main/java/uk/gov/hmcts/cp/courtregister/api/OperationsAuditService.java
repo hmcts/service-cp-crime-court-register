@@ -41,6 +41,13 @@ import uk.gov.hmcts.cp.filter.audit.service.AuditService;
  * <p>Nothing of the failure's own words reaches either the log or the event: a caught exception is
  * named by class, because its message belongs to whatever library raised it and is exactly where a
  * connection string turns up.
+ *
+ * <p><strong>An event that was never built counts as one that was never published.</strong> A null
+ * payload, and a payload whose content node is null, are both a call this service cannot put the
+ * bounded facts onto - the action, the outcome, the override - and a call whose event says none of
+ * those is not an audited call. Both therefore take the same two answers as a transport failure:
+ * refused on the request event, counted and said at ERROR on the response one. Letting either
+ * through would make fail-closed depend on which part of the publishing broke.
  */
 public class OperationsAuditService extends AuditService {
 
@@ -51,6 +58,9 @@ public class OperationsAuditService extends AuditService {
 
     /** The property the audit context routes on, which the starter sets from the payload's name. */
     private static final String CPPNAME = "CPPNAME";
+
+    /** What the log names as the cause where the library handed over no event to publish. */
+    private static final String NO_EVENT_BUILT = "no-event-built";
 
     /** The template the starter built against the audit broker's own connection. */
     private final JmsTemplate audit;
@@ -91,16 +101,20 @@ public class OperationsAuditService extends AuditService {
     @Override
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public void postMessageToArtemis(final AuditPayload payload) {
-        if (payload == null) {
-            LOG.warn("The audit filter offered no payload, so there was nothing to publish.");
-            return;
-        }
         final OperationsAuditFacts facts = OperationsAuditFacts.current();
         final boolean requestEvent = facts == null || facts.firstPublish();
+        if (payload == null || payload.content() == null) {
+            // An event the library's own builder did not produce, or produced without the node the
+            // bounded facts are written onto. Either way this call is not audited, and an
+            // unaudited call is refused exactly as one whose transport failed is - the fail-closed
+            // rule cannot depend on which part of the publishing broke.
+            failed(facts, requestEvent, NO_EVENT_BUILT, null);
+            return;
+        }
         try {
             publish(merged(payload, facts));
         } catch (RuntimeException notPublished) {
-            failed(facts, requestEvent, notPublished);
+            failed(facts, requestEvent, notPublished.getClass().getName(), notPublished);
         }
     }
 
@@ -115,7 +129,7 @@ public class OperationsAuditService extends AuditService {
             final OperationsAuditFacts facts) {
 
         final ObjectNode content = payload.content();
-        if (facts != null && content != null) {
+        if (facts != null) {
             for (final Map.Entry<String, Object> fact : facts.asPublished().entrySet()) {
                 putBounded(content, fact.getKey(), fact.getValue());
             }
@@ -174,23 +188,26 @@ public class OperationsAuditService extends AuditService {
      *
      * @param facts        this call's facts, or {@code null}
      * @param requestEvent whether the lost event was the request's
-     * @param cause        what stopped it, named by class and never by message
+     * @param causeName    what stopped it, as a class name or one of this service's own bounded
+     *                     words - never a message, which belongs to whatever library raised it
+     * @param cause        the failure itself where there was one, so the refusal carries it, or
+     *                     {@code null} where nothing was thrown and there was simply no event
      */
     private void failed(final OperationsAuditFacts facts, final boolean requestEvent,
-            final RuntimeException cause) {
+            final String causeName, final RuntimeException cause) {
 
         final String action = facts == null ? null : facts.actionName();
         if (requestEvent) {
             LOG.error("An operations call was refused because its request could not be audited, "
                             + "which is the only moment there is still something to refuse. "
                             + "action={} reason={} cause={}", action,
-                    OperationsReason.AUDIT_UNAVAILABLE.wire(), cause.getClass().getName());
+                    OperationsReason.AUDIT_UNAVAILABLE.wire(), causeName);
             throw new OperationsRefusedException(OperationsReason.AUDIT_UNAVAILABLE, null, cause);
         }
         unpublished.increment();
         LOG.error("An operations call was answered and its response event was not published, so "
                         + "the audit trail for that call is incomplete and nothing can be refused "
                         + "about it. action={} run_id={} cause={}", action,
-                facts == null ? null : facts.acceptedRunId(), cause.getClass().getName());
+                facts == null ? null : facts.acceptedRunId(), causeName);
     }
 }
