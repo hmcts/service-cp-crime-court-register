@@ -112,6 +112,9 @@ class OperationsAuditIT {
     /** The run id the launcher answers a regeneration with. */
     private static final String RUN_ID = "9f2b6d44-6b1a-4f0a-9d24-0cc2b0d1f3aa";
 
+    /** What an unclassified defect said, which must reach neither the caller nor the event. */
+    private static final String A_DEFECTS_OWN_WORDS = "ZQX7 jdbc:postgresql://secret";
+
     /** The register date every case that needs one is about. */
     private static final LocalDate A_DATE = LocalDate.of(2026, 9, 4);
 
@@ -291,6 +294,43 @@ class OperationsAuditIT {
                         post("/operations/exception-reports")
                                 .contentType(MediaType.MULTIPART_FORM_DATA)
                                 .content("--x--")));
+    }
+
+    /**
+     * A defect on the request thread still leaves both events, which is what says what came of it.
+     *
+     * <p>{@code AuditFilter.doFilterInternal} has no {@code try}/{@code finally} around
+     * {@code chain.doFilter}, so an exception that leaves the dispatcher never reaches
+     * {@code performResponseAudit}: the trail would carry a request event, no response event and
+     * no counter, and nothing this service writes would record the shortfall. The advice's
+     * fallback is what keeps the answer on the wire and therefore the event on the topic.
+     *
+     * @throws Exception where the call cannot be made, which this case does not expect
+     */
+    @org.junit.jupiter.api.Test
+    void an_unclassified_defect_should_still_leave_a_complete_trail() throws Exception {
+        when(flag.read()).thenThrow(new IllegalStateException(A_DEFECTS_OWN_WORDS));
+
+        final int status = mvc.perform(get("/operations/flag").header(IDENTITY, A_CALLER))
+                .andReturn().getResponse().getStatus();
+
+        final ArgumentCaptor<Object> events = ArgumentCaptor.forClass(Object.class);
+        verify(audit, Mockito.atLeastOnce()).convertAndSend(any(jakarta.jms.Destination.class),
+                events.capture(), any(MessagePostProcessor.class));
+        final List<String> published = events.getAllValues().stream().map(String::valueOf).toList();
+
+        softly.assertThat(status).isEqualTo(500);
+        softly.assertThat(published)
+                .as("the request event before the chain and the response event after it, which is "
+                        + "what FR-046 means by the event carrying the outcome")
+                .hasSize(2);
+        softly.assertThat(published.get(published.size() - 1))
+                .as("and the outcome is the bounded code, not a gap a reader has to interpret")
+                .contains("500 UNEXPECTED");
+        softly.assertThat(published)
+                .as("a defect's own words belong to whatever raised them")
+                .allSatisfy(event ->
+                        softly.assertThat(event).doesNotContain(A_DEFECTS_OWN_WORDS));
     }
 
     /**

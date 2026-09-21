@@ -65,6 +65,8 @@ paths:
           $ref: "#/components/responses/Unauthorised"
         "415":
           $ref: "#/components/responses/UnsupportedContentType"
+        "500":
+          $ref: "#/components/responses/Refused"
         "503":
           $ref: "#/components/responses/NotAudited"
 
@@ -96,6 +98,8 @@ paths:
           $ref: "#/components/responses/Unauthorised"
         "415":
           $ref: "#/components/responses/UnsupportedContentType"
+        "500":
+          $ref: "#/components/responses/Refused"
         "501":
           $ref: "#/components/responses/NotWired"
         "503":
@@ -136,6 +140,8 @@ paths:
           $ref: "#/components/responses/Refused"
         "415":
           $ref: "#/components/responses/UnsupportedContentType"
+        "500":
+          $ref: "#/components/responses/Refused"
         "501":
           $ref: "#/components/responses/NotWired"
         "503":
@@ -205,6 +211,8 @@ paths:
           $ref: "#/components/responses/Unauthorised"
         "415":
           $ref: "#/components/responses/UnsupportedContentType"
+        "500":
+          $ref: "#/components/responses/Refused"
         "503":
           $ref: "#/components/responses/Refused"
 
@@ -241,6 +249,8 @@ paths:
           $ref: "#/components/responses/Refused"
         "415":
           $ref: "#/components/responses/UnsupportedContentType"
+        "500":
+          $ref: "#/components/responses/Refused"
         "503":
           $ref: "#/components/responses/Refused"
 
@@ -290,6 +300,9 @@ components:
       description: >-
         A refusal or a failure, as an RFC 9457 ProblemDetail carrying a bounded reason. Never an
         exception message, never a store's or a far end's own words, never a value the caller sent.
+        Every path carries a 500, because every path can meet a failure nobody classified: that one
+        is `reason: UNEXPECTED`, answered by the advice's single fallback so that the outcome
+        reaches the wire and the audit event rather than the container.
       content:
         application/problem+json:
           schema:
@@ -390,6 +403,7 @@ components:
         - DOWNSTREAM_REFUSED
         - DOWNSTREAM_UNAVAILABLE
         - UNSUPPORTED_CONTENT_TYPE
+        - UNEXPECTED
         - AUDIT_UNAVAILABLE
 
     ProblemDetail:

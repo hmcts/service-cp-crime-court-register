@@ -36,11 +36,22 @@ import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
  * without quoting the field that broke it, because that field's name is producer-chosen text
  * (FR-024, constitution Principle VII).
  *
- * <p>What this advice does <strong>not</strong> catch is as deliberate as what it does. There is no
- * {@code Exception} fallback: an unmapped path, an unmapped method and a genuine defect all reach
- * Boot's {@code /error} and come back through {@link OperationsErrorAttributes} in the same bounded
- * shape, without a stack trace. A fallback here would have to guess a bounded code for something
- * nobody classified, and a guessed code is worse than {@code unexpected-failure}.
+ * <p><strong>And there is one fallback, over {@code RuntimeException}.</strong> It does not guess a
+ * code: it answers the one bounded code that means nobody classified this,
+ * {@link OperationsReason#UNEXPECTED}, so that the failure is written down here rather than
+ * somewhere nothing writes it down at all. The reason it has to be written down here is the audit
+ * filter: {@code AuditFilter.doFilterInternal} has no {@code try}/{@code finally} around the chain,
+ * so an exception that leaves the dispatcher never reaches {@code performResponseAudit} - the
+ * trail is left with a request event, no response event and no counter, and FR-046 says the event
+ * carries the outcome. Answering through {@link OperationsProblem} puts the response on the wire
+ * through the library's own caching wrapper and the outcome onto the event.
+ *
+ * <p>What it still does <strong>not</strong> catch is as deliberate. The fallback is over
+ * {@code RuntimeException} and not over {@code Exception}, and it is scoped to this package's
+ * handlers: an unmapped path and an unmapped method are checked {@code ServletException}s the
+ * dispatcher raises before any handler of this package is chosen, and they keep the framework's
+ * own answer through {@link OperationsErrorAttributes}, in the same bounded shape and without a
+ * stack trace.
  */
 @RestControllerAdvice(basePackages = "uk.gov.hmcts.cp.courtregister.api")
 @Order(Ordered.HIGHEST_PRECEDENCE)
@@ -79,6 +90,26 @@ public class OperationsExceptionHandler {
                 notReadable.getClass().getName());
         return OperationsProblem.answering(HttpStatus.BAD_REQUEST,
                 OperationsReason.UNREADABLE_ARGUMENT, null, Map.of());
+    }
+
+    /**
+     * A failure nobody classified, which is the only thing a {@code 500} of this service's may be.
+     *
+     * <p>Not a swallowed exception: it is classified here - as the one code that says it was not -
+     * logged at ERROR naming the class alone, and answered. Nothing of the failure's own words
+     * reaches the log or the body; the message belongs to whatever library raised it and is
+     * exactly where a connection string turns up.
+     *
+     * @param defect what nothing else on this surface claimed, named by class alone
+     * @return the {@code 500}, carrying the bounded code and no detail
+     */
+    @ExceptionHandler(RuntimeException.class)
+    public ResponseEntity<Object> unexpected(final RuntimeException defect) {
+        LOG.error("An operations call ended in a failure this service did not classify, which is "
+                        + "a defect rather than a refusal. reason={} cause={}",
+                OperationsReason.UNEXPECTED.wire(), defect.getClass().getName());
+        return OperationsProblem.answering(HttpStatus.INTERNAL_SERVER_ERROR,
+                OperationsReason.UNEXPECTED, null, Map.of());
     }
 
     /**

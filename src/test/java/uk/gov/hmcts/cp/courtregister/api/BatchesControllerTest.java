@@ -254,43 +254,51 @@ class BatchesControllerTest {
      * exists to read being unavailable, and {@code 500} for an unexpected defect. The distinction
      * is what a runbook acts on: a 503 is retried, and a defect retried is a defect retried for
      * ever. So anything out of the listing that is not one of the store's two unreachable shapes
-     * leaves this controller untouched, and the container answers it under the body
-     * {@code OperationsErrorAttributes} renders.
+     * leaves this controller untouched and is answered by the advice's one fallback -
+     * {@code 500 UNEXPECTED}, the bounded code that says nobody classified it, carrying nothing of
+     * the defect's own words.
      */
     @Nested
     @DisplayName("a defect in the listing")
     class ADefect {
 
+        /** It is not an outage, and it is not the caller's business what it was. */
         @Test
-        void it_should_not_be_answered_as_the_store_being_unavailable() {
+        @DisplayName("it is answered 500 UNEXPECTED, never 503")
+        void it_should_not_be_answered_as_the_store_being_unavailable() throws Exception {
             when(listings.batchesOn(any())).thenThrow(new IllegalStateException("ZQX7DEFECT"));
 
-            Assertions.assertThatThrownBy(() -> mvc.perform(get(PATH).param("date", TYPED_DATE)))
-                    .as("it reaches the container rather than being classified as an outage")
-                    .rootCause()
-                    .isInstanceOf(IllegalStateException.class);
+            mvc.perform(get(PATH).param("date", TYPED_DATE))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason").value("UNEXPECTED"))
+                    .andExpect(jsonPath("$.detail").doesNotExist());
         }
 
         @Test
-        void a_defect_wearing_the_stores_exception_type_should_not_be_an_outage_either() {
+        @DisplayName("a violated constraint is this service's defect, not the store being down")
+        void a_defect_wearing_the_stores_exception_type_should_not_be_an_outage_either()
+                throws Exception {
             when(listings.batchesOn(any())).thenThrow(
                     new DataIntegrityViolationException("ZQX7DEFECT"));
 
-            Assertions.assertThatThrownBy(() -> mvc.perform(get(PATH).param("date", TYPED_DATE)))
-                    .as("a violated constraint is this service's defect and not the store being "
-                            + "unreachable; answered 503 it is a defect a runbook retries for ever")
-                    .rootCause()
-                    .isInstanceOf(DataIntegrityViolationException.class);
+            mvc.perform(get(PATH).param("date", TYPED_DATE))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason").value("UNEXPECTED"));
         }
 
         @Test
-        void a_query_this_service_built_wrongly_should_not_be_an_outage_either() {
+        void a_query_this_service_built_wrongly_should_not_be_an_outage_either() throws Exception {
             when(listings.batchesOn(any())).thenThrow(
                     new InvalidDataAccessApiUsageException("ZQX7DEFECT"));
 
-            Assertions.assertThatThrownBy(() -> mvc.perform(get(PATH).param("date", TYPED_DATE)))
-                    .rootCause()
-                    .isInstanceOf(InvalidDataAccessApiUsageException.class);
+            final String answered = mvc.perform(get(PATH).param("date", TYPED_DATE))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason").value("UNEXPECTED"))
+                    .andReturn().getResponse().getContentAsString();
+
+            Assertions.assertThat(answered)
+                    .as("and nothing of the defect's own words comes back with it")
+                    .doesNotContain("ZQX7DEFECT");
         }
     }
 
@@ -646,15 +654,16 @@ class BatchesControllerTest {
         }
 
         @Test
-        void a_defect_in_the_resend_should_not_be_answered_as_a_dependency_failing() {
+        @DisplayName("a violated constraint is a defect, answered 500 UNEXPECTED and not 503")
+        void a_defect_in_the_resend_should_not_be_answered_as_a_dependency_failing()
+                throws Exception {
             when(notifier.resendFailed(BATCH)).thenThrow(
                     new DataIntegrityViolationException("ZQX7DEFECT"));
 
-            Assertions.assertThatThrownBy(() -> mvc.perform(post(NOTIFY)))
-                    .as("a violated constraint is this service's defect, and a defect answered "
-                            + "503 is a defect a runbook retries for ever")
-                    .rootCause()
-                    .isInstanceOf(DataIntegrityViolationException.class);
+            mvc.perform(post(NOTIFY))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason").value("UNEXPECTED"))
+                    .andExpect(jsonPath("$.detail").doesNotExist());
         }
     }
 }

@@ -183,35 +183,41 @@ class RegistersControllerTest {
     class ADefect {
 
         @Test
-        void it_should_not_be_answered_as_the_store_being_unavailable() {
+        @DisplayName("it is answered 500 UNEXPECTED, never 503")
+        void it_should_not_be_answered_as_the_store_being_unavailable() throws Exception {
             when(listings.recordedWhileOff()).thenThrow(new IllegalStateException("ZQX7DEFECT"));
 
-            Assertions.assertThatThrownBy(() -> mvc.perform(get(PATH)))
-                    .as("it reaches the container rather than being classified as an outage")
-                    .rootCause()
-                    .isInstanceOf(IllegalStateException.class);
+            mvc.perform(get(PATH))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason").value("UNEXPECTED"))
+                    .andExpect(jsonPath("$.detail").doesNotExist());
         }
 
         @Test
-        void a_defect_wearing_the_stores_exception_type_should_not_be_an_outage_either() {
+        @DisplayName("a violated constraint is this service's defect, not the store being down")
+        void a_defect_wearing_the_stores_exception_type_should_not_be_an_outage_either()
+                throws Exception {
             when(listings.recordedWhileOff()).thenThrow(
                     new DataIntegrityViolationException("ZQX7DEFECT"));
 
-            Assertions.assertThatThrownBy(() -> mvc.perform(get(PATH)))
-                    .as("a violated constraint is this service's defect and not the store being "
-                            + "unreachable; answered 503 it is a defect a runbook retries for ever")
-                    .rootCause()
-                    .isInstanceOf(DataIntegrityViolationException.class);
+            mvc.perform(get(PATH))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason").value("UNEXPECTED"));
         }
 
         @Test
-        void a_query_this_service_built_wrongly_should_not_be_an_outage_either() {
+        void a_query_this_service_built_wrongly_should_not_be_an_outage_either() throws Exception {
             when(listings.recordedWhileOff()).thenThrow(
                     new InvalidDataAccessApiUsageException("ZQX7DEFECT"));
 
-            Assertions.assertThatThrownBy(() -> mvc.perform(get(PATH)))
-                    .rootCause()
-                    .isInstanceOf(InvalidDataAccessApiUsageException.class);
+            final String answered = mvc.perform(get(PATH))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason").value("UNEXPECTED"))
+                    .andReturn().getResponse().getContentAsString();
+
+            Assertions.assertThat(answered)
+                    .as("and nothing of the defect's own words comes back with it")
+                    .doesNotContain("ZQX7DEFECT");
         }
     }
 

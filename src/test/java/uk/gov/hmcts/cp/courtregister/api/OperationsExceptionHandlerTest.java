@@ -107,7 +107,8 @@ class OperationsExceptionHandlerTest {
                     .containsExactlyInAnyOrder(OperationsReason.CLAIM_LOST,
                             OperationsReason.INCOMPLETE, OperationsReason.REPORT_NOT_BUILT,
                             OperationsReason.REPORT_NOT_DELIVERED,
-                            OperationsReason.GENERATION_FAILED, OperationsReason.RESEND_FAILED);
+                            OperationsReason.GENERATION_FAILED, OperationsReason.RESEND_FAILED,
+                            OperationsReason.UNEXPECTED);
         }
 
         @ParameterizedTest(name = "{0}")
@@ -198,6 +199,51 @@ class OperationsExceptionHandlerTest {
     }
 
     @Nested
+    @DisplayName("a failure nobody classified")
+    class AnUnclassifiedDefect {
+
+        @Test
+        @DisplayName("it is answered 500 under a bounded code rather than left to the container")
+        void an_unclassified_exception_should_be_answered_from_the_status_map() throws Exception {
+            when(reports.report(any(), anyBoolean()))
+                    .thenThrow(new IllegalStateException(LIBRARY_WORDS));
+
+            mvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason").value(OperationsReason.UNEXPECTED.wire()))
+                    .andExpect(jsonPath("$.detail").doesNotExist())
+                    .andExpect(jsonPath("$.instance").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("and its own words stay where they were raised")
+        void the_defects_message_should_not_reach_the_caller() throws Exception {
+            when(reports.report(any(), anyBoolean()))
+                    .thenThrow(new IllegalStateException(LIBRARY_WORDS));
+
+            final String answered = answerTo("{}");
+
+            assertThat(answered)
+                    .contains(OperationsReason.UNEXPECTED.wire())
+                    .doesNotContain(LIBRARY_WORDS)
+                    .doesNotContain("jdbc:")
+                    .doesNotContain("IllegalStateException");
+        }
+
+        @Test
+        @DisplayName("a classified refusal is still answered under its own code")
+        void a_bounded_refusal_should_not_be_taken_by_the_fallback() throws Exception {
+            when(reports.report(any(), anyBoolean()))
+                    .thenThrow(new OperationsRefusedException(OperationsReason.REPORT_NOT_BUILT));
+
+            mvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason")
+                            .value(OperationsReason.REPORT_NOT_BUILT.wire()));
+        }
+    }
+
+    @Nested
     @DisplayName("a method the path does not answer on")
     class TheUnmappedMethod {
 
@@ -209,9 +255,10 @@ class OperationsExceptionHandlerTest {
                     .andReturn().getResponse().getContentAsString();
 
             assertThat(answered)
-                    .as("the advice has no Exception fallback on purpose: an unmapped method is "
-                            + "not a bounded code and guessing one would be worse than the "
-                            + "framework's own answer")
+                    .as("the advice's fallback is over RuntimeException, and an unmapped method "
+                            + "is a checked ServletException the dispatcher raises before any "
+                            + "handler of this package is chosen - so it keeps the framework's "
+                            + "own answer, through OperationsErrorAttributes")
                     .doesNotContain("uk.gov.hmcts")
                     .doesNotContain("\tat ");
         }

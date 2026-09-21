@@ -74,6 +74,7 @@ final class OperationsProblem {
             Map.entry(OperationsReason.REPORT_NOT_DELIVERED, HttpStatus.INTERNAL_SERVER_ERROR),
             Map.entry(OperationsReason.GENERATION_FAILED, HttpStatus.INTERNAL_SERVER_ERROR),
             Map.entry(OperationsReason.RESEND_FAILED, HttpStatus.INTERNAL_SERVER_ERROR),
+            Map.entry(OperationsReason.UNEXPECTED, HttpStatus.INTERNAL_SERVER_ERROR),
             Map.entry(OperationsReason.UNSUPPORTED_CONTENT_TYPE,
                     HttpStatus.UNSUPPORTED_MEDIA_TYPE),
             Map.entry(OperationsReason.COMMAND_NOT_WIRED, HttpStatus.NOT_IMPLEMENTED),

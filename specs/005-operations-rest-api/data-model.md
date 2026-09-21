@@ -51,6 +51,11 @@ Added at the increment's gate, and about the surface rather than about an action
 the chain and publishes neither of its two events, so a call declaring one would be served
 unaudited; `api/OperationsActionFilter` refuses it ahead of both estate filters, because once the
 audit filter has decided to skip there is nothing left to refuse.
+`UNEXPECTED` (`500`) — a failure nobody classified. `AuditFilter.doFilterInternal` has no
+`try`/`finally` around the chain, so an exception that leaves the dispatcher leaves a request event
+with no response event beside it; the advice's one fallback answers it under this code so the
+outcome is on the wire and on the event. A `500` this service can explain is still a 409, a 503 or
+a 502 it failed to classify — this code is what is left when it could not.
 
 The OpenAPI document normalises the spelling to one convention across both sets; the commands' own
 hyphenated codes keep their characters and gain nothing.
@@ -64,6 +69,7 @@ hyphenated codes keep their characters and gain nothing.
 | Body will not parse, or carries an unknown field | `400` | `unreadable-argument` |
 | Unmapped path or method | framework default, through `OperationsErrorAttributes` | — |
 | `Content-Type` beginning `multipart/` | `415` | `UNSUPPORTED_CONTENT_TYPE`, refused by `OperationsActionFilter` before the audit filter |
+| A failure nobody classified | `500` | `UNEXPECTED`, from the advice's one fallback |
 
 ---
 

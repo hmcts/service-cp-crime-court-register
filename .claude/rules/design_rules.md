@@ -365,7 +365,9 @@ the same application services the CLI called:
   refusal that changed nothing; `503` a dependency this endpoint exists to read or write that is
   unavailable; `502`/`504` a downstream platform contract that refused or did not answer; `500` an
   unexpected defect **and nothing else** — a 500 this service can explain is a 409, a 503 or a 502
-  it failed to classify. Every non-2xx answer is a `ProblemDetail` carrying a bounded `reason`.
+  it failed to classify, and the one it cannot is answered `UNEXPECTED` by the advice's single
+  fallback rather than left to the container, because the audit filter publishes no response event
+  for an exception that leaves the dispatcher. Every non-2xx answer is a `ProblemDetail` carrying a bounded `reason`.
   One status belongs to the surface rather than to an action: `415 UNSUPPORTED_CONTENT_TYPE`, for a
   `Content-Type` beginning `multipart/`, which `cp-audit-filter-springboot` hands down the chain
   without publishing either of its events. It is refused by `OperationsActionFilter` ahead of both

@@ -110,6 +110,23 @@ public enum OperationsReason {
     DOWNSTREAM_UNAVAILABLE("DOWNSTREAM_UNAVAILABLE"),
 
     /**
+     * A failure this service did not classify, which is the only thing a {@code 500} may be.
+     *
+     * <p>The bounded code an unclassified defect is answered under, so that what came of the call
+     * is on the wire, in the log and on the audit event rather than left to the container. A
+     * {@code 500} this service can explain is a 409, a 503 or a 502 it failed to classify
+     * (FR-023): this one is deliberately the code for what nobody could explain, and one appearing
+     * on a dashboard is a defect to be classified rather than a refusal to be read.
+     *
+     * <p>It exists because the audit trail needs it. {@code AuditFilter.doFilterInternal} has no
+     * {@code try}/{@code finally} around the chain, so an exception that leaves the dispatcher
+     * leaves a request event with no response event beside it and no counter moved - FR-046 says
+     * the event carries the outcome, and an outcome nobody wrote down is the silence this service
+     * exists to end.
+     */
+    UNEXPECTED("UNEXPECTED"),
+
+    /**
      * A body in a format no endpoint on this surface takes, refused before anything reads it.
      *
      * <p>Not a nicety about content negotiation. {@code cp-audit-filter-springboot} 1.0.5 hands a
