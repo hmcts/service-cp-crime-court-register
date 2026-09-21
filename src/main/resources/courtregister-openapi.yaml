@@ -432,7 +432,7 @@ components:
           description: >-
             On a 400 about one argument: this service's own name for it, never the value that was
             sent.
-          enum: [date, batchId, recordedBefore, sharedBefore, since]
+          enum: [date, batchId, recordedBefore, sharedBefore, since, ignoreFlag]
         batchId:
           type: string
           format: uuid
@@ -457,6 +457,20 @@ components:
         deferred:
           type: integer
           format: int32
+        accepted:
+          type: integer
+          format: int32
+          description: >-
+            On a notify that tried and could not finish (claim-lost, incomplete): how many
+            recipients had been accepted when it stopped.
+        failed:
+          type: integer
+          format: int32
+          description: The other half of that tally.
+        state:
+          allOf:
+            - $ref: "#/components/schemas/BatchStatus"
+          description: The batch as it stood when the notify stopped.
         delivered:
           type: object
           additionalProperties:

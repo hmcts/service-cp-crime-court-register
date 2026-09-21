@@ -25,9 +25,10 @@ R5) in the same shape but without passing the advice.
 | `status` | int | |
 | `title` | string | A fixed phrase per status, from a closed set |
 | `reason` | string | **The** bounded code. What a runbook greps for |
-| `argument` | string? | On a `400` over one argument: this service's own name for it (`date`, `batchId`, `recordedBefore`, `sharedBefore`, `since`), never the value |
+| `argument` | string? | On a `400` over one argument: this service's own name for it (`date`, `batchId`, `recordedBefore`, `sharedBefore`, `since`, `ignoreFlag`), never the value |
 | `batchId` / `runId` / `date` | string? | Identifiers, where the refusal is about one |
 | `released` / `registers` / `batches` / `requested` / `deferred` | int? | Only on a `500` that follows partly-done work: the partial tally, because "the day stands as whatever this run had already written down" |
+| `accepted` / `failed` / `state` | int?, int?, string? | The notify tally, on the two dispositions that tried and could not finish (`claim-lost`, `incomplete`) and on `already-notifying` — the same reason the partial tally above exists |
 
 `detail` is **never** populated from an exception message, a store's words or a far end's words.
 

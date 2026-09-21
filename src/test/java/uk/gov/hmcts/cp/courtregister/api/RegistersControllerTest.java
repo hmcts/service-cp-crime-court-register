@@ -278,6 +278,19 @@ class RegistersControllerTest {
         }
 
         @Test
+        @DisplayName("no body at all is refused exactly as an empty one is, and defaults nothing")
+        void no_body_at_all_should_be_refused_the_same_way() throws Exception {
+            when(supersession.supersede(eq(null), anyBoolean())).thenThrow(
+                    new OperationsRefusedException(OperationsReason.MISSING_ARGUMENT,
+                            "sharedBefore", null));
+
+            mvc.perform(post(SUPERSEDE))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("missing-argument"))
+                    .andExpect(jsonPath("$.argument").value("sharedBefore"));
+        }
+
+        @Test
         @DisplayName("an instant that will not read is a 400 naming the argument, not the value")
         void an_unreadable_instant_should_not_be_echoed() throws Exception {
             final String answered = mvc.perform(post(SUPERSEDE)

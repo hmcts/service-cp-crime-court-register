@@ -221,6 +221,35 @@ class OpenApiContractTest {
     }
 
     /**
+     * The argument names the document says a {@code 400} may be about, as one set.
+     *
+     * @return the {@code argument} property's enumeration
+     */
+    @SuppressWarnings("unchecked")
+    private static Set<String> documentedArguments() {
+        final Map<String, Object> schemas =
+                (Map<String, Object>) components().get("schemas");
+        final Map<String, Object> problem = (Map<String, Object>) schemas.get("ProblemDetail");
+        final Map<String, Object> properties =
+                (Map<String, Object>) problem.get("properties");
+        final Map<String, Object> argument = (Map<String, Object>) properties.get("argument");
+        return new LinkedHashSet<>((List<String>) argument.get("enum"));
+    }
+
+    /**
+     * The fields the document says a refusal may carry, as one set.
+     *
+     * @return the {@code ProblemDetail} schema's declared property names
+     */
+    @SuppressWarnings("unchecked")
+    private static Set<String> documentedProblemFields() {
+        final Map<String, Object> schemas =
+                (Map<String, Object>) components().get("schemas");
+        final Map<String, Object> problem = (Map<String, Object>) schemas.get("ProblemDetail");
+        return new LinkedHashSet<>(((Map<String, Object>) problem.get("properties")).keySet());
+    }
+
+    /**
      * That the contract and the controllers describe the same seven endpoints.
      */
     @Nested
@@ -308,6 +337,36 @@ class OpenApiContractTest {
                     .as("a runbook greps these, and a code a caller can be answered with that the "
                             + "contract does not name is a code nobody can have written a step for")
                     .containsAll(emitted);
+        }
+
+        @Test
+        void every_field_a_refusal_can_carry_should_be_declared_on_the_problem_schema() {
+            softly.assertThat(documentedProblemFields())
+                    .as("a property a caller is answered with that the contract does not declare "
+                            + "is a property no generated client can read and no runbook step can "
+                            + "have been written for. The set is closed: it is every key "
+                            + "OperationsProblem writes itself (argument, and the reason and "
+                            + "status every refusal carries), every key a controller composes onto "
+                            + "an OperationsRefusedException (batchId, accepted, failed, state, "
+                            + "delivered) and every key the regeneration's partial tally carries "
+                            + "(date, released, registers, batches, requested, deferred), plus "
+                            + "runId. Adding one to a refusal means adding it here and to "
+                            + "data-model.md in the same commit")
+                    .containsExactlyInAnyOrder("type", "title", "status", "instance", "reason",
+                            "argument", "batchId", "runId", "date", "released", "registers",
+                            "batches", "requested", "deferred", "accepted", "failed", "state",
+                            "delivered");
+        }
+
+        @Test
+        void the_argument_enum_should_name_every_argument_a_refusal_can_be_about() {
+            softly.assertThat(documentedArguments())
+                    .as("a 400 names the argument and never the value (FR-025), so the closed set "
+                            + "of names is part of the contract - including the override's, which "
+                            + "OperationsRunLauncher refuses OVERRIDE_REQUIRES_BATCH by")
+                    .contains(OperationsRunLauncher.IGNORE_FLAG)
+                    .containsExactlyInAnyOrder("date", "batchId", "recordedBefore", "sharedBefore",
+                            "since", OperationsRunLauncher.IGNORE_FLAG);
         }
 
         @Test
