@@ -2,12 +2,17 @@ package uk.gov.hmcts.cp.courtregister.config;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.concurrent.Executor;
+import net.javacrumbs.shedlock.core.LockProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.Ordered;
+import org.springframework.scheduling.TaskScheduler;
 import uk.gov.hmcts.cp.courtregister.api.OperationsActionFilter;
 import uk.gov.hmcts.cp.courtregister.api.OperationsErrorAttributes;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
@@ -15,8 +20,13 @@ import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
 import uk.gov.hmcts.cp.courtregister.application.ExceptionReportSink;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.OnDemandExceptionReportService;
+import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher;
 import uk.gov.hmcts.cp.courtregister.application.OperationsSupersessionService;
+import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
+import uk.gov.hmcts.cp.courtregister.application.RegisterRegenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
+import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterBatchRepository;
 import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 
@@ -61,6 +71,14 @@ public class OperationsWebConfig {
     private static final String ON = "true";
 
     /**
+     * The profile the store, its repositories and the generating adapters are declared away from.
+     *
+     * <p>A constant because four beans here carry it and the {@code test} profile deliberately has
+     * no database: a service over readers that do not exist is a context that will not refresh.
+     */
+    private static final String NOT_TEST = "!test";
+
+    /**
      * Registers the action filter first in the chain, for every request.
      *
      * <p>Mapped over everything rather than over {@code /operations/*}: the filter passes an
@@ -97,7 +115,7 @@ public class OperationsWebConfig {
     /**
      * The two listings, over the three reads they are built from.
      *
-     * <p>{@code @Profile("!test")} for the reason the store and its two repositories carry it in
+     * <p>{@code @Profile(NOT_TEST)} for the reason the store and its two repositories carry it in
      * {@code ProcessedLogConfig}: that profile deliberately has no database, and a listing over
      * readers that do not exist is a context that will not refresh. The condition is stated here
      * rather than taken from there because this increment does not touch that file.
@@ -109,7 +127,7 @@ public class OperationsWebConfig {
      * @return the listings the two read endpoints call
      */
     @Bean
-    @Profile("!test")
+    @Profile(NOT_TEST)
     @ConditionalOnProperty(prefix = OPERATIONS, name = ENABLED,
             havingValue = ON, matchIfMissing = true)
     public BatchListingService batchListingService(final RegisterBatchRepository batchRepository,
@@ -142,7 +160,7 @@ public class OperationsWebConfig {
      * @return the on-demand report
      */
     @Bean
-    @Profile("!test")
+    @Profile(NOT_TEST)
     @ConditionalOnProperty(prefix = OPERATIONS, name = ENABLED,
             havingValue = ON, matchIfMissing = true)
     public OnDemandExceptionReportService onDemandExceptionReportService(
@@ -169,7 +187,7 @@ public class OperationsWebConfig {
      * @return the rollback
      */
     @Bean
-    @Profile("!test")
+    @Profile(NOT_TEST)
     @ConditionalOnProperty(prefix = OPERATIONS, name = ENABLED,
             havingValue = ON, matchIfMissing = true)
     public OperationsSupersessionService operationsSupersessionService(
@@ -178,5 +196,88 @@ public class OperationsWebConfig {
 
         return new OperationsSupersessionService(registers, flag, operations.supersedeMaxAge(),
                 clock);
+    }
+
+    /**
+     * The two services an operations call needs the <strong>generation</strong> half for.
+     *
+     * <p>A nested configuration rather than two more bean methods above, because the condition is
+     * a different one: {@code courtregister.generation.enabled} decides whether this pod holds a
+     * flag gate, an assembler and a requesting leg at all, and a bean over collaborators that are
+     * not contributed is a context that will not refresh. A pod without them answers the two
+     * endpoints {@code 501 command-not-wired} through {@code api/NotWiredController} instead,
+     * which is exactly what the command they replace answered there.
+     *
+     * <p>{@code NotCliMode} beside it for the reason {@code SchedulingConfig} carries it: the
+     * generation scheduler this launcher submits to is not built in a JVM started to run one
+     * command, and a launcher over an executor that does not exist is the same refresh failure.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @Profile(NOT_TEST)
+    @Conditional(CliModeConfig.NotCliMode.class)
+    @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled",
+            havingValue = "true")
+    public static class GenerationBackedOperations {
+
+        /**
+         * The regeneration, over the three collaborators a generation needs.
+         *
+         * <p>The run deadline is handed in as a value rather than as {@link GenerationProperties}
+         * itself, exactly as the report's limits are: the application layer takes a duration, not
+         * the shape of a configuration file.
+         *
+         * @param registers  where the day's batches are read, released and stamped
+         * @param assembler  the grouping into one batch per court centre and register date
+         * @param generation the requesting leg, asked once per batch
+         * @param settings   the generation settings, for the run deadline
+         * @param clock      this pod's reading of now
+         * @return the regeneration the background run makes
+         */
+        @Bean
+        @ConditionalOnProperty(prefix = OPERATIONS, name = ENABLED,
+                havingValue = ON, matchIfMissing = true)
+        public RegisterRegenerationService registerRegenerationService(
+                final RegisterStore registers, final BatchAssembler assembler,
+                final RegisterGenerationService generation, final GenerationProperties settings,
+                final Clock clock) {
+
+            return new RegisterRegenerationService(registers, assembler, generation,
+                    settings.runDeadline(), clock);
+        }
+
+        /**
+         * The {@code 202} hand-off, over the schedule's own lock and the schedule's own thread.
+         *
+         * <p>The executor is the generation scheduler's, taken by the name
+         * {@link SchedulingConfig#GENERATION_SCHEDULER} publishes: a regeneration and a scheduled
+         * run then cannot interleave on one pod even before the lock is considered (research R16).
+         * It is adapted to a plain {@link Executor} here rather than reaching the application
+         * layer as a Spring type, and the instant it is scheduled at is the scheduler's own
+         * reading of now, which is immediately.
+         *
+         * @param regeneration the regeneration the background run makes
+         * @param gate         the one lever's gate, read once per run and uncached
+         * @param locks        the schedule's own lock provider
+         * @param generation   the generation settings, for how long the lock is held at most
+         * @param operations   the operations settings, for how long the run waits for the lock
+         * @param scheduler    the generation scheduler, which is where the work happens
+         * @param clock        this pod's reading of now
+         * @return the launcher the generate endpoint calls
+         */
+        @Bean
+        @ConditionalOnProperty(prefix = OPERATIONS, name = ENABLED,
+                havingValue = ON, matchIfMissing = true)
+        public OperationsRunLauncher operationsRunLauncher(
+                final RegisterRegenerationService regeneration, final FeatureFlagGate gate,
+                final LockProvider locks, final GenerationProperties generation,
+                final OperationsProperties operations,
+                @Qualifier(SchedulingConfig.GENERATION_SCHEDULER) final TaskScheduler scheduler,
+                final Clock clock) {
+
+            final Executor onTheGenerationThread =
+                    work -> scheduler.schedule(work, scheduler.getClock().instant());
+            return new OperationsRunLauncher(regeneration, gate, locks, generation.lockAtMostFor(),
+                    operations.lockWait(), onTheGenerationThread, clock);
+        }
     }
 }

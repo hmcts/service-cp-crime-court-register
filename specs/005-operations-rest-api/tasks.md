@@ -815,7 +815,7 @@ departure is forced — research R16 has the reasoning.
       A run that stops leaves through `OperationsRefusedException(GENERATION_FAILED)` carrying the
       counts it had reached, which is "the day stands as whatever this run had already written
       down" as a bounded extras map rather than as a printed line.)
-- [ ] **T032** [P] [US3] `application/OperationsRunLauncherTest` (new) — **the lock is taken, not
+- [x] **T032** [P] [US3] `application/OperationsRunLauncherTest` (new) — **the lock is taken, not
       asked about** (research R12). With a `LockProvider` mock: the run id is minted and recorded
       **before** the work is submitted (ids before calls); the launcher attempts the lock with the
       register-generation lock name and a non-blocking configuration; an empty `Optional` → the work
@@ -823,10 +823,38 @@ departure is forced — research R16 has the reasoning.
       runs and the lock is released in a `finally`, including when the work throws; the work is
       submitted to the generation scheduler's executor and not run on the calling thread. Seam:
       `application/OperationsRunLauncher`. Red: the work runs without a lock.
-- [ ] **T033** [US3] `application/OperationsRunLauncher` — the `202` hand-off: validate, read the
+- [x] **T033** [US3] `application/OperationsRunLauncher` — the `202` hand-off: validate, read the
       flag through `FeatureFlagGate`, mint and record the run id, submit to the generation
       executor, and inside the submitted task take `LockProvider.lock(...)` for
       `RegisterGenerationJob.LOCK_NAME`, run `RegisterRegenerationService`, release. Green: T032.
+      (Landed with T032 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. Green: `OperationsRunLauncherTest` 12 tests, 0 failures; `HttpSurfaceTest` 11 tests,
+      0 failures beside it, which is where the new wiring is proven over the real scan. Checkstyle
+      and PMD clean on main and test; one PMD finding was fixed rather than suppressed, the fourth
+      `"!test"` in `OperationsWebConfig` becoming a named constant.
+      Four things the task's sentence does not spell out and the code had to decide:
+      **the override's cross-field rule is validated here**, first, before the flag is read - an
+      `ignoreFlag` without a `batchId` is `400 OVERRIDE_REQUIRES_BATCH` and reads nothing, because
+      a break-glass over a whole register date is not the break-glass `--ignore-flag` was;
+      **the bounded wait is measured on elapsed time, not on the injected clock** - the clock a run
+      is correlated by may be a fixed one, and a budget nothing advances is a budget that never
+      runs out - with `LockSupport.parkNanos` rather than a sleep, so the zero default makes
+      exactly one non-blocking attempt and never parks;
+      **the background task is a settlement boundary**: a throwable leaving it would go into a
+      `Future` nobody reads, so every ending is classified and written down under a bounded code -
+      the refusal's own, or `generation-failed` with the defect named by class - and the lock is
+      given back in a `finally` either way;
+      **the run id is the launcher's own field, not `RunCorrelation`'s** - that class mints its own
+      and has no "under this id" form, and adding one would be an edit to `batch/` this increment
+      does not need. Every line the launcher writes carries `run_id=` explicitly, which is what the
+      caller was answered with.
+      The two beans are contributed by a nested `OperationsWebConfig.GenerationBackedOperations`,
+      conditional on `courtregister.generation.enabled` and on not-CLI-mode: the executor is the
+      generation scheduler taken by `SchedulingConfig.GENERATION_SCHEDULER` and adapted to a plain
+      `Executor`, so no Spring scheduling type reaches the application layer.
+      ⚠ **The operator trigger is not on the run report line yet.** T036/T037 add the field and run
+      after the 004 rebase; a `TODO` in `OperationsRunLauncher.run` names T037, and until then the
+      trigger and the override are on the launcher's own line.)
 - [ ] **T034** [P] [US3] `api/BatchesControllerTest` (extend) — the generate slice cases of
       data-model §4: `202` with the run id and `overridden`; `400 missing-argument` for an absent
       date; `400 unreadable-argument` for each of `date`, `batchId`, `recordedBefore`, naming the
