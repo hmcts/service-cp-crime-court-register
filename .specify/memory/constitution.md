@@ -1,6 +1,53 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 5.0.1 → 5.0.2
+Bump rationale: PATCH - the architecture section is re-pointed at the mechanism
+                increment 004 shipped (2026-09-21). No principle's wording
+                changes and no obligation is added, removed or relaxed: what
+                was wrong was a description of how a batch nothing was learned
+                about ends.
+
+                004 "release-stale-batches" replaced the grace-period
+                reconciler and its systemdocgenerator query with a **release
+                pass**: the 18:00 run's first act fails every PENDING or
+                GENERATING batch past its cutoff `NOT_COMPLETED_BY_NEXT_RUN`
+                and releases its rows into that same run's batches, one fenced
+                statement per batch. `GenerationReconciler`, the grace period,
+                the document query and `GENERATION_TIMED_OUT` are all gone with
+                it. The Architecture section still described them, which is the
+                kind of stale sentence a reader takes as permission to build
+                against a class that is not there.
+
+                Re-pointed here: the **Events** bullet (the outcome a batch
+                reaches when neither public event arrives), the **002** entry's
+                description of the listener it shipped, and a new **004** entry
+                in the Increments list. The prior amendments' Sync Impact
+                narratives (3.1.0 and 3.2.0, which name the reconciler and its
+                `runId`) are deliberately left as they are: they record what
+                was true at the version they announce, and editing them would
+                make the register say something that was not.
+
+Proposed in: the increment-004 hand-off, carried out from
+specs/005-operations-rest-api at the merge of 004 into this branch. Pinned by
+`batch/StaleBatchReleaserTest`, `persistence/StaleReleaseConcurrencyIT` and
+`domain/BatchFailureReasonTest`, which are 004's own.
+
+Modified sections (this amendment): Architecture - the Events bullet;
+Increments - the 002 entry's closing clause and a new 004 entry. Principles I
+to VIII untouched.
+
+Templates / guidance reviewed:
+  - .claude/rules/design_rules.md            ✅ already 004's at this merge -
+      the flow diagram, the batch state machine and the failure-reason list all
+      name the release pass.
+  - CLAUDE.md                                ✅ UPDATED at the merge - 004
+      listed among the completed increments.
+  - .claude/rules/{workflow,technical-rules}.md, .claude/agents/*.md,
+    .specify/templates/*                     ✅ compatible - none of them names
+      the reconciler.
+
+Previous amendment (5.0.0 → 5.0.1):
 Version change: 5.0.0 → 5.0.1
 Bump rationale: PATCH - clarification (2026-09-20). 5.0.0 said conditions (a)
                 and (b) are carried "by the defaults above and nothing else",
@@ -1149,9 +1196,10 @@ them read it the same way they read everything else.
 - **Events**: a durable JMS subscription to the Artemis `public.event` topic
   with a `CPPNAME` selector for `document-available` / `generation-failed`,
   filtered on the service's own `originatingSource`, correlated on
-  `sourceCorrelationId`. A batch still GENERATING after the grace period is
-  reconciled once through the SDG query API and otherwise fails
-  `GENERATION_TIMED_OUT`. Both paths write the outcome through one code path.
+  `sourceCorrelationId`. A batch that neither event reaches is not guessed at:
+  the next run's **release pass** is its first act, failing every PENDING or
+  GENERATING batch past its cutoff `NOT_COMPLETED_BY_NEXT_RUN` and releasing
+  its rows into that run's batches, one fenced statement per batch.
 - **Notification**: one `send-email-notification` (202 only) per distinct
   recipient in the de-duplicated union of the batch's records' recipients,
   `fileId = documentFileServiceId`, `personalisation.yotsName`; per-recipient
@@ -1214,7 +1262,8 @@ them read it the same way they read everything else.
   `DefendantTypeResolver` and `PdfPayloadMapper` ported Java→Java from
   progression with goldens recorded from progression's classes; the
   file-service, systemdocgenerator, notificationnotify and App Configuration
-  adapters; the `public.event` listener with the query-API reconciler; the
+  adapters; the `public.event` listener with the grace-period reconciler it
+  shipped with, since replaced by 004's release pass; the
   operations CLI; the progression-leg defects appended to the register as
   `P1`–`P9` (six FIXED, two RETIRED, one MOOT). Every phase is built
   test-first under Principle II; every fix lands with its DEFECT-FIXES row
@@ -1236,6 +1285,19 @@ them read it the same way they read everything else.
   built, and a new capability is not a deviation from one (Principle I). The
   e-mail output ships switched off in every environment until the
   notificationnotify team provides the template it is sent under.
+- **004 "release-stale-batches" — complete.** The grace-period reconciler and
+  its systemdocgenerator document query are removed, and what replaces them is
+  the 18:00 run's **first act**: every PENDING or GENERATING batch past its
+  cutoff is failed `NOT_COMPLETED_BY_NEXT_RUN` and its registers released into
+  that same run's batches, one fenced statement per batch so that two replicas
+  cannot both release one. `GENERATION_TIMED_OUT` goes with the mechanism that
+  produced it; `BatchAgeSweep` publishes the three in-flight batch ages the
+  pass leaves with no other reader, because a Micrometer gauge never decays and
+  a reading nobody refreshes goes on looking live; and the run line gains
+  `released_batches`, `released_registers` and `contended`. A batch nothing was
+  learned about still has nothing invented about it - it is failed through the
+  store rather than through the sink. **No `doc/DEFECT-FIXES.md` row is added
+  or amended.**
 - **005 "operations-rest-api" — current.** The six operations commands become
   seven `/operations/**` endpoints and the CLI is removed. The REST layer is an
   inbound adapter in `uk.gov.hmcts.cp.courtregister.api` that calls the same
@@ -1331,4 +1393,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 5.0.1 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-20
+**Version**: 5.0.2 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-21
