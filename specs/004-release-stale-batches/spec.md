@@ -228,7 +228,10 @@ still stamped, and the assembler passed its court centre day over as it does tod
    existing in-flight rule and appears in the run report's deferred counts, exactly as today.
 3. **Given** a batch exactly at the minimum age, **When** the run starts, **Then** the boundary is
    decided once and stated: a batch is stale when it has been in flight for **at least** the minimum
-   age, and the age is measured against the store's own clock rather than a pod's.
+   age, and the two cutoffs are computed once per pass, from the run's own clock, so that every
+   batch in one pass is judged against the same moment (amended 2026-09-21: the clause read "the
+   store's own clock rather than a pod's", which the plan, the statement and the boundary test never
+   implemented — the cutoffs are instants the pass passes in, not a `now()` the statement takes).
 4. **Given** a batch in GENERATED that has a document but has not been notified, **When** the run
    starts, **Then** it is not touched by this pass at any age: it holds a document somebody is owed
    e-mails about, and failing it would throw that document away.
