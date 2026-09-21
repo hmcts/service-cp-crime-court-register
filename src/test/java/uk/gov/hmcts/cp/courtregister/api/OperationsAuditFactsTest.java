@@ -309,6 +309,31 @@ class OperationsAuditFactsTest {
         }
 
         @Test
+        void a_publish_on_a_thread_serving_no_operations_call_should_refuse_nothing() {
+            OperationsAuditFacts.clear();
+
+            final List<String> lines;
+            try (CapturedLog log = CapturedLog.capturing(OperationsAuditService.class)) {
+                assertThatCode(() -> service.postMessageToArtemis(anEvent(null)))
+                        .as("there is no open operations call to refuse: this bean is built "
+                                + "wherever the audit transport is, and the filter that opens the "
+                                + "facts only where the operations surface is served too. A "
+                                + "refusal raised here would leave the audit filter with nothing "
+                                + "above it to render it, after the response was committed")
+                        .doesNotThrowAnyException();
+                lines = log.renderings();
+            }
+
+            softly.assertThat(lines)
+                    .as("not silent either: the shortfall is said and counted, which is the "
+                            + "answer for every event nothing can be refused about")
+                    .anyMatch(line -> line.contains(UncategorizedJmsException.class.getName()));
+            softly.assertThat(registry.get("courtregister_operations_audit_unpublished")
+                            .counter().count())
+                    .isEqualTo(1.0d);
+        }
+
+        @Test
         void a_response_event_that_cannot_be_published_should_not_change_the_answer() {
             facts.regeneration(false, RUN_ID);
             // The first publish is the request event; it refuses, and the second is the response

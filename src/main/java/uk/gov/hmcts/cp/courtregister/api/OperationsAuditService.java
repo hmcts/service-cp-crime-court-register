@@ -29,7 +29,9 @@ import uk.gov.hmcts.cp.filter.audit.service.AuditService;
  * <p>The starter registers its bean {@code @ConditionalOnMissingBean(AuditService.class)}
  * (research R10), so a subclass contributed here takes its place and the filter uses it unchanged.
  *
- * <p><strong>The request event is a precondition and the response event is not.</strong> The filter
+ * <p><strong>The request event is a precondition and the response event is not</strong> - on a
+ * thread that is serving an operations call, which is the only kind there is anything to refuse
+ * on. The filter
  * publishes the request event before the chain, so a failure there can still refuse the call:
  * {@link OperationsReason#AUDIT_UNAVAILABLE}, a {@code 503}, and the application service is never
  * reached. The response event is published after the action has happened, and no status can be
@@ -102,7 +104,11 @@ public class OperationsAuditService extends AuditService {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public void postMessageToArtemis(final AuditPayload payload) {
         final OperationsAuditFacts facts = OperationsAuditFacts.current();
-        final boolean requestEvent = facts == null || facts.firstPublish();
+        // No open facts means no open operations call: this bean is built wherever the audit
+        // transport is, and OperationsActionFilter - which opens them - only where the operations
+        // surface is served as well. There is then nothing to refuse and nowhere to render a
+        // refusal, so such an event takes the answer a response event takes: counted, and said.
+        final boolean requestEvent = facts != null && facts.firstPublish();
         if (payload == null || payload.content() == null) {
             // An event the library's own builder did not produce, or produced without the node the
             // bounded facts are written onto. Either way this call is not audited, and an
