@@ -145,7 +145,8 @@ class CliModeConfigTest {
      * assertion stays "exactly these and nothing else" for the reason the field above gives.
      */
     private static final List<String> OPERATIONS_CONTROLLERS =
-            List.of("flagController", "batchesController", "registersController");
+            List.of("flagController", "batchesController", "registersController",
+                    "exceptionReportsController");
 
     /**
      * Whatever this context has scheduled, which is nothing at all where no scheduling
