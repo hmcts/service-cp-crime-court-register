@@ -57,6 +57,15 @@ public class StaleBatchReleaser {
     /** A pass that was told about no batch at all, which is not the same as a quiet night. */
     private static final ReleaseTally NOTHING = new ReleaseTally(0, 0, 0);
 
+    /**
+     * What a caller that keeps no account of the pass is given, so both forms share one body.
+     *
+     * <p>Named rather than inlined for the same reason {@code StaleReleaseProgress.NONE} is: the
+     * two entry points have to be one pass, and a caller reading either should be able to see that
+     * the only difference between them is whether anybody wanted to be told.
+     */
+    private static final Consumer<ReleaseTally> NO_ACCOUNT = tally -> {};
+
     /** The store, asked once per run for the fenced release of every stale batch. */
     private final RegisterStore store;
 
@@ -109,7 +118,7 @@ public class StaleBatchReleaser {
      * @return what the pass released and what it could not release
      */
     public ReleaseTally releaseStale() {
-        return releaseStale(tally -> { });
+        return releaseStale(NO_ACCOUNT);
     }
 
     /**
@@ -127,25 +136,32 @@ public class StaleBatchReleaser {
      * @return what the pass released and what it could not release
      */
     public ReleaseTally releaseStale(final Consumer<ReleaseTally> account) {
-        return RunCorrelation.under(this::release);
+        return RunCorrelation.under(() -> release(account));
     }
 
     /**
      * The pass itself, under whatever correlation {@link #releaseStale()} settled on.
      *
+     * <p>The caller's account is told in the same {@code finally} the counters and the pass's own
+     * line are written from, and before the throw that ended the pass leaves: everything said
+     * about a pass is said about the part of it that committed, and there is one place that
+     * decides what that part was.
+     *
+     * @param account told what this pass committed, however it ended
      * @return what the pass released and what it could not release
      */
-    private ReleaseTally release() {
+    private ReleaseTally release(final Consumer<ReleaseTally> account) {
         final Instant now = clock.instant();
-        final Account account = new Account();
+        final Account ledger = new Account();
         boolean reachedTheEnd = false;
         try {
-            store.failAndReleaseStale(now.minus(staleAfter), now.minus(manualGrace()), account);
+            store.failAndReleaseStale(now.minus(staleAfter), now.minus(manualGrace()), ledger);
             reachedTheEnd = true;
         } finally {
-            publish(account.tally(), reachedTheEnd);
+            account.accept(ledger.tally());
+            publish(ledger.tally(), reachedTheEnd);
         }
-        return account.tally();
+        return ledger.tally();
     }
 
     /**
