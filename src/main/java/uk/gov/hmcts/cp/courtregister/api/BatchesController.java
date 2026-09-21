@@ -137,9 +137,9 @@ public class BatchesController {
      *
      * @param batchId the batch an operator carried in from a support ticket
      * @return the tally as the batch now stands, and what this call did about it
-     * @throws OperationsRefusedException where the identifier will not read, names no batch, or
-     *         the resend did not settle - all answered by {@link OperationsExceptionHandler} from
-     *         the one status map
+     * @throws OperationsRefusedException where the identifier will not read, or the resend did
+     *         not settle - all answered by {@link OperationsExceptionHandler} from the one status
+     *         map
      */
     @PostMapping(path = "/operations/batches/{batchId}/notify",
             produces = MediaType.APPLICATION_JSON_VALUE)
@@ -167,9 +167,13 @@ public class BatchesController {
      * The resend, with the three things that are not this service's defect classified apart.
      *
      * <p>The command caught all of them as one {@code RuntimeException} and printed
-     * {@code resend-failed}; HTTP has truer codes and an operator acts on the difference - a batch
-     * that does not exist is a wrong identifier on a ticket, a store that will not answer is an
-     * outage to wait out, and a far end that refused is somebody else's incident.
+     * {@code resend-failed}; HTTP has truer codes and an operator acts on the difference - a store
+     * that will not answer is an outage to wait out, and a far end that refused is somebody
+     * else's incident. What is <strong>not</strong> classified apart is the notifier's
+     * {@code IllegalStateException}: it is raised for a batch that does not exist and for two
+     * endings of a batch that does, and a {@code 404} over the wrong one of the three is a worse
+     * answer than the command's, so all three keep {@code resend-failed} until the notifier
+     * distinguishes them by type.
      *
      * @param batchId the batch to resend for
      * @return the tally the notifier answered with
@@ -194,14 +198,20 @@ public class BatchesController {
                     + "it. classification={}", batchId, refused.classification().name());
             throw new OperationsRefusedException(downstream(refused), null,
                     Map.of(BATCH_ID, batchId.toString()), refused);
-        } catch (IllegalStateException noSuchBatch) {
-            // The notifier's own answer to an identity nothing was ever assembled under: the claim
-            // came back ABSENT. A well-formed identifier that names nothing is a 404 and not a
-            // failure of this service.
-            LOG.warn("A resend was asked for a batch this service never assembled. reason={}",
-                    OperationsReason.UNKNOWN_BATCH.wire());
-            throw new OperationsRefusedException(OperationsReason.UNKNOWN_BATCH, null,
-                    Map.of(BATCH_ID, batchId.toString()), noSuchBatch);
+        } catch (IllegalStateException notMade) {
+            // The notifier raises this type for three different endings, and a controller cannot
+            // tell them apart: an identity nothing was ever assembled under, a batch that exists
+            // and carries no document because it was never generated, and a notification row the
+            // store refused and then holds none for. Only the first is a 404, and answering all
+            // three that way sends an operator to check an identifier that is right - so all three
+            // are the command's own resend-failed until the notifier names the first apart by
+            // type. See the note on T039: it is a one-line change in a file this increment may
+            // call and may not edit.
+            LOG.error("Batch {}'s resend was not made, because the notifier would not finish it. "
+                    + "reason={} cause={}", batchId, OperationsReason.RESEND_FAILED.wire(),
+                    notMade.getClass().getName());
+            throw new OperationsRefusedException(OperationsReason.RESEND_FAILED, null,
+                    Map.of(BATCH_ID, batchId.toString()), notMade);
         }
     }
 

@@ -922,14 +922,23 @@ of them.
       `HttpSurfaceTest` beside it, green. Checkstyle and PMD clean on main and test.
       **The distinction is made in the controller, not in the application service, and the reason
       is the coordination contract.** `application/RegisterNotifierService` is a file this tree may
-      call and must not edit, and it already signals the two apart by type: an identity nothing was
-      assembled under comes back as the `IllegalStateException` its `noSuchBatch` raises when the
-      claim answers `ABSENT`, and an outage arrives as `StoreUnavailableException` or as one of the
-      three Spring shapes a driver that never reached the database wears. The controller catches
-      exactly those - the same four the listing catches, for the same stated reason - and maps them
-      to `404 UNKNOWN_BATCH` and `503 STORE_UNAVAILABLE`. Moving the classification into the
-      service is a one-line change and is left for whoever owns that file next; it is recorded here
-      rather than made quietly.
+      call and must not edit. An outage arrives as `StoreUnavailableException` or as one of the
+      three Spring shapes a driver that never reached the database wears, and the controller
+      catches exactly those - the same four the listing catches, for the same stated reason - and
+      maps them to `503 STORE_UNAVAILABLE`.
+      **`404 UNKNOWN_BATCH` is not answered, and gate round 1 is why.** The notifier raises a bare
+      `IllegalStateException` for three different endings: `noSuchBatch` (the claim answered
+      `ABSENT`), `documentOf` (a batch that exists and carries no document, reachable for any
+      `FAILED` or `PENDING` batch with recipients, since the claim guards no status) and
+      `rowThatWon` (a notification row the store refused and then holds none for). Only the first
+      is a `404`, the type does not say which is which, and a `404` over either of the others sends
+      an operator to check an identifier that is right - so all three keep the command's own
+      `500 resend-failed`, pinned by
+      `a_batch_that_carries_no_document_should_not_be_answered_as_no_such_batch`. The `404` of
+      data-model §5 returns when `RegisterNotifierService.noSuchBatch` raises a typed exception the
+      controller can catch alone: a one-line change in that file, left for whoever owns it next,
+      recorded here rather than made quietly. `UNKNOWN_BATCH` keeps its row in the status map
+      meanwhile, so the map stays closed and the code is there to be raised.
       `NotificationFailedException` is mapped too, `502` on a refusal and `504` on a silence, so a
       consumed platform contract's two different answers stay two. It cannot escape `resendFailed`
       today - the notifier catches it per row - and the mapping is what keeps that true by

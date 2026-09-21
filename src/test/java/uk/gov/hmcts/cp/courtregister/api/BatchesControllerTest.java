@@ -470,9 +470,12 @@ class BatchesControllerTest {
      *
      * <p>Every decision is {@code RegisterNotifierService}'s claim and its four dispositions, and
      * this asserts that the three that are not {@code SETTLED} are three different answers rather
-     * than one. It also asserts the distinction the command could not make: a well-formed
-     * identifier that names no batch is a {@code 404} and a store that will not answer is a
-     * {@code 503}, where the CLI caught both as one {@code RuntimeException}.
+     * than one. It also asserts the distinctions the command could not make - a store that will
+     * not answer is a {@code 503} and a far end that refused is a {@code 502}, where the CLI
+     * caught both as one {@code RuntimeException} - and the one that is deliberately <em>not</em>
+     * made: the notifier's {@code IllegalStateException} covers a batch that does not exist and
+     * two endings of a batch that does, so it keeps the command's {@code resend-failed} rather
+     * than telling an operator their identifier is wrong when it is right.
      */
     @Nested
     @DisplayName("the resend an operator asks for")
@@ -553,13 +556,34 @@ class BatchesControllerTest {
         }
 
         @Test
-        void a_batch_that_does_not_exist_should_be_refused_404() throws Exception {
+        void a_resend_the_notifier_would_not_make_should_answer_500_under_the_commands_code()
+                throws Exception {
             when(notifier.resendFailed(BATCH)).thenThrow(
                     new IllegalStateException("no register batch to tell the recipients of"));
 
             mvc.perform(post(NOTIFY))
-                    .andExpect(status().isNotFound())
-                    .andExpect(jsonPath("$.reason").value("UNKNOWN_BATCH"));
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason").value("resend-failed"));
+        }
+
+        @Test
+        void a_batch_that_carries_no_document_should_not_be_answered_as_no_such_batch()
+                throws Exception {
+            when(notifier.resendFailed(BATCH)).thenThrow(new IllegalStateException(
+                    "register batch " + BATCH + " stands at PENDING and carries no document, so "
+                            + "there is nothing to attach"));
+
+            final String body = mvc.perform(post(NOTIFY))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason").value("resend-failed"))
+                    .andReturn().getResponse().getContentAsString();
+
+            Assertions.assertThat(body)
+                    .as("a batch that exists and has not been generated is not a batch that does "
+                            + "not exist, and sending an operator to check an identifier that is "
+                            + "right is the one thing a bounded code must not do")
+                    .doesNotContain(OperationsReason.UNKNOWN_BATCH.wire())
+                    .doesNotContain("PENDING");
         }
 
         @Test
