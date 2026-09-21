@@ -1308,13 +1308,33 @@ not there to switch them off.
       fixed one*, because ShedLock computes `locked_until` from the instant the configuration
       carries: a fixed clock in the past writes a lock that is already expired and every contender
       walks straight through it, which is a green test over a lock that was never held.)
-- [ ] **T051** [P] [US4] `config/TelemetryPrivacyTest` (extend) and `support/PersonalDataMarkers` —
+- [x] **T051** [P] [US4] `config/TelemetryPrivacyTest` (extend) and `support/PersonalDataMarkers` —
       **the sweep now covers responses, not only log statements**. Cases: no controller response
       record and no `ProblemDetail` field can carry a personal-data marker; `detail` never carries
       a store's or an exception's message; the `CJSCPPUID` value appears in **no** log statement in
       `api/` (it belongs in the audit event, which is the one place the caller is named on purpose);
       no response carries an unmasked address. Red: whatever the sweep finds.
-- [ ] **T052** [US4] The fixes T051 finds. Green: T051.
+- [x] **T052** [US4] The fixes T051 finds. Green: T051.
+      (T051 and T052 landed in one commit. Green: `TelemetryPrivacyTest` 43 tests, 0 failures, of
+      which the new `TheOperationsSurface` is 5; Checkstyle and PMD clean on test after one finding
+      was fixed rather than suppressed.
+      **T052 changes no production code: the sweep found nothing.** That is the finding, and it is
+      worth having in the shape it has - every one of the five cases is about what an endpoint
+      *could* answer rather than what one did, which is the claim a sweep exists to make and the
+      one a case per endpoint cannot.
+      **What the five say.** Every field of every request and response record is a bounded type,
+      asserted against a **closed list** rather than against a list of forbidden ones: a response
+      record gaining a `CourtRegisterDocument`, a `RegisterRecord` or a `JsonNode` is how a
+      defendant reaches a caller, and only an allow-list catches the one nobody thought of. No
+      field of one is named after a person. `setDetail(` appears nowhere in `api/`, so the one
+      field of RFC 9457 that invites free text is never populated at all. The string `CJSCPPUID`
+      appears nowhere in `api/`, so no class there holds the value it could log - the caller is
+      named in the audit event and nowhere else (FR-038). And the masking rule has exactly one
+      home, in `BatchListingService`, because a second rule in the adapter is how the two come to
+      disagree and the weaker one ships.
+      `support/PersonalDataMarkers` is untouched: the markers it holds are for a value flowing
+      through a running pipeline, and these five are structural claims over the records and the
+      source. Adding a marker nothing populates would have been a fixture pretending to be a test.)
 
 ---
 

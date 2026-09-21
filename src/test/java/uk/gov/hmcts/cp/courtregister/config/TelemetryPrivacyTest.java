@@ -19,6 +19,7 @@ import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.RecordComponent;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -1264,6 +1265,175 @@ class TelemetryPrivacyTest {
                         .noneMatch(line -> line.contains(SECRET_MARKER));
             }
         });
+    }
+
+    // --- the surface an operator reads -----------------------------------------------------------
+
+    /**
+     * The sweep, extended past log statements to the one thing this service now writes to a caller.
+     *
+     * <p>Every other case in this suite is about a log line or a metric label. Since increment 005
+     * there is a third telemetry surface - an HTTP response - and Principle VII governs it exactly
+     * as it governs the other two: bounded codes, counts and identifiers, no defendant detail, no
+     * unmasked recipient address, no exception message and nothing the caller supplied (FR-025,
+     * FR-026).
+     *
+     * <p>Read off the source and off the records themselves rather than by driving a request. A
+     * case per endpoint proves what that endpoint answered for the inputs it was given; these
+     * prove what any endpoint <em>could</em> answer, which is the claim a sweep exists to make.
+     */
+    @Nested
+    @DisplayName("what an operations response may carry")
+    class TheOperationsSurface {
+
+        /** Where the response and request records live. */
+        private static final Path DTO = Path.of("src", "main", "java", "uk", "gov", "hmcts", "cp",
+                "courtregister", "api", "dto");
+
+        /** The inbound adapter itself: the controllers, the advice, the filter and the facts. */
+        private static final Path API = Path.of("src", "main", "java", "uk", "gov", "hmcts", "cp",
+                "courtregister", "api");
+
+        /**
+         * Every type a bounded field may be.
+         *
+         * <p>A closed list rather than a rule about what is forbidden, for the reason the reason
+         * codes are an enum: a response record gaining a {@code CourtRegisterDocument}, a
+         * {@code RegisterRecord} or a {@code JsonNode} is how a defendant reaches a caller, and
+         * the way to catch that is to say what is allowed rather than to guess at what is not.
+         */
+        private static final Set<Class<?>> BOUNDED = Set.of(
+                String.class, int.class, long.class, boolean.class, Integer.class, Long.class,
+                Boolean.class, UUID.class, LocalDate.class, java.time.Instant.class,
+                List.class, Map.class);
+
+        /**
+         * Field names that would be a person, whatever their type.
+         *
+         * <p>Matched as whole words against the component's name, lower-cased. {@code fileName} and
+         * {@code courtHouse} are not among them and must not be: the register's file name is a
+         * bounded composition of a date, an OU code and a hearing id, and a court house is a
+         * building.
+         */
+        private static final List<String> A_PERSON = List.of("defendant", "person", "guardian",
+                "dateofbirth", "nino", "ethnic", "statementoffacts", "firstname", "lastname",
+                "surname", "postcode");
+
+        /**
+         * Every record the API declares, request and response alike.
+         *
+         * @return the record classes under {@code api/dto}, nested ones included
+         * @throws Exception where the directory cannot be read
+         */
+        private List<Class<?>> theApiRecords() throws Exception {
+            final List<Class<?>> records = new ArrayList<>();
+            try (Stream<Path> sources = Files.walk(DTO)) {
+                for (final Path source : sources
+                        .filter(path -> path.toString().endsWith(".java")).toList()) {
+
+                    final String simple = source.getFileName().toString().replace(".java", "");
+                    final Class<?> declared = Class.forName(
+                            "uk.gov.hmcts.cp.courtregister.api.dto." + simple);
+                    records.add(declared);
+                    records.addAll(Arrays.asList(declared.getDeclaredClasses()));
+                }
+            }
+            return records.stream().filter(Class::isRecord).toList();
+        }
+
+        @Test
+        @DisplayName("every field of every request and response record is a bounded type")
+        void no_api_record_should_carry_a_type_this_service_keeps_out_of_telemetry()
+                throws Exception {
+
+            final List<String> unbounded = new ArrayList<>();
+            for (final Class<?> declared : theApiRecords()) {
+                for (final RecordComponent component : declared.getRecordComponents()) {
+                    final Class<?> type = component.getType();
+                    if (!BOUNDED.contains(type) && !type.isEnum()
+                            && !type.getName().startsWith(
+                                    "uk.gov.hmcts.cp.courtregister.api.dto.")) {
+                        unbounded.add(declared.getSimpleName() + '.' + component.getName()
+                                + " : " + type.getName());
+                    }
+                }
+            }
+
+            assertThat(unbounded)
+                    .as("a response record gaining a register document, a register row or a "
+                            + "JsonNode is how a defendant reaches a caller - so what may be on "
+                            + "one is a closed list, exactly as the reason codes are")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("and no field of one is named after a person")
+        void no_api_record_should_name_a_field_after_a_person() throws Exception {
+            final List<String> named = new ArrayList<>();
+            for (final Class<?> declared : theApiRecords()) {
+                for (final RecordComponent component : declared.getRecordComponents()) {
+                    final String lowered = component.getName().toLowerCase(Locale.ROOT);
+                    if (A_PERSON.stream().anyMatch(lowered::contains)) {
+                        named.add(declared.getSimpleName() + '.' + component.getName());
+                    }
+                }
+            }
+
+            assertThat(named)
+                    .as("every defendant on this register is a child, and a field that names one "
+                            + "is a field somebody will populate")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("the ProblemDetail is never given a detail")
+        void no_refusal_should_carry_an_exceptions_or_a_stores_own_words() throws Exception {
+            assertThat(sourcesUnder(API))
+                    .as("`detail` is the one field of RFC 9457 that invites free text, and free "
+                            + "text is where a connection string or a fragment of a statement "
+                            + "turns up - so it is never populated at all (data-model, Common)")
+                    .noneMatch(source -> source.contains("setDetail("));
+        }
+
+        @Test
+        @DisplayName("the caller's identity reaches no line of the inbound adapter")
+        void the_callers_identity_should_belong_to_the_audit_event_and_nowhere_else()
+                throws Exception {
+
+            assertThat(sourcesUnder(API))
+                    .as("the CJSCPPUID belongs in the audit event, which is the one place this "
+                            + "service names a caller on purpose (FR-038) - a class that does not "
+                            + "hold the value cannot log it")
+                    .noneMatch(source -> source.contains("CJSCPPUID"));
+        }
+
+        @Test
+        @DisplayName("and the address masking has exactly one home")
+        void the_api_should_not_carry_a_masking_rule_of_its_own() throws Exception {
+            assertThat(sourcesUnder(API))
+                    .as("`list-batches` masked by one rule and the endpoint masks by the same one, "
+                            + "in BatchListingService; a second rule in the adapter is how the two "
+                            + "come to disagree, and the weaker of them is the one that ships")
+                    .noneMatch(source -> source.contains("\"***\""));
+        }
+
+        /**
+         * Every Java source under a directory, as text.
+         *
+         * @param root where to read from
+         * @return the sources
+         * @throws Exception where the tree cannot be read
+         */
+        private List<String> sourcesUnder(final Path root) throws Exception {
+            try (Stream<Path> sources = Files.walk(root)) {
+                final List<String> text = new ArrayList<>();
+                for (final Path source : sources
+                        .filter(path -> path.toString().endsWith(".java")).toList()) {
+                    text.add(Files.readString(source));
+                }
+                return text;
+            }
+        }
     }
 
     // --- the configuration that decides what reaches the index -----------------------------------
