@@ -1,6 +1,5 @@
 package uk.gov.hmcts.cp.courtregister.api;
 
-import java.net.URI;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.List;
@@ -11,9 +10,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.dao.TransientDataAccessException;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -21,6 +18,8 @@ import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.cp.courtregister.api.dto.BatchListingResponse;
 import uk.gov.hmcts.cp.courtregister.application.BatchListing;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
+import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 
 /**
@@ -52,22 +51,10 @@ import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
         havingValue = "true", matchIfMissing = true)
 public class BatchesController {
 
-    /** An instance that names nowhere, which is how the field is kept out of the body. */
-    private static final URI NOWHERE = URI.create("");
-
     private static final Logger LOG = LoggerFactory.getLogger(BatchesController.class);
 
     /** This service's own name for the one argument the listing takes. */
     private static final String DATE = "date";
-
-    /** Nothing was given where something had to be. */
-    private static final String MISSING_ARGUMENT = "missing-argument";
-
-    /** Something was given and this service cannot read it as what it has to be. */
-    private static final String UNREADABLE_ARGUMENT = "unreadable-argument";
-
-    /** The rows could not be read, so there is no listing to give. */
-    private static final String LISTING_FAILED = "listing-failed";
 
     /** The two listings, over the three reads they are built from. */
     private final BatchListingService listings;
@@ -90,22 +77,19 @@ public class BatchesController {
      *         defect in this service and is answered {@code 500} rather than being dressed up as
      *         a dependency outage (FR-023)
      */
-    // PMD.OnlyOneReturn: the four answers are the four things that can happen to the one argument,
-    // each said where it is decided; one exit would carry a verdict past reads that must not be
-    // made once the date has been refused.
-    @SuppressWarnings("PMD.OnlyOneReturn")
     @GetMapping(path = "/operations/batches", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Object> list(
             @RequestParam(name = DATE, required = false) final String date) {
 
         if (date == null || date.isBlank()) {
-            return refusal(HttpStatus.BAD_REQUEST, MISSING_ARGUMENT, DATE);
+            throw new OperationsRefusedException(OperationsReason.MISSING_ARGUMENT, DATE, null);
         }
         final LocalDate registerDate;
         try {
             registerDate = LocalDate.parse(date);
         } catch (DateTimeParseException notADate) {
-            return refusal(HttpStatus.BAD_REQUEST, UNREADABLE_ARGUMENT, DATE);
+            throw new OperationsRefusedException(OperationsReason.UNREADABLE_ARGUMENT, DATE,
+                    notADate);
         }
         try {
             return ResponseEntity.ok(listed(registerDate));
@@ -122,7 +106,8 @@ public class BatchesController {
             // bounded fields.
             LOG.error("The batches of one register date could not be read, so no listing is given "
                     + "for it. cause={}", notRead.getClass().getName());
-            return refusal(HttpStatus.SERVICE_UNAVAILABLE, LISTING_FAILED, null);
+            throw new OperationsRefusedException(OperationsReason.LISTING_FAILED, null,
+                    notRead);
         }
     }
 
@@ -154,30 +139,4 @@ public class BatchesController {
                         .toList());
     }
 
-    /**
-     * A refusal, in bounded fields and nothing else.
-     *
-     * @param status   the status the refusal is answered under
-     * @param reason   the bounded code a runbook greps for
-     * @param argument this service's own name for the argument at fault, or {@code null}
-     * @return the refusal
-     */
-    private static ResponseEntity<Object> refusal(final HttpStatus status, final String reason,
-            final String argument) {
-
-        final ProblemDetail problem = ProblemDetail.forStatus(status);
-        problem.setTitle(status.getReasonPhrase());
-        // Spring fills `instance` with the request URI whenever it is left null, which on the
-        // notify path would be the batch id the caller typed. An EMPTY uri is serialised away by
-        // the problem-detail mixin's NON_EMPTY rule, so this is how the field is suppressed rather
-        // than populated; setting it to null would simply let the framework fill it in again.
-        problem.setInstance(NOWHERE);
-        problem.setProperty("reason", reason);
-        if (argument != null) {
-            problem.setProperty("argument", argument);
-        }
-        return ResponseEntity.status(status)
-                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
-                .body(problem);
-    }
 }

@@ -19,7 +19,6 @@ import uk.gov.hmcts.cp.courtregister.domain.ExceptionEntry;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionKind;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionReport;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
-import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
 import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
 
 /**
@@ -65,12 +64,11 @@ public class ExceptionReportsController {
      * Builds the report over the window asked for and delivers it to the sinks asked for.
      *
      * @param request what the caller asked for, or {@code null} where they sent no body
-     * @return the report, or the bounded refusal that stopped it
+     * @return the report, or the {@code 500} that says which sink is owed a resend
+     * @throws uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException where the window
+     *         will not read or the e-mail output was asked for and is unavailable, which
+     *         {@link OperationsExceptionHandler} answers from the one status map
      */
-    // PMD.OnlyOneReturn: the report, the undelivered report and the refusal are said where each is
-    // decided. The catch is transitional and T025's @RestControllerAdvice absorbs it: until the
-    // advice exists, this is the only place a refusal from this endpoint could become a status.
-    @SuppressWarnings("PMD.OnlyOneReturn")
     @PostMapping(path = "/operations/exception-reports",
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Object> report(
@@ -78,18 +76,11 @@ public class ExceptionReportsController {
 
         final ExceptionReportRequest asked =
                 request == null ? ExceptionReportRequest.NOTHING : request;
-        try {
-            final OnDemandExceptionReport answered =
-                    reports.report(asked.since(), asked.emailAsked());
-            return answered.everySinkTookIt()
-                    ? ResponseEntity.ok(bodyOf(answered))
-                    : notDelivered(answered);
-        } catch (OperationsRefusedException refused) {
-            // Classified where it was raised and answered from the one status map. Nothing is
-            // swallowed: the service said what happened at the level it deserved before it left,
-            // and what reaches the caller is the bounded code and nothing else.
-            return OperationsProblem.answering(refused);
-        }
+        final OnDemandExceptionReport answered =
+                reports.report(asked.since(), asked.emailAsked());
+        return answered.everySinkTookIt()
+                ? ResponseEntity.ok(bodyOf(answered))
+                : notDelivered(answered);
     }
 
     /**

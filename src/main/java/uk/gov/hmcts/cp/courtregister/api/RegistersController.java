@@ -1,6 +1,5 @@
 package uk.gov.hmcts.cp.courtregister.api;
 
-import java.net.URI;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,14 +8,14 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.dao.TransientDataAccessException;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.cp.courtregister.api.dto.RecordedWhileOffResponse;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
+import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
 
 /**
@@ -40,13 +39,9 @@ import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
         havingValue = "true", matchIfMissing = true)
 public class RegistersController {
 
-    /** An instance that names nowhere, which is how the field is kept out of the body. */
-    private static final URI NOWHERE = URI.create("");
 
     private static final Logger LOG = LoggerFactory.getLogger(RegistersController.class);
 
-    /** The rows could not be read, so there is no listing to give. */
-    private static final String LISTING_FAILED = "listing-failed";
 
     /** The two listings, over the three reads they are built from. */
     private final BatchListingService listings;
@@ -68,8 +63,6 @@ public class RegistersController {
      *         defect in this service and is answered {@code 500} rather than being dressed up as
      *         a dependency outage (FR-023)
      */
-    // PMD.OnlyOneReturn: the listing and the refusal are said where each is decided.
-    @SuppressWarnings("PMD.OnlyOneReturn")
     @GetMapping(path = "/operations/registers/recorded-while-off",
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Object> recordedWhileOff() {
@@ -89,26 +82,9 @@ public class RegistersController {
             // hierarchy included, is left to reach the 500 the status map keeps for it.
             LOG.error("The registers recorded while the flag was off could not be read, so no "
                     + "listing is given. cause={}", notRead.getClass().getName());
-            return refusal();
+            throw new OperationsRefusedException(OperationsReason.LISTING_FAILED, null,
+                    notRead);
         }
     }
 
-    /**
-     * The one refusal this endpoint has, in bounded fields and nothing else.
-     *
-     * @return the refusal
-     */
-    private static ResponseEntity<Object> refusal() {
-        final ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.SERVICE_UNAVAILABLE);
-        problem.setTitle(HttpStatus.SERVICE_UNAVAILABLE.getReasonPhrase());
-        // Spring fills `instance` with the request URI whenever it is left null, which on the
-        // notify path would be the batch id the caller typed. An EMPTY uri is serialised away by
-        // the problem-detail mixin's NON_EMPTY rule, so this is how the field is suppressed rather
-        // than populated; setting it to null would simply let the framework fill it in again.
-        problem.setInstance(NOWHERE);
-        problem.setProperty("reason", LISTING_FAILED);
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
-                .body(problem);
-    }
 }

@@ -681,7 +681,7 @@ exception report has the widest refusal set of any endpoint.
 - [x] **T023** [US6] `api/ExceptionReportsController` and its dtos. Every entry field is an
       identifier, a bounded code or a count, and absent fields are **omitted** rather than rendered
       — the same rule `ReportExceptionsCli.carried` applied. Green: T022.
-- [ ] **T024** [P] [US4] `api/OperationsExceptionHandlerTest` (new) — **the status map and the
+- [x] **T024** [P] [US4] `api/OperationsExceptionHandlerTest` (new) — **the status map and the
       no-echo rule, once, for everything**. Cases, one per row of data-model "Common": a body that
       will not parse → `400`; a body with an unknown field → `400` (the request contract is closed,
       FR-028); every bounded reason reaches `reason` and none reaches `detail`; **no response body
@@ -689,12 +689,28 @@ exception report has the widest refusal set of any endpoint.
       asserting none appears; an exception message never reaches the body; an unmapped method on a
       mapped path answers without a stack trace. Seam: `api/OperationsExceptionHandler`. Red: the
       unknown-field case is accepted.
-- [ ] **T025** [US4] `api/OperationsExceptionHandler` (`@RestControllerAdvice`,
+- [x] **T025** [US4] `api/OperationsExceptionHandler` (`@RestControllerAdvice`,
       `@Order(HIGHEST_PRECEDENCE)`) and the `ObjectMapper` setting that makes an unknown field a
       failure on the request records only. The full map of data-model FR-023: `400`, `404`, `409`,
       `500`, `501`, `502`, `503`, `504`. **`@ControllerAdvice` is permitted for this package and
       nowhere else** (`technical-rules.md`); it must be unreachable from the listeners and the jobs.
       Green: T024.
+      (Green: `OperationsExceptionHandlerTest` 39 tests, 0 failures; the whole `api` package 190
+      tests, 0 failures. The advice is declared `basePackages = "…courtregister.api"`, so it is
+      unreachable from the listeners and the jobs by declaration and not only by fact. It has **no
+      `Exception` fallback**: an unmapped path, an unmapped method and a genuine defect reach
+      Boot's `/error` and come back through `OperationsErrorAttributes` in the same bounded shape,
+      and a fallback here would have to guess a bounded code for something nobody classified.
+      The closed request contract is `api/OperationsRequestBodies`, a `WebMvcConfigurer` that
+      registers a `FAIL_ON_UNKNOWN_PROPERTIES` mapper **per request-record type** on the HTTP
+      converter - not globally, because the auto-configured mapper is the one every adapter reads
+      hearing payloads and platform envelopes with, and making those fail on an unknown field
+      would dead-letter a night's hearings for somebody else's new field. It is a
+      `WebMvcConfigurer` rather than a bean on a configuration class so the `@WebMvcTest` slices
+      pick it up. `BatchesController` and `RegistersController` now raise
+      `OperationsRefusedException` instead of building their own `ProblemDetail`s, and
+      `ExceptionReportsController`'s transitional `catch` is gone: the advice is the only producer
+      of a refusal body.)
 
 ---
 
