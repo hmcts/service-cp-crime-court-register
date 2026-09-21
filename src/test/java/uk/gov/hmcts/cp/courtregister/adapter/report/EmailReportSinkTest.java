@@ -79,9 +79,16 @@ class EmailReportSinkTest {
 
     private static final String RUN_ID = "a-run-the-caller-already-opened";
 
-    /** The five counts, spelled as the events and the CSV spell them. */
-    private static final List<String> THE_FIVE_COUNTS = List.of("request_failed", "request_late",
-            "batch_late", "batch_failed", "notification_failed");
+    /**
+     * One count per kind, spelled as the events and the CSV spell them.
+     *
+     * <p>Six since increment 004: {@code batch_released} is the informational kind, a batch a run
+     * gave up on and re-rendered the same night (FR-019). It travels zero-filled like the rest,
+     * because a key that only appeared on the mornings it was non-zero would be a personalisation
+     * the template could not lay out.
+     */
+    private static final List<String> THE_PER_KIND_COUNTS = List.of("request_failed", "request_late",
+            "batch_late", "batch_failed", "notification_failed", "batch_released");
 
     private static final UUID REQUEST_ID = UUID.fromString("4c8e1a70-9b2d-4f36-8a57-c1d0e9f3b284");
 
@@ -153,11 +160,11 @@ class EmailReportSinkTest {
                         + "a body that is otherwise closed, which is what lets the counts travel "
                         + "at all")
                 .containsOnlyKeys("request_failed", "request_late", "batch_late", "batch_failed",
-                        "notification_failed", "window_from", "window_to");
+                        "notification_failed", "batch_released", "window_from", "window_to");
         assertThat(personalisation).containsEntry("request_failed", "1");
         assertThat(personalisation)
-                .as("zero-filled, so a morning with nothing wrong reads as four noughts and a "
-                        + "window rather than as a body with fields missing (FR-012)")
+                .as("zero-filled, so a morning with nothing wrong reads as a row of noughts and "
+                        + "a window rather than as a body with fields missing (FR-012)")
                 .containsEntry("batch_failed", "0");
         assertThat(personalisation).containsEntry("window_from", WINDOW.from().toString());
         assertThat(personalisation).containsEntry("window_to", WINDOW.to().toString());
@@ -175,8 +182,8 @@ class EmailReportSinkTest {
 
         assertThat(everyMail()).allSatisfy(mail -> {
             assertThat(mail.personalisation().keySet())
-                    .as("every key is one of the five counts or a window boundary")
-                    .allSatisfy(key -> assertThat(THE_FIVE_COUNTS.contains(key)
+                    .as("every key is one of the per-kind counts or a window boundary")
+                    .allSatisfy(key -> assertThat(THE_PER_KIND_COUNTS.contains(key)
                             || key.startsWith("window_")).isTrue());
             assertThat(mail.personalisation().values())
                     .as("the detail travels as the CSV, by file id: an identifier in the body "

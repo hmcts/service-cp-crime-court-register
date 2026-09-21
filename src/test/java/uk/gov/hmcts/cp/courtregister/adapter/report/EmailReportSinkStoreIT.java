@@ -274,7 +274,7 @@ class EmailReportSinkStoreIT {
         assertThat(row[11])
                 .as("the bounded reason this service wrote, which is the whole of what a dead "
                         + "batch tells an operator")
-                .isEqualTo(BatchFailureReason.GENERATION_TIMED_OUT.name());
+                .isEqualTo(BatchFailureReason.RENDER_REQUEST_FAILED.name());
         assertThat(row[12]).isEqualTo("900");
     }
 
@@ -307,7 +307,7 @@ class EmailReportSinkStoreIT {
     private static ExceptionEntry batchFailed(final long ageSeconds) {
         return new ExceptionEntry(ExceptionKind.BATCH_FAILED, null, null, null, null, BATCH_ID,
                 null, COURT_CENTRE_ID, REGISTER_DATE, "FAILED", null,
-                BatchFailureReason.GENERATION_TIMED_OUT.name(), ageSeconds);
+                BatchFailureReason.RENDER_REQUEST_FAILED.name(), ageSeconds);
     }
 
     private static ExceptionEntry notified(final long ageSeconds) {

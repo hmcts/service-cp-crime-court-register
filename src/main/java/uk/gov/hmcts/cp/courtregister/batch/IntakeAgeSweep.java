@@ -83,8 +83,9 @@ public class IntakeAgeSweep {
      *
      * <p>No {@code @SchedulerLock}, for the reason the class javadoc gives. The correlation is
      * opened here rather than inside the body so that a caller reaching the body directly - a test,
-     * or a future command - carries whatever correlation it opened for itself, which is the same
-     * split {@code GenerationReconciler} makes between its scheduled pass and its counting one.
+     * or a future command - carries whatever correlation it opened for itself. It is the same split
+     * {@code StaleBatchReleaser} relies on from the other side: called from inside the run, it
+     * adopts the run's correlation rather than minting a second for the same night's work.
      */
     @Scheduled(fixedDelayString = "${courtregister.intake.gauge-refresh}",
             scheduler = IntakeSweepConfig.INTAKE_SWEEP_SCHEDULER)

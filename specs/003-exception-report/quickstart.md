@@ -86,9 +86,9 @@ when `--email` was accepted:
 
 ```
 kind=REQUEST_LATE source=cpp-context-results request_id=... hearing_id=... hearing_day=2026-09-13 status=RETRYING attempts=2 age_seconds=4820
-kind=BATCH_FAILED batch_id=... court_centre_id=... register_date=2026-09-12 status=FAILED reason=GENERATION_TIMED_OUT age_seconds=55100
+kind=BATCH_FAILED batch_id=... court_centre_id=... register_date=2026-09-12 status=FAILED reason=GENERATION_FAILED age_seconds=55100
 kind=NOTIFICATION_FAILED batch_id=... notification_id=... court_centre_id=... register_date=2026-09-12 status=FAILED reason=502 age_seconds=61240
-counts request_failed=0 request_late=1 batch_late=0 batch_failed=1 notification_failed=1 window_from=... window_to=...
+counts request_failed=0 request_late=1 batch_late=0 batch_failed=1 notification_failed=1 batch_released=0 window_from=... window_to=...
 event=exception_report_run run_id=... window_from=... window_to=... entries=3 delivered_log=ok delivered_email=ok outcome=delivered duration_ms=412
 ```
 
@@ -119,7 +119,7 @@ is also a decline (1), with the usage line. A sink the command **asked** and tha
 **The local stack records no registers**, for the reason 002's quickstart gives: `app` runs with
 `COURTREGISTER_PAYLOAD_MODE=STUB`, so a command published to `courtregister.requests` completes
 `no-defendants` and writes no output row. So `BATCH_LATE` and `BATCH_FAILED` cannot be produced locally
-without seeding the store by hand. The five kinds together are proved by
+without seeding the store by hand. The kinds together are proved by
 `e2e/ExceptionReportEndToEndIT` under
 `./gradlew test`. What this block verifies is the half no JUnit suite reaches: that the sixth command
 dispatches out of the image, reads the store's own statements, and answers on its three documented
@@ -184,7 +184,7 @@ ContainerLogV2
 ```
 
 ```kusto
-// did the report run, and what did it find - the summary event, eleven fields
+// did the report run, and what did it find - the summary event, twelve fields since 004
 ContainerLogV2
 | where TimeGenerated > ago(7d)
 | where LogMessage.event == "courtregister_exception_report"
@@ -198,6 +198,10 @@ ContainerLogV2
           batchLate        = toint(LogMessage.batch_late),
           batchFailed      = toint(LogMessage.batch_failed),
           notificationFailed = toint(LogMessage.notification_failed),
+          // increment 004's sixth kind, and informational: a batch a run gave up on whose
+          // registers went out the same night. Counted here so the counts still add up to the
+          // courtregister_exception events a query finds
+          batchReleased      = toint(LogMessage.batch_released),
           // dropped LATE entries only - the cap never drops a failure, so a shortfall on
           // request_failed, batch_failed or notification_failed is a sink that broke
           truncated          = toint(LogMessage.truncated)

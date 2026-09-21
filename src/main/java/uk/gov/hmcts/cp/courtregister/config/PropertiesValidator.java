@@ -37,7 +37,7 @@ import org.springframework.stereotype.Component;
  * <p>The downstream half is held to the same standard, and its failures are quieter still: a
  * schedule read in the wrong zone, a lock that expires before the run it locks is allowed to end, a
  * notification claim whose lease cannot cover one recipient's POST cycle, a run with no payload
- * store, no flag, no renderer or no notifier, an event-driven completion with no broker to hear
+ * store, no flag, no renderer or no notifier, a generation half with no broker to hear an outcome
  * from, a stub reachable where registers are really produced, the local flag credential anywhere a
  * real flag is read, and a blank or malformed e-mail template id (fix P9). None of them is
  * discovered before 18:00, and by then the night's registers are already not going out
@@ -158,8 +158,8 @@ public class PropertiesValidator implements InitializingBean {
     private static final String GENERATION_ENABLED = GENERATION + ".enabled";
     private static final String RUN_DEADLINE = GENERATION + ".run-deadline";
     private static final String LOCK_AT_MOST_FOR = GENERATION + ".lock-at-most-for";
-    private static final String GENERATION_COMPLETION = GENERATION + ".completion";
-    private static final String GENERATION_GRACE_PERIOD = GENERATION + ".grace-period";
+    private static final String GENERATION_STALE_AFTER = GENERATION + ".stale-after";
+    private static final String GENERATION_BATCH_AGE_REFRESH = GENERATION + ".batch-age-refresh";
     private static final String NN_MODE = GENERATION + ".nn-mode";
     private static final String FILESERVICE_URL = "courtregister.fileservice.url";
     private static final String FEATURE_ENDPOINT = "courtregister.feature.endpoint";
@@ -627,8 +627,9 @@ public class PropertiesValidator implements InitializingBean {
                                 final ReportProperties report,
                                 final String brokerUrl) {
         validate(properties);
-        validateReport(report, generation);
+        validateReport(report);
         generation.validate();
+        validateTheGenerationDurationsAreUsable(generation);
         validateTheSchedulerLockOutlivesTheRun(generation);
         validateTheNotificationClaimOutlastsOnePostCycle(properties);
         feature.validate();
@@ -1191,6 +1192,30 @@ public class PropertiesValidator implements InitializingBean {
     }
 
     /**
+     * The two durations the generation half decides for itself, held to being durations at all.
+     *
+     * <p>Unconditional, like the zone rule and the lock rule beside them, and for the same reason: a
+     * job that happens to be disabled in this deployment is not a reason to accept a value that
+     * would be wrong in the next one.
+     *
+     * <p>{@code stale-after} is the destructive one. It decides when a run gives up on a batch still
+     * awaiting its render, fails it and releases its registers into that night's assembly, so a
+     * value of zero or less is a run that fails every batch it can see and re-renders every court
+     * centre day, every night. {@code batch-age-refresh} is the fixed delay the batch-age readings
+     * are taken on, and a non-positive delay is a reading nobody ever takes again - which would
+     * leave three gauges holding whatever they last said, for ever, because a Micrometer gauge does
+     * not decay.
+     *
+     * @param generation the downstream half's settings
+     * @throws IllegalStateException if either duration is zero or negative
+     */
+    private static void validateTheGenerationDurationsAreUsable(
+            final GenerationProperties generation) {
+        requirePositive(generation.staleAfter(), GENERATION_STALE_AFTER);
+        requirePositive(generation.batchAgeRefresh(), GENERATION_BATCH_AGE_REFRESH);
+    }
+
+    /**
      * The nightly run's lock has to outlast the run it locks, by a margin nothing can set to zero.
      *
      * <p>The ShedLock lock expires on its own after {@code lock-at-most-for} whether the run has
@@ -1521,24 +1546,19 @@ public class PropertiesValidator implements InitializingBean {
     /**
      * A batch has to be able to learn what became of its render.
      *
-     * <p>{@code event} is the platform pattern and the default: systemdocgenerator publishes the
+     * <p>There is one way a batch learns what became of its render: systemdocgenerator publishes the
      * outcome and this service hears it on a durable subscription. It cannot hear anything without a
      * broker to subscribe to, and a run that never learns an outcome is a batch that stays
-     * GENERATING until the reconciler times it out - every batch, every night, silently.
-     * {@code poll-only} is the escape hatch for an environment without broker access and asks for no
-     * broker at all.
+     * GENERATING until the next run gives up on it - every batch, every night, silently. The rule
+     * therefore applies whenever the generation half is enabled, with no setting able to excuse it.
      */
     private static void validateTheCompletionMechanismCanHearAnOutcome(
             final GenerationProperties generation, final String brokerUrl) {
-        if (generation.enabled()
-                && GenerationProperties.COMPLETION_EVENT.equals(generation.completion())
-                && !hasText(brokerUrl)) {
+        if (generation.enabled() && !hasText(brokerUrl)) {
             throw new IllegalStateException(
                     BROKER_URL + " must name the broker the outcome events arrive on when "
-                            + GENERATION_COMPLETION + " is "
-                            + GenerationProperties.COMPLETION_EVENT + " and " + GENERATION_ENABLED
-                            + " is true - without it every batch waits for an outcome nobody will"
-                            + " send, until the reconciler times it out");
+                            + GENERATION_ENABLED + " is true - without it every batch waits for an"
+                            + " outcome nobody will send, until the next run gives up on it");
         }
     }
 
@@ -1729,18 +1749,16 @@ public class PropertiesValidator implements InitializingBean {
      * the same index as every other, recipients are people's addresses, and naming the setting is
      * what an operator needs in order to fix it.
      *
-     * @param report     the report's settings
-     * @param generation the downstream half's settings, which the rendering limit borrows from
+     * @param report the report's settings
      * @throws IllegalStateException if any of the report's rules is broken
      */
-    /* default */ static void validateReport(final ReportProperties report,
-            final GenerationProperties generation) {
+    /* default */ static void validateReport(final ReportProperties report) {
         validateTheScheduleCanBeRead(report);
         GenerationProperties.requireTheCourtsZone(report.zone(), report.zoneOverrideAcknowledged(),
                 REPORT_ZONE, REPORT_ZONE_OVERRIDE_ACKNOWLEDGED, REPORT_HOUR);
         requirePositive(report.requestTerminalWithin(), REPORT_REQUEST_TERMINAL_WITHIN);
         requirePositive(report.notifiedWithin(), REPORT_NOTIFIED_WITHIN);
-        validateTheRenderingLimitIsUsableWhereverItCameFrom(report, generation);
+        validateTheRenderingLimitIsUsable(report);
         validateTheReportCanCarryAtLeastOneException(report);
         validateTheReportLockOutlivesItsRun(report);
         validateTheReportCanReachSomebody(report);
@@ -1790,23 +1808,16 @@ public class PropertiesValidator implements InitializingBean {
     }
 
     /**
-     * The rendering limit has to be usable whichever of its two sources it came from.
+     * The rendering limit has to be usable, and it is the report's own value to get wrong.
      *
-     * <p>An explicitly set value is the deployment's own and is held to being usable under its own
-     * key. Only an <strong>unset</strong> one resolves: "unset" and "zero" are different things an
-     * operator can mean, and a zero quietly read as the grace period is a rendering limit nobody
-     * chose. A zero that arrives <em>through</em> the resolution is refused too, and under
-     * {@link #GENERATION_GRACE_PERIOD} rather than under the report's own key - because that is the
-     * key an operator has to edit, and a refusal naming a key nobody set is a refusal nobody can
-     * act on. Left unchecked it is a limit of zero seconds, under which every batch in the estate
-     * is late on its first morning and the report says nothing useful ever again.
+     * <p>It borrowed the generation half's grace period until 004 retired it. The two answer
+     * different questions now - "when should support be told a render is late" and "when does a run
+     * give up and re-batch" - so the report keeps a value of its own and a refusal names the report's
+     * own key. Left unchecked it is a limit of zero seconds, under which every batch in the estate is
+     * late on its first morning and the report says nothing useful ever again.
      */
-    private static void validateTheRenderingLimitIsUsableWhereverItCameFrom(
-            final ReportProperties report, final GenerationProperties generation) {
-        requirePositive(resolvedBatchGeneratedWithin(report, generation),
-                report.batchGeneratedWithin() == null
-                        ? GENERATION_GRACE_PERIOD
-                        : REPORT_BATCH_GENERATED_WITHIN);
+    private static void validateTheRenderingLimitIsUsable(final ReportProperties report) {
+        requirePositive(report.batchGeneratedWithin(), REPORT_BATCH_GENERATED_WITHIN);
     }
 
     /**
@@ -1887,32 +1898,6 @@ public class PropertiesValidator implements InitializingBean {
             throw new IllegalStateException(
                     setting + MUST_BE_SET_WHEN + REPORT_EMAIL_ENABLED + " is true - " + consequence);
         }
-    }
-
-    /**
-     * The rendering limit the report reads, resolved once.
-     *
-     * <p>{@code batch-generated-within} is the one duration this increment leaves undefaulted, and
-     * it resolves to the generation half's grace period: that is already the interval after which
-     * the reconciler decides a render has not happened, and two different answers to "how long is
-     * too long for a render" is the shape that makes an alert argue with a batch state. An
-     * explicitly set value is the deployment's own and is used as it stands - a set zero is refused
-     * rather than resolved, because "unset" and "zero" are different things an operator can mean.
-     *
-     * <p>One mechanism, not two: there is no {@code application.yaml} placeholder for this key,
-     * because nothing reads it through the placeholder resolver. A value written in both places is a
-     * value whose two copies can disagree, and the morning they do is the morning an alert argues
-     * with a batch state.
-     *
-     * @param report     the report's settings
-     * @param generation the downstream half's settings
-     * @return how long a batch may stay PENDING or GENERATING before the report calls it late
-     */
-    public static Duration resolvedBatchGeneratedWithin(final ReportProperties report,
-            final GenerationProperties generation) {
-        return report.batchGeneratedWithin() == null
-                ? generation.gracePeriod()
-                : report.batchGeneratedWithin();
     }
 
     private static void requirePositive(final Duration value, final String setting) {

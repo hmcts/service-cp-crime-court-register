@@ -21,6 +21,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.configuration.FluentConfiguration;
 import org.junit.jupiter.api.BeforeAll;
@@ -83,6 +85,9 @@ class SchemaMigrationV2IT {
     /** The batch states that carry an attribution, because each of them is reached by one. */
     private static final List<String> COMPLETED_STATUSES =
             List.of("GENERATED", "NOTIFIED", "PARTIALLY_NOTIFIED", "NOTIFIED_NOBODY");
+
+    /** One quoted code inside a live check constraint's admitted list. */
+    private static final Pattern QUOTED_CODE = Pattern.compile("'([A-Z_]+)'");
 
     @BeforeAll
     static void migrate() {
@@ -215,6 +220,21 @@ class SchemaMigrationV2IT {
      */
     private static String[] vocabularyOf(final Class<? extends Enum<?>> bounded) {
         return Arrays.stream(bounded.getEnumConstants()).map(Enum::name).toArray(String[]::new);
+    }
+
+    /**
+     * The codes one live {@code IN} or {@code ARRAY} list admits, taken out of its own text.
+     *
+     * <p>Postgres normalises {@code IN ('A', 'B')} to {@code = ANY (ARRAY['A'::text, 'B'::text])},
+     * so the codes are read off with the same pattern whichever way the migration spelled them.
+     */
+    private static List<String> admittedCodesOf(final String definition) {
+        final Matcher codes = QUOTED_CODE.matcher(definition);
+        final List<String> admitted = new ArrayList<>();
+        while (codes.find()) {
+            admitted.add(codes.group(1));
+        }
+        return admitted;
     }
 
     /**
@@ -817,11 +837,29 @@ class SchemaMigrationV2IT {
                     .hasMessageContaining("register_batch_status_chk");
         }
 
+        /**
+         * The vocabulary and the constraint, held to each other in <strong>both</strong>
+         * directions against the constraint Postgres is actually holding.
+         *
+         * <p>"Exactly" is the whole point, and {@code contains} does not say it: it proves every
+         * constant reaches the database and would say nothing about a seventh code the column
+         * admits and no constant names - a row support can find in the table, a label a dashboard
+         * can show, and nothing in this repository that explains either. The codes are therefore
+         * taken out of the live definition and compared as a set.
+         *
+         * <p>Not a duplicate of {@code BatchStateTest}'s comparison, which reads the migration
+         * <em>files</em>: this one reads the database those files were supposed to produce, so a
+         * constraint a migration never applied, or one something else changed, is caught here and
+         * only here. It is also the direction {@code V7} needs, being the migration that narrows.
+         */
         @Test
         void failure_reason_check_should_name_exactly_the_bounded_reasons() throws SQLException {
-            assertThat(constraintsOf(BATCH_TABLE).get("register_batch_failure_reason_chk"))
-                    .isNotNull()
-                    .contains(vocabularyOf(BatchFailureReason.class));
+            final String definition =
+                    constraintsOf(BATCH_TABLE).get("register_batch_failure_reason_chk");
+
+            assertThat(definition).isNotNull();
+            assertThat(admittedCodesOf(definition))
+                    .containsExactlyInAnyOrder(vocabularyOf(BatchFailureReason.class));
         }
 
         @Test
@@ -838,12 +876,108 @@ class SchemaMigrationV2IT {
                     .hasMessageContaining("register_batch_failure_reason_chk");
         }
 
+        /**
+         * V6's whole effect, asked of the database rather than read off the file.
+         *
+         * <p>The stale-batch pass writes this reason with no attribution: nothing outside this
+         * service reported anything, the run simply stopped waiting. Until V6 the column's
+         * constraint enumerated six values and this row is refused by it - which is the batch the
+         * pass could not fail, on the night it was trying to give a court centre's registers back.
+         */
         @Test
-        void completed_by_check_should_name_exactly_the_two_completion_mechanisms()
+        void v6_admits_not_completed_by_next_run() {
+            assertThatCode(() -> inRolledBackTransaction(
+                    insertFailedBatch("NOT_COMPLETED_BY_NEXT_RUN", null)))
+                    .doesNotThrowAnyException();
+        }
+
+        /**
+         * And the half V6 deliberately leaves to the constraint that is already right.
+         *
+         * <p>{@code register_batch_completed_by_shape_chk} is untouched by the migration: the new
+         * reason is not generator-attributed, so an unattributed row under it satisfies the third
+         * arm as {@code false = false} and an attributed one is refused by that same arm as
+         * {@code false = true}, with no edit at all. Asserted rather than reasoned about, because
+         * "no edit was needed" and "no edit was made" are the same diff.
+         *
+         * <p>The admitted row comes first and is the case's precondition rather than a repetition
+         * of the one above: a reason the vocabulary does not admit is refused whatever it carries,
+         * and Postgres names whichever violated constraint it reached, so a refusal on its own
+         * would prove nothing about the attribution at all.
+         */
+        @Test
+        void the_new_reason_refuses_an_attribution() {
+            assertThatCode(() -> inRolledBackTransaction(
+                    insertFailedBatch("NOT_COMPLETED_BY_NEXT_RUN", null)))
+                    .as("the reason is admitted, so what follows is about the attribution alone")
+                    .doesNotThrowAnyException();
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    insertFailedBatch("NOT_COMPLETED_BY_NEXT_RUN", "EVENT")))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("register_batch_completed_by_shape_chk");
+        }
+
+        /**
+         * V7 narrows, and these two cases are what says so against the database.
+         *
+         * <p>Both values were the grace-period reconciler's, and the reconciler is gone: nothing
+         * asks systemdocgenerator what became of a render, so nothing can conclude that one timed
+         * out and nothing can name that mechanism on a row. A vocabulary that went on admitting
+         * them would let a value into {@code register_batch} that no reader in this repository can
+         * explain - {@code BatchFailureReason.valueOf} throws on it when the 07:00 report reads the
+         * row, and support would be looking at a code naming a component that does not exist.
+         *
+         * <p>{@code SchemaMigrationV6IT} still holds the other end of this, that V6 admitted them:
+         * that suite is pinned to {@code target("5")} and {@code target("6")} and is a statement
+         * about V6 whatever V7 does afterwards. These two are the statement about the head.
+         */
+        @Test
+        void v7_refuses_the_retired_timeout_reason() {
+            // Unattributed, so that the vocabulary is the only rule the row can be refused by.
+            // The retired reason is no longer in the shape constraint's attributed list either, so
+            // a row carrying both the reason and a mechanism violates that constraint as well and
+            // Postgres would name whichever it reached - a refusal about the wrong rule.
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    insertFailedBatch("GENERATION_TIMED_OUT", null)))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("register_batch_failure_reason_chk");
+        }
+
+        /**
+         * The attribution, refused on the state that most obviously carries one.
+         *
+         * <p>GENERATED rather than FAILED, because a FAILED row naming a retired mechanism violates
+         * the shape constraint as well and Postgres reports whichever it reached first - which
+         * would make the case's refusal about the wrong rule. A GENERATED row is required to name a
+         * mechanism, so the only thing wrong with this one is which mechanism it names.
+         */
+        @Test
+        void v7_refuses_the_retired_attribution() {
+            assertThatThrownBy(() -> inRolledBackTransaction(
+                    insertBatchNaming("GENERATED", "RECONCILER")))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("register_batch_completed_by_chk");
+        }
+
+        /**
+         * And the vocabulary the column is left with, in both directions.
+         *
+         * <p>{@code contains} would say that every constant reaches the database and nothing about
+         * a second code the column still admits, which is exactly what V7 exists to take away. The
+         * codes are therefore read out of the live definition and compared as a set - and after V7
+         * that definition is a single equality rather than an {@code IN} list, which
+         * {@link #admittedCodesOf} reads the same way because it reads quoted codes and not list
+         * syntax.
+         */
+        @Test
+        void completed_by_check_should_name_exactly_the_one_completion_mechanism()
                 throws SQLException {
-            assertThat(constraintsOf(BATCH_TABLE).get("register_batch_completed_by_chk"))
-                    .isNotNull()
-                    .contains(vocabularyOf(CompletedBy.class));
+            final String definition =
+                    constraintsOf(BATCH_TABLE).get("register_batch_completed_by_chk");
+
+            assertThat(definition).isNotNull();
+            assertThat(admittedCodesOf(definition))
+                    .containsExactlyInAnyOrder(vocabularyOf(CompletedBy.class));
         }
 
         /**
@@ -885,10 +1019,11 @@ class SchemaMigrationV2IT {
          * The other end of the same rule: a batch nobody has finished has completed nothing.
          *
          * <p>PENDING is a batch that was assembled and has not been asked of the renderer, and
-         * GENERATING is one that was asked and whose answer has not come back - which is exactly
-         * the state the reconciler reads, because nothing has completed it. An attribution on
-         * either says a mechanism reported an outcome that has not happened, and the
-         * {@code reconciled} metric counts an outcome nobody delivered.
+         * GENERATING is one that was asked and whose answer has not come back - the state the next
+         * run's stale-batch pass reads, precisely because nothing has completed it. An attribution
+         * on either says a mechanism reported an outcome that has not happened, and leaves the one
+         * column that records which mechanism delivered an outcome naming one for an outcome nobody
+         * delivered.
          *
          * <p>Left to the catch-all branch this constraint used to end with, both rows are legal:
          * the branch permits every state outside GENERATED, the three notified states and FAILED,
@@ -901,30 +1036,30 @@ class SchemaMigrationV2IT {
                     insertBatchNaming("PENDING", "EVENT")))
                     .isInstanceOf(SQLException.class)
                     .hasMessageContaining("register_batch_completed_by_shape_chk");
-            // The render was asked for and the answer has not arrived; the batch is the
-            // reconciler's to chase, not one it has already reported on.
+            // The render was asked for and the answer has not arrived, so the batch is one the
+            // next run may have to stop waiting for, not one anything has reported on.
             assertThatThrownBy(() -> inRolledBackTransaction(
-                    insertBatchNaming("GENERATING", "RECONCILER")))
+                    insertBatchNaming("GENERATING", "EVENT")))
                     .isInstanceOf(SQLException.class)
                     .hasMessageContaining("register_batch_completed_by_shape_chk");
         }
 
         /**
-         * The second generator-attributed reason, in both directions.
+         * The one generator-attributed reason, in both directions.
          *
-         * <p>The shape check enumerates two reasons and the case above probes one of them from each
-         * side, which a rule that had only ever named GENERATION_FAILED would also pass.
-         * GENERATION_TIMED_OUT is the reconciler's verdict about systemdocgenerator's silence: it
-         * arrived because something went and asked, so the row names what asked, and a row that
-         * does not is the one the {@code reconciled} metric cannot be computed from.
+         * <p>The case above probes the rule from the refusing side over two reasons that must not
+         * carry an attribution; this one probes the reason that must, from each side. There were
+         * two until V7 - the second was the reconciler's verdict about systemdocgenerator's silence
+         * - so what this case now says is that narrowing the shape constraint's attributed list to
+         * one did not narrow it to none, which is the way a rewritten three-arm CHECK goes wrong.
          */
         @Test
-        void completed_by_shape_check_should_require_a_mechanism_on_a_timed_out_generation() {
+        void completed_by_shape_check_should_require_a_mechanism_on_a_failed_generation() {
             assertThatCode(() -> inRolledBackTransaction(
-                    insertFailedBatch("GENERATION_TIMED_OUT", "RECONCILER")))
+                    insertFailedBatch("GENERATION_FAILED", "EVENT")))
                     .doesNotThrowAnyException();
             assertThatThrownBy(() -> inRolledBackTransaction(
-                    insertFailedBatch("GENERATION_TIMED_OUT", null)))
+                    insertFailedBatch("GENERATION_FAILED", null)))
                     .isInstanceOf(SQLException.class)
                     .hasMessageContaining("register_batch_completed_by_shape_chk");
         }
@@ -1303,6 +1438,192 @@ class SchemaMigrationV2IT {
                             .as("and the backfill added no rows of its own")
                             .isFalse();
                 }
+            }
+        }
+    }
+
+    /**
+     * What V7 does to a store that already holds one of the rows it is taking away.
+     *
+     * <p>A CHECK constraint cannot be added to a table that already holds a violating row, so the
+     * two narrowing statements <strong>refuse to apply</strong> to any database still carrying a
+     * batch failed GENERATION_TIMED_OUT or completed by RECONCILER. That is the one operational
+     * fact an operator has to know about this migration, which is why it is a test rather than a
+     * sentence: Flyway stops at V7, the pod does not start, and the answer is to clean the volume
+     * (`docker compose down -v` locally) or to delete the rows. Nothing is deployed, so no
+     * environment anybody depends on holds one; a developer's volume, a seeded container or a
+     * replayed SIT snapshot may.
+     *
+     * <p><strong>Both ends are pinned to targets rather than to the head</strong>, as
+     * {@code SchemaMigrationV6IT} explains: a case that migrated to the head would stop being a
+     * statement about V7 the moment V8 landed, and its "before" would stop being the schema V7 is
+     * applied to. It runs against a database of its own for the same reason the backfill case does
+     * - against the shared, already-migrated container Flyway would find its own history and do
+     * nothing at all.
+     */
+    @Nested
+    @DisplayName("V7 against a store holding a retired row")
+    class RetiredVocabulary {
+
+        /** The row a pre-004 local run leaves behind: the reconciler's own verdict, attributed. */
+        private static final String RETIRED_ROW =
+                "INSERT INTO " + BATCH_TABLE + " (batch_id, court_centre_id, register_date, "
+                        + "file_name, status, system_generated, failure_reason, completed_by) "
+                        + "VALUES ('" + UUID.randomUUID() + "', '" + UUID.randomUUID() + "', "
+                        + "DATE '2026-08-20', 'courtregister_2026-08-20.json', 'FAILED', true, "
+                        + "'GENERATION_TIMED_OUT', 'RECONCILER')";
+
+        /**
+         * The row the attribution narrowing is the only thing wrong with: a batch that generated,
+         * naming the mechanism that is going away and no failure reason at all.
+         */
+        private static final String RETIRED_ATTRIBUTION_ROW =
+                "INSERT INTO " + BATCH_TABLE + " (batch_id, court_centre_id, register_date, "
+                        + "file_name, status, system_generated, completed_by) "
+                        + "VALUES ('" + UUID.randomUUID() + "', '" + UUID.randomUUID() + "', "
+                        + "DATE '2026-08-20', 'courtregister_2026-08-20.json', 'GENERATED', true, "
+                        + "'RECONCILER')";
+
+        private static FluentConfiguration flywayAgainst(final String jdbcUrl) {
+            return Flyway.configure()
+                    .dataSource(jdbcUrl, PostgresTestSupport.username(), PostgresTestSupport.password())
+                    .locations("classpath:db/migration");
+        }
+
+        private static Connection connectionTo(final String jdbcUrl) throws SQLException {
+            return DriverManager.getConnection(
+                    jdbcUrl, PostgresTestSupport.username(), PostgresTestSupport.password());
+        }
+
+        private static void execute(final String jdbcUrl, final String sql) throws SQLException {
+            try (Connection connection = connectionTo(jdbcUrl);
+                 Statement statement = connection.createStatement()) {
+                statement.executeUpdate(sql);
+            }
+        }
+
+        @Test
+        @DisplayName("V7 refuses to apply, and applies once the row is gone")
+        void v7_refuses_to_apply_to_a_store_holding_a_retired_row() throws SQLException {
+            final String database =
+                    "courtregister_v7_retired_" + UUID.randomUUID().toString().replace("-", "");
+            final String jdbcUrl = PostgresTestSupport.createEmptyDatabase(database);
+
+            flywayAgainst(jdbcUrl).target("6").load().migrate();
+            execute(jdbcUrl, RETIRED_ROW);
+
+            assertThatThrownBy(() -> flywayAgainst(jdbcUrl).target("7").load().migrate())
+                    .as("the migration stops rather than dropping the row it cannot admit: a "
+                            + "narrowing that silently deleted evidence would be the worse of the "
+                            + "two failures, and an operator would learn of it from the absence")
+                    .hasMessageContaining("register_batch_failure_reason_chk");
+            assertThat(failureReasonsIn(jdbcUrl))
+                    .as("and the row is exactly where it was, for whoever has to decide what to "
+                            + "do with it")
+                    .containsExactly("GENERATION_TIMED_OUT");
+
+            execute(jdbcUrl, "DELETE FROM " + BATCH_TABLE);
+
+            assertThatCode(() -> flywayAgainst(jdbcUrl).target("7").load().migrate())
+                    .as("and on a store that holds none of them it applies, which is the whole of "
+                            + "what the clean-the-volume step buys")
+                    .doesNotThrowAnyException();
+            assertThat(admittedFailureReasonsIn(jdbcUrl))
+                    .as("the narrowed vocabulary, read off the constraint the migration left")
+                    .containsExactlyInAnyOrder(vocabularyOf(BatchFailureReason.class));
+        }
+
+        /**
+         * And the row the <em>other</em> narrowing statement is the only thing wrong with.
+         *
+         * <p>{@link #RETIRED_ROW} violates both statements at once, and Flyway stops at the first:
+         * the refusal it records is always {@code register_batch_failure_reason_chk}, so statement
+         * 2 - the attribution narrowing - is never actually reached by the case above. V7 has two
+         * narrowing statements and an operator can be stopped by either, so the second one is
+         * asserted on a row only it can refuse: a GENERATED batch completed by RECONCILER, carrying
+         * no failure reason at all. That row is valid under V6 in every other respect, which is
+         * exactly why a store can be holding one.
+         *
+         * <p>It matters operationally because the two rows look nothing alike to whoever has to
+         * clear them. A batch failed GENERATION_TIMED_OUT is a visible dead end somebody was
+         * probably already looking at; a batch that generated perfectly well and merely recorded
+         * the reconciler as the mechanism that told it so is an ordinary successful row, and
+         * deleting only the failed ones leaves the pod still refusing to start.
+         */
+        @Test
+        @DisplayName("V7 refuses to apply to a store holding the retired attribution alone")
+        void v7_refuses_to_apply_to_a_store_holding_the_retired_attribution_alone()
+                throws SQLException {
+
+            final String database =
+                    "courtregister_v7_attributed_" + UUID.randomUUID().toString().replace("-", "");
+            final String jdbcUrl = PostgresTestSupport.createEmptyDatabase(database);
+
+            flywayAgainst(jdbcUrl).target("6").load().migrate();
+            execute(jdbcUrl, RETIRED_ATTRIBUTION_ROW);
+
+            assertThatThrownBy(() -> flywayAgainst(jdbcUrl).target("7").load().migrate())
+                    .as("the second narrowing statement stops the migration too, and names the "
+                            + "constraint it could not add rather than the one before it")
+                    .hasMessageContaining("register_batch_completed_by_chk");
+            assertThat(completionMechanismsIn(jdbcUrl))
+                    .as("and this row is where it was as well - a successful batch is not "
+                            + "something a migration may quietly rewrite to make itself applicable")
+                    .containsExactly("RECONCILER");
+
+            execute(jdbcUrl, "DELETE FROM " + BATCH_TABLE);
+
+            assertThatCode(() -> flywayAgainst(jdbcUrl).target("7").load().migrate())
+                    .as("and once it is gone V7 applies, which is the same clean-the-volume step "
+                            + "reached from the other row")
+                    .doesNotThrowAnyException();
+        }
+
+        /** The attributions the batch table actually holds, for the untouched-row assertion. */
+        private static List<String> completionMechanismsIn(final String jdbcUrl)
+                throws SQLException {
+
+            final List<String> mechanisms = new ArrayList<>();
+            try (Connection connection = connectionTo(jdbcUrl);
+                 Statement statement = connection.createStatement();
+                 ResultSet rows = statement.executeQuery(
+                         "SELECT completed_by FROM " + BATCH_TABLE)) {
+                while (rows.next()) {
+                    mechanisms.add(rows.getString(1));
+                }
+            }
+            return mechanisms;
+        }
+
+        /** The failure reasons the batch table actually holds, for the untouched-row assertion. */
+        private static List<String> failureReasonsIn(final String jdbcUrl) throws SQLException {
+            final List<String> reasons = new ArrayList<>();
+            try (Connection connection = connectionTo(jdbcUrl);
+                 Statement statement = connection.createStatement();
+                 ResultSet rows = statement.executeQuery(
+                         "SELECT failure_reason FROM " + BATCH_TABLE)) {
+                while (rows.next()) {
+                    reasons.add(rows.getString(1));
+                }
+            }
+            return reasons;
+        }
+
+        /** The codes {@code register_batch_failure_reason_chk} admits on that database. */
+        private static List<String> admittedFailureReasonsIn(final String jdbcUrl)
+                throws SQLException {
+            try (Connection connection = connectionTo(jdbcUrl);
+                 Statement statement = connection.createStatement();
+                 ResultSet rows = statement.executeQuery("""
+                         SELECT pg_get_constraintdef(oid)
+                           FROM pg_constraint
+                          WHERE conname = 'register_batch_failure_reason_chk'
+                         """)) {
+                final boolean theConstraintIsThere = rows.next();
+                assertThat(theConstraintIsThere)
+                        .as("the constraint V7 was supposed to leave behind")
+                        .isTrue();
+                return admittedCodesOf(rows.getString(1));
             }
         }
     }

@@ -89,8 +89,8 @@ public record NotificationSummary(
      * incomplete account of what was sent. The batch is therefore left where it is, and only an
      * operator's explicit {@code notify-register --batch} resend recovers it: the outcome sink
      * drives one notify call per transition into GENERATED and suppresses the callback for a batch
-     * already there, so nothing revisits it unasked. The reconciler names such a batch and ages
-     * it; it settles nothing.
+     * already there, so nothing revisits it unasked. {@code courtregister_oldest_generated_age}
+     * names such a batch and ages it; a reading settles nothing.
      *
      * @param accepted how many of the batch's rows stood accepted when the cycle stopped
      * @param failed   how many of them stood FAILED

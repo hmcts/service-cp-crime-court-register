@@ -121,7 +121,7 @@ class ExceptionReportEndToEndIT {
     private static final int ONE_OF_EACH_KIND = 5;
 
     /** The number of fields data-model.md states the summary event carries. */
-    private static final int ELEVEN_SUMMARY_FIELDS = 11;
+    private static final int TWELVE_SUMMARY_FIELDS = 12;
 
     /** SC-006's window, in the shape {@code report-exceptions --since 24h} builds it. */
     private static final Duration SINCE_24H = Duration.ofHours(24);
@@ -219,14 +219,15 @@ class ExceptionReportEndToEndIT {
 
         final Map<String, String> summary = fieldsOf(summaryEvent(written));
         assertThat(summary)
-                .as("eleven fields, the five counts among them, present even where they are nought")
-                .hasSize(ELEVEN_SUMMARY_FIELDS)
+                .as("twelve fields, the six counts among them, present even where they are nought")
+                .hasSize(TWELVE_SUMMARY_FIELDS)
                 .containsEntry("event", SUMMARY_EVENT)
                 .containsEntry("request_failed", "1")
                 .containsEntry("request_late", "1")
                 .containsEntry("batch_late", "1")
                 .containsEntry("batch_failed", "1")
-                .containsEntry("notification_failed", "1");
+                .containsEntry("notification_failed", "1")
+                .containsEntry("batch_released", "0");
 
         assertThat(runLine(written))
                 .as("the run's own line, written after every sink returned, saying the morning "

@@ -135,8 +135,8 @@ public class ExceptionReportJob {
     /**
      * The scheduled entry point, which answers nothing because a schedule has nobody to tell.
      *
-     * <p>{@code void} over a body that returns the report, which is {@code reconcileScheduled}'s
-     * shape and taken for its reasons: ShedLock's interceptor refuses to lock a method returning a
+     * <p>{@code void} over a body that returns the report, which is the nightly run's shape and
+     * taken for its reasons: ShedLock's interceptor refuses to lock a method returning a
      * primitive, so an entry point that stays {@code void} cannot be broken later by a body whose
      * return type changes - and the body stays directly callable by a unit test without going
      * through the proxy at all.

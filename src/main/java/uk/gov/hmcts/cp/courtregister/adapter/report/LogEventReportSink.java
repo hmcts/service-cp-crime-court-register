@@ -26,12 +26,20 @@ import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
  * shape of a structured event is an adapter's concern in exactly the way an HTTP body is, so the
  * application layer imports no logging library (Principle V).
  *
- * <p>Two events. {@code courtregister_exception_report}, once per run, carries eleven fields: the
- * event name, the run id, the window's two ends, the snapshot, the five counts - present even
- * when they are nought, so an empty morning is distinguishable from a morning the report did not
- * run - and the number the entry cap dropped. The counts are of what the reads found and the
- * events are of what the report carries, so without that eleventh field a query would find fewer
- * events than the counts imply and nothing would say whether a sink had broken.
+ * <p>Two events. {@code courtregister_exception_report}, once per run, carries twelve fields: the
+ * event name, the run id, the window's two ends, the snapshot, <strong>one count per
+ * {@link ExceptionKind}</strong> - present even when they are nought, so an empty morning is
+ * distinguishable from a morning the report did not run - and the number the entry cap dropped.
+ * The counts are of what the reads found and the events are of what the report carries, so
+ * without that last field a query would find fewer events than the counts imply and nothing would
+ * say whether a sink had broken.
+ *
+ * <p><strong>One count per kind, and the list is checked against the enumeration by
+ * {@code LogEventReportSinkTest}.</strong> Increment 004 added {@code BATCH_RELEASED} and extended
+ * the CSV sink's header and the command's counts line to six while leaving this line at five, so a
+ * morning whose only exception was a released batch wrote five noughts beside one
+ * {@code courtregister_exception} event - the exact shape the paragraph above tells a reader to
+ * treat as a sink that broke. A kind added without a count here is that bug again.
  *
  * <p>{@code courtregister_exception}, once per entry, carries the event name, the run id, the
  * kind, and then <strong>only the fields that apply to that kind</strong>: an absent field is what
@@ -82,7 +90,7 @@ public class LogEventReportSink implements ExceptionReportSink {
     @Override
     public DeliveryOutcome deliver(final ExceptionReport report) {
         final Map<ExceptionKind, Integer> counts = report.counts();
-        LOG.info("The exception report for this run has been built; its window, its five counts "
+        LOG.info("The exception report for this run has been built; its window, its six counts "
                         + "and how many late entries the entry cap dropped are the fields of this "
                         + "line.",
                 value(EVENT, SUMMARY_EVENT),
@@ -95,6 +103,7 @@ public class LogEventReportSink implements ExceptionReportSink {
                 value("batch_late", counts.get(ExceptionKind.BATCH_LATE)),
                 value("batch_failed", counts.get(ExceptionKind.BATCH_FAILED)),
                 value("notification_failed", counts.get(ExceptionKind.NOTIFICATION_FAILED)),
+                value("batch_released", counts.get(ExceptionKind.BATCH_RELEASED)),
                 value("truncated", report.truncated()));
 
         for (final ExceptionEntry entry : report.entries()) {

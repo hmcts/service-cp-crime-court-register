@@ -105,9 +105,9 @@ class ExceptionReportJobTest {
         final SchedulerLock lock = run.getAnnotation(SchedulerLock.class);
 
         assertThat(run.getReturnType())
-                .as("void, like the reconciler's scheduled pass: ShedLock's interceptor refuses to "
-                        + "lock a method returning a primitive, and a schedule has nobody to hand "
-                        + "a report back to in any case")
+                .as("void, like the nightly run's: ShedLock's interceptor refuses to lock a "
+                        + "method returning a primitive, and a schedule has nobody to hand a "
+                        + "report back to in any case")
                 .isEqualTo(void.class);
         assertThat(schedule)
                 .as("a report nothing fires is a morning support hears nothing, which is exactly "
@@ -129,7 +129,7 @@ class ExceptionReportJobTest {
     }
 
     @Test
-    void the_lock_name_is_neither_generations_nor_the_reconcilers() throws NoSuchMethodException {
+    void the_lock_name_is_not_generations() throws NoSuchMethodException {
         final SchedulerLock lock = ExceptionReportJob.class.getDeclaredMethod("run")
                 .getAnnotation(SchedulerLock.class);
 
@@ -137,8 +137,7 @@ class ExceptionReportJobTest {
                 .as("a 07:00 report waiting on the lock an 18:00 run that overran still holds is a "
                         + "report that does not happen (SC-008)")
                 .isEqualTo("exception-report")
-                .isNotEqualTo(RegisterGenerationJob.LOCK_NAME)
-                .isNotEqualTo(GenerationReconciler.LOCK_NAME);
+                .isNotEqualTo(RegisterGenerationJob.LOCK_NAME);
     }
 
     @Test

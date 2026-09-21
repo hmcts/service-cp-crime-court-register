@@ -54,13 +54,16 @@ import uk.gov.hmcts.cp.courtregister.domain.RunReport;
  * whatever the batch before it took; a batch it leaves no time for is left PENDING for the next run
  * rather than failed, because nothing has gone wrong with it.
  *
- * <p><strong>The reconciler runs whatever the night held, and on nights the run does not.</strong>
- * A run with nothing to assemble still chases the batches an earlier run is waiting on - which is
- * precisely the night on which the subscription is most likely to be the thing that is broken - and
- * the run report names what it had to fetch. But the safety net is not this class's to provide:
- * {@link GenerationReconciler} carries a schedule and a lock of its own, because a run the flag
- * stopped touches nothing at all and the batches an earlier ON night left GENERATING would
- * otherwise never be asked about.
+ * <p><strong>The release is the run's own first act.</strong> Before anything is read,
+ * {@link StaleBatchReleaser} fails every batch that was still awaiting its render when this run
+ * began and gives its registers back, so the assembly below picks them up and the court centre gets
+ * its document tonight. The order is the point: a pass after the assembly would release into a
+ * night that had already been decided. It happens on the nights the run happens and on no others -
+ * a run the flag stopped releases nothing, because a service that may not generate may not decide
+ * that a batch it would not be allowed to re-render has failed, and the batches an earlier ON night
+ * left in flight wait for the first night the flag says ON again (FR-005, FR-018). Nothing is asked
+ * of systemdocgenerator between runs: an outcome that was lost is not an outcome anybody can be
+ * asked for.
  *
  * <p>Every run produces a {@link RunReport}, the skipped ones included: a report that only appeared
  * when work happened would make "the flag is off" and "the job did not fire" the same silence, and
@@ -131,7 +134,7 @@ public class RegisterGenerationJob {
 
     private final RegisterGenerationService service;
 
-    private final GenerationReconciler reconciler;
+    private final StaleBatchReleaser releaser;
 
     private final GenerationMetrics metrics;
 
@@ -152,7 +155,7 @@ public class RegisterGenerationJob {
      * @param store      the register store, for the records this run may batch
      * @param assembler  the grouping into one batch per court centre and register date
      * @param service    the requesting leg, asked once per batch and sequentially
-     * @param reconciler the grace-period safety net under the public-event topic
+     * @param releaser   the run's first act: the batches the night before did not finish
      * @param metrics    the instrument surface a nightly flow is read by between runs
      * @param properties the settings the run works to, the run deadline above all
      * @param clock      the run's own clock, which the deadline and the report's duration are
@@ -160,9 +163,9 @@ public class RegisterGenerationJob {
      */
     public RegisterGenerationJob(final FeatureFlagGate gate, final RegisterStore store,
             final BatchAssembler assembler, final RegisterGenerationService service,
-            final GenerationReconciler reconciler, final GenerationMetrics metrics,
+            final StaleBatchReleaser releaser, final GenerationMetrics metrics,
             final GenerationProperties properties, final Clock clock) {
-        this(gate, store, assembler, service, reconciler, metrics, properties, clock,
+        this(gate, store, assembler, service, releaser, metrics, properties, clock,
                 RunProgress.NONE);
     }
 
@@ -173,7 +176,7 @@ public class RegisterGenerationJob {
      * @param store       the register store, for the records this run may batch
      * @param assembler   the grouping into one batch per court centre and register date
      * @param service     the requesting leg, asked once per batch and sequentially
-     * @param reconciler  the grace-period safety net under the public-event topic
+     * @param releaser    the run's first act: the batches the night before did not finish
      * @param metrics     the instrument surface a nightly flow is read by between runs
      * @param properties  the settings the run works to, the run deadline above all
      * @param clock       the run's own clock, which the deadline and the report's duration are
@@ -183,14 +186,14 @@ public class RegisterGenerationJob {
      */
     public RegisterGenerationJob(final FeatureFlagGate gate, final RegisterStore store,
             final BatchAssembler assembler, final RegisterGenerationService service,
-            final GenerationReconciler reconciler, final GenerationMetrics metrics,
+            final StaleBatchReleaser releaser, final GenerationMetrics metrics,
             final GenerationProperties properties, final Clock clock,
             final RunProgress runProgress) {
         this.gate = gate;
         this.store = store;
         this.assembler = assembler;
         this.service = service;
-        this.reconciler = reconciler;
+        this.releaser = releaser;
         this.metrics = metrics;
         this.properties = properties;
         this.clock = clock;
@@ -201,14 +204,14 @@ public class RegisterGenerationJob {
      * Runs one generation, from the flag read to the report.
      *
      * <p>The flag is read before anything else and its answer ends the run: a skipped run touches
-     * neither the store, the assembler, the service nor the reconciler, because a run that read the
+     * neither the releaser, the store, the assembler nor the service, because a run that read the
      * store first would already have stamped {@code batch_id} onto rows the flag says this service
      * may not generate - and getting them back is a person's decision about one batch at a time
      * (the release behind {@code generate-register}), not something a later run can undo.
      *
-     * <p><strong>A run that stops part way still reports.</strong> The store can go away between
-     * the read and the stamp and the reconciler's own query can fail, and a run that left through
-     * one of those without writing its line would be the one night that produced no report at all -
+     * <p><strong>A run that stops part way still reports.</strong> The store can go away under the
+     * release pass, and between the read and the stamp, and a run that left through one of those
+     * without writing its line would be the one night that produced no report at all -
      * the night that stamped batches and asked for renders and then said nothing about how far it
      * got, which is worse than the silence the report exists to abolish. So the line is written
      * from what the run had done and the failure is then rethrown: reported <em>and</em> rethrown,
@@ -259,7 +262,7 @@ public class RegisterGenerationJob {
 
         if (decision instanceof Skipped) {
             return recorded(new RunReport(decision, Map.of(), 0, Map.of(), 0, 0,
-                    RunReport.Settled.NOTHING_ASSEMBLED, 0, sinceStart(startedAt)));
+                    RunReport.Settled.NOTHING_ASSEMBLED, 0, 0, 0, sinceStart(startedAt)));
         }
         // Only from here on is the file service anything readiness should have an opinion
         // about, and it stops being one however the run ends.
@@ -282,15 +285,28 @@ public class RegisterGenerationJob {
     }
 
     /**
-     * The night the flag allowed: read, assemble, request one batch at a time, then chase.
+     * The night the flag allowed: release, read, assemble, then request one batch at a time.
      *
      * <p>Everything it learns goes into the tally as it learns it rather than into a report built
      * at the end, because a run that stopped half way through has still learned the first half and
      * the report is the only place that says so.
      *
+     * <p>The release is first and nothing is read before it. A batch still awaiting its render when
+     * this run began is failed and its registers are given back inside the pass, so the read below
+     * answers with them and the court centre day the assembler would otherwise have passed over is
+     * no longer in flight. A store lost under the pass ends the run the way a store lost anywhere
+     * else does - reported on the line and rethrown - and one batch the pass could not give back
+     * ends nothing at all, which is the store's own rule and is counted rather than raised
+     * (FR-003a).
+     *
      * @param tally what the run has done, filled in as it goes
      */
     private void generate(final RunTally tally) {
+        // Handed over rather than assigned from the return: a store lost under the pass leaves
+        // through the throw, and a run that took the account from the return would then write
+        // released_batches=0 beside the pass's own line saying it had given batches back.
+        releaser.releaseStale(tally::released);
+
         final List<RegisterRecord> active = store.activeUnbatched();
         // The history the supplementary rule is decided from (design Q27): a key with a batch still
         // in flight is left waiting, and a key whose batches are all terminal may be followed by a
@@ -302,7 +318,6 @@ public class RegisterGenerationJob {
         tally.assembled(active, assembler.assemble(active, recorded, true));
 
         request(tally);
-        tally.chased(reconciler.reconcile());
     }
 
     /**
@@ -619,6 +634,14 @@ public class RegisterGenerationJob {
      * read that could not be taken, and the four zeroes under it are not a night that settled
      * nothing.
      *
+     * <p><strong>And three numbers that are in neither account.</strong>
+     * {@code released_batches} and {@code released_registers} are what the run's first act gave
+     * back, and the registers among them are re-batched by this same run - so they are already
+     * inside {@code rows} and are deliberately not added to it or to anything else (FR-009).
+     * {@code contended} is what the pass could not give back: those batches are untouched and stale
+     * still, so the next run reaches them again, and a line that said nothing about them would
+     * describe a night as complete that had left work undone.
+     *
      * @param report what the run did
      * @return that same report, so a caller can write the line and answer with it in one step
      */
@@ -629,7 +652,8 @@ public class RegisterGenerationJob {
         LOG.info("event={} run_id={} gate={} reason={} batches={} requested={} generating={} failed={} "
                         + "pending={} deferred={} rows={} rows_generating={} rows_failed={} "
                         + "rows_pending={} rows_deferred={} snapshot={} generated={} notified={} "
-                        + "rows_generated={} rows_notified={} reconciled={} duration_ms={}",
+                        + "rows_generated={} rows_notified={} released_batches={} "
+                        + "released_registers={} contended={} duration_ms={}",
                 RUN_EVENT, RunCorrelation.current(), gateOf(report.gateDecision()),
                 reasonOf(report.gateDecision()),
                 outcomes.values().stream().mapToInt(Integer::intValue).sum(), report.requested(),
@@ -638,8 +662,8 @@ public class RegisterGenerationJob {
                 counted(rows, BatchStatus.GENERATING), counted(rows, BatchStatus.FAILED),
                 counted(rows, BatchStatus.PENDING), report.deferredRows(),
                 settled.read() ? TAKEN : UNREAD, settled.generated(), settled.notified(),
-                settled.generatedRows(), settled.notifiedRows(),
-                report.reconciled(), report.duration().toMillis());
+                settled.generatedRows(), settled.notifiedRows(), report.releasedBatches(),
+                report.releasedRegisters(), report.contended(), report.duration().toMillis());
         return report;
     }
 
@@ -720,6 +744,17 @@ public class RegisterGenerationJob {
          */
         private final Map<UUID, Integer> registersByBatch = new LinkedHashMap<>();
 
+        /**
+         * What the run's first act gave back, and what it could not.
+         *
+         * <p>Held from the moment the pass answers rather than folded into the counts, because the
+         * three numbers are a diagnostic beside the night's two accounts and not part of either:
+         * the registers counted are re-batched by this same run and are therefore already inside
+         * its row totals (FR-009).
+         */
+        private StaleBatchReleaser.ReleaseTally releaseTally =
+                new StaleBatchReleaser.ReleaseTally(0, 0, 0);
+
         /** The registers the store called active, for the age of the oldest still waiting. */
         private List<RegisterRecord> activeRegisters = List.of();
 
@@ -745,9 +780,6 @@ public class RegisterGenerationJob {
 
         /** How many batches the run deadline left unrequested. */
         private int batchesLeftBehind;
-
-        /** How many outcomes the reconciler had to fetch rather than receive. */
-        private int outcomesChased;
 
         /**
          * Records what the night held, which is everything the deferral readings are taken from.
@@ -834,12 +866,12 @@ public class RegisterGenerationJob {
         }
 
         /**
-         * Records how many outcomes the reconciler had to fetch.
+         * Records what the run's first act came to.
          *
-         * @param outcomesFetched what it fetched
+         * @param released what the pass released and what it could not release
          */
-        private void chased(final int outcomesFetched) {
-            this.outcomesChased = outcomesFetched;
+        private void released(final StaleBatchReleaser.ReleaseTally released) {
+            this.releaseTally = released;
         }
 
         private List<RegisterRecord> active() {
@@ -872,7 +904,8 @@ public class RegisterGenerationJob {
 
             return new RunReport(decision, outcomes, rendersAsked.size(), rowOutcomes,
                     nightsAssembly == null ? 0 : nightsAssembly.deferred().size(),
-                    registersWaiting, settled, outcomesChased, duration);
+                    registersWaiting, settled, releaseTally.batches(), releaseTally.registers(),
+                    releaseTally.contended(), duration);
         }
     }
 }

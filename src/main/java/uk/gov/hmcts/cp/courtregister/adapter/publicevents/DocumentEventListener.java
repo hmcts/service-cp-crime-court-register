@@ -37,7 +37,9 @@ import uk.gov.hmcts.cp.courtregister.domain.CompletedBy;
  *       subscription and were applied to nothing. One that names its batch and leaves out
  *       {@code payloadFileServiceId} is dropped just the same and counted under
  *       {@code missing-payload-id} instead, because its correlation was never in doubt and the
- *       reading that says otherwise sends support after a batch identity nothing lost.</li>
+ *       reading that says otherwise sends support after a batch identity nothing lost. One that
+ *       addresses itself perfectly and leaves out the document, or the instant, is counted under
+ *       {@code incomplete-outcome}: the fault there is the announcement, not the addressing.</li>
  * </ul>
  *
  * <p>What it does with a message it recognises is call
@@ -336,9 +338,13 @@ public class DocumentEventListener {
         final UUID documentFileId = uuid(payload, DOCUMENT_FILE_SERVICE_ID);
         final Instant generatedAt = instant(payload, GENERATED_TIME);
         if (documentFileId == null || generatedAt == null) {
+            // The announcement's addressing is sound and its subject is missing, which is neither
+            // of the two absences above: counted under its own reason so a batch given back by the
+            // next run is not the only trace of an outcome that arrived and could not be used.
+            metrics.incompleteOutcomeIgnored();
             LOG.warn("A document-available for batch {} carried no document or no instant, so it "
-                    + "is acknowledged and dropped; the reconciler is what asks again.",
-                    correlationId);
+                    + "is acknowledged and dropped; the batch stays in flight and the next run "
+                    + "gives it back.", correlationId);
             return;
         }
         apply(correlationId, () -> sink.documentAvailable(correlationId, payloadFileId,
@@ -360,8 +366,12 @@ public class DocumentEventListener {
 
         final Instant failedAt = instant(payload, FAILED_TIME);
         if (failedAt == null) {
+            // The same fault on the other event, and so the same reason: a refusal with no instant
+            // is a refusal nothing can be stamped with.
+            metrics.incompleteOutcomeIgnored();
             LOG.warn("A generation-failed for batch {} carried no instant, so it is acknowledged "
-                    + "and dropped; the reconciler is what asks again.", correlationId);
+                    + "and dropped; the batch stays in flight and the next run gives it back.",
+                    correlationId);
             return;
         }
         apply(correlationId, () -> sink.generationFailed(correlationId, payloadFileId,

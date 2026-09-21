@@ -7,16 +7,26 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
+import java.util.stream.Stream;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.mock.env.MockEnvironment;
@@ -30,11 +40,15 @@ import uk.gov.hmcts.cp.courtregister.application.DocumentRenderer;
 import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
 import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
+import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
-import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
+import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
+import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
+import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
 import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
 import uk.gov.hmcts.cp.courtregister.pipeline.PdfPayloadMapper;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 import uk.gov.hmcts.cp.courtregister.support.WorkloadIdentityStub;
 
 /**
@@ -42,13 +56,13 @@ import uk.gov.hmcts.cp.courtregister.support.WorkloadIdentityStub;
  *
  * <p>Every class Phase 5 landed is reachable from a unit test and none of them was reachable from
  * Spring. There was no {@code @Component} on and no {@code @Bean} constructing
- * {@code DocumentOutcomeSinkImpl}, {@link GenerationReconciler}, {@link RegisterGenerationService},
+ * {@code DocumentOutcomeSinkImpl}, {@link RegisterGenerationService},
  * {@link BatchAssembler}, {@link PdfPayloadMapper}, {@link FileServicePayloadStore} or
  * {@link SystemDocGeneratorClient}; the only {@code PayloadFileStore} and {@code DocumentRenderer}
  * beans in the whole context were {@link StubGenerationConfig}'s stand-ins. So
  * {@code PublicEventsConfig.documentEventListener} found no sink and returned {@code null} - no
  * {@code @JmsListener}, no durable subscription - and {@code SchedulingConfig.registerGenerationJob}
- * found no gate, assembler, service or reconciler and returned {@code null} - nothing scheduled. A
+ * found no gate, assembler or service and returned {@code null} - nothing scheduled. A
  * pod deployed with {@code courtregister.generation.enabled=true} was inert, and the only trace of
  * it was two WARN lines.
  *
@@ -70,28 +84,101 @@ import uk.gov.hmcts.cp.courtregister.support.WorkloadIdentityStub;
  */
 @ExtendWith(WorkloadIdentityStub.class)
 @SpringBootTest(properties = {
-    "courtregister.generation.enabled=true",
-    "courtregister.generation.completion=event",
-    "courtregister.generation.sdg-mode=LIVE",
-    "courtregister.generation.nn-mode=LIVE",
-    "courtregister.generation.fileservice-mode=LIVE",
-    "courtregister.generation.flag-mode=LIVE",
-    "courtregister.fileservice.url=jdbc:postgresql://fileservice.internal:5432/fileservice",
-    "courtregister.feature.endpoint=https://appconfig.internal",
-    "courtregister.feature.label=ste86",
-    "courtregister.endpoints.systemdocgenerator=http://systemdocgenerator.internal:8080",
-    "courtregister.endpoints.notificationnotify=http://notificationnotify.internal:8080",
-    "courtregister.endpoints.system-user-id=00000000-0000-4000-8000-000000000000",
-    "courtregister.email.templates.cr_standard=5c9a0e21-3d47-4f18-9b62-0a71c4e8d530",
-    "courtregister.payload.mode=STUB",
-    "courtregister.referencedata.mode=STUB",
-    // Intake is a different half and needs a broker this suite has no business standing up.
-    "courtregister.consumer.enabled=false",
-    "spring.artemis.broker-url=tcp://localhost:61616",
-    "spring.artemis.embedded.enabled=true",
-    "spring.artemis.embedded.queues=public.event"})
+    GenerationWiringContextTest.GENERATION_ENABLED,
+    GenerationWiringContextTest.SDG_MODE,
+    GenerationWiringContextTest.NN_MODE,
+    GenerationWiringContextTest.FILESERVICE_MODE,
+    GenerationWiringContextTest.FLAG_MODE,
+    GenerationWiringContextTest.FILESERVICE_URL,
+    GenerationWiringContextTest.FLAG_ENDPOINT,
+    GenerationWiringContextTest.FLAG_LABEL,
+    GenerationWiringContextTest.SDG_ENDPOINT,
+    GenerationWiringContextTest.NN_ENDPOINT,
+    GenerationWiringContextTest.SYSTEM_USER_ID,
+    GenerationWiringContextTest.TEMPLATE_ID,
+    GenerationWiringContextTest.PAYLOAD_MODE,
+    GenerationWiringContextTest.REFDATA_MODE,
+    GenerationWiringContextTest.CONSUMER_DISABLED,
+    GenerationWiringContextTest.BROKER_URL,
+    GenerationWiringContextTest.EMBEDDED_BROKER,
+    GenerationWiringContextTest.EMBEDDED_TOPIC})
 @DisplayName("the downstream half on a generating pod")
 class GenerationWiringContextTest {
+
+    /**
+     * The settings a generating pod is deployed with, named so that the command JVM below differs
+     * from this context by {@code courtregister.cli} and by nothing else.
+     *
+     * <p>A nested {@code @SpringBootTest} does not inherit the enclosing one's {@code properties},
+     * so the pair would otherwise be two different deployments and the absence it asserts would be
+     * attributable to whichever setting had been left out.
+     */
+    static final String GENERATION_ENABLED = "courtregister.generation.enabled=true";
+
+    /**
+     * The retired safety net's binary name, spelled rather than imported.
+     *
+     * <p>A case that imported the type would be deleted with it, which is the one thing an
+     * assertion about a deletion may not be.
+     */
+    private static final String RECONCILER =
+            "uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler";
+
+    /** Where the {@code batch} package's own sources are, for the lock sweep. */
+    private static final Path BATCH_SOURCES = Path.of("src", "main", "java", "uk", "gov", "hmcts",
+            "cp", "courtregister", "batch");
+
+    /** The same package, as a binary name prefix. */
+    private static final String BATCH_PACKAGE = "uk.gov.hmcts.cp.courtregister.batch.";
+
+    /** The one sub-package the sweep leaves out: a command holds no scheduler and takes no lock. */
+    private static final Path CLI_SOURCES = BATCH_SOURCES.resolve("cli");
+
+    /** The extension a source of it carries, named so the sweep carries no literal. */
+    private static final String JAVA = ".java";
+
+    static final String SDG_MODE = "courtregister.generation.sdg-mode=LIVE";
+
+    static final String NN_MODE = "courtregister.generation.nn-mode=LIVE";
+
+    static final String FILESERVICE_MODE = "courtregister.generation.fileservice-mode=LIVE";
+
+    static final String FLAG_MODE = "courtregister.generation.flag-mode=LIVE";
+
+    static final String FILESERVICE_URL =
+            "courtregister.fileservice.url=jdbc:postgresql://fileservice.internal:5432/fileservice";
+
+    static final String FLAG_ENDPOINT = "courtregister.feature.endpoint=https://appconfig.internal";
+
+    static final String FLAG_LABEL = "courtregister.feature.label=ste86";
+
+    static final String SDG_ENDPOINT =
+            "courtregister.endpoints.systemdocgenerator=http://systemdocgenerator.internal:8080";
+
+    static final String NN_ENDPOINT =
+            "courtregister.endpoints.notificationnotify=http://notificationnotify.internal:8080";
+
+    static final String SYSTEM_USER_ID =
+            "courtregister.endpoints.system-user-id=00000000-0000-4000-8000-000000000000";
+
+    static final String TEMPLATE_ID =
+            "courtregister.email.templates.cr_standard=5c9a0e21-3d47-4f18-9b62-0a71c4e8d530";
+
+    static final String PAYLOAD_MODE = "courtregister.payload.mode=STUB";
+
+    static final String REFDATA_MODE = "courtregister.referencedata.mode=STUB";
+
+    /** Intake is a different half and needs a broker this suite has no business standing up. */
+    static final String CONSUMER_DISABLED = "courtregister.consumer.enabled=false";
+
+    static final String BROKER_URL = "spring.artemis.broker-url=tcp://localhost:61616";
+
+    static final String EMBEDDED_BROKER = "spring.artemis.embedded.enabled=true";
+
+    static final String EMBEDDED_TOPIC = "spring.artemis.embedded.queues=public.event";
+
+    /** The one property the command JVM below differs by. */
+    static final String CLI_ON = "courtregister.cli=true";
 
     private final ApplicationContext context;
 
@@ -107,7 +194,8 @@ class GenerationWiringContextTest {
                 .as("the bean is contributed only where an outcome has somewhere to be applied, so "
                         + "a null here is a pod holding no subscription at all: every "
                         + "document-available systemdocgenerator publishes for this service is "
-                        + "delivered to nobody, and every batch waits for the reconciler")
+                        + "delivered to nobody, and every batch waits until the next run "
+                        + "gives up on it")
                 .isNotNull();
     }
 
@@ -115,7 +203,7 @@ class GenerationWiringContextTest {
     @DisplayName("holds the sink an outcome is applied through")
     void the_context_should_hold_an_outcome_sink() {
         assertThat(context.getBeanProvider(DocumentOutcomeSink.class).getIfAvailable())
-                .as("the listener and the reconciler drive one port, and it is what turns an "
+                .as("the one port an outcome is applied through, and it is what turns an "
                         + "announcement into batch state")
                 .isNotNull();
     }
@@ -133,14 +221,299 @@ class GenerationWiringContextTest {
         assertThat(context.getBeanNamesForType(RegisterGenerationService.class))
                 .as("the requesting leg the run asks once per batch")
                 .isNotEmpty();
-        assertThat(context.getBeanNamesForType(GenerationReconciler.class))
-                .as("the safety net, which carries a schedule of its own and therefore has to be a "
-                        + "bean for that schedule to be seen at all")
-                .isNotEmpty();
         assertThat(context.getBeanNamesForType(PdfPayloadMapper.class))
                 .as("progression's payload generator, which the requesting leg maps every batch "
                         + "through")
                 .isNotEmpty();
+    }
+
+    /**
+     * The retired safety net, asserted gone rather than asserted unused.
+     *
+     * <p>Two halves, because a bean nobody fires and a class nobody has is not the same claim and
+     * only the second one keeps. The bean is what a context would fire; the class is what a merge
+     * could bring back with a timer on it again, which is the shape the increment removed: a sweep
+     * that reached a stale batch before the run's own pass did, and failed it under a reason that
+     * does not give its registers back.
+     *
+     * <p>Stated over the bean <em>names</em> and a class <em>name</em> rather than over the type,
+     * because a case that imported the type could not outlive it - and the assertion has to be one
+     * that still compiles the day after the deletion, or it goes with it.
+     */
+    @Test
+    @DisplayName("holds no reconciler, and neither does any other context, the class being gone")
+    void no_context_holds_a_generation_reconciler() {
+        assertThat(context.getBeanDefinitionNames())
+                .as("a bean of it is a class something can call, and the run stopped calling it at "
+                        + "T016: what would be left is an object a later wiring change could put a "
+                        + "schedule back on")
+                .noneSatisfy(name -> assertThat(name).containsIgnoringCase("reconciler"));
+        assertThatThrownBy(() -> Class.forName(RECONCILER))
+                .as("and the class itself, because a type on the classpath is a type a merge can "
+                        + "wire up again with nothing to catch it (FR-007)")
+                .isInstanceOf(ClassNotFoundException.class);
+    }
+
+    /**
+     * One ShedLock name in the whole of {@code batch}, beside the morning report's.
+     *
+     * <p>A sweep over the package's sources rather than a list of the classes somebody remembered:
+     * the claim is about every locked method the generation half can carry, and a case naming two
+     * classes would say nothing about a third arriving beside them. FR-007 leaves the generation
+     * half exactly one schedule, so it leaves it exactly one lock, and the report's is the only
+     * other lock this service takes.
+     *
+     * <p>{@code IntakeAgeSweep} deliberately holds none, which is why the expected set is two and
+     * not three: a gauge describes the JVM that publishes it, so every replica takes its own
+     * readings and an alert aggregates them.
+     */
+    @Test
+    @DisplayName("the generation half carries exactly one scheduler lock")
+    void the_generation_half_carries_exactly_one_scheduler_lock() throws IOException {
+        assertThat(schedulerLockNames())
+                .as("the run's own, and the morning report's; a third is a second thing holding a "
+                        + "lock over batches the run is the only decider of")
+                .containsExactlyInAnyOrder(RegisterGenerationJob.LOCK_NAME,
+                        ExceptionReportJob.LOCK_NAME);
+    }
+
+    /**
+     * Every {@code @SchedulerLock} name declared anywhere in the {@code batch} package.
+     *
+     * <p>The classes are found from the sources rather than from a scan of the classpath, which is
+     * what makes this a claim about the package as it is written: a class added to it is in the
+     * sweep the moment it is saved, and a class deleted from it leaves nothing behind for the sweep
+     * to keep asserting about. {@code batch/cli} is left out on purpose - a command holds no
+     * scheduler and therefore takes no lock, which {@link CliModeConfigTest} is what asserts.
+     *
+     * <p><strong>It walks, and it looks inside.</strong> The sources are read recursively and every
+     * nested type is collected with its enclosing one, because a lock is a lock wherever it is
+     * written: a second schedule declared on a nested class, or in a sub-package somebody adds
+     * beside {@code cli}, is exactly the arrangement FR-007 says this half may not have, and a
+     * sweep that read only the top-level type of each file in one directory would let it through.
+     *
+     * @return the lock names, in no particular order
+     * @throws IOException if the package's sources cannot be read
+     */
+    private static List<String> schedulerLockNames() throws IOException {
+        try (Stream<Path> sources = Files.walk(BATCH_SOURCES)) {
+            return sources.filter(source -> !source.startsWith(CLI_SOURCES))
+                    .filter(source -> source.getFileName().toString().endsWith(JAVA))
+                    .map(GenerationWiringContextTest::loaded)
+                    .flatMap(GenerationWiringContextTest::withNested)
+                    .flatMap(declaring -> Stream.of(declaring.getDeclaredMethods()))
+                    .map(method -> method.getAnnotation(SchedulerLock.class))
+                    .filter(lock -> lock != null)
+                    .map(SchedulerLock::name)
+                    .toList();
+        }
+    }
+
+    /**
+     * One class of the {@code batch} package, from the file that declares it.
+     *
+     * @param source the source file, which this repository names after its one public type
+     * @return the loaded class
+     */
+    private static Class<?> loaded(final Path source) {
+        final String simple = source.getFileName().toString();
+        final String relative = BATCH_SOURCES.relativize(source.getParent()).toString();
+        final String subPackage = relative.isEmpty() ? ""
+                : relative.replace(source.getFileSystem().getSeparator(), ".") + ".";
+        final String binary = BATCH_PACKAGE + subPackage
+                + simple.substring(0, simple.length() - JAVA.length());
+        try {
+            return Class.forName(binary);
+        } catch (ClassNotFoundException notCompiled) {
+            throw new AssertionError(binary
+                    + " is a source in the batch package that no class answers to", notCompiled);
+        }
+    }
+
+    /**
+     * A class and every type declared inside it, however deeply.
+     *
+     * @param declaring the class read off a source file
+     * @return that class and its nested types
+     */
+    private static Stream<Class<?>> withNested(final Class<?> declaring) {
+        return Stream.concat(Stream.of(declaring),
+                Stream.of(declaring.getDeclaredClasses())
+                        .flatMap(GenerationWiringContextTest::withNested));
+    }
+
+
+    /**
+     * The run's first act has to be a bean for the run to be given one.
+     *
+     * <p>Nothing else on the context constructs it: the job is contributed by
+     * {@link SchedulingConfig} over the collaborators it asks in order, and a pass that no
+     * configuration declared would leave the nightly run with nothing to call - every batch whose
+     * outcome went missing sitting in flight, and its court centre day passed over at every
+     * subsequent run, which is the failure this increment exists to end.
+     */
+    @Test
+    @DisplayName("holds the pass the run gives back stale batches through")
+    void a_generation_enabled_context_holds_a_stale_batch_releaser() {
+        assertThat(context.getBeanNamesForType(StaleBatchReleaser.class))
+                .as("a null here is a nightly run whose first act does nothing: a batch nobody "
+                        + "heard an outcome about stays in flight, and its court centre gets no "
+                        + "document night after night until a person notices")
+                .isNotEmpty();
+    }
+
+    /**
+     * <strong>[A]</strong> The pass takes what it measures by and not the record it came from.
+     *
+     * <p>Green on introduction - it states the shape Phase 3 landed - and asserted here because
+     * the wiring is where that shape is easiest to lose: a constructor handed the whole
+     * {@code GenerationProperties} would let the pass read any setting the deployment carries,
+     * including the two that are deployment shape rather than cutover levers, and the class would
+     * stop being testable on two durations.
+     */
+    @Test
+    @DisplayName("[A] the pass takes the two durations and not the whole record")
+    void the_releaser_takes_the_two_durations_and_not_the_whole_record() {
+        assertThat(StaleBatchReleaser.class.getDeclaredConstructors()[0].getParameterTypes())
+                .as("the store it releases through, where the numbers are counted, the two cutoffs "
+                        + "and the clock they are measured back from - and no settings record")
+                .containsExactly(RegisterStore.class, GenerationMetrics.class, Duration.class,
+                        Duration.class, Clock.class);
+    }
+
+    /**
+     * <strong>[A]</strong> And the half-wired context the completeness check is written for.
+     *
+     * <p>Characterisation: the branch exists and behaves this way already. It is asserted because
+     * nothing asserted it — every case above holds a context that is complete, so the WARN line and
+     * the {@code null} it accompanies were reachable from no test at all, and the check's own list
+     * of collaborators is exactly the sort of thing a later wiring change edits without noticing.
+     *
+     * <p>Driven by calling the {@code @Bean} method rather than by standing up a context missing a
+     * bean: the pass is declared on this same configuration, so a context that holds the
+     * configuration holds the pass, and there is no set of properties that produces the incomplete
+     * case. The method is the unit; the providers are what a context hands it.
+     */
+    @Nested
+    @DisplayName("a context the downstream half is only half on")
+    class AnIncompleteContext {
+
+        @Test
+        @DisplayName("[A] schedules no run, and the line names the collaborator that was missing")
+        void a_context_without_the_pass_should_schedule_no_run_and_name_it() {
+            try (CapturedLog log = CapturedLog.capturing(SchedulingConfig.class)) {
+                final RegisterGenerationJob job = new SchedulingConfig().registerGenerationJob(
+                        holding(FeatureFlagGate.class, mock(FeatureFlagGate.class)),
+                        holding(RegisterStore.class, mock(RegisterStore.class)),
+                        holding(BatchAssembler.class, mock(BatchAssembler.class)),
+                        holding(RegisterGenerationService.class,
+                                mock(RegisterGenerationService.class)),
+                        holdingNothing(StaleBatchReleaser.class),
+                        // Read only on the branch that constructs the run, which this is not.
+                        null, null, null, null);
+
+                assertThat(job)
+                        .as("a run whose first act would be a call to nothing is not a run: it "
+                                + "would report a quiet night every night while every batch whose "
+                                + "outcome went missing stayed in flight")
+                        .isNull();
+                assertThat(log.messages())
+                        .as("and the one trace a deployment gets has to say which collaborator was "
+                                + "missing, or an inert pod is indistinguishable from a quiet one")
+                        .anyMatch(line -> line.contains("releaser=false"))
+                        .allSatisfy(line -> assertThat(line)
+                                .as("gate, store, assembler and service were all present, so the "
+                                        + "line must not accuse them")
+                                .doesNotContain("gate=false", "store=false", "assembler=false",
+                                        "service=false"));
+            }
+        }
+
+        @Test
+        @DisplayName("[A] the check no longer names the reconciler")
+        void the_completeness_check_should_not_name_the_reconciler() {
+            try (CapturedLog log = CapturedLog.capturing(SchedulingConfig.class)) {
+                new SchedulingConfig().registerGenerationJob(
+                        holdingNothing(FeatureFlagGate.class),
+                        holdingNothing(RegisterStore.class),
+                        holdingNothing(BatchAssembler.class),
+                        holdingNothing(RegisterGenerationService.class),
+                        holdingNothing(StaleBatchReleaser.class),
+                        null, null, null, null);
+
+                assertThat(log.messages())
+                        .as("the run stopped asking for a reconciler at T016, and a line still "
+                                + "naming one would describe a collaborator the job does not have")
+                        .isNotEmpty()
+                        .allSatisfy(line -> assertThat(line).doesNotContain("reconciler"));
+            }
+        }
+
+        /**
+         * A provider answering with one bean, as a context holding it would.
+         *
+         * @param <T>  the collaborator's type
+         * @param type the type the configuration asks for
+         * @param bean the bean it is given
+         * @return a provider over a factory holding exactly that bean
+         */
+        private <T> ObjectProvider<T> holding(final Class<T> type, final T bean) {
+            final DefaultListableBeanFactory factory = new DefaultListableBeanFactory();
+            factory.registerSingleton(type.getName(), bean);
+            return factory.getBeanProvider(type);
+        }
+
+        /**
+         * A provider answering with nothing, as a context missing the bean does.
+         *
+         * @param <T>  the collaborator's type
+         * @param type the type the configuration asks for
+         * @return a provider over an empty factory
+         */
+        private <T> ObjectProvider<T> holdingNothing(final Class<T> type) {
+            return new DefaultListableBeanFactory().getBeanProvider(type);
+        }
+    }
+
+    /**
+     * A JVM started to run one operations command must not hold the pass.
+     *
+     * <p>An operator regenerating one court centre must not, as a side effect, give up on another
+     * court centre's in-flight batch: the pass belongs to the scheduled run, which holds the lock
+     * that makes it one run. The absence is complete because the pass is declared beside the job on
+     * {@link SchedulingConfig}, which carries {@link CliModeConfig}'s condition - a bean-level
+     * condition would leave a pass nothing calls.
+     */
+    @Nested
+    @SpringBootTest(properties = {
+        GENERATION_ENABLED, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
+        FILESERVICE_URL, FLAG_ENDPOINT, FLAG_LABEL, SDG_ENDPOINT, NN_ENDPOINT, SYSTEM_USER_ID,
+        TEMPLATE_ID, PAYLOAD_MODE, REFDATA_MODE, CONSUMER_DISABLED, BROKER_URL, EMBEDDED_BROKER,
+        EMBEDDED_TOPIC, CLI_ON})
+    @DisplayName("a JVM started to run one operations command")
+    class ACommandJvm {
+
+        private final ApplicationContext commandContext;
+
+        @Autowired
+        ACommandJvm(final ApplicationContext commandContext) {
+            this.commandContext = commandContext;
+        }
+
+        @Test
+        @DisplayName("holds no stale-batch pass")
+        void a_command_jvm_holds_no_stale_batch_releaser() {
+            assertThat(commandContext.getBeanNamesForType(StaleBatchReleaser.class))
+                    .as("the on-demand generation command does not run the pass: one court "
+                            + "centre's regeneration may not decide that another's in-flight batch "
+                            + "has failed, and the per-batch release the operations surface "
+                            + "already offers is the supported way to free one")
+                    .isEmpty();
+            assertThat(commandContext.getBeanProvider(RegisterGenerationJob.class).getIfAvailable())
+                    .as("and it holds no run to call one either, which is what makes the absence "
+                            + "a plain one rather than a half")
+                    .isNull();
+        }
     }
 
     @Test

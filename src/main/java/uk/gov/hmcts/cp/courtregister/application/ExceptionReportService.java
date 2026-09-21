@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.cp.courtregister.config.ProcessingMetrics;
 import uk.gov.hmcts.cp.courtregister.domain.BatchException;
+import uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.DeliveryStatus;
 import uk.gov.hmcts.cp.courtregister.domain.ExceptionEntry;
@@ -219,7 +220,7 @@ public class ExceptionReportService {
         }
         for (final BatchException dead
                 : batches.failedBetween(window.from(), window.to())) {
-            entries.add(batch(ExceptionKind.BATCH_FAILED, dead, nameOf(dead)));
+            entries.add(batch(kindOf(dead), dead, nameOf(dead)));
         }
         for (final RecordedRegisterSummary stranded : registers.recordedUnbatchedBefore(
                 LastScheduledRun.before(generationCron, generationZone, snapshotAt))) {
@@ -479,5 +480,31 @@ public class ExceptionReportService {
     /** A dead batch's own bounded failure reason, and never systemdocgenerator's words. */
     private static String nameOf(final BatchException dead) {
         return dead.failureReason() == null ? null : dead.failureReason().name();
+    }
+
+    /**
+     * Which kind one FAILED batch is, decided by the reason on its own row.
+     *
+     * <p>One read answers for both, because one read is what the store holds: a batch a run gave
+     * up on is FAILED exactly as a batch systemdocgenerator refused is, and the only thing that
+     * tells them apart is the bounded reason. So the split is made here, at the one place a FAILED
+     * batch becomes an entry, rather than by a second statement that would have to keep the same
+     * window and the same order as this one.
+     *
+     * <p><strong>{@link ExceptionKind#BATCH_RELEASED} is informational and
+     * {@link ExceptionKind#BATCH_FAILED} is not</strong> (FR-019). A released batch's registers
+     * were given back by the same run that failed it and were rendered that night, so it is
+     * reported because support should know a court centre needed two attempts - not because
+     * anything is owed. Reported as a failure it would send somebody after a document that
+     * exists, and the morning a genuinely refused render was on the same page it would be one
+     * entry harder to see.
+     *
+     * @param dead the projection the failed-batches read answered with
+     * @return the kind its reason makes it
+     */
+    private static ExceptionKind kindOf(final BatchException dead) {
+        return dead.failureReason() == BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN
+                ? ExceptionKind.BATCH_RELEASED
+                : ExceptionKind.BATCH_FAILED;
     }
 }

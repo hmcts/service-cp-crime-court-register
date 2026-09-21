@@ -71,8 +71,10 @@ import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmission;
 import uk.gov.hmcts.cp.courtregister.application.RegisterSubmissionClient;
 import uk.gov.hmcts.cp.courtregister.application.SubmissionReceipt;
+import uk.gov.hmcts.cp.courtregister.batch.BatchAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
+import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
 import uk.gov.hmcts.cp.courtregister.batch.cli.Args;
 import uk.gov.hmcts.cp.courtregister.batch.cli.CheckFlagCli;
 import uk.gov.hmcts.cp.courtregister.batch.cli.CliMain;
@@ -710,8 +712,8 @@ class TelemetryPrivacyTest {
          */
         private static GenerationProperties generationSettings() {
             return new GenerationProperties(true, "0 0 18 * * MON-FRI", "Europe/London", false,
-                    Duration.ofMinutes(60), Duration.ofMinutes(70), Duration.ofMinutes(10),
-                    GenerationProperties.COMPLETION_EVENT,
+                    Duration.ofMinutes(60), Duration.ofMinutes(70), Duration.ofMinutes(30),
+                    Duration.ofMinutes(10),
                     GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE,
                     GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE);
         }
@@ -787,7 +789,7 @@ class TelemetryPrivacyTest {
      * last case below insists the drive above reached <em>each</em> of them: a statement added to
      * any of those classes later is inside this claim from the moment it is written, rather than
      * inside it if somebody remembered to add a case. The classes are named because the two legs
-     * are not a package - the run and the reconciler are in {@code batch}, the two services in
+     * are not a package - the run and the stale-batch pass are in {@code batch}, the two services in
      * {@code application}, the renderer's client, the notifier's client and the topic listener in
      * three {@code adapter} packages - and the ninth,
      * {@link uk.gov.hmcts.cp.courtregister.adapter.fileservice.FileServicePayloadStore}, is in the
@@ -819,11 +821,15 @@ class TelemetryPrivacyTest {
         /** The instruments the drive moved, on the registry the service would export from. */
         private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
+        /** Whether the drive handed systemdocgenerator's own words to the store, which keeps them. */
+        private boolean carriedTheGeneratorsWords;
+
         @BeforeAll
         void driveTheTwoLegs() throws Exception {
             try (CapturedLog log = CapturedLog.everything();
                     GenerationLegs legs = GenerationLegs.overMarkedRecipients(meters)) {
                 legs.driveEverything();
+                carriedTheGeneratorsWords = legs.generatorWordsReachedTheStore();
                 written.addAll(log.events());
             }
         }
@@ -858,11 +864,11 @@ class TelemetryPrivacyTest {
          * writes.
          *
          * <p><strong>INFO and above, which is the scope Principle VII governs and not a
-         * convenience.</strong> {@code SystemDocGeneratorClient} writes the generator's own words
-         * into a reason slot at DEBUG deliberately - that is the diagnostic the case above keeps
-         * <em>below</em> INFO rather than removes - so a sweep over every level would forbid the
-         * one place those words are allowed to be. The estate's index is the thing being protected,
-         * and free text below INFO does not reach it.
+         * convenience.</strong> The rule this sweep enforces is about the estate's index, which is
+         * what INFO and above reaches; a slot below it is a diagnostic. Nothing writes the
+         * generator's own words into one any more - the retired query client's DEBUG line was the
+         * one place they were allowed, and it went with the query - but the scope is stated in
+         * terms of the rule rather than of what happens to exist.
          */
         @Test
         @DisplayName("writes a bounded code into every reason slot, on both legs")
@@ -893,9 +899,14 @@ class TelemetryPrivacyTest {
                             + "defendant is a child; it goes to sdg_reason, not to the index")
                     .noneMatch(line -> line.contains(PersonalDataMarkers.GENERATOR_REASON));
             assertThat(renderings())
-                    .as("and it is kept at DEBUG deliberately, so a sweep that found it nowhere at "
-                            + "all would be passing because the drive never carried one")
-                    .anyMatch(line -> line.contains(PersonalDataMarkers.GENERATOR_REASON));
+                    .as("and now the query is gone they are in no line at any level: the one place "
+                            + "they were allowed was the retired client's own DEBUG slot, and what "
+                            + "keeps them is sdg_reason, which is a column")
+                    .noneMatch(line -> line.contains(PersonalDataMarkers.GENERATOR_REASON));
+            assertThat(carriedTheGeneratorsWords)
+                    .as("a sweep that found them nowhere would be passing because the drive never "
+                            + "carried any, so the proof is taken where they land")
+                    .isTrue();
         }
 
         @Test
@@ -978,8 +989,8 @@ class TelemetryPrivacyTest {
          * arrangement of this leg could put a reading on it, and this case named it as the single
          * unmoved meter so that whoever wired the timer up would be told to fold it into the drive.
          * It is wired now: the outcome sink times a render's round trip off the row it has just
-         * settled, and the reconciler times the one ending that does not pass through the sink. So
-         * the exception is gone and the claim is the plain one - the drive moves every meter
+         * settled, which is the one path an outcome reaches this service by. So the exception is
+         * gone and the claim is the plain one - the drive moves every meter
          * {@link GenerationMetrics} declares, and the label sweep above passes over all of them.
          */
         @Test
@@ -1050,6 +1061,45 @@ class TelemetryPrivacyTest {
                     .as("a statement the drive never reached is a statement outside every claim "
                             + "above; each needs a case in GenerationLegs.driveEverything")
                     .isEmpty();
+        }
+
+        /**
+         * Which classes the enumeration names, asked of the two this increment added.
+         *
+         * <p>Every claim in this group is bounded by {@link GenerationLegs#THE_LEGS}: a line
+         * written by a class the list does not name is outside the reach assertion, outside the
+         * label sweep and outside the statement scan, with this suite green. So the list itself is
+         * asserted, and asserted the way the report's four classes are - by name <em>and</em> by
+         * the statements each brought with it, because a class added to the list that declares no
+         * line widens the enumeration without widening a single claim.
+         *
+         * <p><strong>And the one that is no longer there.</strong> The retired reconciler took the
+         * three in-flight age readings and the grace-period sweep with it (FR-006); what replaced
+         * them is the run's first act and a sweep of its own, and a list that still named the
+         * deleted class would not compile while a list that named neither of the new ones would
+         * quietly cover nothing they write. The absence is asserted by name rather than by type
+         * for exactly that reason: a type that does not exist cannot be written down here at all.
+         */
+        @Test
+        @DisplayName("[A] and the enumeration names 004's two classes, with the lines they write")
+        void should_enumerate_the_release_pass_and_the_batch_age_sweep() throws Exception {
+            assertThat(GenerationLegs.THE_LEGS)
+                    .as("the two classes this increment added to the generation half; a line "
+                            + "either of them writes is inside every claim above only while the "
+                            + "list names it")
+                    .contains(StaleBatchReleaser.class, BatchAgeSweep.class);
+            assertThat(GenerationLegs.THE_LEGS.stream().map(Class::getSimpleName).toList())
+                    .as("and the mechanism they replaced is named nowhere: the grace-period "
+                            + "reconciler is gone, and a sweep that still expected its lines would "
+                            + "be describing a night this service no longer has")
+                    .doesNotContain("GenerationReconciler");
+            assertThat(List.of(StaleBatchReleaser.class, BatchAgeSweep.class))
+                    .allSatisfy(added -> assertThat(LogStatement.everyOneIn(List.of(added)))
+                            .as("the statements %s declares; asked of each class rather than of "
+                                    + "the pair, because one of them writing three lines satisfies "
+                                    + "a claim about both while the other is covered by nothing",
+                                    added.getSimpleName())
+                            .isNotEmpty());
         }
 
         /**
@@ -1130,6 +1180,11 @@ class TelemetryPrivacyTest {
      * free text on this leg is a recipient's address or another service's prose about a document
      * whose every defendant is a child.
      *
+     * <p>{@link SweepFailureReason} joined the second source at 004, when the batch-age sweep
+     * gave the generation half an absorbed refusal of its own. It is the same enumeration the
+     * intake sweep's counter is labelled from - one vocabulary for one kind of refusal - and the
+     * two codes exist precisely so that an outage of theirs cannot hide inside a bug of ours.
+     *
      * @return the bounded vocabulary
      */
     private static Set<String> boundedLabelVocabulary() {
@@ -1141,6 +1196,8 @@ class TelemetryPrivacyTest {
                                 .filter(value -> !value.startsWith(METER_PREFIX)),
                         Arrays.stream(BatchStatus.values()).map(TelemetryPrivacyTest::code),
                         Arrays.stream(NotificationStatus.values())
+                                .map(TelemetryPrivacyTest::code),
+                        Arrays.stream(SweepFailureReason.values())
                                 .map(TelemetryPrivacyTest::code),
                         Stream.concat(
                                         Stream.of(new FlagDecision.Enabled(),

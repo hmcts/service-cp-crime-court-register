@@ -34,15 +34,21 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
  * <p><strong>The single-table half of the batch's life.</strong> {@link JdbcRegisterStore} owns the
  * writes that have to move {@code processed_output} in the same statement - assembly and every
  * {@code mark} - because those are atomic or they are wrong. What is left is what the other
- * collaborators need and can do alone: the reconciler's two overdue reads, the read by the identity
- * every outcome is attributed by, the operations CLI's own assembly, and the whole-row
- * compare-and-set a caller that read a batch and decided about it writes it back through.
+ * collaborators need and can do alone: the three in-flight reads the batch-age readings will be
+ * taken from, the read by the identity every outcome is attributed by, the operations CLI's own
+ * assembly, and the whole-row compare-and-set a caller that read a batch and decided about it
+ * writes it back through.
+ *
+ * <p><strong>Three of those reads belong to a sweep of their own.</strong> The retired reconciler
+ * took them on its way past; {@code batch/BatchAgeSweep} takes them now, on its own fixed delay
+ * and under no lock, so {@code courtregister_oldest_generating_age}, {@code _pending_age} and
+ * {@code _generated_age} are refreshed by a reader whose only job that is. They outlived their old
+ * caller because the readings are what FR-011 asks for, and a gauge that came and went with a
+ * mechanism would be a gauge nobody could alert on across the change.
  *
  * <p><strong>A batch is read by its identity and by nothing else.</strong> There is no read by the
- * payload a batch was rendered from, because there is no caller for one: the reconciler asks
- * systemdocgenerator about the payload id it read off the batch row it already holds, and the sink
- * finds a batch by {@code sourceCorrelationId} alone and treats the payload as a cross-check on
- * that. A lookup by payload would only ever be reached by an outcome whose own account of which
+ * payload a batch was rendered from, because there is no caller for one: the sink finds a batch by
+ * {@code sourceCorrelationId} alone and treats the payload as a cross-check on that. A lookup by payload would only ever be reached by an outcome whose own account of which
  * batch it is about was missing or wrong, and completing a night's registers on one of those is the
  * guess the correlation exists to make unnecessary.
  *
@@ -68,9 +74,9 @@ public class RegisterBatchRepository {
      * The two states a batch is still in flight in, and so has not been completed by anything.
      *
      * <p>PENDING is a batch nothing has been asked of the renderer for; GENERATING is one whose
-     * answer has not come back, which is exactly why the reconciler reads it. Neither has an
-     * outcome for a mechanism to have learned, and {@code register_batch_completed_by_shape_chk}
-     * says the same of the row.
+     * answer has not come back. Neither has an outcome for a mechanism to have learned, and
+     * {@code register_batch_completed_by_shape_chk} says the same of the row - which is why these
+     * two, and only these two, are what the run's stale-batch pass may give up on.
      */
     private static final Set<BatchStatus> UNFINISHED =
             Set.of(BatchStatus.PENDING, BatchStatus.GENERATING);
@@ -114,8 +120,10 @@ public class RegisterBatchRepository {
     /**
      * Statement 3 - the batches whose outcome is overdue, oldest first.
      *
-     * <p>Ordered so that a run that cannot reconcile all of them reconciles the ones that have been
+     * <p>Ordered so that a caller that cannot read all of them reads the ones that have been
      * waiting longest, which are the ones a Youth Offending Team is already missing a register for.
+     * What is taken from it now is a reading - how long the oldest batch awaiting its render has
+     * been waiting - and nothing is settled on the strength of it.
      */
     private static final String GENERATING_SINCE = SELECT_BATCH + """
              WHERE status = 'GENERATING' AND requested_at < :requestedBefore
@@ -125,15 +133,17 @@ public class RegisterBatchRepository {
     /**
      * Statement 4 - the batches that never reached the renderer, oldest first.
      *
-     * <p>The other half of the safety net's read. A batch whose payload id was minted and whose
+     * <p>The second of the three readings. A batch whose payload id was minted and whose
      * {@code markRequested} never landed - the pod died after the 202, or the store blipped on the
-     * mark - stays PENDING for ever: {@link #generatingSince(Instant)} does not see it, its rows are
-     * stamped and so outside {@code activeUnbatched}, and the live-key index keeps every later
-     * re-share of that key waiting behind it.
+     * mark - stays PENDING: {@link #generatingSince(Instant)} does not see it, its rows are stamped
+     * and so outside {@code activeUnbatched}, and the live-key index keeps every later re-share of
+     * that key waiting behind it.
      *
-     * <p>{@code payload_file_id IS NOT NULL} is what makes such a batch answerable at all:
-     * systemdocgenerator is asked about a payload, so a batch that never minted one is a batch
-     * there is nothing to ask about. The cutoff is read against {@code assembled_at} because
+     * <p><strong>It no longer stays there.</strong> The run's own stale-batch pass gives such a
+     * batch back - staleness is state and age, not how far a batch got (FR-020) - so what this read
+     * is for is the reading beside it: how long the oldest batch that never reached the renderer
+     * has been stuck. {@code payload_file_id IS NOT NULL} is kept because this is the reading about
+     * a render that was asked for, and the cutoff is read against {@code assembled_at} because
      * {@code requested_at} is exactly the column this batch never got.
      */
     private static final String PENDING_SINCE = SELECT_BATCH + """
@@ -146,13 +156,14 @@ public class RegisterBatchRepository {
     /**
      * Statement 5 - the batches holding a document nobody was told about, oldest first.
      *
-     * <p>The third read the safety net makes, and the third batch nothing else in the flow can see.
+     * <p>The third reading, and the third batch nothing else in the flow can see.
      * Notification follows {@code markGenerated} in one step of one code path, so a store that went
      * away in between - or a listener session that rolled the JMS delivery back after that mark had
      * already committed - leaves the batch at GENERATED with rows that were never settled.
      * {@link #generatingSince(Instant)} reads GENERATING and {@link #pendingSince(Instant)} reads
-     * PENDING, so the one state that leaves a Youth Offending Team untold is the one state no
-     * reading moves for.
+     * PENDING, so the one state that leaves a Youth Offending Team untold is the one state nothing
+     * settles for - the stale-batch pass never touches a GENERATED batch at any age, because it
+     * holds a document somebody is owed e-mails about.
      *
      * <p>The cutoff is read against {@code generated_at} because that is when the batch became the
      * notifying leg's to finish, and a batch whose document arrived a moment ago is one that leg is
@@ -173,9 +184,10 @@ public class RegisterBatchRepository {
      *
      * <p><strong>Fenced on the state the caller read.</strong> A whole-row write keyed on the batch
      * identity alone would let anything overwrite anything: a FAILED batch - terminal, and reported
-     * to an operator as such - would be revived by a late reconciliation, keeping
-     * systemdocgenerator's verdict about that identity attached to a batch being rendered again;
-     * and two runs deciding about one batch would each believe they had moved it. The status the
+     * to an operator as such - would be revived by a late outcome, keeping systemdocgenerator's
+     * verdict about that identity attached to a batch whose registers have since been given back
+     * and rendered again; and two runs deciding about one batch would each believe they had moved
+     * it. The status the
      * caller read is therefore the predicate the update carries, and a batch that moved in between
      * changes no rows and is reported rather than overwritten - the same shape
      * {@link JdbcRegisterStore}'s {@code mark} statements are written in.
@@ -322,10 +334,9 @@ public class RegisterBatchRepository {
     /**
      * Statement 10 - the batches nothing has been asked of the renderer for, oldest first.
      *
-     * <p>Deliberately not {@link #PENDING_SINCE}, which serves the reconciler and so admits only
-     * the batches that minted a payload: systemdocgenerator can only be asked about a payload, and
-     * a batch that never minted one is a batch there is nothing to ask about. The report is saying
-     * that a court centre's day has been waiting, and that batch has been waiting longest of all.
+     * <p>Deliberately not {@link #PENDING_SINCE}, which serves the render-age reading and so admits
+     * only the batches that minted a payload. The report is saying that a court centre's day has
+     * been waiting, and a batch that never minted a payload has been waiting longest of all.
      */
     private static final String LATE_PENDING = EXCEPTION_COLUMNS + """
                    extract(epoch from (now() - assembled_at))::bigint AS age_seconds
@@ -392,9 +403,9 @@ public class RegisterBatchRepository {
      * @param transactionOperations the transaction the claim's two statements are taken in together
      * @param notificationClaimLease how long a notification claim stays live, measured from the
      *                      last renewal: {@code courtregister.notification.claim-lease}, the
-     *                      notifying leg's own setting. Not the reconciler's grace period, which
-     *                      answers a different question - how long a batch may hold a document
-     *                      before the safety net looks is no bound at all on telling a batch's
+     *                      notifying leg's own setting. Not {@code stale-after}, which answers a
+     *                      different question - how long a batch may be awaiting its render before
+     *                      the next run gives up on it is no bound at all on telling a batch's
      *                      recipients, whose cost is the number of Youth Offending Teams it is
      *                      addressed to times what notificationnotify makes of each of them. What
      *                      this has to cover is one recipient's turn, because
@@ -452,7 +463,7 @@ public class RegisterBatchRepository {
     /**
      * Statement 3 - the batches that have been GENERATING since before the given instant.
      *
-     * @param requestedBefore the far edge of the grace period
+     * @param requestedBefore the far edge of the reading's window
      * @return every batch whose outcome is overdue, oldest first
      */
     public List<RegisterBatch> generatingSince(final Instant requestedBefore) {
@@ -465,7 +476,7 @@ public class RegisterBatchRepository {
     /**
      * Statement 4 - the batches that minted a payload before the given instant and got no further.
      *
-     * @param assembledBefore the far edge of the grace period, measured from assembly
+     * @param assembledBefore the far edge of the reading's window, measured from assembly
      * @return every stale PENDING batch that minted a payload, oldest first
      */
     public List<RegisterBatch> pendingSince(final Instant assembledBefore) {
@@ -478,7 +489,7 @@ public class RegisterBatchRepository {
     /**
      * Statement 5 - the batches that have held a document since before the given instant.
      *
-     * @param generatedBefore the far edge of the grace period, measured from the document
+     * @param generatedBefore the far edge of the reading's window, measured from the document
      * @return every batch parked at GENERATED with nobody told, oldest first
      */
     public List<RegisterBatch> generatedSince(final Instant generatedBefore) {
@@ -492,10 +503,9 @@ public class RegisterBatchRepository {
      * The report's BATCH_LATE read for a batch nothing has been asked of the renderer for.
      *
      * <p>A projection rather than {@link #pendingSince(Instant)}, and the two are different
-     * questions. That read serves the reconciler, which can only ask systemdocgenerator about a
-     * payload, so it admits only the batches that minted one; this one is the report saying a court
-     * centre's day has been waiting, and a batch that never minted a payload has been waiting
-     * longest of all.
+     * questions. That read is the reading about a render that was asked for, so it admits only the
+     * batches that minted a payload; this one is the report saying a court centre's day has been
+     * waiting, and a batch that never minted a payload has been waiting longest of all.
      *
      * @param assembledBefore the cut-off, measured from assembly
      * @return every PENDING batch assembled before it, oldest first
@@ -596,8 +606,8 @@ public class RegisterBatchRepository {
      *
      * <p><strong>A claim that outlives its notifier is recoverable, which is what the lease is
      * for.</strong> A pod that died mid-notification left the claim behind, and a claim nothing can
-     * ever take is a batch no resend and no reconciliation could pick up - the state defect fix P1
-     * is about, wearing a different hat.
+     * ever take is a batch no resend could pick up - the state defect fix P1 is about, wearing a
+     * different hat.
      *
      * <p><strong>And a compare-and-set that changed nothing is asked why.</strong> Nought rows means
      * another notifier holds a live claim, or it means this store holds no such batch, and the two

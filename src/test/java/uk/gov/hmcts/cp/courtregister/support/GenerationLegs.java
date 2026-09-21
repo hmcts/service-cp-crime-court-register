@@ -1,7 +1,6 @@
 package uk.gov.hmcts.cp.courtregister.support;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
-import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
@@ -11,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
 
@@ -48,14 +48,18 @@ import uk.gov.hmcts.cp.courtregister.application.PayloadFileStore;
 import uk.gov.hmcts.cp.courtregister.application.RegisterGenerationService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
+import uk.gov.hmcts.cp.courtregister.application.ReleasedBatch;
 import uk.gov.hmcts.cp.courtregister.application.RenderProgress;
 import uk.gov.hmcts.cp.courtregister.application.ReportMailer;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseOutcome;
+import uk.gov.hmcts.cp.courtregister.application.StaleReleaseProgress;
+import uk.gov.hmcts.cp.courtregister.batch.BatchAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.BatchAssembler;
 import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
 import uk.gov.hmcts.cp.courtregister.batch.FeatureFlagGate;
-import uk.gov.hmcts.cp.courtregister.batch.GenerationReconciler;
 import uk.gov.hmcts.cp.courtregister.batch.IntakeAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
+import uk.gov.hmcts.cp.courtregister.batch.StaleBatchReleaser;
 import uk.gov.hmcts.cp.courtregister.batch.cli.ReportExceptionsCli;
 import uk.gov.hmcts.cp.courtregister.config.GenerationMetrics;
 import uk.gov.hmcts.cp.courtregister.config.GenerationProperties;
@@ -105,7 +109,7 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  *
  * <p>The subject of {@code config/TelemetryPrivacyTest}'s downstream group: everything that happens
  * to a register after the delivery path has recorded it. A batch is assembled, a payload is stored,
- * systemdocgenerator is asked for the render, the outcome comes back by topic or by query, and the
+ * systemdocgenerator is asked for the render, the outcome comes back on the topic, and the
  * document is e-mailed to the Youth Offending Teams the subscription matched - and every one of
  * those steps writes lines and moves meters. What this fixture exists to do is make <em>every</em>
  * one of those lines happen once, with a marker wherever a person could be named, so a sweep over
@@ -116,7 +120,8 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
  * have and because none of the three writes a log line of its own. Everything above them is real:
  * the payload mapper that turns a batch into a render payload, the client that asks
  * systemdocgenerator, the client that asks notificationnotify, the topic listener, the outcome
- * sink, the reconciler and the nightly run. The two HTTP clients matter most - they are the classes
+ * sink, the stale-batch pass and the nightly run. The two HTTP clients matter most - they are the
+ * classes
  * with a recipient's address in their hands and a far end's status line in their exceptions - so
  * they run over a real socket against a real server, and every answer below is one
  * systemdocgenerator or notificationnotify really could give.
@@ -140,6 +145,10 @@ public final class GenerationLegs implements AutoCloseable {
 
     /** The batch every scenario is about, fixed so a suite can look for it in the capture. */
     public static final UUID BATCH_ID = UUID.fromString("11111111-2222-4333-8444-555555555555");
+
+    /** A second batch, the one the stale-batch pass could not give back. */
+    public static final UUID CONTENDED_BATCH_ID =
+            UUID.fromString("22222222-3333-4444-8555-666666666666");
 
     /** The identity one recipient's e-mail is asked for under, fixed for the same reason. */
     public static final UUID NOTIFICATION_ID =
@@ -170,11 +179,12 @@ public final class GenerationLegs implements AutoCloseable {
     public static final List<Class<?>> THE_LEGS = Stream.concat(
             Stream.of(
                     RegisterGenerationJob.class,
+                    StaleBatchReleaser.class,
                     ExceptionReportJob.class,
                     IntakeAgeSweep.class,
+                    BatchAgeSweep.class,
                     RegisterGenerationService.class,
                     SystemDocGeneratorClient.class,
-                    GenerationReconciler.class,
                     DocumentEventListener.class,
                     DocumentOutcomeSinkImpl.class,
                     RegisterNotifierService.class,
@@ -279,16 +289,14 @@ public final class GenerationLegs implements AutoCloseable {
 
     private static final Duration READ_TIMEOUT = Duration.ofSeconds(2);
 
-    private static final Duration GRACE_PERIOD = Duration.ofMinutes(10);
+    private static final Duration STALE_AFTER = Duration.ofMinutes(30);
+
+    private static final Duration BATCH_AGE_REFRESH = Duration.ofMinutes(10);
 
     private static final ObjectMapper MAPPER = JacksonConfig.contractObjectMapper();
 
     /** Any generate-document command, which is one path and takes no parameter. */
     private static final String ANY_RENDER_COMMAND = SystemDocGeneratorClient.COMMAND_PATH;
-
-    /** Any document query, whatever payload is asked about. */
-    private static final String ANY_DOCUMENT_QUERY = SystemDocGeneratorClient.QUERY_PATH
-            .replace("{payloadFileId}", "[^/]+");
 
     /** Any send-email-notification, whatever identity it was made under. */
     private static final String ANY_EMAIL_COMMAND = NotificationNotifyClient.COMMAND_PATH
@@ -323,7 +331,7 @@ public final class GenerationLegs implements AutoCloseable {
 
     private final RegisterNotifierService notifying;
 
-    private final GenerationReconciler reconciler;
+    private final StaleBatchReleaser releaser;
 
     private final DocumentOutcomeSinkImpl sink;
 
@@ -357,6 +365,12 @@ public final class GenerationLegs implements AutoCloseable {
 
     private final IntakeAgeSweep sweep;
 
+    /** The three in-flight batch readings, whose only lines are a parked batch and a refusal. */
+    private final BatchAgeSweep batchSweep;
+
+    /** Whether the refusal the drive applied carried systemdocgenerator's words into the store. */
+    private boolean generatorWordsKept;
+
     private GenerationLegs(final WireMockServer wireMock, final MeterRegistry registry) {
         this.contexts = wireMock;
         this.metrics = new GenerationMetrics(registry);
@@ -369,11 +383,11 @@ public final class GenerationLegs implements AutoCloseable {
                 payloadFileStore, renderer, MAPPER, retryPolicy(), waited -> {}, metrics, clock);
         this.notifying = new RegisterNotifierService(store, batches, notifications, notifier,
                 metrics, TEMPLATE_ID, retryPolicy(), waited -> {}, clock);
-        this.reconciler = new GenerationReconciler(batches, renderer, sinkOf(), store, metrics,
-                GRACE_PERIOD, clock);
         this.sink = sinkOf();
         this.listener = new DocumentEventListener(sink, metrics, DeliveryObserver.NONE);
-        this.job = new RegisterGenerationJob(gate, store, assembler, generation, reconciler,
+        this.releaser = new StaleBatchReleaser(store, metrics, settings().staleAfter(),
+                settings().lockAtMostFor(), clock);
+        this.job = new RegisterGenerationJob(gate, store, assembler, generation, releaser,
                 metrics, settings(), clock);
         this.reporting = new ExceptionReportService(requestLog, batches, notifications, store,
                 REPORT_LIMIT, REPORT_LIMIT, REPORT_LIMIT, MAX_ENTRIES, GENERATION_CRON,
@@ -381,6 +395,7 @@ public final class GenerationLegs implements AutoCloseable {
         this.reportJob = new ExceptionReportJob(reporting, List.of(logSink), REPORT_CRON,
                 GenerationProperties.COURTS_ZONE, intakeMetrics, clock);
         this.sweep = new IntakeAgeSweep(requestLog, intakeMetrics, REPORT_LIMIT, clock);
+        this.batchSweep = new BatchAgeSweep(batches, metrics, clock);
         this.reportMailer = new NotificationNotifyReportMailer(
                 restClientFor(wireMock.baseUrl()), SYSTEM_USER_ID, MAPPER);
     }
@@ -403,6 +418,25 @@ public final class GenerationLegs implements AutoCloseable {
     }
 
     /**
+     * Whether the drive handed systemdocgenerator's own words to something that keeps them.
+     *
+     * <p>The vacuity guard for the privacy case that now says those words reach <em>no</em> line at
+     * any level. They used to be allowed one: the retired query client wrote them into a DEBUG slot,
+     * and the sweep proved it had carried one by finding it there. With the query gone the words
+     * arrive on the public-event topic and go to {@code sdg_reason}, which is a column - so the
+     * proof that the drive carried them has to be taken where they land, which is the store.
+     *
+     * <p>Read at the moment the call is made rather than at the end of the drive, because
+     * {@code reset} clears a mock's recorded invocations and several arrangements after that one
+     * reset the store.
+     *
+     * @return whether the refusal the drive applied carried the marker into the store
+     */
+    public boolean generatorWordsReachedTheStore() {
+        return generatorWordsKept;
+    }
+
+    /**
      * Makes every line the leg can write happen once.
      *
      * <p>Grouped by the class each arrangement is about, and every group is one arrangement per
@@ -413,7 +447,7 @@ public final class GenerationLegs implements AutoCloseable {
         theNightlyRun();
         theRequestingLeg();
         theRenderersClient();
-        theReconciler();
+        theStaleBatchPass();
         theTopicListener();
         theOutcomeSink();
         theNotifyingLeg();
@@ -424,6 +458,7 @@ public final class GenerationLegs implements AutoCloseable {
         theMorningRun();
         theOnDemandReport();
         theIntakeGaugeRefresh();
+        theBatchAgeRefresh();
     }
 
     // --- the nightly run -------------------------------------------------------------------------
@@ -496,7 +531,51 @@ public final class GenerationLegs implements AutoCloseable {
         final FeatureFlagReader reader = mock(FeatureFlagReader.class);
         when(reader.read()).thenReturn(new FlagDecision.Disabled());
         whateverItAnswers(new RegisterGenerationJob(new FeatureFlagGate(reader, metrics), store,
-                assembler, generation, reconciler, metrics, settings(), clock)::run);
+                assembler, generation, releaser, metrics, settings(), clock)::run);
+    }
+
+    // --- the stale-batch pass --------------------------------------------------------------------
+
+    /**
+     * The run's first act, in both of the endings it can write about a batch.
+     *
+     * <p>One batch given back and one the store could not give back, so all three of the pass's
+     * statements are written and all three of its counters move. Every value on those lines is an
+     * identity or a count: a released batch names the court centre day it held because that is
+     * what was given back, and a contended one is named by its batch identity alone.
+     */
+    private void theStaleBatchPass() {
+        reset(store);
+        final ReleasedBatch given = new ReleasedBatch(BATCH_ID, COURT_CENTRE, REGISTER_DATE, 2);
+        when(store.failAndReleaseStale(any(), any(), any())).thenAnswer(call -> {
+            final StaleReleaseProgress progress = call.getArgument(2, StaleReleaseProgress.class);
+            progress.recordReleased(given);
+            progress.recordContended(CONTENDED_BATCH_ID);
+            return new StaleReleaseOutcome(List.of(given), List.of(CONTENDED_BATCH_ID));
+        });
+        whateverItAnswers(releaser::releaseStale);
+        aStaleBatchPassTheStoreLeftPartWayThrough();
+    }
+
+    /**
+     * The pass the store went away in the middle of, after a batch had already been given back.
+     *
+     * <p>Its own line, because the numbers it carries are not a night's: each batch commits by
+     * itself, so what the pass was told about before the store stopped answering is committed and
+     * has to be said, and said as a part rather than as a whole. Identities and counts again -
+     * the line names the three numbers and nothing else, and the refusal that ended the pass is
+     * the run's own to report.
+     */
+    private void aStaleBatchPassTheStoreLeftPartWayThrough() {
+        reset(store);
+        when(store.failAndReleaseStale(any(), any(), any())).thenAnswer(call -> {
+            call.getArgument(2, StaleReleaseProgress.class).recordReleased(
+                    new ReleasedBatch(BATCH_ID, COURT_CENTRE, REGISTER_DATE, 2));
+            throw new StoreUnavailableException(
+                    "the store could not be reached to fail and release the stale batches",
+                    new IllegalStateException("the connection was refused"));
+        });
+        whateverItAnswers(releaser::releaseStale);
     }
 
     // --- the requesting leg ----------------------------------------------------------------------
@@ -569,84 +648,6 @@ public final class GenerationLegs implements AutoCloseable {
         renderCommandAnswering(HttpStatus.SERVICE_UNAVAILABLE.value());
         whateverItAnswers(this::askForARender);
 
-        queryAnswering(HttpStatus.NOT_FOUND.value(), "");
-        whateverItAnswers(this::askAboutTheDocument);
-
-        queryAnswering(HttpStatus.SERVICE_UNAVAILABLE.value(), "");
-        whateverItAnswers(this::askAboutTheDocument);
-
-        queryAnswering(HttpStatus.BAD_REQUEST.value(), "");
-        whateverItAnswers(this::askAboutTheDocument);
-
-        queryAnswering(HttpStatus.OK.value(), "{ this is not an answer");
-        whateverItAnswers(this::askAboutTheDocument);
-
-        queryAnswering(HttpStatus.OK.value(), refusedDocument());
-        whateverItAnswers(this::askAboutTheDocument);
-
-        queryFaulting();
-        whateverItAnswers(this::askAboutTheDocument);
-    }
-
-    // --- the reconciler --------------------------------------------------------------------------
-
-    private void theReconciler() {
-        aBatchNobodyHasBeenToldAbout();
-        aRenderTheGeneratorHasFinished();
-        aRenderTheGeneratorRefused();
-        aRenderTheGeneratorHasNoVerdictFor();
-        aRendererThatWouldNotAnswerTheQuery();
-        anEndingWhoseRoundTripCouldNotBeRead();
-    }
-
-    /**
-     * The silence that was ended and could not be timed, which is the sink's line one door along.
-     *
-     * <p>This ending is written through the store rather than through the sink, so the reading is
-     * taken here and so is the line about a reading nobody could take. It is absorbed for a second
-     * reason as well as the sink's: this call is inside the loop over every overdue batch, so a
-     * refusal let out would leave the batches behind this one waiting another grace period.
-     */
-    private void anEndingWhoseRoundTripCouldNotBeRead() {
-        reconcilingOne();
-        when(batches.findById(BATCH_ID)).thenThrow(new StoreUnavailableException(
-                "the store could not be reached to read a settled batch back",
-                new IllegalStateException("the connection pool is empty")));
-        queryAnswering(HttpStatus.OK.value(), "{}");
-        whateverItAnswers(reconciler::reconcile);
-    }
-
-    private void aBatchNobodyHasBeenToldAbout() {
-        reset(batches);
-        when(batches.generatingSince(any(Instant.class))).thenReturn(List.of());
-        when(batches.pendingSince(any(Instant.class))).thenReturn(List.of());
-        when(batches.generatedSince(any(Instant.class)))
-                .thenReturn(List.of(batch(BatchStatus.GENERATED, null, null)));
-        whateverItAnswers(reconciler::reconcile);
-    }
-
-    private void aRenderTheGeneratorHasFinished() {
-        reconcilingOne();
-        queryAnswering(HttpStatus.OK.value(), generatedDocument());
-        whateverItAnswers(reconciler::reconcile);
-    }
-
-    private void aRenderTheGeneratorRefused() {
-        reconcilingOne();
-        queryAnswering(HttpStatus.OK.value(), refusedDocument());
-        whateverItAnswers(reconciler::reconcile);
-    }
-
-    private void aRenderTheGeneratorHasNoVerdictFor() {
-        reconcilingOne();
-        queryAnswering(HttpStatus.OK.value(), "{}");
-        whateverItAnswers(reconciler::reconcile);
-    }
-
-    private void aRendererThatWouldNotAnswerTheQuery() {
-        reconcilingOne();
-        queryFaulting();
-        whateverItAnswers(reconciler::reconcile);
     }
 
     // --- the topic listener ----------------------------------------------------------------------
@@ -779,6 +780,9 @@ public final class GenerationLegs implements AutoCloseable {
                 .thenReturn(Optional.of(refused()));
         whateverItAnswers(() -> sink.generationFailed(BATCH_ID, PAYLOAD_FILE_ID,
                 PersonalDataMarkers.GENERATOR_REASON, AT, CompletedBy.EVENT));
+        generatorWordsKept = mockingDetails(store).getInvocations().stream()
+                .flatMap(invocation -> Stream.of(invocation.getArguments()))
+                .anyMatch(PersonalDataMarkers.GENERATOR_REASON::equals);
     }
 
     /**
@@ -930,6 +934,14 @@ public final class GenerationLegs implements AutoCloseable {
         when(assembler.assemble(anyList(), anyList(), anyBoolean())).thenReturn(new BatchAssembly(
                 List.of(new AssembledBatch(pending(), List.of(register(List.of(recipient()))))),
                 List.of(new CourtCentreDay(COURT_CENTRE, REGISTER_DATE))));
+        // The run's first act, on the ordinary night: nothing was left in flight, so the pass
+        // gives nothing back and every arrangement above is about what it says it is about. A
+        // store that answered nothing here would end the run inside its first statement, and the
+        // lines these nights exist to reach would never be written. The pass's own endings are
+        // driven by theStaleBatchPass(), which answers with both of them.
+        when(store.failAndReleaseStale(any(Instant.class), any(Instant.class),
+                any(StaleReleaseProgress.class)))
+                .thenReturn(new StaleReleaseOutcome(List.of(), List.of()));
         when(batches.generatingSince(any(Instant.class))).thenReturn(List.of());
         when(batches.pendingSince(any(Instant.class))).thenReturn(List.of());
         when(batches.generatedSince(any(Instant.class))).thenReturn(List.of());
@@ -942,16 +954,6 @@ public final class GenerationLegs implements AutoCloseable {
 
     private void payloadStoreRefusing() {
         doRefuseThePayload();
-    }
-
-    private void reconcilingOne() {
-        reset(batches, store);
-        when(batches.generatingSince(any(Instant.class)))
-                .thenReturn(List.of(batch(BatchStatus.GENERATING, PAYLOAD_FILE_ID, null)));
-        when(batches.pendingSince(any(Instant.class))).thenReturn(List.of());
-        when(batches.generatedSince(any(Instant.class))).thenReturn(List.of());
-        when(batches.findById(BATCH_ID))
-                .thenReturn(Optional.of(batch(BatchStatus.GENERATING, PAYLOAD_FILE_ID, null)));
     }
 
     private void notifyingOne(final NotificationClaim claim, final BatchStatus status) {
@@ -993,21 +995,6 @@ public final class GenerationLegs implements AutoCloseable {
                 .willReturn(aResponse().withFault(Fault.EMPTY_RESPONSE)));
     }
 
-    private void queryAnswering(final int status, final String body) {
-        contexts.resetAll();
-        contexts.stubFor(get(urlPathMatching(ANY_DOCUMENT_QUERY))
-                .willReturn(aResponse()
-                        .withStatus(status)
-                        .withHeader("Content-Type", SystemDocGeneratorClient.DOCUMENT_MEDIA_TYPE)
-                        .withBody(body)));
-    }
-
-    private void queryFaulting() {
-        contexts.resetAll();
-        contexts.stubFor(get(urlPathMatching(ANY_DOCUMENT_QUERY))
-                .willReturn(aResponse().withFault(Fault.EMPTY_RESPONSE)));
-    }
-
     private void emailCommandAnswering(final int status) {
         contexts.resetAll();
         contexts.stubFor(post(urlPathMatching(ANY_EMAIL_COMMAND))
@@ -1026,11 +1013,6 @@ public final class GenerationLegs implements AutoCloseable {
         renderer.requestRender(
                 new uk.gov.hmcts.cp.courtregister.domain.RenderRequest(PAYLOAD_FILE_ID, BATCH_ID,
                         "OEE_Layout5", "pdf", DocumentEventListener.ORIGINATING_SOURCE),
-                uk.gov.hmcts.cp.courtregister.domain.CallerIdentity.SYSTEM);
-    }
-
-    private void askAboutTheDocument() {
-        renderer.query(PAYLOAD_FILE_ID,
                 uk.gov.hmcts.cp.courtregister.domain.CallerIdentity.SYSTEM);
     }
 
@@ -1339,6 +1321,41 @@ public final class GenerationLegs implements AutoCloseable {
     }
 
     /**
+     * The generation half's own sweep: a batch nobody was told about, and both absorbed refusals.
+     *
+     * <p>Three lines and no more, which is the whole of what this sweep can write. The first is
+     * the WARN about a batch parked at GENERATED - a document that exists and Youth Offending
+     * Teams who have not been sent it - and it may carry an identity, a stamp and a count and
+     * nothing else. The other two are the two arms of the one refusal this service absorbs, driven
+     * both ways round for the reason the intake sweep's are: an outage of theirs and a bug of ours
+     * are counted under two bounded reasons precisely so that one cannot hide inside the other,
+     * and an arm nothing drives is a reason no sweep has ever read.
+     *
+     * <p>Driven after the intake refresh because it leaves the batch reads refusing. Everything
+     * else the sweep does is three gauges moving, which no log capture sees and which this class
+     * reaches anyway - the meters are swept by name.
+     */
+    private void theBatchAgeRefresh() {
+        reset(batches);
+        when(batches.generatingSince(any(Instant.class))).thenReturn(List.of());
+        when(batches.pendingSince(any(Instant.class))).thenReturn(List.of());
+        when(batches.generatedSince(any(Instant.class)))
+                .thenReturn(List.of(batch(BatchStatus.GENERATED, PAYLOAD_FILE_ID,
+                        DOCUMENT_FILE_ID)));
+        whateverItAnswers(batchSweep::sweepScheduled);
+
+        when(batches.generatingSince(any(Instant.class)))
+                .thenThrow(new StoreUnavailableException(
+                        "the store could not be reached to read the oldest batch awaiting a render",
+                        new IllegalStateException("the connection pool is empty")))
+                .thenThrow(new IllegalStateException(
+                        "the batch-age refresh met something nobody classified, about "
+                                + PersonalDataMarkers.CHILD_NAME));
+        whateverItAnswers(batchSweep::sweepScheduled);
+        whateverItAnswers(batchSweep::sweepScheduled);
+    }
+
+    /**
      * A sink that cannot take the report, and whose refusal names a team and an address.
      *
      * <p>The second sink of the pair on purpose: the first has to still be asked, and what the
@@ -1401,8 +1418,8 @@ public final class GenerationLegs implements AutoCloseable {
     private static GenerationProperties settings() {
         return new GenerationProperties(true, GENERATION_CRON, GenerationProperties.COURTS_ZONE,
                 false,
-                RUN_DEADLINE, RUN_DEADLINE.plusMinutes(10), GRACE_PERIOD,
-                GenerationProperties.COMPLETION_EVENT,
+                RUN_DEADLINE, RUN_DEADLINE.plusMinutes(10), STALE_AFTER,
+                BATCH_AGE_REFRESH,
                 GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE,
                 GenerationProperties.SourceMode.LIVE, GenerationProperties.SourceMode.LIVE);
     }
@@ -1484,24 +1501,6 @@ public final class GenerationLegs implements AutoCloseable {
         org.mockito.Mockito.doThrow(new StoreRefusedRowException(
                         "a notification row for this batch and address is already held"))
                 .when(notifications).insert(any(RegisterNotification.class));
-    }
-
-    /** The query answer that says the document exists. */
-    private static String generatedDocument() {
-        return """
-                {
-                  "documentFileServiceId": "%s",
-                  "generatedTime": "2026-03-02T18:05:11.412+00:00"
-                }""".formatted(DOCUMENT_FILE_ID);
-    }
-
-    /** The query answer that says the render was refused, in systemdocgenerator's own words. */
-    private static String refusedDocument() {
-        return """
-                {
-                  "failedTime": "2026-03-02T18:06:23.004+00:00",
-                  "reason": "%s"
-                }""".formatted(PersonalDataMarkers.GENERATOR_REASON);
     }
 
     private static String generationFailedPayload() {

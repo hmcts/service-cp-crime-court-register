@@ -20,15 +20,18 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.ConditionContext;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.jms.config.JmsListenerEndpointRegistry;
 import org.springframework.jms.listener.MessageListenerContainer;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
+import org.springframework.scheduling.config.CronTask;
 import org.springframework.scheduling.config.ScheduledTask;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.cp.courtregister.adapter.publicevents.DocumentEventListener;
+import uk.gov.hmcts.cp.courtregister.batch.BatchAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.ExceptionReportJob;
 import uk.gov.hmcts.cp.courtregister.batch.IntakeAgeSweep;
 import uk.gov.hmcts.cp.courtregister.batch.RegisterGenerationJob;
@@ -68,8 +71,6 @@ class CliModeConfigTest {
 
     /** The master switch for the downstream half; both contexts here are a generating pod's. */
     private static final String GENERATION_ENABLED = "courtregister.generation.enabled=true";
-
-    private static final String COMPLETION_EVENT = "courtregister.generation.completion=event";
 
     private static final String SDG_MODE = "courtregister.generation.sdg-mode=LIVE";
 
@@ -124,6 +125,9 @@ class CliModeConfigTest {
 
     private static final String EMBEDDED_TOPIC = "spring.artemis.embedded.queues=public.event";
 
+    /** The 18:00 weekday run, as {@code application.yaml} ships it. */
+    private static final String GENERATION_CRON = "0 0 18 * * MON-FRI";
+
     /** The one property the two contexts differ by. */
     private static final String CLI_ON = "courtregister.cli=true";
 
@@ -170,9 +174,9 @@ class CliModeConfigTest {
      * Whatever this context has scheduled, which is nothing at all where no scheduling
      * configuration was imported.
      *
-     * <p>Asked of the annotation post-processor rather than of the job bean, because the job is not
-     * the only {@code @Scheduled} on a generating context - {@code GenerationReconciler} carries one
-     * too - and "no scheduled job" is a claim about both.
+     * <p>Asked of the annotation post-processor rather than of the job bean, because the run is
+     * not the only {@code @Scheduled} on a generating context - the morning report and the intake
+     * sweep carry one each - and "a command schedules nothing" is a claim about all of them.
      *
      * @param context the context under assertion
      * @return the scheduled tasks, empty where nothing processes {@code @Scheduled}
@@ -237,7 +241,7 @@ class CliModeConfigTest {
     @Nested
     @ExtendWith(WorkloadIdentityStub.class)
     @SpringBootTest(properties = {
-        GENERATION_ENABLED, COMPLETION_EVENT, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
+        GENERATION_ENABLED, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
         FILESERVICE_URL, FLAG_ENDPOINT, FLAG_LABEL, SDG_ENDPOINT, NN_ENDPOINT, SYSTEM_USER_ID,
         TEMPLATE_ID, PAYLOAD_MODE, REFDATA_MODE, CONSUMER_ENABLED, NO_STORE, BROKER_URL,
         EMBEDDED_BROKER, EMBEDDED_TOPIC, CLI_ON})
@@ -318,6 +322,38 @@ class CliModeConfigTest {
                             + "command JVM would publish a pod's readings for as long as it ran")
                     .isEmpty();
             assertThat(context.getBeanNamesForType(IntakeAgeSweep.class)).isEmpty();
+        }
+
+        /**
+         * And no batch-age sweep, for the reason the intake one is not here either.
+         *
+         * <p>Its configuration is conditional on the generation half and on this, and on nothing
+         * else - so a command JVM run on a generating pod's settings, which is every command this
+         * service ships, would publish that pod's three readings for as long as the command ran.
+         * Three gauges are aggregated across pods with {@code max()}, so a command's copy of them
+         * is not a duplicate reading but a competing one, taken by a process that holds no batch
+         * and is about to exit.
+         *
+         * <p>The condition itself is asserted beside the absence, because the absence alone cannot
+         * tell a condition that is right from a configuration that happens not to have been
+         * imported.
+         */
+        @Test
+        @DisplayName("and no batch-age sweep, whose readings belong to the pod that holds batches")
+        void a_command_jvm_runs_no_batch_age_sweep() {
+            assertThat(context.getBeanNamesForType(BatchSweepConfig.class))
+                    .as("the sweep is conditional on the generation half and on this, so if this "
+                            + "condition were missing a command JVM would publish a pod's three "
+                            + "in-flight readings for as long as it ran")
+                    .isEmpty();
+            assertThat(context.getBeanNamesForType(BatchAgeSweep.class)).isEmpty();
+            assertThat(BatchSweepConfig.class.getAnnotation(Conditional.class))
+                    .as("and the condition is on the configuration rather than on the bean, "
+                            + "because a scheduler with nothing on it is a half-absence to reason "
+                            + "about instead of a plain one")
+                    .isNotNull()
+                    .satisfies(conditional -> assertThat(conditional.value())
+                            .contains(CliModeConfig.NotCliMode.class));
         }
 
         @Test
@@ -416,7 +452,7 @@ class CliModeConfigTest {
     @Nested
     @ExtendWith(WorkloadIdentityStub.class)
     @SpringBootTest(properties = {
-        GENERATION_ENABLED, COMPLETION_EVENT, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
+        GENERATION_ENABLED, SDG_MODE, NN_MODE, FILESERVICE_MODE, FLAG_MODE,
         FILESERVICE_URL, FLAG_ENDPOINT, FLAG_LABEL, SDG_ENDPOINT, NN_ENDPOINT, SYSTEM_USER_ID,
         TEMPLATE_ID, PAYLOAD_MODE, REFDATA_MODE, CONSUMER_ENABLED, NO_STORE, BROKER_URL,
         EMBEDDED_BROKER, EMBEDDED_TOPIC, CLI_OFF})
@@ -454,18 +490,49 @@ class CliModeConfigTest {
                     .isNotEmpty();
         }
 
+        /**
+         * FR-007 read off a real context: the generation half fires once a night and no oftener.
+         *
+         * <p>Characterisation of what the timer's removal left. The one cron trigger this pod
+         * carries is the 18:00 run; the morning report is not on this context, because
+         * {@code courtregister.report.enabled} is not set here, and the intake sweep is a fixed
+         * delay rather than a cron - a reading, not a decision. A second cron on the generation
+         * half would be a second thing deciding what became of a batch, which is the arrangement
+         * 004 exists to end.
+         */
+        @Test
+        @DisplayName("fires the generation half on exactly one cron")
+        void the_generation_half_carries_exactly_one_cron() {
+            assertThat(scheduledTasks(context))
+                    .as("the 18:00 run, and no second wall-clock decision about a batch")
+                    .filteredOn(task -> task.getTask() instanceof CronTask)
+                    .extracting(task -> ((CronTask) task.getTask()).getExpression())
+                    .containsExactly(GENERATION_CRON);
+        }
+
         @Test
         @DisplayName("runs the public-event listener container")
         void an_ordinary_pod_should_run_the_jms_listener_container() {
             assertThat(listenerContainers(context))
-                    .as("the durable subscription this pod holds; with nothing subscribed, every "
-                            + "outcome waits for the grace-period reconciler")
+                    .as("the durable subscription this pod holds; with nothing subscribed, no "
+                            + "outcome arrives at all and every batch waits until the next run "
+                            + "gives up on it")
                     .isNotEmpty()
                     .allSatisfy(container -> assertThat(container.isRunning())
                             .as("event-driven completion means the container starts with the pod")
                             .isTrue());
             assertThat(context.getBeanNamesForType(DocumentEventListener.class))
                     .as("the listener the subscription delivers to")
+                    .isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("holds the batch-age sweep, which is where those three readings come from")
+        void an_ordinary_pod_should_hold_the_batch_age_sweep() {
+            assertThat(context.getBeanNamesForType(BatchAgeSweep.class))
+                    .as("a Micrometer gauge never decays, so the three in-flight readings are "
+                            + "only as current as their publisher: a generating pod that held no "
+                            + "sweep would show whatever it last saw, for ever, and look live")
                     .isNotEmpty();
         }
 

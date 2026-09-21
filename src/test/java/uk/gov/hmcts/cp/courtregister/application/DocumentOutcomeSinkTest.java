@@ -67,12 +67,13 @@ import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
  * court centre on two register days are put in front of it precisely so that a sink that reached
  * for the court centre would be seen doing it.
  *
- * <p><strong>Both mechanisms, one code path.</strong> {@link CompletedBy} is a parameter rather than
- * something the sink infers from its caller, so every mark is driven under both values: the store
- * writes {@code completed_by} in the same statement that moves the batch - a compare-and-set leaves
- * no second moment to write it in - and a mechanism the sink substituted for the one that actually
- * learned the outcome would make the {@code reconciled} reading a description of the code rather
- * than of the night.
+ * <p><strong>Every mechanism, one code path.</strong> {@link CompletedBy} is a parameter rather
+ * than something the sink infers from its caller, so every mark is driven under every value the
+ * type offers - one of them since the grace-period reconciler went, and the parameterisation is
+ * kept for the second that comes back. The store writes {@code completed_by} in the same statement
+ * that moves the batch, a compare-and-set leaving no second moment to write it in, and a mechanism
+ * the sink substituted for the one that actually learned the outcome would make that column a
+ * description of the code rather than of the night.
  *
  * <p><strong>The correlation is the batch's identity, and the payload has to agree with it.</strong>
  * {@code sourceCorrelationId} is what the render request carried and it is the only identifier this
@@ -81,10 +82,9 @@ import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
  * whatever payload it names - reaching for the payload instead would let an event that has lost its
  * correlation complete a batch it was never about - and an outcome whose correlation and payload
  * name different batches is counted and ignored too, because an event that contradicts itself is
- * the one shape that could complete the wrong night's registers. A redelivery - which a durable
- * subscription guarantees and a reconciler racing an in-flight event produces - carries both
- * identifiers of one batch, moves it once and is counted nowhere: it is attributable, and it is
- * already applied.
+ * the one shape that could complete the wrong night's registers. A redelivery - which a shared
+ * durable subscription guarantees on its own - carries both identifiers of one batch, moves it once
+ * and is counted nowhere: it is attributable, and it is already applied.
  *
  * <p><strong>And the leg a generated batch is handed on to, which is part of the join.</strong> The
  * GENERATED mark and {@link RegisterNotifierService#notify} are one step of one code path, so the
@@ -399,10 +399,10 @@ class DocumentOutcomeSinkTest {
 
             documentAvailable(batch.batchId(), batch.payloadFileId(), learnedBy);
 
-            told("one code path for the listener and the reconciler, and the caller's own name "
-                            + "carried through it verbatim: a run whose outcomes all arrive by "
-                            + "RECONCILER is a subscription to investigate, and nothing else in "
-                            + "the flow would say so",
+            told("one code path whatever learned the outcome, and the caller's own name carried "
+                            + "through it verbatim: the column is the only place a run says which "
+                            + "mechanism delivered each of its outcomes, and nothing else in the "
+                            + "flow would say so",
                     () -> verify(store).markGenerated(
                             batch.batchId(), DOCUMENT_FILE_ID, GENERATED_AT, learnedBy));
         }
@@ -513,8 +513,9 @@ class DocumentOutcomeSinkTest {
          * {@code sourceCorrelationId} is optional on both vendored schemas, and this service always
          * sends one, so an outcome carrying none answers a request that was not ours. The listener
          * already drops it before the sink is reached; the sink says the same thing on its own
-         * account, because the reconciler is the other caller and a port that behaved differently
-         * for its two drivers would have two answers to one question.
+         * account, because what an outcome means belongs to the one code path that applies it and
+         * not to whichever driver carried it in - a port that answered the question differently for
+         * its drivers would have two answers to one question.
          */
         @Test
         void an_outcome_without_a_correlation_should_be_counted_and_ignored() {
@@ -576,11 +577,10 @@ class DocumentOutcomeSinkTest {
         }
 
         /**
-         * The reconciler asks systemdocgenerator about a payload it read off the batch row, so its
-         * two identifiers always agree; the listener's come off the wire and are the ones that can
-         * disagree. The rule is the sink's rather than the listener's because there is one code
-         * path for what an outcome means, and a check that lived in one driver would be a check the
-         * other did not make.
+         * The listener's two identifiers come off the wire, which is where they can disagree at
+         * all. The rule is the sink's rather than the listener's because there is one code path for
+         * what an outcome means, and a check that lived in the driver would be a check the next
+         * driver did not make.
          */
         @Test
         void a_batch_whose_payload_is_not_yet_known_should_take_no_outcome_at_all() {
@@ -647,16 +647,114 @@ class DocumentOutcomeSinkTest {
     }
 
     /**
+     * An outcome for a batch this service had already ended, which is what stops a second e-mail.
+     *
+     * <p>004 creates a new way to reach this state and the behaviour is unchanged: a late or
+     * duplicate outcome for a batch already FAILED has always moved nothing. What was <em>not</em>
+     * there was the counter. The refused transition was a WARN and was counted nowhere - the one
+     * acknowledged-and-dropped path on the subscription with no bounded reason, which the design
+     * rules forbid and which is now the guarantee the whole increment rests on: the batch the run
+     * gave up on at 18:00 may still be alive inside systemdocgenerator, and the document-available
+     * that arrives at 18:05 must move nothing, because the registers it was about are in tonight's
+     * batch and that batch is what tells the Youth Offending Teams (SC-003, SC-010).
+     */
+    @Nested
+    @DisplayName("an outcome for a batch this service has already ended")
+    class AnOutcomeForABatchAlreadyEnded {
+
+        @Test
+        void a_document_available_for_a_batch_not_completed_by_the_next_run_moves_nothing_and_is_counted() {
+            final RegisterBatch batch = releasedByTheNextRun();
+
+            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
+
+            told("the batch is left exactly where the run put it: re-stamping it would take "
+                            + "systemdocgenerator's verdict about a render nobody is waiting for "
+                            + "and attach it to a court centre day tonight's run has already "
+                            + "re-batched",
+                    () -> verify(store, never()).markGenerated(any(), any(), any(), any()));
+            told("and nobody is told, which is the whole guarantee: one e-mail per court centre "
+                            + "and register date, from the batch that really rendered",
+                    () -> verifyNoInteractions(notifier));
+            softly.assertThat(ignored(GenerationMetrics.TERMINAL_BATCH))
+                    .as("a path that drops something moves a counter, and this is the drop a "
+                            + "double e-mail is prevented by - \"it is in the log index\" is not "
+                            + "an alerting surface")
+                    .isEqualTo(1);
+            softly.assertThat(ignored(GenerationMetrics.UNKNOWN_CORRELATION))
+                    .as("the correlation was never in doubt: this outcome names a batch this "
+                            + "service holds and has ended")
+                    .isEqualTo(ABSENT);
+        }
+
+        @Test
+        void a_generation_failed_for_one_moves_nothing_and_is_counted() {
+            final RegisterBatch batch = releasedByTheNextRun();
+
+            generationFailed(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
+
+            told("FAILED is terminal and the reason on the row is this service's own: a refusal "
+                            + "arriving afterwards would replace \"this had not completed by the "
+                            + "time the next run began\" with the renderer's verdict about a "
+                            + "batch nobody is waiting for",
+                    () -> verify(store, never()).markFailed(any(), any(), any(), any()));
+            softly.assertThat(ignored(GenerationMetrics.TERMINAL_BATCH))
+                    .as("counted under the same bounded reason as the acceptance, because it is "
+                            + "the same fact about the same batch: an outcome arrived for "
+                            + "something this service had already ended")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void a_redelivery_of_such_an_outcome_is_counted_under_the_same_reason() {
+            final RegisterBatch batch = releasedByTheNextRun();
+
+            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
+            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
+
+            softly.assertThat(ignored(GenerationMetrics.TERMINAL_BATCH))
+                    .as("a durable subscription offers an unapplied outcome again, so the second "
+                            + "delivery is the ordinary case rather than a new fault")
+                    .isEqualTo(2);
+            softly.assertThat(ignored(GenerationMetrics.UNKNOWN_CORRELATION))
+                    .as("and never as an unknown correlation: counting a redelivery there would "
+                            + "report a lost correlation every time the broker did what a durable "
+                            + "subscription is for")
+                    .isEqualTo(ABSENT);
+        }
+
+        /**
+         * The batch the run gave up on: FAILED, released, and naming no completion mechanism.
+         *
+         * <p>{@code completed_by} is null because nobody outside this service reported anything
+         * about it - which is exactly why a late outcome for it is the one this counter exists
+         * for.
+         *
+         * @return the batch, as the sink's one lookup finds it
+         */
+        private RegisterBatch releasedByTheNextRun() {
+            final RegisterBatch batch = generating(MONDAY);
+            final RegisterBatch released = new RegisterBatch(batch.batchId(), COURT_CENTRE,
+                    OU_CODE, COURT_HOUSE, batch.registerDate(), batch.fileName(),
+                    batch.payloadFileId(), null, BatchStatus.FAILED,
+                    BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN, null, true, null, ASSEMBLED_AT,
+                    REQUESTED_AT, null, null, FAILURE_RECORDED_AT, 1, null, 0);
+            when(batches.findById(batch.batchId())).thenReturn(Optional.of(released));
+            return released;
+        }
+    }
+
+    /**
      * The leg a generated batch is handed on to, and everything that never reaches it.
      *
      * <p>A document that exists and has been sent to nobody is the state defect fix P1 is about, so
      * the moment the batch is recorded as having one is the moment its Youth Offending Teams can be
      * told: the GENERATED mark and {@link RegisterNotifierService#notify} are one step of one code
-     * path, which is what makes the reconciler's fetched document reach the same e-mails the topic's
-     * delivered one does. What is asked here is the order and the absences, not the content - the
-     * mark is what decides whether anyone is told at all, because the store's compare-and-set is
-     * what refuses the second of two racing mechanisms, so an e-mail sent before that mark, or in
-     * place of it, would be a register announced on a move that never took.
+     * path, which is what makes the hand-on belong to the mark rather than to whatever carried the
+     * outcome in. What is asked here is the order and the absences, not the content - the mark is
+     * what decides whether anyone is told at all, because the store's compare-and-set is what
+     * refuses the second of two racing arrivals, so an e-mail sent before that mark, or in place of
+     * it, would be a register announced on a move that never took.
      *
      * <p><strong>These cases are characterisations rather than the red half of a pair.</strong> The
      * wiring landed with {@code RegisterNotifierService} (T059) and they were written afterwards, so
@@ -687,9 +785,9 @@ class DocumentOutcomeSinkTest {
                     () -> order.verify(store).markGenerated(
                             batch.batchId(), DOCUMENT_FILE_ID, GENERATED_AT, learnedBy));
             told("and then the recipients are told, in the same step and on this thread, under "
-                            + "both mechanisms - a document the reconciler fetched reaches the same "
-                            + "e-mails a delivered event's does, which is the whole reason one code "
-                            + "path exists",
+                            + "every mechanism the type offers - the hand-on belongs to the mark "
+                            + "and not to whatever carried the outcome in, which is the whole "
+                            + "reason one code path exists",
                     () -> order.verify(notifier).notify(batch.batchId()));
             told("once, and for the batch that was marked and no other: the notifying leg reads "
                             + "the batch back by this id, so a second hand-on would be a second "
@@ -707,24 +805,24 @@ class DocumentOutcomeSinkTest {
             documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
             documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
 
-            told("a durable subscription guarantees the second delivery and a reconciler racing an "
-                            + "in-flight event produces it; the batch already stands where the "
-                            + "outcome would put it, so the second arrival is recognised above and "
-                            + "the teams are e-mailed exactly once",
+            told("a shared durable subscription guarantees the second delivery on its own; the "
+                            + "batch already stands where the outcome would put it, so the second "
+                            + "arrival is recognised above and the teams are e-mailed exactly "
+                            + "once",
                     () -> verify(notifier, times(1)).notify(batch.batchId()));
         }
 
         /**
-         * The reconciler arriving after the listener has already finished, which is the shape the
-         * grace-period query is bound to produce: the batch it asks systemdocgenerator about was
-         * GENERATING when the query selected it and is GENERATED by the time the answer is applied.
+         * An announcement arriving for a batch an earlier one has already finished, which a shared
+         * durable subscription is bound to produce: the batch was GENERATING when the first
+         * delivery was applied and is GENERATED by the time this one reaches the sink.
          */
         @Test
         void a_document_available_for_a_batch_already_generated_should_tell_nobody() {
             final RegisterBatch batch = generated(generating(MONDAY), CompletedBy.EVENT);
             when(batches.findById(batch.batchId())).thenReturn(Optional.of(batch));
 
-            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.RECONCILER);
+            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
 
             told("nothing is re-stamped, so there is no mark for a notification to follow",
                     () -> verify(store, never()).markGenerated(any(), any(), any(), any()));
@@ -751,11 +849,11 @@ class DocumentOutcomeSinkTest {
          * The race the compare-and-set exists to settle, seen from the losing side.
          *
          * <p>{@code JdbcRegisterStore.permitted} refuses a move the batch has already made with an
-         * {@link IllegalStateException}, so the mark two mechanisms make about one batch at one
+         * {@link IllegalStateException}, so the mark two arrivals make about one batch at one
          * moment succeeds for exactly one of them. The refusal is what stops the loser going on to
          * send, and it is not swallowed here either: the sink lets it out to the caller - the
-         * listener's own error handling, or the reconciler's - rather than turning a mark that did
-         * not take into a run that looks like it worked.
+         * listener's own error handling - rather than turning a mark that did not take into a run
+         * that looks like it worked.
          */
         @Test
         void a_mark_that_did_not_take_should_not_be_followed_by_an_e_mail() {
@@ -767,11 +865,11 @@ class DocumentOutcomeSinkTest {
 
             softly.assertThatThrownBy(() -> sink.documentAvailable(batch.batchId(),
                             batch.payloadFileId(), DOCUMENT_FILE_ID, GENERATED_AT,
-                            CompletedBy.RECONCILER))
+                            CompletedBy.EVENT))
                     .as("the refusal reaches the caller rather than being absorbed here, because a "
                             + "mark that did not take is not an outcome this service applied")
                     .isInstanceOf(IllegalStateException.class);
-            told("and nobody is e-mailed on the strength of it: the mark decides, so the mechanism "
+            told("and nobody is e-mailed on the strength of it: the mark decides, so the arrival "
                             + "whose compare-and-set lost the race sends nothing and the one that "
                             + "won sends everything",
                     () -> verifyNoInteractions(notifier));
@@ -902,10 +1000,9 @@ class DocumentOutcomeSinkTest {
          *
          * <p>The pair to the case above and the reason the reading may be taken early without
          * being taken twice: the second arrival is recognised before any mark is attempted, so
-         * moving the reading up to the mark does not put it on the redelivery path. A durable
-         * subscription guarantees the second delivery and a reconciler racing an in-flight event
-         * produces it, so a series that counted both would halve its own average every time the
-         * broker did what it is for.
+         * moving the reading up to the mark does not put it on the redelivery path. A shared
+         * durable subscription guarantees the second delivery on its own, so a series that counted
+         * both would halve its own average every time the broker did what it is for.
          */
         @Test
         void a_redelivered_document_should_be_timed_once_and_not_twice() {
@@ -951,7 +1048,7 @@ class DocumentOutcomeSinkTest {
             final RegisterBatch batch = generated(generating(MONDAY), CompletedBy.EVENT);
             when(batches.findById(batch.batchId())).thenReturn(Optional.of(batch));
 
-            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.RECONCILER);
+            documentAvailable(batch.batchId(), batch.payloadFileId(), CompletedBy.EVENT);
 
             softly.assertThat(roundTripsTimed())
                     .as("the batch already stands where the outcome would put it, so nothing was "

@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -23,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -32,10 +35,13 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.slf4j.MDC;
@@ -70,21 +76,25 @@ import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
 /**
  * The night, in the order it happens.
  *
- * <p>The job decides almost nothing on its own - the gate answers about the flag, the assembler
- * groups, the service requests, the reconciler chases - and that is exactly what makes it worth
- * pinning: what a run <em>is</em> is the order it asks those four in, and every failure this class
- * can have is an order rather than a calculation.
+ * <p>The job decides almost nothing on its own - the gate answers about the flag, the releaser gives
+ * back what the night before did not finish, the assembler groups, the service requests - and that
+ * is exactly what makes it worth pinning: what a run <em>is</em> is the order it asks those four in,
+ * and every failure this class can have is an order rather than a calculation.
  *
- * <p>Four of them matter enough to be stated as cases here:
+ * <p>Five of them matter enough to be stated as cases here:
  *
  * <ul>
  *   <li><strong>the flag first, and its answer ends the run.</strong> A run that read the store
  *       before it read the flag would have stamped {@code batch_id} onto rows the flag says this
  *       service may not generate, and getting them back is a person's decision about one batch at a
  *       time rather than something a later run can undo. The
- *       skipped run therefore touches nothing at all - not the store, not the assembler, not the
- *       service and not the reconciler - which is what the first nested class asserts as
+ *       skipped run therefore touches nothing at all - not the releaser, not the store, not the
+ *       assembler and not the service - which is what the first nested class asserts as
  *       interactions rather than as outcomes;</li>
+ *   <li><strong>the stale-batch pass next, and before anything is read.</strong> A pass that ran
+ *       after the assembly would give registers back into a batch that had already been made, so
+ *       the court centre it was released for would wait another night for its document. It is the
+ *       assertion the whole of increment 004 rests on;</li>
  *   <li><strong>one batch at a time.</strong> Sequential is not an efficiency choice: each request
  *       is a write to the shared file service followed by a POST, and a run that fanned them out
  *       would make the run deadline unenforceable and the file-service datasource's readiness
@@ -92,8 +102,9 @@ import uk.gov.hmcts.cp.courtregister.support.PersonalDataMarkers;
  *   <li><strong>the deadline bounds requesting and nothing else.</strong> It is computed once, so a
  *       bound re-derived per batch cannot grow by what the batch before it took, and a batch it
  *       leaves no time for is left PENDING for the next run rather than failed - nothing has gone
- *       wrong with it. The run still chases what it is waiting on afterwards, because completion
- *       arrives on the public-event topic long after this run has ended;</li>
+ *       wrong with it. What becomes of a render is learned long after the run has ended, on the
+ *       public-event topic, and a batch nothing was ever learned about is what the next run's
+ *       first act gives back;</li>
  *   <li><strong>every run reports.</strong> Including - especially - the ones that did nothing, since
  *       before cutover that is every night, and a report that only appeared when work happened would
  *       make "the flag is off" and "the scheduler never fired" the same silence.</li>
@@ -135,7 +146,8 @@ class RegisterGenerationJobTest {
 
     private static final Duration RUN_DEADLINE = Duration.ofMinutes(60);
     private static final Duration LOCK_AT_MOST_FOR = Duration.ofMinutes(70);
-    private static final Duration GRACE_PERIOD = Duration.ofMinutes(10);
+    private static final Duration STALE_AFTER = Duration.ofMinutes(30);
+    private static final Duration BATCH_AGE_REFRESH = Duration.ofMinutes(10);
 
     /** 18:00 in Europe/London on a Thursday in August, which is 17:00 UTC. */
     private static final Instant SIX_PM = Instant.parse("2026-08-20T17:00:00Z");
@@ -151,8 +163,35 @@ class RegisterGenerationJobTest {
     /** How the one line a night leaves behind starts, which is what an operator filters on. */
     private static final String RUN_EVENT = "event=register_generation_run";
 
-    /** How many outcomes the reconciler had to fetch on the mixed night. */
-    private static final int RECONCILED = 4;
+    /**
+     * What the stale-batch pass gave back on the mixed night, in its three numbers.
+     *
+     * <p>Three different numbers, none of them any other number on the line, for the reason the row
+     * counts below are three different numbers: a fixture whose released batches, released registers
+     * and contended batches were the same would be pinned by a line that carried the three in the
+     * wrong order.
+     */
+    private static final int RELEASED_BATCHES = 4;
+
+    private static final int RELEASED_REGISTERS = 7;
+
+    private static final int CONTENDED = 6;
+
+    /** What the pass answers on a night nothing was left in flight, which is most nights. */
+    private static final StaleBatchReleaser.ReleaseTally NOTHING_RELEASED =
+            new StaleBatchReleaser.ReleaseTally(0, 0, 0);
+
+    /**
+     * What a pass the store interrupted had committed before it stopped, in its three numbers.
+     *
+     * <p>Their own values rather than the mixed night's, so that a line carrying the interrupted
+     * pass's account cannot be satisfied by a fixture that reported the whole night's.
+     */
+    private static final int INTERRUPTED_BATCHES = 1;
+
+    private static final int INTERRUPTED_REGISTERS = 2;
+
+    private static final int INTERRUPTED_CONTENDED = 3;
 
     /**
      * How many registers each of the mixed night's three batches groups.
@@ -203,6 +242,16 @@ class RegisterGenerationJobTest {
             " snapshot=taken generated=0 notified=0 rows_generated=0 rows_notified=0";
 
     /**
+     * What the line says about a night whose first act found nothing left in flight.
+     *
+     * <p>Three noughts rather than three absences: a night that released nothing and a night that
+     * did not report are different lines, and only a nought told apart from an absence can be
+     * alerted on from the first night.
+     */
+    private static final String NOTHING_RELEASED_ON_THE_LINE =
+            " released_batches=0 released_registers=0 contended=0";
+
+    /**
      * The correlation as {@code normalisedRunLines} renders it, so an expectation can name the
      * field without naming the identity, which is minted per run.
      */
@@ -215,9 +264,10 @@ class RegisterGenerationJobTest {
      * asked the renderer for, the three states the requesting leg can leave a batch in and their
      * total, the court centre days the run passed over, how many registers ended the run under each
      * of those outcomes, what the store said tonight's batches had come to by the time the line was
-     * written, the outcomes it had to chase and how long it took. Written out rather than asserted
-     * field by field because the claim is the whole line - a field dropped from it is a night an
-     * operator can no longer read, and a field renamed is an alert that stops firing.
+     * written, what its first act gave back and could not give back, and how long it took. Written
+     * out rather than asserted field by field because the claim is the whole line - a field dropped
+     * from it is a night an operator can no longer read, and a field renamed is an alert that stops
+     * firing.
      */
     private static final String THE_MIXED_NIGHTS_LINE = RUN_EVENT
             + NORMALISED_RUN_ID
@@ -228,15 +278,32 @@ class RegisterGenerationJobTest {
             + " rows_pending=" + UNSTAMPABLE_ROWS
             + " rows_deferred=" + WAITING_ROWS
             + NOTHING_SETTLED_YET
-            + " reconciled=" + RECONCILED + " duration_ms=180000";
+            + " released_batches=" + RELEASED_BATCHES
+            + " released_registers=" + RELEASED_REGISTERS
+            + " contended=" + CONTENDED
+            + " duration_ms=180000";
+
+    /**
+     * The line a run that stopped before it read anything can still write.
+     *
+     * <p>Two nights leave it: one the store went away under while the pass was giving batches back,
+     * and one it went away under at the first read. Both are a night that did nothing, and both
+     * still have to say so.
+     */
+    private static final String NOTHING_YET = RUN_EVENT
+            + NORMALISED_RUN_ID
+            + " gate=proceed reason=flag-on batches=0 requested=0 generating=0 failed=0"
+            + " pending=0 deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0"
+            + " rows_deferred=0" + NOTHING_SETTLED_YET + NOTHING_RELEASED_ON_THE_LINE
+            + " duration_ms=0";
 
     /** The same line for a night the flag stopped: the same fields, and nothing earned. */
     private static final String THE_SKIPPED_NIGHTS_LINE = RUN_EVENT
             + NORMALISED_RUN_ID
             + " gate=skipped reason=flag-off batches=0 requested=0 generating=0 failed=0 pending=0"
             + " deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0 rows_deferred=0"
-            + NOTHING_SETTLED_YET
-            + " reconciled=0 duration_ms=0";
+            + NOTHING_SETTLED_YET + NOTHING_RELEASED_ON_THE_LINE
+            + " duration_ms=0";
 
     /**
      * What every value on the line is allowed to be: a count, a duration, or a bounded code.
@@ -252,7 +319,8 @@ class RegisterGenerationJobTest {
                     + "requested=\\d+ generating=\\d+ failed=\\d+ pending=\\d+ deferred=\\d+ "
                     + "rows=\\d+ rows_generating=\\d+ rows_failed=\\d+ rows_pending=\\d+ "
                     + "rows_deferred=\\d+ snapshot=(?:taken|unread) generated=\\d+ notified=\\d+ "
-                    + "rows_generated=\\d+ rows_notified=\\d+ reconciled=\\d+ duration_ms=\\d+");
+                    + "rows_generated=\\d+ rows_notified=\\d+ released_batches=\\d+ "
+                    + "released_registers=\\d+ contended=\\d+ duration_ms=\\d+");
 
     /** What the store answers with; the run's job is to pass it on unchanged. */
     private static final List<RegisterRecord> ACTIVE = List.of(record(), record());
@@ -263,14 +331,44 @@ class RegisterGenerationJobTest {
     private final RegisterStore store = mock(RegisterStore.class);
     private final BatchAssembler assembler = mock(BatchAssembler.class);
     private final RegisterGenerationService service = mock(RegisterGenerationService.class);
-    private final GenerationReconciler reconciler = mock(GenerationReconciler.class);
+    private final StaleBatchReleaser releaser = mock(StaleBatchReleaser.class);
     private final AdjustableClock clock = AdjustableClock.startingAt(SIX_PM);
 
     private final RegisterGenerationJob job = new RegisterGenerationJob(gate, store, assembler,
-            service, reconciler, metrics, settings(), clock);
+            service, releaser, metrics, settings(), clock);
 
     @InjectSoftAssertions
     private SoftAssertions softly;
+
+    /**
+     * Most nights leave nothing in flight, so the pass answers with nothing unless a case says
+     * otherwise.
+     *
+     * <p>Stated once here rather than in every fixture: a run whose pass answered {@code null}
+     * would fail inside the run's first statement, and every case below would then be about that
+     * rather than about what it is written for.
+     */
+    @BeforeEach
+    void nothingIsStaleUnlessACaseSaysSo() {
+        theStaleBatchPassGaveBack(NOTHING_RELEASED);
+    }
+
+    /**
+     * Stands the pass up to hand an account over the way the real one does.
+     *
+     * <p>Through the observer and not only through the return, because that is where the run reads
+     * it from: the pass commits each batch by itself and tells its caller as it goes, so a run the
+     * store stopped part way still has the part that happened. A double that only answered would
+     * pin the run to a reading the real pass cannot give it on the night it matters.
+     *
+     * @param tally what the pass committed and could not commit
+     */
+    private void theStaleBatchPassGaveBack(final StaleBatchReleaser.ReleaseTally tally) {
+        doAnswer(call -> {
+            call.<Consumer<StaleBatchReleaser.ReleaseTally>>getArgument(0).accept(tally);
+            return tally;
+        }).when(releaser).releaseStale(any());
+    }
 
     /**
      * The settings a deployed run works to, which are the ones {@code application.yaml} ships.
@@ -279,7 +377,7 @@ class RegisterGenerationJobTest {
      */
     private static GenerationProperties settings() {
         return new GenerationProperties(true, COURT_CRON, COURTS_ZONE, false, RUN_DEADLINE,
-                LOCK_AT_MOST_FOR, GRACE_PERIOD, GenerationProperties.COMPLETION_EVENT,
+                LOCK_AT_MOST_FOR, STALE_AFTER, BATCH_AGE_REFRESH,
                 SourceMode.LIVE, SourceMode.LIVE, SourceMode.LIVE, SourceMode.LIVE);
     }
 
@@ -373,7 +471,7 @@ class RegisterGenerationJobTest {
     }
 
     /**
-     * A night with one of each outcome, two court centre days passed over and two chased outcomes.
+     * A night with one of each outcome, two court centre days passed over and a pass that released.
      *
      * <p>Built so that the line it leaves behind exercises every field at once and none of them
      * with the same number: a report whose counts were all one would be pinned by a line that had
@@ -423,7 +521,8 @@ class RegisterGenerationJobTest {
             return requested(failing, BatchStatus.FAILED,
                     BatchFailureReason.RENDER_REQUEST_REJECTED);
         });
-        when(reconciler.reconcile()).thenReturn(RECONCILED);
+        theStaleBatchPassGaveBack(new StaleBatchReleaser.ReleaseTally(
+                RELEASED_BATCHES, RELEASED_REGISTERS, CONTENDED));
         return List.of(generating, failing, unstampable);
     }
 
@@ -434,8 +533,8 @@ class RegisterGenerationJobTest {
      * settled counts are read back rather than reasoned about. All three batches were stamped and
      * all three renders were accepted, so the requesting leg leaves every one of them GENERATING -
      * and while the run was still working through the court centres behind it, the event listener
-     * marked the first one's document and its notification and the reconciler settled the second
-     * one's document. By the time the line is written the store says one NOTIFIED, one GENERATED and
+     * marked the first one's document and its notification and then the second one's document. By
+     * the time the line is written the store says one NOTIFIED, one GENERATED and
      * one still GENERATING, and nothing the requesting leg saw could have said so.
      *
      * <p>Each batch groups a different number of registers so that the two counts of batches and
@@ -763,7 +862,7 @@ class RegisterGenerationJobTest {
 
             run();
 
-            verifyNoInteractions(store, assembler, service, reconciler);
+            verifyNoInteractions(releaser, store, assembler, service);
         }
 
         @Test
@@ -1075,70 +1174,280 @@ class RegisterGenerationJobTest {
                     .isZero();
         }
 
-        @Test
-        void a_run_that_ran_out_of_time_should_still_chase_the_batches_it_is_waiting_on() {
-            aBatchTheRunRanOutOfTimeFor();
-
-            run();
-
-            verify(reconciler).reconcile();
-        }
     }
 
     /**
-     * The safety net, which is part of the run rather than a schedule of its own.
+     * The run's first act: giving back what the night before did not finish.
+     *
+     * <p>Where the pass sits is the whole of increment 004. A batch still awaiting its render when
+     * this run begins is failed and its registers released, so the assembler puts them in a batch
+     * tonight and the court centre gets its document tonight - which is true only if the pass has
+     * already run by the time the store is read. A pass after the assembly would release into a
+     * night that had already been decided, and the court centre would wait again.
      */
     @Nested
-    @DisplayName("chasing the batches already generating")
-    class Reconciling {
+    @DisplayName("releasing what the night before did not finish")
+    class Releasing {
 
         @Test
-        void a_night_with_nothing_to_assemble_should_still_chase_what_is_outstanding() {
-            aNightHolding();
+        void the_releaser_runs_after_the_gate_and_before_the_store_is_read() {
+            aNightHolding(batch());
+            everyRequestIsAccepted();
 
             run();
 
-            verify(reconciler).reconcile();
+            final InOrder order = inOrder(gate, releaser, store, assembler);
+            order.verify(gate).decide(false);
+            order.verify(releaser).releaseStale(any());
+            order.verify(store).activeUnbatched();
+            order.verify(assembler).assemble(any(), any(), anyBoolean());
         }
 
         /**
-         * The run calls the reconciler, but the run is not what makes reconciliation happen.
+         * Both nights FR-018 names, and not one of them standing in for the other.
          *
-         * <p>A skipped run touches nothing - which is right, and is the case above - so on a night
-         * the flag reads OFF or could not be read, a batch left GENERATING by an earlier ON night
-         * is not asked about by this class at all. Before cutover that is every night. The safety
-         * net therefore has to have a schedule of its own, independent of the gate, and this is
-         * where a reader of the run meets that fact; what its cadence and its lock are is pinned in
-         * {@code GenerationReconcilerTest}.
+         * <p>FR-005 forbids the pass on a run the flag stopped, and FR-018 states the cost: a
+         * court centre whose batch went stale is not given back tonight, because a run that may
+         * not generate may not decide that a batch it could not re-render has failed. The
+         * fail-closed night is the one worth asserting separately - it is the night nobody chose,
+         * reached by an App Configuration outage rather than by the cutover, and the temptation to
+         * "do the safe half of the run anyway" is exactly what the shared {@code Skipped} branch
+         * would let somebody act on without failing a test.
+         *
+         * @param reason the two answers that stop a run
          */
-        @Test
-        void a_skipped_run_should_leave_overdue_batches_to_the_reconcilers_own_schedule()
-                throws NoSuchMethodException {
-            theGateAnswers(new Skipped(Reason.FLAG_OFF));
+        @ParameterizedTest(name = "[A] {0}")
+        @EnumSource(value = Reason.class, names = {"FLAG_OFF", "FLAG_UNREADABLE"})
+        void a_skipped_run_does_not_release_anything(final Reason reason) {
+            theGateAnswers(new Skipped(reason));
 
             run();
 
-            verifyNoInteractions(reconciler);
-            softly.assertThat(GenerationReconciler.class.getDeclaredMethod("reconcileScheduled")
-                            .getAnnotation(Scheduled.class))
-                    .as("a night this service may not generate on is still a night it owns the "
-                            + "batches it asked for yesterday; without a schedule of its own the "
-                            + "reconciler never runs on one")
-                    .isNotNull();
+            verifyNoInteractions(releaser);
+        }
+
+        /**
+         * The promise the increment is for, stated as a sequence the store can see.
+         *
+         * <p>The store answers with the released registers only once the pass has run, so a run
+         * that read before it released would assemble an empty night - and the assertion is that
+         * the registers the pass gave back are the ones the assembler was handed, in the same run.
+         */
+        @Test
+        void released_registers_reach_the_assembler_in_the_same_run() {
+            final AtomicReference<Boolean> released = new AtomicReference<>(false);
+            theGateAnswers(new Proceed(false));
+            doAnswer(call -> {
+                released.set(true);
+                final StaleBatchReleaser.ReleaseTally tally =
+                        new StaleBatchReleaser.ReleaseTally(1, ACTIVE.size(), 0);
+                call.<Consumer<StaleBatchReleaser.ReleaseTally>>getArgument(0).accept(tally);
+                return tally;
+            }).when(releaser).releaseStale(any());
+            when(store.activeUnbatched())
+                    .thenAnswer(call -> released.get() ? ACTIVE : List.<RegisterRecord>of());
+            when(assembler.assemble(any(), any(), anyBoolean())).thenReturn(assembly());
+
+            run();
+
+            verify(assembler).assemble(eq(ACTIVE), any(), anyBoolean());
+        }
+
+        /**
+         * A store lost under the pass ends the run the way a store lost anywhere else does.
+         *
+         * <p>Reported and rethrown, never logged and continued: the pass is the run's first act, so
+         * a night that lost the store there has generated nothing at all, and the one line it can
+         * still write is a night of zeroes. What must not happen is a run that swallowed it and
+         * went on to assemble against a store that is not answering (constitution Principle VI).
+         */
+        @Test
+        void a_releaser_that_throws_still_writes_a_line_and_rethrows() {
+            theGateAnswers(new Proceed(false));
+            doThrow(new StoreUnavailableException("the register store did not answer", null))
+                    .when(releaser).releaseStale(any());
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                final Throwable stopped = whatStoppedTheRun();
+
+                softly.assertThat(stopped)
+                        .as("a store outage under the pass is the run's own failure, and a failure "
+                                + "that was only reported has not been settled")
+                        .isInstanceOf(StoreUnavailableException.class);
+                softly.assertThat(normalisedRunLines(log))
+                        .as("and the night still leaves the one line that says it did nothing")
+                        .containsExactly(NOTHING_YET);
+            }
+            verifyNoInteractions(store, assembler, service);
+        }
+
+        /**
+         * The two lines one night leaves may not disagree about that night.
+         *
+         * <p>A pass the store interrupts has still committed what it gave back, and says so at
+         * WARN and on the three counters. The run's line is written from the same night under the
+         * same {@code run_id}, so a run that read the pass's account from the return value - which
+         * a throw never delivers - would report {@code released_batches=0} beside a pass's line
+         * saying one, and a reader would have two accounts of one night with no way to tell which
+         * is the night (FR-009).
+         */
+        @Test
+        void a_pass_the_store_interrupted_still_puts_its_account_on_the_run_line() {
+            theGateAnswers(new Proceed(false));
+            doAnswer(call -> {
+                call.<Consumer<StaleBatchReleaser.ReleaseTally>>getArgument(0).accept(
+                        new StaleBatchReleaser.ReleaseTally(
+                                INTERRUPTED_BATCHES, INTERRUPTED_REGISTERS, INTERRUPTED_CONTENDED));
+                throw new StoreUnavailableException("the register store did not answer", null);
+            }).when(releaser).releaseStale(any());
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                softly.assertThat(whatStoppedTheRun())
+                        .as("the outage is still the run's own failure and still leaves it")
+                        .isInstanceOf(StoreUnavailableException.class);
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "released_batches"))
+                        .as("and the night's own line carries what the pass had already given "
+                                + "back, rather than a nought the pass's line contradicts")
+                        .isEqualTo(INTERRUPTED_BATCHES);
+                softly.assertThat(onTheLine(fields, "released_registers"))
+                        .as("with the hearings that came back with those batches")
+                        .isEqualTo(INTERRUPTED_REGISTERS);
+                softly.assertThat(onTheLine(fields, "contended"))
+                        .as("and what the pass had already found it could not give back, which is "
+                                + "undone work and may not be silent on a night that stopped")
+                        .isEqualTo(INTERRUPTED_CONTENDED);
+            }
         }
 
         @Test
-        void what_the_reconciler_had_to_fetch_should_be_reported() {
-            aNightHolding();
-            when(reconciler.reconcile()).thenReturn(2);
+        void the_run_line_carries_both_released_numbers() {
+            aMixedNight();
 
-            final RunReport report = run();
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
 
-            softly.assertThat(reported(report, RunReport::reconciled))
-                    .as("the broker's health seen from here: a run whose outcomes all arrive by "
-                            + "reconciliation is a subscription to investigate rather than a "
-                            + "renderer")
-                    .isEqualTo(2);
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "released_batches"))
+                        .as("how many court centre days this night had to give up on, which is "
+                                + "the one number that says an outcome went missing")
+                        .isEqualTo(RELEASED_BATCHES);
+                softly.assertThat(onTheLine(fields, "released_registers"))
+                        .as("and how many hearings' registers came back with them, because a batch "
+                                + "is one document and a register is one hearing's youth defendants")
+                        .isEqualTo(RELEASED_REGISTERS);
+                softly.assertThat(onTheLine(fields, "contended"))
+                        .as("and what the pass could not give back, which is a night's undone work "
+                                + "and must not be silent on the line that describes the night")
+                        .isEqualTo(CONTENDED);
+            }
+        }
+
+        @Test
+        void a_run_that_released_nothing_says_zero() {
+            aNightHolding(batch());
+            everyRequestIsAccepted();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "released_batches"))
+                        .as("a night that released nothing and a night that did not report are "
+                                + "different lines, and only a nought told apart from an absence "
+                                + "can be alerted on")
+                        .isZero();
+                softly.assertThat(onTheLine(fields, "released_registers")).isZero();
+                softly.assertThat(onTheLine(fields, "contended")).isZero();
+            }
+        }
+
+        /**
+         * <strong>[A]</strong> A batch the pass could not give back does not stop the night.
+         *
+         * <p>FR-003a: exhaustion is reported, never thrown. A batch whose every attempt lost the
+         * day's active-register key is left exactly as it was found and named in the pass's
+         * answer, and the run goes on to read the store and assemble - the batches it could not
+         * release are stale still, so the next run reaches them again. The plan's test matrix
+         * claims this row for this suite; until now it was only carried incidentally, by the mixed
+         * night's line happening to report a non-zero {@code contended}.
+         *
+         * <p>Green on introduction: the run has never read the third number for anything but the
+         * line, which is the property being pinned - a pass that gave nothing back is not a pass
+         * that failed.
+         */
+        @Test
+        void a_batch_the_pass_could_not_release_should_not_stop_the_run() {
+            aNightHolding(batch());
+            everyRequestIsAccepted();
+            theStaleBatchPassGaveBack(new StaleBatchReleaser.ReleaseTally(0, 0, CONTENDED));
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                verify(store).activeUnbatched();
+                verify(assembler).assemble(any(), any(), anyBoolean());
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "contended"))
+                        .as("the night carried on and said what it had left undone, which is the "
+                                + "whole of FR-003a: a court centre the pass could not free is "
+                                + "not a reason to leave every other court centre unrendered")
+                        .isEqualTo(CONTENDED);
+                softly.assertThat(onTheLine(fields, "released_batches"))
+                        .as("and nothing was given back, so neither released number may claim it "
+                                + "was")
+                        .isZero();
+            }
+        }
+
+        /**
+         * The word has to be gone from the format string, not merely nought.
+         *
+         * <p>A whole-line assertion rather than a field one: a line still carrying
+         * {@code reconciled=0} would describe a mechanism this service no longer has, and every
+         * dashboard and alert written against it would go on reading as though it did.
+         */
+        @Test
+        void the_run_line_carries_no_reconciled_anywhere() {
+            aMixedNight();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                softly.assertThat(theOneLine(log))
+                        .as("no vocabulary outlives the thing it names: nothing is reconciled any "
+                                + "more, because nothing is asked of systemdocgenerator between "
+                                + "runs")
+                        .isNotNull()
+                        .doesNotContain("reconciled");
+            }
+        }
+
+        /**
+         * The one thing a reader of a line of totals will otherwise assume.
+         *
+         * <p>The released registers are re-batched by this same run, so they are already inside
+         * {@code rows}. They are a diagnostic beside the night's two accounts and not a third sum,
+         * and a line whose totals had quietly grown by them would be a night that counted the same
+         * registers twice (FR-009).
+         */
+        @Test
+        void the_released_registers_are_not_added_to_either_total() {
+            aMixedNight();
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                run();
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "rows"))
+                        .as("every register this run accounted for, batched or left waiting - and "
+                                + "not one more for the seven the pass handed back into it")
+                        .isEqualTo(THE_MIXED_NIGHTS_ROWS);
+                softly.assertThat(onTheLine(fields, "batches"))
+                        .as("and the batches it assembled, not the batches it failed")
+                        .isEqualTo(3);
+            }
         }
     }
 
@@ -1872,10 +2181,11 @@ class RegisterGenerationJobTest {
          *
          * <p>Principle VII asks that every line about processing carry {@code requestId} and
          * {@code hearingId}. A run has neither and cannot: it is one unit of work across many
-         * hearings and many batches. Before this it carried nothing at all, and the eleven lines a
-         * night writes - four from the job, seven from the reconciler - could not be pulled out of
-         * the index as one run. On a night where the reconciler is also settling batches from
-         * earlier nights, that is the difference between reading a run and reading a haystack.
+         * hearings and many batches. Before this it carried nothing at all, and the lines a
+         * night writes - the job's own, and the stale-batch pass's under the same id - could not
+         * be pulled out of the index as one run. On a night where the pass is also releasing
+         * batches from earlier nights, that is the difference between reading a run and reading a
+         * haystack.
          */
         @Test
         void every_line_a_run_writes_should_name_the_run_it_belongs_to() {
@@ -1956,7 +2266,7 @@ class RegisterGenerationJobTest {
      *
      * <p>Every case above is a run that finished, and finishing is not the only thing a run does.
      * The store can go away between the read and the stamp, {@code markPayloadMinted} can refuse,
-     * the reconciler's own query can fail: each of those leaves the run through
+     * the stale-batch pass's own statements can refuse: each of those leaves the run through
      * {@link RegisterGenerationJob#run()} without the report ever being written, so the night that
      * went half way is the one night that produces <em>no</em> line at all. That is worse than the
      * silence the report exists to abolish, because it is the silence of a night that did
@@ -1986,13 +2296,6 @@ class RegisterGenerationJobTest {
         /** What a store outage looks like from here: an unchecked refusal, on its own words. */
         private static final String OUTAGE = "the register store did not answer";
 
-        /** The line a run that stopped before it read anything can still write. */
-        private static final String NOTHING_YET = RUN_EVENT
-                + NORMALISED_RUN_ID
-                + " gate=proceed reason=flag-on batches=0 requested=0 generating=0 failed=0"
-                + " pending=0 deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0"
-                + " rows_deferred=0" + NOTHING_SETTLED_YET + " reconciled=0 duration_ms=0";
-
         /**
          * The line the mixed night can write once its second batch stops the run.
          *
@@ -2007,7 +2310,11 @@ class RegisterGenerationJobTest {
                 + " pending=0 deferred=2 rows=" + (GENERATING_ROWS + WAITING_ROWS)
                 + " rows_generating=" + GENERATING_ROWS
                 + " rows_failed=0 rows_pending=0 rows_deferred=" + WAITING_ROWS
-                + NOTHING_SETTLED_YET + " reconciled=0 duration_ms=60000";
+                + NOTHING_SETTLED_YET
+                + " released_batches=" + RELEASED_BATCHES
+                + " released_registers=" + RELEASED_REGISTERS
+                + " contended=" + CONTENDED
+                + " duration_ms=60000";
 
         /**
          * The line a night whose one render left and whose store then refused can still write.
@@ -2024,7 +2331,8 @@ class RegisterGenerationJobTest {
                 + NORMALISED_RUN_ID
                 + " gate=proceed reason=flag-on batches=0 requested=1 generating=0 failed=0"
                 + " pending=0 deferred=0 rows=0 rows_generating=0 rows_failed=0 rows_pending=0"
-                + " rows_deferred=0" + NOTHING_SETTLED_YET + " reconciled=0 duration_ms=0";
+                + " rows_deferred=0" + NOTHING_SETTLED_YET + NOTHING_RELEASED_ON_THE_LINE
+                + " duration_ms=0";
 
         /** Sets the night up as one the flag allowed and the store then refused. */
         private void aStoreThatWentAway() {

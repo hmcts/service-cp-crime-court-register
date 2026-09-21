@@ -1,6 +1,7 @@
 package uk.gov.hmcts.cp.courtregister.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
@@ -418,6 +419,75 @@ class ExceptionReportServiceTest {
                         assertThat(entry.requestId()).isNull();
                         assertThat(entry.notificationId()).isNull();
                     });
+        }
+
+        /**
+         * FR-019: a batch the run released is not one of the batches that failed.
+         *
+         * <p>It is FAILED in the store, under a bounded reason of this service's own, and it is
+         * the one terminal failure that has already been put right: the registers it held were
+         * given back by the same run and rendered that night. Reporting it beside the batches
+         * systemdocgenerator refused would send support after a court centre that got its
+         * document.
+         */
+        @Test
+        void a_batch_released_by_the_run_is_reported_as_batch_released_not_batch_failed() {
+            when(batches.failedBetween(WINDOW_FROM, NOW)).thenReturn(List.of(released()));
+
+            final ExceptionReport report = service.build(WINDOW, RUN_ID);
+
+            assertThat(report.entries())
+                    .as("one entry either way - what changes is which kind support reads it as, "
+                            + "and this one is informational because its registers were "
+                            + "re-rendered the same night (FR-019)")
+                    .singleElement()
+                    .satisfies(entry -> {
+                        assertThat(entry.kind()).isEqualTo(ExceptionKind.BATCH_RELEASED);
+                        assertThat(entry.reason())
+                                .as("the bounded reason is still the row's own, because it is "
+                                        + "what the kind was derived from")
+                                .isEqualTo(BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN.name());
+                        assertThat(entry.batchId()).isEqualTo(BATCH_ID);
+                        assertThat(entry.status()).isEqualTo(BatchStatus.FAILED.name());
+                    });
+        }
+
+        @Test
+        void a_batch_that_genuinely_failed_is_still_batch_failed() {
+            when(batches.failedBetween(WINDOW_FROM, NOW))
+                    .thenReturn(List.of(dead(), released()));
+
+            final ExceptionReport report = service.build(WINDOW, RUN_ID);
+
+            assertThat(report.entries())
+                    .as("one read, two kinds, decided by the reason on each row: a kind that "
+                            + "swallowed the genuinely dead batches would be the informational "
+                            + "one hiding the only one support has to act on")
+                    .extracting(ExceptionEntry::kind)
+                    .containsExactlyInAnyOrder(ExceptionKind.BATCH_FAILED,
+                            ExceptionKind.BATCH_RELEASED);
+        }
+
+        /**
+         * And the enumeration's own switch still answers for every kind there is.
+         *
+         * <p>{@code recursEveryRun()} is a switch expression precisely so that a sixth kind cannot
+         * be added without deciding which of the two it is. This case is what makes that a claim
+         * rather than a compiler nicety that a {@code default} arm could one day silence: every
+         * kind is asked, and the new one is asked by name.
+         */
+        @Test
+        void the_kind_switch_stays_exhaustive() {
+            assertThat(ExceptionKind.values())
+                    .as("every kind answers, so none of them reaches a default arm nobody chose")
+                    .allSatisfy(kind -> assertThatCode(kind::recursEveryRun)
+                            .doesNotThrowAnyException());
+            assertThat(ExceptionKind.BATCH_RELEASED.recursEveryRun())
+                    .as("read over the window like the other terminal kinds and not against a "
+                            + "cut-off: a released batch is a thing that happened once, so a "
+                            + "report that left it out is the only report that would ever have "
+                            + "stated it - and it is not an entry the next morning finds again")
+                    .isFalse();
         }
 
         @Test
@@ -848,6 +918,16 @@ class ExceptionReportServiceTest {
     private static RecordedRegisterSummary leftBehindAt() {
         return new RecordedRegisterSummary(OUTPUT_ID, HEARING_ID, COURT_CENTRE, REGISTER_DATE,
                 WINDOW_FROM.minus(Duration.ofDays(1)), THE_SAME_AGE);
+    }
+
+    /**
+     * The batch a run gave up on: FAILED under this service's own reason, registers given back.
+     *
+     * @return the projection the failed-batches read answers with
+     */
+    private static BatchException released() {
+        return new BatchException(BATCH_ID, COURT_CENTRE, REGISTER_DATE, BatchStatus.FAILED,
+                BatchFailureReason.NOT_COMPLETED_BY_NEXT_RUN, ATTEMPTS, BATCH_FAILED_AGE);
     }
 
     private static BatchException dead() {

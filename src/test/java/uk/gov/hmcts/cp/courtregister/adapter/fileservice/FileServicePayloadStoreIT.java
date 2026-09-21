@@ -126,7 +126,7 @@ class FileServicePayloadStoreIT {
      */
     private static final String CSV_TEXT =
             "kind,court_centre,reason\nBATCH_FAILED,"
-                    + "\"Youth Court, M\u00f4n\",GENERATION_TIMED_OUT\n"; // o-circumflex
+                    + "\"Youth Court, M\u00f4n\",RENDER_REQUEST_FAILED\n"; // o-circumflex
 
     private static final byte[] CSV_BYTES = CSV_TEXT.getBytes(StandardCharsets.UTF_8);
 

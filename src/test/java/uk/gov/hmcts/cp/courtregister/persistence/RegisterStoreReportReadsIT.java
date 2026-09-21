@@ -114,7 +114,7 @@ class RegisterStoreReportReadsIT {
     @BeforeAll
     static void migrate() {
         database = ReportReadsDatabase.migrated(DATABASE);
-        store = new JdbcRegisterStore(database.jdbcClient(), database.transactions());
+        store = new JdbcRegisterStore(database.jdbcClient(), database.transactionManager());
     }
 
     /** The database goes with the suite, so its name is free for a second load of this class. */

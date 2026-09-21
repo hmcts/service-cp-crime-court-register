@@ -131,8 +131,8 @@ class PublicEventsConfigTest {
     /** A generating pod's settings, which is the only deployment that holds the subscription. */
     private static GenerationProperties generationSettings() {
         return new GenerationProperties(true, "0 0 18 * * MON-FRI", "Europe/London", false,
-                Duration.ofMinutes(60), Duration.ofMinutes(70), Duration.ofMinutes(10),
-                GenerationProperties.COMPLETION_EVENT, SourceMode.LIVE, SourceMode.LIVE,
+                Duration.ofMinutes(60), Duration.ofMinutes(70), Duration.ofMinutes(30),
+                Duration.ofMinutes(10), SourceMode.LIVE, SourceMode.LIVE,
                 SourceMode.LIVE, SourceMode.LIVE);
     }
 }

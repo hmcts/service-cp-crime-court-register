@@ -283,8 +283,8 @@ public interface RegisterStore {
      * @param batchId        the batch the document belongs to
      * @param documentFileId the rendered document's file-service id
      * @param generatedAt    when systemdocgenerator generated it
-     * @param completedBy    the mechanism that learned the document exists: the event listener or
-     *                       the grace-period reconciler
+     * @param completedBy    the mechanism that learned the document exists, which is the event
+     *                       listener
      */
     void markGenerated(UUID batchId, UUID documentFileId, Instant generatedAt,
             CompletedBy completedBy);
@@ -292,11 +292,14 @@ public interface RegisterStore {
     /**
      * Fails the batch under a bounded reason, leaving its rows where the reason says they belong.
      *
-     * <p>{@code completedBy} is nullable here and only here: four of the six reasons are this
-     * service's own verdict about a render it could not ask for or could not get an answer about,
-     * and naming a completion mechanism for those would credit a decision nobody outside this
-     * service made. The two that are somebody's answer - a {@code generation-failed} event, a
-     * reconciled query - carry EVENT and RECONCILER respectively.
+     * <p>{@code completedBy} is nullable here and only here: most of the reasons are this service's
+     * own verdict about a render it could not ask for, could not get an answer about, or stopped
+     * waiting for, and naming a completion mechanism for those would credit a decision nobody
+     * outside this service made. The reasons that are somebody's answer - the ones
+     * {@link uk.gov.hmcts.cp.courtregister.domain.BatchFailureReason#isGeneratorAttributed()} names
+     * - carry the mechanism that brought it, which for the one this service still writes, a
+     * {@code generation-failed} event, is EVENT. The rule is asked of the enum rather than restated
+     * here, so this port cannot drift from what the store enforces.
      *
      * <p>Where the reason releases the rows, a row the hearing has since been re-shared for is
      * superseded against the re-share as its stamp is cleared, exactly as {@link #releaseFailed}
@@ -327,9 +330,9 @@ public interface RegisterStore {
     /**
      * Gives one FAILED batch's registers back, so that a person may have the day rendered again.
      *
-     * <p>The other half of {@link #markFailed}. Two of the six reasons say the batch never left this
-     * service, and those release the stamp as they fail - their registers are active and unbatched
-     * by the time any later run reads them. The other four say systemdocgenerator was asked, so a
+     * <p>The other half of {@link #markFailed}. Three of the six reasons leave no document to
+     * wait for, and those release the stamp as they fail - their registers are active and unbatched
+     * by the time any later run reads them. The other three say systemdocgenerator was asked, so a
      * document may yet exist and the rows keep their stamp: re-rendering that day is a decision a
      * person makes (data-model.md), and this is the statement that decision is written as.
      *
@@ -395,6 +398,148 @@ public interface RegisterStore {
      *         them, or where every register it held has since been replaced
      */
     List<RegisterRecord> releaseFailed(UUID batchId);
+
+    /**
+     * Fails every batch still awaiting its render past its cutoff, and gives its registers back.
+     *
+     * <p>What the nightly run does first, after the flag and before it assembles anything. A batch
+     * still PENDING or GENERATING when the next run begins, and in that state for long enough, is
+     * failed under {@link BatchFailureReason#NOT_COMPLETED_BY_NEXT_RUN} and its registers released,
+     * so that the same run's assembly puts them in a batch tonight and the court centre gets its
+     * document tonight rather than never.
+     *
+     * <p><strong>Atomic per batch, fenced on the staleness rule itself - and that is why this is a
+     * method here rather than a loop in the caller.</strong> A read, then a mark, then a release is
+     * not an acceptable shape for it, and the two reasons are the two failures this increment
+     * exists to end:
+     *
+     * <ul>
+     *   <li><strong>A stranded register.</strong> {@link #markFailed} and {@link #releaseFailed}
+     *       are separate operations. A crash between them leaves registers stamped to a terminal
+     *       batch, and {@link #activeUnbatched()} means unbatched - so no later run and no command
+     *       ever reaches those rows again, and a hearing's youth defendants quietly stop reaching
+     *       a court register at all. Here the failure and the release are one act, or neither
+     *       happens.</li>
+     *   <li><strong>A refused mark ending the night.</strong> Between a read and a mark the
+     *       outcome sink can move the batch, and the state machine would then refuse the mark -
+     *       which, run inline in the night's generation, ends the run. One batch that came good in
+     *       the wrong second would cost every court centre its document that night. Here such a
+     *       batch simply does not match.</li>
+     * </ul>
+     *
+     * <p>So <strong>zero rows is an answer, not an error</strong>: a batch that ceased to be stale
+     * between this call and the row being written is one the operation did not change, and it is
+     * named in neither list. A store that cannot be reached at all still fails the way every other
+     * unreachable store does.
+     *
+     * <p><strong>Per batch, and that is a promise rather than an implementation detail.</strong>
+     * FR-003a says no single batch's outcome may end the run, and one transaction over every stale
+     * batch is a way of ending it that no care in the caller can undo: a refusal met on one court
+     * centre's registers would roll back every other court centre's release with it. Each batch is
+     * therefore failed and released by a statement of its own, in a transaction of its own - the
+     * failure and the release of <em>that</em> batch still one act, which is what the requirement
+     * was ever about.
+     *
+     * <p><strong>A transaction of its own whoever calls this, and from where.</strong> The
+     * separation is the implementation's to enforce and not the caller's to remember: a caller
+     * already inside a transaction would otherwise have every attempt join it, the first refusal
+     * would abort it, and every batch released before that one would be rolled back at the end -
+     * the run-ending outcome again, reached by obeying the port rather than by breaking it. So
+     * each batch's release suspends whatever the caller had open and commits or rolls back by
+     * itself, and a caller may wrap this call in a transaction of its own without changing what
+     * any batch's ending means.
+     *
+     * <p><strong>The key keeps one active register, in both directions.</strong> A hearing can hold
+     * more than one register for a day, and the release decides between them the same way the
+     * recorder does: the later share is the one the day is still to render. A register the estate
+     * replaced while the batch was in flight supersedes the one being given back; a share the
+     * batched register <em>overtook</em> - a delivery that arrived behind the register it belongs in
+     * front of, and was recorded active because a batched register is not the recorder's to
+     * supersede - is superseded by it. Neither is handed back beside the other, and a batch whose
+     * key holds such a share is released like any other rather than contended for ever.
+     *
+     * <p><strong>What a re-share can do, and what the caller is told about it.</strong> One thing a
+     * staleness predicate cannot fence is a register re-shared while the operation is running: the
+     * replacement is not in the snapshot the operation reads, so the release would give the
+     * replaced register back beside its replacement and the store would refuse the second active
+     * row for the key. That is a lost race rather than a rule, so the adapter makes that batch's
+     * statement again on a fresh snapshot that has the re-share in it. A batch whose every attempt
+     * met the same refusal is <strong>reported, not thrown</strong>: it is named in
+     * {@link StaleReleaseOutcome#contended()}, left exactly as it was found, and the operation goes
+     * on to the batches after it and answers normally. Nothing about one batch reaches the caller
+     * as an exception, because the pass runs inline in the night's generation and an exception
+     * there costs every court centre its document over one hearing that was re-shared three times
+     * in a few milliseconds. A contended batch is stale still and untouched, so the next run
+     * reaches it again; meanwhile the 07:00 report names its court centre day as a late batch every
+     * morning, which is the surface support already watches.
+     *
+     * <p>A batch holding a document is never matched, at any age - somebody is owed e-mails about
+     * it. A batch an operator asked for is given the longer cutoff, because a manual generation
+     * holds no run lock and may still be requesting its renders when the schedule fires. Both
+     * cutoffs are the caller's to compute, from its own clock and its own settings: this port
+     * defaults neither, and a pass that let the store decide what "too long" means would be a
+     * setting nobody could change.
+     *
+     * <p><strong>The one refusal that is still raised.</strong> The race for the day's key is the
+     * only refusal this operation knows what to do about. A release refused by any other rule -
+     * another unique key, or a constraint that is no key at all, such as a bounded reason a store
+     * left short of its migrations does not admit - is a rule nobody wrote this statement against,
+     * and the same row meets it on every attempt and on every run. So it is raised as
+     * {@link uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException}, a fault in the
+     * schema or in the statement rather than a race, and the pass may let it end the run as it
+     * lets any programming error end one. FR-003a is about a batch's <em>ordinary</em> ending, and
+     * that one is reported.
+     *
+     * <p><strong>So no refusal reaches the pass as an {@code org.springframework.dao} type</strong>
+     * and it never has to catch a bare {@code RuntimeException} to read one (Principle V). What
+     * does still cross, here and from every method on this port, is the store's own contention
+     * signal - a deadlock or a serialisation failure, which is the store answering rather than a
+     * rule being broken, and which is the run's ordinary transient failure rather than anything
+     * this operation decides about. That is the adapter's store-wide policy and it is stated here
+     * so the pass is not written against a promise the package does not make.
+     *
+     * <p><strong>And the account is told as it is made, not only returned.</strong> Each batch is
+     * committed by itself, so a walk that ends in a throw still leaves the batches before it
+     * durably failed and released. {@code progress} is told about each of them where it is
+     * settled, so a caller keeping an account has the part that happened whether the walk finished
+     * or not; {@link StaleReleaseProgress#NONE} is for a caller that keeps none. The return value
+     * is the same account, whole, for a walk that got to the end.
+     *
+     * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
+     * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
+     * @param progress        told about each batch as its own transaction commits, so that an
+     *                        interrupted walk still leaves an account of what it did
+     * @return the batches this operation changed, oldest day first, each with the count of
+     *         registers still that day's to render, and beside them the batches it left exactly as
+     *         it found them because every attempt at them lost the same race for the day's key
+     * @throws uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException if a release was
+     *         refused by a rule this operation does not account for
+     * @throws uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException if the store could not
+     *         be reached
+     */
+    StaleReleaseOutcome failAndReleaseStale(Instant scheduledCutoff, Instant manualCutoff,
+            StaleReleaseProgress progress);
+
+    /**
+     * The same release, for a caller that keeps no account of the pass as it goes.
+     *
+     * <p>The operations commands and the suites that ask the store about one day read the whole
+     * answer out of the return value and have no run report to write, so they are not made to pass
+     * an observer that would be told nothing they use. Only the nightly pass, whose numbers are
+     * the night's own account, tells the difference between the two forms.
+     *
+     * @param scheduledCutoff the stamp at or before which a batch the schedule made is stale
+     * @param manualCutoff    the stamp at or before which a batch an operator asked for is stale
+     * @return what the operation released and what it could not release
+     * @throws uk.gov.hmcts.cp.courtregister.domain.RegisterNotReleasedException if a release was
+     *         refused by a rule this operation does not account for
+     * @throws uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException if the store could not
+     *         be reached
+     */
+    default StaleReleaseOutcome failAndReleaseStale(final Instant scheduledCutoff,
+            final Instant manualCutoff) {
+        return failAndReleaseStale(scheduledCutoff, manualCutoff, StaleReleaseProgress.NONE);
+    }
 
     /**
      * Settles the batch on its notification tally, and moves its rows to NOTIFIED.

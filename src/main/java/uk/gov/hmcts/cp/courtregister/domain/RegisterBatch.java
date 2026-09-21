@@ -37,7 +37,7 @@ import java.util.UUID;
  * @param fileName          the first record's file name, as progression named the document
  * @param payloadFileId     minted before the file-service insert, sent as
  *                          {@code payloadFileServiceId}; {@code null} until then
- * @param documentFileId    the rendered PDF's file-service id, from the event or the query API;
+ * @param documentFileId    the rendered PDF's file-service id, as the public event reported it;
  *                          {@code null} until the document exists
  * @param status            where the batch has got to
  * @param failureReason     the bounded reason the batch failed, or {@code null}
@@ -93,7 +93,7 @@ public record RegisterBatch(
      * <p>The same bound the column carries (data-model.md). It is a bound and not a validation:
      * how long the message is is systemdocgenerator's decision, not this service's, and a batch
      * whose failure could not be written because the renderer was verbose would stay GENERATING
-     * until the reconciler gave up on it - the failure lost twice over.
+     * until the next run gave up on it - the failure lost twice over.
      */
     public static final int REASON_LIMIT = 512;
 
@@ -149,8 +149,8 @@ public record RegisterBatch(
      *
      * <p><strong>Both ends, or no reading at all.</strong> {@code requested_at} is written by the
      * mark that records the 202, so a batch whose render was never accepted has no start - which is
-     * every batch the requesting leg fails on its own account, and the stale PENDING batch the
-     * reconciler ends RENDER_REQUEST_FAILED. {@code generated_at} and {@code failed_at} are the two
+     * every batch the requesting leg fails on its own account, and every stale PENDING batch the
+     * run gives up on. {@code generated_at} and {@code failed_at} are the two
      * ends a render can reach, and a batch still waiting for one has no end. Neither absence is a
      * nought to record: a timer told nought would say the round trip was instant, which is the
      * reading a fast renderer produces.

@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -166,12 +168,16 @@ class StubGenerationAdaptersTest {
         }
 
         @Test
-        void the_stubbed_renderer_should_report_no_verdict_rather_than_invent_a_document() {
-            assertThat(new StubDocumentRenderer().query(PAYLOAD_FILE_ID, CallerIdentity.SYSTEM))
+        void the_stubbed_renderer_should_declare_no_way_of_inventing_a_document() {
+            assertThat(Arrays.stream(StubDocumentRenderer.class.getDeclaredMethods())
+                    .filter(method -> !method.isSynthetic())
+                    .toList())
                     .as("a minted document id would be a GENERATED batch carrying a PDF nobody "
                             + "rendered - the silent success this service exists to end (C1, C33) "
-                            + "- and a stubbed file-service leg would attach it to a real e-mail")
-                    .isEmpty();
+                            + "- and a stubbed file-service leg would attach it to a real e-mail; "
+                            + "the stand-in has no second call to invent one in")
+                    .extracting(Method::getName)
+                    .containsExactly("requestRender");
         }
     }
 

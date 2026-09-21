@@ -741,8 +741,12 @@ group already makes about the other five commands).
 | `request_failed`, `request_late`, `batch_late`, `batch_failed`, `notification_failed` | integers | always present, zero included; **what the reads found**, never what the cap kept |
 | `truncated` | integer | how many **late** entries the entry cap dropped, never a failure; nought on every ordinary morning |
 
-**Eleven fields**: `event`, `run_id`, the three instants, the five counts and `truncated`. That
-number is stated once, here, and the log sink's test counts against it.
+**Twelve fields** (amended 2026-09-21): `event`, `run_id`, the three instants, **one count per
+kind** and `truncated`. That number is stated once, here, and the log sink's test counts against
+it. It was eleven while there were five kinds; increment 004 added `BATCH_RELEASED` and the line
+carries its count beside the other five, because a count the line leaves out is a morning whose
+events outnumber its counts - the shape the paragraph below tells a reader to read as a broken
+sink.
 
 The last of them is what makes the other five readable. The counts are of what the reads found and
 the exception events are of what the report carries, so a query over a capped morning finds fewer
