@@ -39,12 +39,12 @@ import uk.gov.hmcts.cp.courtregister.domain.RegisterBatch;
  * assembly, and the whole-row compare-and-set a caller that read a batch and decided about it
  * writes it back through.
  *
- * <p><strong>Three of those reads have no caller at this commit.</strong> The retired reconciler
- * took them on its way past, and {@code batch/BatchAgeSweep} (Phase 6) is what takes them next:
- * until it lands, {@code courtregister_oldest_generating_age}, {@code _pending_age} and
- * {@code _generated_age} are registered and unrefreshed. They are kept here rather than deleted
- * with their old caller because the readings are what FR-011 asks for, and a gauge that appeared
- * only after the sweep landed would be a gauge nobody could alert on in between.
+ * <p><strong>Three of those reads belong to a sweep of their own.</strong> The retired reconciler
+ * took them on its way past; {@code batch/BatchAgeSweep} takes them now, on its own fixed delay
+ * and under no lock, so {@code courtregister_oldest_generating_age}, {@code _pending_age} and
+ * {@code _generated_age} are refreshed by a reader whose only job that is. They outlived their old
+ * caller because the readings are what FR-011 asks for, and a gauge that came and went with a
+ * mechanism would be a gauge nobody could alert on across the change.
  *
  * <p><strong>A batch is read by its identity and by nothing else.</strong> There is no read by the
  * payload a batch was rendered from, because there is no caller for one: the sink finds a batch by
