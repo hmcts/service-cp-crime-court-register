@@ -3037,7 +3037,7 @@ what this phase added: T037's one, T038's two and T039's one.
       paragraph above the table lists `GenerationReconcilerTest` among the suites that run
       executed. It is a record of a run that happened, not a pointer to a file, and correcting it
       would be editing a dated observation.)
-- [x] T046 [A] The gates, recorded. `flock … ./gradlew build` with the JaCoCo ratchet at **0.88 line /
+- [~] T046 [A] The gates, recorded. `flock … ./gradlew build` with the JaCoCo ratchet at **0.88 line /
       0.85 branch** unchanged, PMD over main, Checkstyle over main and test, the differential audit
       and the consolidation audit; then the `quickstart.md` walkthrough end to end on a **clean** local
       stack, including step 6's other side of the boundary and the three startup refusals. Quote the
@@ -3071,7 +3071,12 @@ what this phase added: T037's one, T038's two and T039's one.
       What no suite can stand in for is the **V7-on-a-dirty-volume** paragraph of the quickstart's
       own preamble, which was observed on a real volume when the file was written, and the image's
       entrypoint dispatch. The walkthrough is owed before the increment's merge and is carried as
-      an open point.)
+      an open point.
+      **The task is therefore `[~]` and not `[x]`**: the first half - the gates, the numbers and the
+      two audits - ran and is quoted above; the second half, the walkthrough on a clean stack, has
+      not. "It needs `docker compose`" explains the delay and does not stand in for the run, so the
+      tick says half rather than claiming both. What closes it is the walkthrough itself, quoted
+      here.)
 
 **Phase close**: `flock … ./gradlew build` green; whole-increment review gate (code-reviewer, qa,
 spec-validator, then Codex) before the merge to `main`.
@@ -3174,8 +3179,11 @@ defect of the branch. The round was therefore a verification, and it found the r
 left it - fifty tasks ticked (T007 `[~]`, moved to Phase 5 as T050, which is ticked), the tree
 clean at `5296c20e`, the ratchet in `gradle/test.gradle` untouched at LINE 0.88 / BRANCH 0.85, and
 the boundary holding: `CLAUDE.md`'s net diff over the range is empty, `CliModeConfig`'s is
-comment-only as the contract permits, and no commit in the range touches `batch/cli`, an `api/`
-package, `openapi.yaml`, `acl/`, `docker/startup.sh`, the constitution or the build files.
+comment-only as the contract permits, and no commit in the range touches `src/main/**/batch/cli`,
+an `api/` package, `openapi.yaml`, `acl/`, `docker/startup.sh`, the constitution or the build files.
+(The three edits under `src/test/**/batch/cli` are the recorded hand-offs at **T002** and **T036**
+- the two compile-forced `settings()` helpers and `ReportExceptionsCliTest`'s counts line - and not
+a claim that nothing under `batch/cli` was touched at all.)
 
 **Re-gated after round 2** (`flock -w 7200 … ./gradlew build -Dtest.noFailFast=true`) →
 **BUILD SUCCESSFUL, exit 0, 4m 13s, 3672 tests over 580 suites, 0 failures, 0 errors, 0 skipped**,
