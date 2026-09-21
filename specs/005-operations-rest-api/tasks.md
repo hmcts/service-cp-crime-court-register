@@ -1619,10 +1619,102 @@ a deletion has no red run, and its evidence is the green build with the replaced
       **Nothing was edited** — the command is read-only, and every finding above is carried into
       T060 rather than fixed here. Four of the seven are one-sentence spec corrections; one is three
       one-line code edits; none blocks the five deployment gates.)
-- [ ] **T060** [A] The handover note: the five deployment gates from `spec.md`, the one open item
+- [x] **T060** [A] The handover note: the five deployment gates from `spec.md`, the one open item
       (the estate's audit header allowlist), and the behaviour 004 owes 005 (its pre-batching pass
       skipping operator-initiated batches). This increment **must not be deployed to STE** until the
       five gates land — the CLI is gone, so a pod without them has no operational surface at all.
+
+---
+
+## Handover — increment 005, operations REST API
+
+**Read this before the increment is deployed anywhere.**
+
+### This increment must not be deployed to STE until five gates land
+
+The CLI is **removed**. A pod deployed without these has **no operational surface at all** — no way
+to read the cutover flag, regenerate a date, resend a batch's recipients, supersede a period or pull
+the exception report. And because the identity header is an assertion rather than a proof, a pod
+deployed without gates 2 and 3 has a surface that is **worse than none**: any workload inside the
+mesh could assert a Second Line Support identity and be believed.
+
+None of the five is in this repository, and nothing in this repository can assert any of them:
+
+1. **An internal ingress / APIM route for `/operations/**`** in the `cpp-aks-deploy` values, not
+   exposed outside the estate.
+2. **The gateway strips any client-supplied `CJSCPPUID` and injects the authenticated identity.**
+   Without this, the authorisation is a caller's own claim about itself.
+3. **An Istio `AuthorizationPolicy` and a `NetworkPolicy` restricting `/operations/**` to that
+   gateway**, so no other workload in the mesh can reach it directly.
+4. **usersgroups reachable from the pod** for the auth filter's identity client, with whatever
+   network policy that requires.
+5. **The Artemis audit connection** in the STE values: `CP_AUDIT_ENABLED=true` with the broker's
+   hosts, port, credentials and TLS material from Key Vault, and `AUTHZ_HTTP_ENABLED` /
+   `HTTP_AUDIT_ENABLED` left at their `true` defaults.
+
+**Gate 5 is the one a values file will get wrong**, so it is worth saying twice. `HTTP_AUDIT_ENABLED`
+builds nothing on its own: every `audit.http.*` bean the starter declares sits inside the
+`@AutoConfiguration` class `cp.audit.enabled` gates, and this service ships that key `false` so a
+laptop with no broker starts. A values file that sets the two switches and omits
+`CP_AUDIT_ENABLED` serves the operations API **unaudited**, and condition (b) of constitution
+Principle III is unmet. Nothing refuses that combination — start-up never refuses on a switch
+combination an operator chose — so the pod **says** it instead: one WARN at start-up naming both
+settings. The deployment review is what checks it.
+
+### Open items
+
+- **The estate's audit header allowlist.** `cp-audit-filter-springboot` captures every request
+  header verbatim, and its own README says an allowlist "should be agreed with the Audit team before
+  rolling this out broadly". This is an **estate decision, not a deployment step**, and it is a gate
+  on rollout rather than on a values file. It cannot be closed from this repository. Owner: whoever
+  takes it to the Audit team.
+- **The audit RESPONSE event that cannot be refused.** The request event is published before the
+  action, so a broker that cannot be reached refuses the call `503 AUDIT_UNAVAILABLE` and nothing
+  happens. The **response** event has no such lever: by the time it is published the action has been
+  taken, so a publish that fails leaves a request event with no response event beside it. What this
+  service does is count the shortfall on
+  `courtregister_operations_audit_unpublished` and answer the caller anyway — the alternative would
+  be undoing work that has already happened. **A durable outbox is what would close it**, and that
+  is a design decision rather than a defect: it is recorded here **awaiting the design owner's
+  sign-off**, and the counter is the evidence in the meantime.
+- **The 415-before-401 ordering — now fixed, and recorded because it was live for one run.** The
+  `multipart/` guard ran in `OperationsActionFilter` at `HIGHEST_PRECEDENCE`, ahead of
+  `cp-auth-rules-filter` at `+30`, so an **unauthenticated** caller who declared a multipart body
+  was answered `415` and never reached the authorisation filter at all. It is now
+  `OperationsContentTypeFilter` at `+40`: inside the authorisation filter, so an anonymous caller
+  gets `401` and a caller in the wrong group `403`, and still outside
+  `cp-audit-filter-springboot` at `+50`, which is the half that has not changed — that filter hands
+  a multipart request down the chain publishing neither event, and an endpoint reachable unaudited
+  is an endpoint that may not exist. Pinned in `OperationsAuthzIT` on all three of `401`, `403` and
+  `415`.
+- **The seven findings of T059's `/speckit-analyze` pass**, none of which blocks the gates. One is
+  CRITICAL and is a **stale success criterion rather than a defect**: `SC-010` still demands the
+  start-up refusal constitution 5.0.0 removed and FR-045 now forbids. `FR-048`'s "three
+  conditionals" are nine. Three refusals are logged as the enum constant while the wire carries the
+  kebab-case form, so an alert keyed on `reason=` and a runbook keyed on the body disagree —
+  three one-line edits. `FR-043` has no task and no named test. See T059 for the rest.
+
+### What 004 owed 005, and where it stands
+
+**Discharged in the merged tree.** 004's pre-batching pass must not fail an operator-initiated batch
+that spans 18:00: a manual generation holds no run lock and has the whole requesting deadline to
+work in, so judging it by the schedule's minimum age would release its rows out from under it.
+`batch/StaleBatchReleaser` judges a batch the schedule made by the minimum age and a batch an
+operator asked for by **the longer of that and the run's own lock duration**, and which cutoff a
+batch is judged by is decided in the statement's own predicate from the `system_generated` column
+`V2` already carries. 005's `application/RegisterRegenerationService` writes `system_generated =
+false` (`BY_HAND`), because it is the CLI's body moved unchanged. Nothing is owed either way.
+
+### What changed for an operator, in one paragraph
+
+Six commands reached by `kubectl exec ... -- ./startup.sh <command>` are seven endpoints under
+`/operations/**`, reached by `curl` through the gateway with the caller's own identity. The same
+arguments, the same refusals, the same fields — as JSON rather than as `key=value` lines. Three
+things are **stricter** than the commands were, because HTTP reaches further than `kubectl exec`
+did: supersede is admitted only while the flag says OFF and gains a `dryRun` and an age bound;
+regeneration takes the nightly lock instead of trusting a runbook; and every call is authorised and
+audited, which no exec into a pod ever was. `README.md`'s Operations API section is the table;
+`specs/005-operations-rest-api/quickstart.md` shows every refusal.
 
 ---
 

@@ -128,8 +128,8 @@ public class BatchAssembler {
      * @param existing        every batch already recorded for the keys those records fall under,
      *                        whatever state it reached; empty on a key being rendered for the first
      *                        time
-     * @param systemGenerated true where the nightly schedule asked, false where the operations CLI
-     *                        did, which is progression's own flag and is written to the batch row
+     * @param systemGenerated true where the nightly schedule asked, false where an operator did,
+     *                        which is progression's own flag and is written to the batch row
      * @return one batch per key it could assemble, each beside the registers it was assembled from,
      *         and the keys it left waiting
      */
