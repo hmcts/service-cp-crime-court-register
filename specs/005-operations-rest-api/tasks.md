@@ -1128,7 +1128,7 @@ the **real** authorisation filter refuses the people it should.
       The `courtregister.operations` block and the two `audit.http.*` keys landed in
       `application.yaml` as the task asks, beside the `enabled` key T005 left there and without
       restating or flipping it.)
-- [ ] **T044** [P] [US1] `api/OperationsAuditFactsTest` (new) — the payload carries the action, the
+- [x] **T044** [P] [US1] `api/OperationsAuditFactsTest` (new) — the payload carries the action, the
       outcome (status family + bounded reason), `flagOverride` on the regeneration endpoint, the run
       id, and the superseded count on the supersede endpoint; and it carries **no** request or
       response body. Driven through the publisher seam — `AuditService` is a plain class registered
@@ -1142,7 +1142,7 @@ the **real** authorisation filter refuses the people it should.
       happened, does not change the answer but logs at ERROR naming the action and the run id and
       moves a bounded counter. Neither is allowed to be a caught-and-ignored exception, which is
       what the library's own `AuditService.postMessageToArtemis` does.
-- [ ] **T045** [US1] `api/OperationsAuditFacts` and `api/OperationsAuditService` — the controllers
+- [x] **T045** [US1] `api/OperationsAuditFacts` and `api/OperationsAuditService` — the controllers
       and the advice populate the facts; the service merges them into the payload's `content` and
       delegates. Nothing else is added to the event. Green: T044.
       **`OperationsAuditService` is registered as the `AuditService`**, which the starter allows
@@ -1167,6 +1167,41 @@ the **real** authorisation filter refuses the people it should.
       `@JmsListener` in `uk.gov.hmcts.cp` which does not name `LISTENER_CONTAINER_FACTORY`. The
       invariant is currently true and pinned by nothing, which is how a listener written next year
       attaches to the audit broker with every test green.
+      (T044 and T045 landed in one commit under the Phase 2 TDD exception, so there is no red run
+      to quote. Green: `OperationsAuditFactsTest` 12 tests and `PublicEventsConfigTest` with the
+      new sweep, 0 failures; the whole `api` package, `ConfigurationValidationTest`,
+      `HttpSurfaceTest` and `TelemetryPrivacyTest` green beside them. Checkstyle and PMD clean on
+      main and test after four findings were fixed rather than suppressed.
+      **The two JMS beans are closed by the reflection sweep rather than by defining the default
+      factory**, which is the second of the two options this note offers: the sweep refuses any
+      `@JmsListener` in `src/main` that does not name
+      `PublicEventsConfig.LISTENER_CONTAINER_FACTORY`, line-anchored so the word inside a javadoc
+      paragraph is not read as a declaration. Defining Boot's default factory would have put this
+      service in the business of building a listener container for a broker it does not consume.
+      **Four things the task's sentences do not spell out and the code had to decide.**
+      *The facts are a thread-local rather than a request-scoped bean*: the audit filter is a
+      servlet filter publishing from the request's own thread, and a thread-local opened by the
+      outermost filter and cleared in its `finally` is the mechanism `batch/RunCorrelation` and MDC
+      already use here - it needs no scoped proxy on a singleton the starter constructs.
+      *Which of the two publishes is the request event is kept on the facts*, because the library's
+      payload does not say: both events carry the same `_metadata.name`, and the filter publishes
+      exactly two, the request before the chain and the response after it.
+      *The `503 AUDIT_UNAVAILABLE` is rendered by `OperationsActionFilter`*, not by the advice: the
+      audit filter runs outside the `DispatcherServlet`, so a refusal it raises reaches no
+      `@RestControllerAdvice`. The outermost filter catches `OperationsRefusedException` and writes
+      the bounded body from the one status map, rather than letting it arrive as the container's
+      own 500 with the path the caller typed in it. `AUDIT_UNAVAILABLE` is a new
+      `OperationsReason`, 503 in the status map and in the OpenAPI document's `Reason` enumeration.
+      *The outcome is recorded in `OperationsProblem.answering`*, the one place every refusal body
+      is built, rather than at four throw sites - and a call that reached no refusal is
+      `SUCCEEDED`, which is a fact rather than a gap. That removed the need for an interceptor
+      reading a status code back off the response.
+      **The Complexity Tracking entry's dated sign-off is still outstanding.** The plan says that
+      entry "needs the design owner's dated sign-off before Phase 8 lands"; nobody was available to
+      give one during this run, so the shortfall stands exactly as recorded - a response event that
+      cannot be published is logged at ERROR naming the action and the run id, moves
+      `courtregister_operations_audit_unpublished`, and is dressed up as nothing else. It is
+      carried to the orchestrator rather than assumed.)
 - [ ] **T046** [US2] `api/OperationsAuthzIT` (new) — **the real filter, wired as deployed**, with
       usersgroups stubbed at the HTTP boundary by WireMock and
       `@DynamicPropertySource` over `authz.http.identity-url-template` (the

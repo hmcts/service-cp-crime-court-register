@@ -107,7 +107,17 @@ public enum OperationsReason {
     DOWNSTREAM_REFUSED("DOWNSTREAM_REFUSED"),
 
     /** A consumed platform contract did not answer at all. */
-    DOWNSTREAM_UNAVAILABLE("DOWNSTREAM_UNAVAILABLE");
+    DOWNSTREAM_UNAVAILABLE("DOWNSTREAM_UNAVAILABLE"),
+
+    /**
+     * The call could not be audited, so it was refused rather than made.
+     *
+     * <p>The one refusal on this surface that is about the surface's own conditions rather than
+     * about the action: constitution Principle III(b) makes being audited a condition of an
+     * operations endpoint existing, so a call whose request event could not be published is a call
+     * that must not proceed as though it had been (plan, Complexity Tracking).
+     */
+    AUDIT_UNAVAILABLE("AUDIT_UNAVAILABLE");
 
     /** What the code is spelled as on the wire, in a response and in a runbook step. */
     private final String spelling;

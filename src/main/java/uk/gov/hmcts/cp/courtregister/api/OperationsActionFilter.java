@@ -5,10 +5,14 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.web.filter.OncePerRequestFilter;
+import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
 
 /**
  * Names the action a request is, from its path and its method, and lets nobody else name it.
@@ -44,6 +48,15 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * service does not recognise is the way round it. What such a request is authorised as is the
  * library's own computed {@code "<METHOD> <path>"}, which matches no rule in
  * {@code acl/operations-rules.drl} and is therefore refused.
+ *
+ * <p><strong>It also opens and closes the call's audit facts, and catches the one refusal that
+ * cannot reach the advice.</strong> Being outermost is what makes it the right place for both. The
+ * facts ({@link OperationsAuditFacts}) are a thread-local that must be cleared in a
+ * {@code finally} by whoever opened it, because the container's threads are pooled; and a request
+ * whose audit event could not be published is refused <em>by the audit filter</em>, which runs
+ * outside the {@code DispatcherServlet} and therefore outside every {@code @RestControllerAdvice}.
+ * That refusal is rendered here, from the same status map every other refusal on this surface is
+ * rendered from, so it carries a bounded reason rather than arriving as the container's own 500.
  */
 public class OperationsActionFilter extends OncePerRequestFilter {
 
@@ -81,9 +94,45 @@ public class OperationsActionFilter extends OncePerRequestFilter {
     protected void doFilterInternal(final HttpServletRequest request,
             final HttpServletResponse response, final FilterChain chain)
             throws ServletException, IOException {
+
         final String path = pathOf(request);
         final String action = actionFor(request.getMethod(), path);
-        chain.doFilter(new ActionRequestWrapper(request, action, ours(path)), response);
+        final OperationsAuditFacts facts = OperationsAuditFacts.open();
+        facts.action(action);
+        try {
+            chain.doFilter(new ActionRequestWrapper(request, action, ours(path)), response);
+        } catch (OperationsRefusedException refused) {
+            // The audit filter runs outside the DispatcherServlet, so a refusal it raises reaches
+            // no advice. Rendered here from the one status map, rather than left to arrive as the
+            // container's own 500 with the path the caller typed in it.
+            answer(response, refused, facts);
+        } finally {
+            OperationsAuditFacts.clear();
+        }
+    }
+
+    /**
+     * Writes a refusal that never reached the dispatcher, in the shape every other one has.
+     *
+     * @param response the response to write
+     * @param refused  what was refused, and under which bounded code
+     * @param facts    this call's audit facts, so the refusal is on the event as well as the wire
+     * @throws IOException where the response cannot be written, which is the caller having gone
+     *         away and is nothing this service can refuse
+     */
+    private static void answer(final HttpServletResponse response,
+            final OperationsRefusedException refused, final OperationsAuditFacts facts)
+            throws IOException {
+
+        final int status = OperationsProblem.statusOf(refused.reason()).value();
+        facts.refusedWith(status, refused.reason().wire());
+        response.reset();
+        response.setStatus(status);
+        response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.getWriter().write("{\"status\":" + status + ",\"title\":\""
+                + HttpStatus.valueOf(status).getReasonPhrase() + "\",\"reason\":\""
+                + refused.reason().wire() + "\"}");
     }
 
     /**

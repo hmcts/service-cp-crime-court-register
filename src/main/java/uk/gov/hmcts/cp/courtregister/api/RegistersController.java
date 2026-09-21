@@ -96,6 +96,12 @@ public class RegistersController {
         final SupersedeRequest asked = request == null ? SupersedeRequest.NOTHING : request;
         final Supersession done = supersession.supersede(instantOf(asked.sharedBefore()),
                 asked.dryRunAsked());
+        // The count goes into the audit event as well as the response (data-model section 6): how
+        // much of the estate's history a rollback gave up is the fact this call is read for.
+        final OperationsAuditFacts facts = OperationsAuditFacts.current();
+        if (facts != null) {
+            facts.superseded(done.superseded());
+        }
         return new SupersedeResponse(done.superseded(), done.sharedBefore(), done.dryRun());
     }
 

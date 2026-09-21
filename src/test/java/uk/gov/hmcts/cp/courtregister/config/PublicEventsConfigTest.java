@@ -119,6 +119,86 @@ class PublicEventsConfigTest {
         return factory.createListenerContainer(endpoint);
     }
 
+    /**
+     * The invariant the audit starter made fragile, stated so that it stops being true by accident.
+     *
+     * <p>Since increment 005 {@code cp-audit-filter-springboot} is on the classpath, and it
+     * contributes an {@code auditConnectionFactory} - pointed at the estate's <em>audit</em> broker
+     * - marked {@code @Primary}, and an {@code auditJmsTemplate}. Boot's default
+     * {@code jmsListenerContainerFactory} resolves its connection factory <strong>by type</strong>,
+     * so on this classpath the default factory is built against the audit broker. Any
+     * {@code @JmsListener} that does not name {@link PublicEventsConfig#LISTENER_CONTAINER_FACTORY}
+     * therefore attaches to the audit broker: a subscription that opens, reports itself started, and
+     * hears no {@code document-available} event ever, while every batch waits for an outcome
+     * delivered to nobody. Nothing logs and nothing is counted.
+     *
+     * <p>It is true today - there is one {@code @JmsListener} in {@code src/main} and it names the
+     * factory - and until this case it was pinned by nothing, which is how a listener written next
+     * year attaches to the wrong broker with every test green.
+     */
+    @Nested
+    @DisplayName("every JMS listener this service declares")
+    class TheFactoryEveryListenerMustName {
+
+        /** Where the declarations are read from: the source, so an unwritten one cannot hide. */
+        private static final java.nio.file.Path SOURCE_ROOT =
+                java.nio.file.Path.of("src", "main", "java");
+
+        /**
+         * A real declaration, which is the annotation at the start of a line.
+         *
+         * <p>Line-anchored so that the word inside a javadoc paragraph - this very class has
+         * several - is not read as a listener that names nothing.
+         */
+        private static final java.util.regex.Pattern DECLARATION =
+                java.util.regex.Pattern.compile("(?m)^\\s*@JmsListener\\b");
+
+        /** What naming it looks like, exactly as the one declaration spells it. */
+        private static final String NAMES_THE_FACTORY =
+                "containerFactory = PublicEventsConfig.LISTENER_CONTAINER_FACTORY";
+
+        @Test
+        void no_listener_should_be_left_to_boots_default_factory() throws java.io.IOException {
+            final java.util.List<String> unnamed = new java.util.ArrayList<>();
+            try (java.util.stream.Stream<java.nio.file.Path> sources =
+                         java.nio.file.Files.walk(SOURCE_ROOT)) {
+
+                for (final java.nio.file.Path source : sources
+                        .filter(path -> path.toString().endsWith(".java")).toList()) {
+
+                    if (!declaresWithFactory(java.nio.file.Files.readString(source))) {
+                        unnamed.add(source.toString());
+                    }
+                }
+            }
+
+            assertThat(unnamed)
+                    .as("a listener that names no container factory is built on Boot's default, "
+                            + "which on this classpath resolves against the audit starter's "
+                            + "@Primary connection factory - the audit broker, where no "
+                            + "document-available event will ever arrive")
+                    .isEmpty();
+        }
+
+        /**
+         * Whether every {@code @JmsListener} in one source names the public-event factory.
+         *
+         * @param text the source
+         * @return true where each occurrence is followed by the factory before the annotation ends
+         */
+        private static boolean declaresWithFactory(final String text) {
+            final java.util.regex.Matcher found = DECLARATION.matcher(text);
+            boolean named = true;
+            while (named && found.find()) {
+                final int ends = text.indexOf(')', found.end());
+                final String declaration =
+                        ends < 0 ? text.substring(found.end()) : text.substring(found.end(), ends);
+                named = declaration.contains(NAMES_THE_FACTORY);
+            }
+            return named;
+        }
+    }
+
     /** Spring's own JMS settings as {@code application.yaml} leaves them, plus a bound client id. */
     private static JmsProperties jmsSettings() {
         final JmsProperties jms = new JmsProperties();

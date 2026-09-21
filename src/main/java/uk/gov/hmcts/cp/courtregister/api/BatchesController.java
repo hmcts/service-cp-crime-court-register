@@ -302,8 +302,23 @@ public class BatchesController {
         final Selection selection = new Selection(dateOf(asked.date()), asked.courtHouse(),
                 batchOf(asked.batchId()), instantOf(asked.recordedBefore()), asked.overrideAsked());
         final RunAccepted accepted = launcher.launch(selection);
+        // An override is an operator's decision and is written down twice: here, on the audit
+        // event with the caller's identity, and on the run report line the background run writes.
+        recordForAudit(accepted);
         return ResponseEntity.accepted().body(new GenerateRegisterResponse(accepted.runId(),
                 accepted.registerDate(), accepted.overridden()));
+    }
+
+    /**
+     * Puts the two facts a regeneration adds onto this call's audit event.
+     *
+     * @param accepted what the launcher answered with
+     */
+    private static void recordForAudit(final RunAccepted accepted) {
+        final OperationsAuditFacts facts = OperationsAuditFacts.current();
+        if (facts != null) {
+            facts.regeneration(accepted.overridden(), accepted.runId());
+        }
     }
 
     /**

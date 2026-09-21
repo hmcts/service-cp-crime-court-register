@@ -29,6 +29,10 @@ import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
  * otherwise reach a caller as an unexplained {@code 500}, which is the silence this whole service
  * exists to end.
  *
+ * <p><strong>And it is where a refusal reaches the audit event.</strong> The event carries the
+ * outcome of the call (FR-046), and a refusal is an outcome; recording it here rather than at each
+ * throw site is what makes "on the wire" and "in the event" the same statement.
+ *
  * <p>Nothing a caller supplied reaches what this builds. {@code detail} is never populated - not
  * from an exception message, not from a store's words, not from a far end's - and {@code instance}
  * is set empty rather than left null, because Spring fills a null one with the request URI, which
@@ -75,6 +79,7 @@ final class OperationsProblem {
             Map.entry(OperationsReason.LISTING_FAILED, HttpStatus.SERVICE_UNAVAILABLE),
             Map.entry(OperationsReason.SUPERSESSION_FAILED, HttpStatus.SERVICE_UNAVAILABLE),
             Map.entry(OperationsReason.STORE_UNAVAILABLE, HttpStatus.SERVICE_UNAVAILABLE),
+            Map.entry(OperationsReason.AUDIT_UNAVAILABLE, HttpStatus.SERVICE_UNAVAILABLE),
             Map.entry(OperationsReason.DOWNSTREAM_UNAVAILABLE, HttpStatus.GATEWAY_TIMEOUT));
 
     /** Nothing is constructed: this is a table and two functions over it. */
@@ -126,6 +131,13 @@ final class OperationsProblem {
             final OperationsReason reason, final String argument,
             final Map<String, Object> carried) {
 
+        // The one place every refusal body is built is the one place the audit event learns what
+        // the call came to: an outcome recorded at four throw sites would be four chances for a
+        // refusal to be on the wire and not in the event.
+        final OperationsAuditFacts facts = OperationsAuditFacts.current();
+        if (facts != null) {
+            facts.refusedWith(status.value(), reason.wire());
+        }
         final ProblemDetail problem = ProblemDetail.forStatus(status);
         problem.setTitle(status.getReasonPhrase());
         problem.setInstance(NOWHERE);

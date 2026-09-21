@@ -1,5 +1,8 @@
 package uk.gov.hmcts.cp.courtregister.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -12,8 +15,10 @@ import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.Ordered;
+import org.springframework.jms.core.JmsTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import uk.gov.hmcts.cp.courtregister.api.OperationsActionFilter;
+import uk.gov.hmcts.cp.courtregister.api.OperationsAuditService;
 import uk.gov.hmcts.cp.courtregister.api.OperationsErrorAttributes;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
 import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
@@ -95,6 +100,45 @@ public class OperationsWebConfig {
                 new FilterRegistrationBean<>(new OperationsActionFilter());
         registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
         return registration;
+    }
+
+    /**
+     * The audit publisher this service supplies in the starter's place.
+     *
+     * <p>Two reasons, and the first is a principle. The starter's own
+     * {@code AuditService.postMessageToArtemis} catches every {@code Exception}, logs it and
+     * returns, so a broker outage would let an operations call succeed with no audit event -
+     * which Principle VI (nothing swallowed) and Principle III(b) (every endpoint audited) both
+     * refuse. The second is content: the generic filter can infer the action, the outcome, an
+     * override and a superseded count from no body, so the replacement merges them in from
+     * {@code OperationsAuditFacts} (FR-046).
+     *
+     * <p>The starter registers its own bean {@code @ConditionalOnMissingBean(AuditService.class)},
+     * so this one simply takes its place and the filter uses it unchanged (research R10).
+     *
+     * <p><strong>Built only where the audit transport is.</strong> Every {@code audit.http.*} bean
+     * the starter declares - the filter included - sits inside the {@code @AutoConfiguration} class
+     * {@code cp.audit.enabled} gates, and the template this bean publishes through is one of them.
+     * A pod with the transport off holds no filter to publish from and no template to publish with,
+     * and contributing this would only fail its own injection.
+     *
+     * @param auditJmsTemplate the template the starter built against the audit broker
+     * @param auditObjectMapper the starter's own mapper, so the event is spelled as it spells it
+     * @param meters           where the lost-response-event counter is registered
+     * @return the publisher the audit filter uses
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "cp.audit", name = ENABLED, havingValue = ON)
+    public OperationsAuditService operationsAuditService(
+            @Qualifier("auditJmsTemplate") final JmsTemplate auditJmsTemplate,
+            @Qualifier("auditObjectMapper") final ObjectMapper auditObjectMapper,
+            final MeterRegistry meters) {
+
+        final Counter unpublished = Counter.builder("courtregister_operations_audit_unpublished")
+                .description("Response events an answered operations call could not publish, "
+                        + "which is the recorded shortfall a durable outbox would close")
+                .register(meters);
+        return new OperationsAuditService(auditJmsTemplate, auditObjectMapper, unpublished);
     }
 
     /**
