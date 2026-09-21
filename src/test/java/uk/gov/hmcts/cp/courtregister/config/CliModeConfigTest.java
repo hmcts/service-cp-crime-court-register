@@ -141,12 +141,30 @@ class CliModeConfigTest {
      * The controllers a pod holds since increment 005 replaced the commands with endpoints.
      *
      * <p>{@code courtregister.cli} decides who starts - the consumer, the scheduler and the event
-     * listener - and it has never decided what is mapped, so both contexts hold the same set. The
-     * assertion stays "exactly these and nothing else" for the reason the field above gives.
+     * listener - and what it decides about what is mapped it decides only by consequence: see
+     * {@link #CLI_CONTROLLERS}. The assertion stays "exactly these and nothing else" for the
+     * reason the field above gives.
      */
     private static final List<String> OPERATIONS_CONTROLLERS =
             List.of("flagController", "batchesController", "registersController",
                     "exceptionReportsController");
+
+    /**
+     * The controllers a command JVM holds, which is the same set without the batch endpoints.
+     *
+     * <p>Not a second surface decided by the property, but the one consequence of what it does
+     * decide. {@code BatchesController} serves the regeneration hand-off, and that holds the
+     * schedule's lock provider and the schedule's own thread - both of which
+     * {@code courtregister.cli} withdraws, because a command JVM must not be a second replica of
+     * the 18:00 run. A controller left scanned over beans that are gone is an
+     * {@code UnsatisfiedDependencyException} at refresh, which would cost every command its
+     * context; so the controller carries the same condition its collaborators do, and a JVM that
+     * is about to exit maps three fewer paths.
+     *
+     * <p>The whole question goes away in Phase 10, which deletes the CLI and the property with it.
+     */
+    private static final List<String> CLI_CONTROLLERS =
+            List.of("flagController", "registersController", "exceptionReportsController");
 
     /**
      * Whatever this context has scheduled, which is nothing at all where no scheduling
@@ -186,6 +204,16 @@ class CliModeConfigTest {
      */
     private static List<String> withTheErrorFallback() {
         return Stream.concat(OPERATIONS_CONTROLLERS.stream(), Stream.of(ERROR_FALLBACK)).toList();
+    }
+
+    /**
+     * The controllers a command JVM is permitted to hold.
+     *
+     * @return the operations controllers that need nothing the property withdraws, and Boot's own
+     *         error fallback
+     */
+    private static List<String> cliControllersWithTheErrorFallback() {
+        return Stream.concat(CLI_CONTROLLERS.stream(), Stream.of(ERROR_FALLBACK)).toList();
     }
 
     /**
@@ -306,13 +334,14 @@ class CliModeConfigTest {
         }
 
         @Test
-        @DisplayName("serves the same controllers an ordinary pod does, and nothing else")
+        @DisplayName("serves every controller that needs nothing the property withdraws")
         void a_cli_context_should_hold_the_operations_controllers_and_nothing_else() {
             assertThat(controllerBeans(context))
-                    .as("courtregister.cli decides who starts, never what is mapped: a command "
-                            + "JVM that held a different surface from the pod it runs beside "
-                            + "would be a second shape of this service")
-                    .containsExactlyInAnyOrderElementsOf(withTheErrorFallback());
+                    .as("courtregister.cli decides who starts, and the batch endpoints go with "
+                            + "the schedule's lock and the schedule's thread because the "
+                            + "regeneration hand-off holds both - a controller left scanned over "
+                            + "beans that are gone would cost every command its context")
+                    .containsExactlyInAnyOrderElementsOf(cliControllersWithTheErrorFallback());
         }
     }
 

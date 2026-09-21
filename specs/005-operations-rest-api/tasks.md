@@ -965,6 +965,16 @@ of them.
       listing shares a class with the two endpoints that are, and serving two of the three paths
       while mapping nothing for the others would be worse than saying so. The flag endpoint's own
       conflict was settled separately, above.
+      **The full build found a third condition the controller needs, and it landed straight after.**
+      `courtregister.cli=true` withdraws `SchedulingConfig` and `SchedulingInfrastructureConfig`,
+      so a command JVM holds neither the generation scheduler nor the ShedLock provider the
+      regeneration hand-off is built over - and with the generation switch on, that made
+      `batchesController` an `UnsatisfiedDependencyException` at refresh and cost every command its
+      context (12 suites failed on it: `CliModeConfigTest.ACliContext` and `CliDispatchIT`). The
+      controller therefore carries `@Conditional(CliModeConfig.NotCliMode.class)` as well, and
+      `CliModeConfigTest` now states the consequence rather than the old "both contexts hold the
+      same set": a JVM about to exit maps three fewer paths, and the whole question goes away in
+      Phase 10 with the CLI.
       **One part of the task is deliberately not done**: folding the `@Profile("!test")` on the two
       listing controllers into the same gating. It is a tidy-up with no behaviour attached, the
       `test` profile genuinely has no database, and doing it would put a refactor of two working

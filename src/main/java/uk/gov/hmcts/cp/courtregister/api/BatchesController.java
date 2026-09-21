@@ -9,6 +9,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Profile;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.RecoverableDataAccessException;
@@ -32,6 +33,7 @@ import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher;
 import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher.RunAccepted;
 import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterRegenerationService.Selection;
+import uk.gov.hmcts.cp.courtregister.config.CliModeConfig;
 import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
@@ -68,6 +70,12 @@ import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
  * is the refresh failure the operations switch is written to avoid. Such a pod answers all three
  * batch paths {@code 501 command-not-wired} through {@link NotWiredController}, which is exactly
  * what the commands they replace answered there (FR-052).
+ *
+ * <p><strong>And not in a JVM started to run one operations command.</strong> The regeneration
+ * hand-off holds the schedule's lock provider and the schedule's thread, and
+ * {@code courtregister.cli} withdraws both - so a command JVM cannot hold this controller however
+ * its generation switch reads, and it is about to exit rather than serve anybody. The condition
+ * goes with the CLI when Phase 10 deletes it.
  */
 @RestController
 @Profile("!test")
@@ -75,6 +83,7 @@ import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
         havingValue = "true", matchIfMissing = true)
 @ConditionalOnProperty(prefix = "courtregister.generation", name = "enabled",
         havingValue = "true")
+@Conditional(CliModeConfig.NotCliMode.class)
 public class BatchesController {
 
     private static final Logger LOG = LoggerFactory.getLogger(BatchesController.class);
