@@ -1425,10 +1425,27 @@ a deletion has no red run, and its evidence is the green build with the replaced
       they should be: the gauges refresh wherever the intake half runs. Nothing else changes
       shape - every other configuration keeps the enabled-flag condition it already had.)
 
-- [ ] **T055** [US5] `docker/startup.sh` — the command dispatch, the `CLI_MAIN`, `CLI_COMMANDS` and
+- [x] **T055** [US5] `docker/startup.sh` — the command dispatch, the `CLI_MAIN`, `CLI_COMMANDS` and
       `BOOT_LAUNCHER` variables and the whole `case` go; the entrypoint starts the application, full
       stop. Delete `e2e/CliDispatchIT`. `scripts/container-smoke.sh` calls `GET /operations/flag`
       through the readiness gate instead of running two commands. Evidence: the smoke passes.
+      (Done. Green: `./scripts/container-smoke.sh` — `PASS: readiness reported UP within the 60s
+      budget`, then `PASS: GET /operations/flag answered 200 with flag=ON`, and a clean teardown.
+      **The script asserts the body as well as the status**, for the reason it asserted the printed
+      line and not just the exit code before: the endpoint answers `200` for all three readings, so
+      a `2xx` alone would be satisfied by an empty one. It greps `"flag":"ON"`.
+      **No identity header, and that is the compose stack rather than a shortcut.**
+      `docker-compose.yml` switches both estate filters off for the local loop with the reason
+      written beside them, so what this step proves is the surface and the reading — the image
+      serves the path at all, on the published port, through the same gate readiness answered on,
+      with the deployed App Configuration reader behind it. Who may reach it is `OperationsAuthzIT`'s
+      claim, over the real filter and the real rules.
+      **One environmental note for whoever runs it next.** The run had to publish
+      `fileservice-postgres` on no host port, because an unrelated container on this machine holds
+      5433. Nothing in the script or the compose file was changed for it — the override was a
+      scratch file passed in `COMPOSE_FILE` and is not in the tree — and the smoke connects to that
+      database over the compose network, so the published port is for a developer's psql and not
+      for this script.)
 - [ ] **T056** [US5] `config/HttpSurfaceTest` — re-pointed from "no controller exists" to "actuator
       and `/operations/**`, and nothing else": every mapped path is under one of the two, and no
       path submits a hearing, reads a register out or creates a batch. This is the test that stops

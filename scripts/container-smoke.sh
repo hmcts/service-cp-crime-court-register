@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
 # Container smoke: build the image, run it against the committed compose dependencies, require it to
-# report readiness inside the 60-second budget (spec SC-101/SC-103, container half), and then run two
-# operations commands through the entrypoint that dispatches them (FR-016) - one per half, and
-# neither of them writes anything. Tears the stack down on every exit path, success or failure.
+# report readiness inside the 60-second budget (spec SC-101/SC-103, container half), and then call
+# the operations API through that same readiness gate - one endpoint, and it writes nothing. Tears
+# the stack down on every exit path, success or failure.
 #
 # This is the local equivalent of the "Container smoke" step in
 # .github/workflows/ci-build-publish.yml; both run this same script, so the two cannot drift.
@@ -18,6 +18,7 @@ set -euo pipefail
 readonly READINESS_BUDGET_SECONDS=60
 readonly DEPENDENCY_BUDGET_SECONDS=120
 readonly READINESS_URL="http://localhost:8082/actuator/health/readiness"
+readonly FLAG_URL="http://localhost:8082/operations/flag"
 
 # A project name of this script's own. Everything it creates — containers, network, volumes — is
 # namespaced under it, so the teardown's `down --volumes` can only ever destroy what this script
@@ -76,8 +77,8 @@ log "starting dependencies"
 compose up --detach postgres servicebus-emulator wiremock fileservice-postgres artemis
 
 # Only these two are waited on, and the readiness policy is why. `postgres` is a readiness input, so
-# the pod cannot report UP without it; `wiremock` answers the flag read, so check-flag cannot get an
-# answer without it. The broker is never a readiness input (spec FR-011) and the file-service
+# the pod cannot report UP without it; `wiremock` answers the flag read, so the flag endpoint cannot
+# get an answer without it. The broker is never a readiness input (spec FR-011) and the file-service
 # component answers UP between runs without asking, both pinned by `e2e/ReadinessPolicyIT`, so
 # waiting on either would only make this script slower than the thing it is testing.
 for dependency in postgres wiremock; do
@@ -111,16 +112,23 @@ done
 
 log "PASS: readiness reported UP within the ${READINESS_BUDGET_SECONDS}s budget"
 
-# The other half of what the image has to do. A deployed pod serves the actuator and nothing else,
-# so the only way support regenerates a date, resends a batch's failed recipients or reads the
-# cutover flag is `kubectl exec ... -- ./startup.sh <command>` (FR-016, research 13) - and that path
-# is in the entrypoint, not in the application, so no JUnit suite covers it. What is proved here is
-# what only the built image can prove: the six names reach CliMain out of the fat jar rather than
-# starting a second application, the script is executable at the path the runbooks name, and the
-# code the command answered with is the code the container exits on.
+# The other half of what the image has to do, and the half that changed in increment 005. A deployed
+# pod used to serve the actuator and nothing else, so an operator reached a named action by
+# `kubectl exec ... -- ./startup.sh <command>` - a path that lived in the entrypoint and that no
+# JUnit suite covered. The actions are the seven endpoints under `/operations/**` now, served by the
+# pod itself, and what only the built image can prove has moved with them: that the image serves
+# them at all, on the port the compose stack publishes, through the same gate readiness answered
+# on - a controller left unscanned, a filter registered in the wrong order or an OpenAPI document
+# missing from the jar are all things that pass every slice test and answer nothing here.
 #
-# `check-flag` is the one to run: it reads and changes nothing, so a smoke run cannot leave a batch
-# or an e-mail behind it.
+# `GET /operations/flag` is the one to call: it reads and changes nothing, so a smoke run cannot
+# leave a batch or an e-mail behind it.
+#
+# No identity header, because `docker-compose.yml` switches both estate filters off for the local
+# loop - a laptop has no usersgroups to resolve a caller's groups through and no audit broker to
+# publish to. What that leaves under assertion is the surface and the reading, which is what this
+# script can prove; who may reach it is `OperationsAuthzIT`'s, over the real filter and the real
+# rules.
 #
 # The reading is taken through the REAL reader, with no mode override at all. It used to need
 # `COURTREGISTER_GENERATION_FLAG_MODE=STUB`, because the live reader authorises its App Configuration
@@ -129,82 +137,33 @@ log "PASS: readiness reported UP within the ${READINESS_BUDGET_SECONDS}s budget"
 # by the SDK before a socket is opened, so pointing it at the WireMock stub was not an option either.
 # `courtregister.feature.credential=local-test`, which docker-compose.yml sets on `app`, swaps that
 # identity for a published pair the stub does not check and leaves everything else deployed. So what
-# this step now asserts is the whole path a runbook uses: the dispatch out of the fat jar, the
-# deployed reader, the deployed SDK client, the key in the path, the label in the query and the
-# fail-closed reading of the answer.
-log "running check-flag through the entrypoint"
-# In the `if` deliberately: errexit does not apply to a condition, so a non-zero code is read and
-# reported here rather than ending the script with no line saying which command failed. `--no-TTY`
-# because CI has no terminal to allocate and `docker compose exec` insists on one by default.
-if cli_output=$(compose exec --no-TTY app ./startup.sh check-flag 2>&1); then
-  cli_status=0
+# this step asserts is the whole path an operator uses: the endpoint, the deployed reader, the
+# deployed SDK client, the key in the path, the label in the query and the fail-closed reading of
+# the answer.
+log "calling GET ${FLAG_URL}"
+# In the `if` deliberately: errexit does not apply to a condition, so a failure is read and reported
+# here rather than ending the script with no line saying what was called. `--fail` so that a status
+# this surface answers a refusal under is a failure here and not a body to grep.
+if flag_output=$(curl --silent --fail --show-error --max-time 5 "$FLAG_URL" 2>&1); then
+  flag_status=0
 else
-  cli_status=$?
+  flag_status=$?
 fi
 
-if [ "$cli_status" -ne 0 ]; then
-  log "FAIL: startup.sh check-flag exited ${cli_status}, and 0 is the only code a flag that answers"
-  log "      carries - 1 is a refusal and 2 is a flag nobody could read"
-  printf '%s\n' "$cli_output" | grep -E '^(flag|command)=' || printf '%s\n' "$cli_output" | tail -5
+if [ "$flag_status" -ne 0 ]; then
+  log "FAIL: GET ${FLAG_URL} did not answer 2xx (curl exited ${flag_status})"
+  log "      the endpoint answers 200 for all three readings - ON, OFF and unreadable - so a"
+  log "      non-2xx here is the surface, not the flag"
+  printf '%s\n' "$flag_output" | tail -5
   exit 1
 fi
 
-# Exit 0 alone is not the whole assertion: a script that dispatched nothing and returned would also
-# be 0, and the line is what a runbook step greps for.
-if ! printf '%s\n' "$cli_output" | grep -q '^flag=ON$'; then
-  log "FAIL: startup.sh check-flag exited 0 without printing the reading a runbook step reads"
-  printf '%s\n' "$cli_output" | tail -5
+# A 2xx alone is not the whole assertion: the body is what a runbook step reads, and an endpoint
+# that answered an empty 200 would satisfy the check above.
+if ! printf '%s\n' "$flag_output" | grep -q '"flag":"ON"'; then
+  log "FAIL: GET ${FLAG_URL} answered 2xx without the reading a runbook step reads"
+  printf '%s\n' "$flag_output" | tail -5
   exit 1
 fi
 
-log "PASS: startup.sh check-flag printed flag=ON and exited 0"
-
-# The second command, and the second thing only the built image can prove: that the sixth name
-# reaches CliMain as well, that the report's reads answer against a real database rather than a
-# fixture, and that what a runbook step greps for is on the operator's stream and not only in the
-# log. `--since 1h` because the window is what an incident is asked in - a bare invocation would
-# read back to the last scheduled run, which on a freshly started stack is a window nothing has
-# happened in either, but says so through a schedule rather than through an argument.
-#
-# Like `check-flag` it reads and changes nothing. `--email` is deliberately NOT given: the compose
-# stack has the e-mail output switched on, and an invocation that asked for it would write a CSV
-# into the file service and post to the notificationnotify stub - a smoke run that left something
-# behind it. Without the flag the sink is `skipped`, which is the word for an output that exists
-# and an invocation that did not want it.
-log "running report-exceptions --since 1h through the entrypoint"
-if report_output=$(compose exec --no-TTY app ./startup.sh report-exceptions --since 1h 2>&1); then
-  report_status=0
-else
-  report_status=$?
-fi
-
-if [ "$report_status" -ne 0 ]; then
-  log "FAIL: startup.sh report-exceptions --since 1h exited ${report_status}, and 0 is the only"
-  log "      code a report that was built and taken by every sink it asked carries"
-  printf '%s\n' "$report_output" | grep -E '^(counts|event|command)=?' || \
-    printf '%s\n' "$report_output" | tail -5
-  exit 1
-fi
-
-# Exit 0 alone is not the whole assertion, for the reason check-flag's line is not: a command that
-# dispatched nothing and returned would also be 0. Two lines are required and they say different
-# things - the counts line is the report, and the run line is how it was delivered - so a run that
-# built a report and told nobody, or told somebody about no report, fails here rather than passing.
-if ! printf '%s\n' "$report_output" | grep -q '^counts '; then
-  log "FAIL: startup.sh report-exceptions exited 0 without printing the counts line"
-  printf '%s\n' "$report_output" | tail -5
-  exit 1
-fi
-
-# Matched anywhere on the stream rather than at the end of it, exactly as check-flag's reading is.
-# The command writes its lines to the operator's stream and the JVM logs to the same one, so the
-# last thing on it is whatever the context said on the way down - a connection pool closing, a
-# meter registry that could not reach a collector. The claim is that the run's own line was
-# written, not that nothing was printed after it.
-if ! printf '%s\n' "$report_output" | grep -q '^event=exception_report_run '; then
-  log "FAIL: startup.sh report-exceptions exited 0 without printing the run's own line"
-  printf '%s\n' "$report_output" | tail -5
-  exit 1
-fi
-
-log "PASS: startup.sh report-exceptions --since 1h printed its counts and its run line, and exited 0"
+log "PASS: GET /operations/flag answered 200 with flag=ON"
