@@ -63,6 +63,8 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Unauthorised"
+        "415":
+          $ref: "#/components/responses/UnsupportedContentType"
         "503":
           $ref: "#/components/responses/NotAudited"
 
@@ -92,6 +94,8 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Unauthorised"
+        "415":
+          $ref: "#/components/responses/UnsupportedContentType"
         "501":
           $ref: "#/components/responses/NotWired"
         "503":
@@ -130,6 +134,8 @@ paths:
           $ref: "#/components/responses/Unauthorised"
         "409":
           $ref: "#/components/responses/Refused"
+        "415":
+          $ref: "#/components/responses/UnsupportedContentType"
         "501":
           $ref: "#/components/responses/NotWired"
         "503":
@@ -168,6 +174,8 @@ paths:
           $ref: "#/components/responses/Refused"
         "409":
           $ref: "#/components/responses/Refused"
+        "415":
+          $ref: "#/components/responses/UnsupportedContentType"
         "500":
           $ref: "#/components/responses/Refused"
         "501":
@@ -195,6 +203,8 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Unauthorised"
+        "415":
+          $ref: "#/components/responses/UnsupportedContentType"
         "503":
           $ref: "#/components/responses/Refused"
 
@@ -229,6 +239,8 @@ paths:
           $ref: "#/components/responses/Unauthorised"
         "409":
           $ref: "#/components/responses/Refused"
+        "415":
+          $ref: "#/components/responses/UnsupportedContentType"
         "503":
           $ref: "#/components/responses/Refused"
 
@@ -263,6 +275,8 @@ paths:
           $ref: "#/components/responses/Unauthorised"
         "409":
           $ref: "#/components/responses/Refused"
+        "415":
+          $ref: "#/components/responses/UnsupportedContentType"
         "500":
           $ref: "#/components/responses/Refused"
         "503":
@@ -289,6 +303,18 @@ components:
         which is the only moment there is still something to refuse. Carries
         `reason: AUDIT_UNAVAILABLE`. The endpoints that also answer 503 for a store that will not
         answer carry both codes under the one status; the code is what tells them apart.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+
+    UnsupportedContentType:
+      description: >-
+        The request declared a body in a format no endpoint here takes. Refused by
+        api/OperationsActionFilter ahead of both estate filters, because cp-audit-filter-springboot
+        hands a `multipart/*` request down the chain without publishing either of its events, and
+        an endpoint reachable unaudited is an endpoint that may not exist (constitution Principle
+        III(b)). Carries `reason: UNSUPPORTED_CONTENT_TYPE`.
       content:
         application/problem+json:
           schema:
@@ -363,6 +389,7 @@ components:
         - STORE_UNAVAILABLE
         - DOWNSTREAM_REFUSED
         - DOWNSTREAM_UNAVAILABLE
+        - UNSUPPORTED_CONTENT_TYPE
         - AUDIT_UNAVAILABLE
 
     ProblemDetail:

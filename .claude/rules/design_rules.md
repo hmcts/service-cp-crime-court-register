@@ -366,6 +366,10 @@ the same application services the CLI called:
   unavailable; `502`/`504` a downstream platform contract that refused or did not answer; `500` an
   unexpected defect **and nothing else** — a 500 this service can explain is a 409, a 503 or a 502
   it failed to classify. Every non-2xx answer is a `ProblemDetail` carrying a bounded `reason`.
+  One status belongs to the surface rather than to an action: `415 UNSUPPORTED_CONTENT_TYPE`, for a
+  `Content-Type` beginning `multipart/`, which `cp-audit-filter-springboot` hands down the chain
+  without publishing either of its events. It is refused by `OperationsActionFilter` ahead of both
+  estate filters, because an endpoint reachable unaudited is an endpoint that may not exist.
 - **One endpoint is asynchronous, and it is the dangerous one.** Regeneration answers
   `202` with a run id and does the work on the generation scheduler's single thread, because the
   CLI's inline render requests ran under a sixty-minute deadline and no gateway will hold a

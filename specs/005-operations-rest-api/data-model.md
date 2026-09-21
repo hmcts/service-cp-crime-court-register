@@ -45,6 +45,13 @@ register-generation lock), `FLAG_ON` (supersede, refused because this service is
 `SUPERSEDE_INSTANT_TOO_OLD`, `UNKNOWN_BATCH`, `STORE_UNAVAILABLE`, `DOWNSTREAM_REFUSED`,
 `DOWNSTREAM_UNAVAILABLE`.
 
+Added at the increment's gate, and about the surface rather than about an action:
+`UNSUPPORTED_CONTENT_TYPE` (`415`) — a body declared in a format no endpoint here takes.
+`cp-audit-filter-springboot` 1.0.5 hands a request whose `Content-Type` begins `multipart/` down
+the chain and publishes neither of its two events, so a call declaring one would be served
+unaudited; `api/OperationsActionFilter` refuses it ahead of both estate filters, because once the
+audit filter has decided to skip there is nothing left to refuse.
+
 The OpenAPI document normalises the spelling to one convention across both sets; the commands' own
 hyphenated codes keep their characters and gain nothing.
 
@@ -56,6 +63,7 @@ hyphenated codes keep their characters and gain nothing.
 | Caller not in "Second Line Support"; identity service unreachable; no rule for the action | `403` | produced by the filter |
 | Body will not parse, or carries an unknown field | `400` | `unreadable-argument` |
 | Unmapped path or method | framework default, through `OperationsErrorAttributes` | — |
+| `Content-Type` beginning `multipart/` | `415` | `UNSUPPORTED_CONTENT_TYPE`, refused by `OperationsActionFilter` before the audit filter |
 
 ---
 

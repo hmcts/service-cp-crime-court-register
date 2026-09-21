@@ -110,6 +110,19 @@ public enum OperationsReason {
     DOWNSTREAM_UNAVAILABLE("DOWNSTREAM_UNAVAILABLE"),
 
     /**
+     * A body in a format no endpoint on this surface takes, refused before anything reads it.
+     *
+     * <p>Not a nicety about content negotiation. {@code cp-audit-filter-springboot} 1.0.5 hands a
+     * request whose {@code Content-Type} begins {@code multipart/} straight down the chain and
+     * publishes neither its request event nor its response event, so an endpoint reachable with
+     * one is an endpoint reachable unaudited - which Principle III(b) makes a condition of the
+     * endpoint existing at all. The refusal is taken outside the audit filter, by
+     * {@code api/OperationsActionFilter}, because by the time the filter has decided to skip there
+     * is nothing left to refuse.
+     */
+    UNSUPPORTED_CONTENT_TYPE("UNSUPPORTED_CONTENT_TYPE"),
+
+    /**
      * The call could not be audited, so it was refused rather than made.
      *
      * <p>The one refusal on this surface that is about the surface's own conditions rather than

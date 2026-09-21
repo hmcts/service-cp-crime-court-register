@@ -245,6 +245,79 @@ class OperationsAuditIT {
     }
 
     /**
+     * The one content type that would be served without either event, refused before it is.
+     *
+     * <p>{@code cp-audit-filter-springboot} 1.0.5 reads {@code getContentType()} first and, where
+     * it begins {@code multipart/}, calls the chain and returns - publishing neither event. Nothing
+     * here declares {@code consumes}, notify takes no body and the report's body is optional with a
+     * default window, so before the guard both of those actions could be taken with no audit trail
+     * at all. These are the two that <em>do</em> something: one sends e-mail, the other builds and
+     * delivers a report.
+     *
+     * @param call the multipart call
+     * @throws Exception where the call cannot be made, which no case here expects
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("theTwoThatActOnTheEstate")
+    void a_multipart_call_should_be_refused_rather_than_served_unaudited(final String action,
+            final MockHttpServletRequestBuilder call) throws Exception {
+
+        final int status = mvc.perform(call.header(IDENTITY, A_CALLER))
+                .andReturn().getResponse().getStatus();
+
+        softly.assertThat(status)
+                .as("an endpoint reachable without an audit event is an endpoint that may not "
+                        + "exist (constitution Principle III(b)); the refusal is taken outside the "
+                        + "audit filter because by the time it has decided to skip there is "
+                        + "nothing left to refuse")
+                .isEqualTo(415);
+        softly.assertThat(action).isNotBlank();
+        Mockito.verifyNoInteractions(notifier);
+        Mockito.verifyNoInteractions(reports);
+    }
+
+    /**
+     * The two endpoints whose action reaches beyond this service, as multipart calls.
+     *
+     * @return one call per endpoint
+     */
+    static Stream<Arguments> theTwoThatActOnTheEstate() {
+        return Stream.of(
+                Arguments.of("notify-register",
+                        post("/operations/batches/" + BATCH + "/notify")
+                                .contentType(MediaType.MULTIPART_FORM_DATA)
+                                .content("--x--")),
+                Arguments.of("report-exceptions",
+                        post("/operations/exception-reports")
+                                .contentType(MediaType.MULTIPART_FORM_DATA)
+                                .content("--x--")));
+    }
+
+    /**
+     * The audit filter's own skip list, which is a substring match and therefore wider than it
+     * reads.
+     *
+     * <p>{@code AuditFilter.shouldNotFilter} skips any request URI <em>containing</em>
+     * {@code /health} or {@code /actuator}, so a batch id with either inside it is served with no
+     * audit event too. It is harmless only because such an id is not a UUID and is refused by the
+     * controller's own binding before any application service is reached - which is what this
+     * records, so that a later change making that path reach a service is a failing test rather
+     * than a silent hole.
+     *
+     * @throws Exception where the call cannot be made, which this case does not expect
+     */
+    @org.junit.jupiter.api.Test
+    void a_batch_id_the_audit_filter_skips_on_should_still_reach_no_action() throws Exception {
+        final int status = mvc.perform(post("/operations/batches/actuator/notify")
+                .header(IDENTITY, A_CALLER)).andReturn().getResponse().getStatus();
+
+        softly.assertThat(status)
+                .as("the binding refuses it, so nothing is done unaudited")
+                .isEqualTo(400);
+        Mockito.verifyNoInteractions(notifier);
+    }
+
+    /**
      * The controllers, contributed by hand for the reason {@code OperationsAuthzIT} states.
      */
     @TestConfiguration(proxyBeanMethods = false)
