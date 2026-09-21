@@ -2,6 +2,7 @@ package uk.gov.hmcts.cp.courtregister.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -18,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.ApplicationContext;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Controller;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.NestedTestConfiguration;
@@ -81,6 +83,12 @@ class HttpSurfaceTest {
      */
     private static final String ERROR_FALLBACK = "basicErrorController";
 
+    /** The bounded code a pod that holds no generating half answers its three paths under. */
+    private static final String NOT_WIRED = "command-not-wired";
+
+    /** A well-formed batch identity, so the notify path is exercised rather than the parser. */
+    private static final String BATCH = "11111111-2222-4333-8444-555555555555";
+
     /**
      * The controllers a pod that serves the operations API holds, and the only ones it may.
      *
@@ -108,7 +116,8 @@ class HttpSurfaceTest {
      * (FR-052).
      */
     private static final List<String> CONTROLLERS_WITHOUT_GENERATION =
-            List.of("flagController", "registersController", "exceptionReportsController");
+            List.of("flagController", "registersController", "exceptionReportsController",
+                    "notWiredController");
 
     private final MockMvc mockMvc;
 
@@ -293,8 +302,9 @@ class HttpSurfaceTest {
                             + "without the three variables only a deployed pod is given")
                     .isTrue();
             assertThat(controllerBeans(context))
-                    .as("the batch controller goes with the generating half it needs; the other "
-                            + "three are served on every pod")
+                    .as("the batch controller goes with the generating half it needs, and the "
+                            + "not-wired fallback takes its three paths; the other three "
+                            + "controllers are served on every pod")
                     .containsExactlyInAnyOrderElementsOf(Stream.concat(
                             CONTROLLERS_WITHOUT_GENERATION.stream(),
                             Stream.of(ERROR_FALLBACK)).toList());
@@ -307,6 +317,37 @@ class HttpSurfaceTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.flag").value("UNREADABLE"))
                     .andExpect(jsonPath("$.reason").value("unreadable-not-configured"));
+        }
+
+        @Test
+        @DisplayName("the three batch paths answer 501 command-not-wired")
+        void the_three_batch_paths_should_answer_that_this_pod_does_not_hold_them()
+                throws Exception {
+
+            mockMvc.perform(get("/operations/batches").param("date", "2026-09-04"))
+                    .andExpect(status().isNotImplemented())
+                    .andExpect(jsonPath("$.reason").value(NOT_WIRED));
+            mockMvc.perform(post("/operations/batches/generate"))
+                    .andExpect(status().isNotImplemented())
+                    .andExpect(jsonPath("$.reason").value(NOT_WIRED));
+            mockMvc.perform(post("/operations/batches/" + BATCH + "/notify"))
+                    .andExpect(status().isNotImplemented())
+                    .andExpect(jsonPath("$.reason").value(NOT_WIRED));
+        }
+
+        @Test
+        @DisplayName("and an endpoint that needs no generating bean is served normally")
+        void an_endpoint_needing_no_generating_bean_should_not_be_answered_as_missing()
+                throws Exception {
+
+            // Its own refusal rather than the fallback's: the rollback is reached, reads its one
+            // argument and declines it, which is what "served on this pod" looks like from
+            // outside. A path this pod does not hold would never get as far as an argument.
+            mockMvc.perform(post("/operations/registers/supersede")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"sharedBefore\":\"ZQX7NOTANINSTANT\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("unreadable-argument"));
         }
     }
 

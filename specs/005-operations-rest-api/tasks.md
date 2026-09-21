@@ -936,17 +936,39 @@ of them.
       accident rather than by luck if it ever does.
       `ALREADY_NOTIFYING` is a `409` here where the command exited SUCCESS: over HTTP the call
       changed nothing and the status says so, which is data-model §5.)
-- [ ] **T040** [P] [US6] `api/NotWiredControllerTest` (new) — `501 COMMAND_NOT_WIRED` on a pod with
+- [x] **T040** [P] [US6] `api/NotWiredControllerTest` (new) — `501 COMMAND_NOT_WIRED` on a pod with
       `courtregister.generation.enabled=false` for the three endpoints that need those beans
       (generate, notify, the batch listing), and the other four served normally. This is exactly
       what the CLI answered on such a pod; a `404` would read as a mistyped URL and a `500` as a
       bean-definition error reaching an operator. Red: the context fails to start for want of a
       bean, or the path answers 404.
-- [ ] **T041** [US6] `api/NotWiredController` and `config/OperationsWebConfig` — the controllers
+- [x] **T041** [US6] `api/NotWiredController` and `config/OperationsWebConfig` — the controllers
       that need the generation beans registered `@ConditionalOnProperty` on
       `courtregister.generation.enabled`, the not-wired fallback registered when it is off, and the
       whole set conditional on `courtregister.operations.enabled`. **Reads the generation property;
       does not change it** (004 owns that block). Green: T040.
+      (Landed with T040 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. Green: `NotWiredControllerTest` 4 tests and `HttpSurfaceTest` 14 tests, 0 failures;
+      the whole `api` package green beside them. Checkstyle and PMD clean on main and test. The
+      generation property is read and not changed: `courtregister.generation.*` is untouched.
+      **The gating half of this landed in T035's commit**, because it had to - the commit that
+      added an endpoint over a generation-only bean is the commit that had to gate the class, or
+      the build was not green. What lands here is the fallback: `api/NotWiredController`, mapped
+      over all three batch paths and registered by the inverse condition
+      (`havingValue = "false", matchIfMissing = true`) beside the operations switch, so exactly one
+      of the two controllers is contributed on any pod. It raises the same
+      `OperationsRefusedException` every other refusal on this surface raises, so the `501` body is
+      built by the one status map and carries no path, no identifier and nothing the caller typed.
+      **The batch listing is in the not-wired set, and the flag endpoint is not.** That is T040's
+      own wording and the gate-round-1 note's; the reason it is true of the listing is not that its
+      readers are missing - `BatchListingService` is contributed on every pod - but that the
+      listing shares a class with the two endpoints that are, and serving two of the three paths
+      while mapping nothing for the others would be worse than saying so. The flag endpoint's own
+      conflict was settled separately, above.
+      **One part of the task is deliberately not done**: folding the `@Profile("!test")` on the two
+      listing controllers into the same gating. It is a tidy-up with no behaviour attached, the
+      `test` profile genuinely has no database, and doing it would put a refactor of two working
+      controllers into a commit about a fallback. Recorded here rather than done quietly.)
 
       **Half of this landed in gate round 1's remediation**, because it was not a shape improvement
       but a crash: `courtregister.operations.enabled=false` withdrew the only `BatchListingService`

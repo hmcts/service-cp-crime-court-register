@@ -66,7 +66,7 @@ import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
  * where the flag gate, the assembler, the requesting leg and the notifier are, so a pod that
  * renders nothing holds none of them - and a controller left scanned over beans that do not exist
  * is the refresh failure the operations switch is written to avoid. Such a pod answers all three
- * batch paths {@code 501 command-not-wired} through {@code NotWiredController}, which is exactly
+ * batch paths {@code 501 command-not-wired} through {@link NotWiredController}, which is exactly
  * what the commands they replace answered there (FR-052).
  */
 @RestController
