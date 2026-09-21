@@ -1491,13 +1491,52 @@ a deletion has no red run, and its evidence is the green build with the replaced
       against it.
       The suite is 3867 where the increment began at 3616 plus 004's: the nine CLI suites that went
       at T053 are out of it and everything Phases 2–9 added is in it.)
-- [ ] **T058** [US5] The documentation sweep. `specs/002-consolidate-progression-leg/quickstart.md`:
+- [x] **T058** [US5] The documentation sweep. `specs/002-consolidate-progression-leg/quickstart.md`:
       the CLI examples replaced by the `curl` ones from this increment's `quickstart.md`. `README.md`
       and `CLAUDE.md`: the final read-through — the operations paragraphs landed in `d73ef50` and
       this is the check that nothing else in either still says "command". Then a repository-wide
       grep for `batch/cli`, `CliModeConfig`, `courtregister.cli`, `startup.sh <command>` and the six
       command names: nothing outside this spec, the constitution's history and the earlier
       increments' own records (SC-007). **README's generation section is 004's — do not touch it.**
+      (Done. Markdown and javadoc only; Checkstyle, PMD and `compileTestJava` clean afterwards.
+      **`specs/002-consolidate-progression-leg/quickstart.md`.** The five-step
+      `docker compose exec app ./startup.sh <command>` block is the same five steps as `curl`
+      against the compose stack, with the endpoint-by-endpoint version pointed at
+      `specs/005-operations-rest-api/quickstart.md`. Two things changed in substance rather than in
+      spelling, and both are said in the block: no `CJSCPPUID` is sent, because the compose file
+      switches both estate filters off for the local loop; and step 2's warning is inverted - the
+      command held no lock and could race the 18:00 run, and the endpoint takes the same ShedLock,
+      so a call landing inside the night's run is refused by the lock rather than racing it.
+      **The repository-wide grep.** `batch/cli`, `CliModeConfig`, `courtregister.cli`,
+      `logback-cli`, `CliMain` and `startup.sh <command>` now appear only where the task permits:
+      this spec, the constitution's amendment record, and the earlier increments' own `tasks.md`,
+      `plan.md`, `research.md`, `data-model.md` and checklists. What was corrected outside those:
+      `README.md`'s two "non-command JVM" phrases (there is no other kind of JVM now) and its
+      quickstart line, which named the two commands the container smoke used to run;
+      `.claude/agents/spec-validator.md`, whose CLI-remnant rule said "the three conditionals" and
+      is nine; `src/main/java/…/batch/BatchAssembler.java`, whose javadoc named
+      `batch/cli/GenerateRegisterCli` as the caller that needs its answer, now
+      `application/RegisterRegenerationService`; and `src/test/java/…/support/PersonalDataMarkers`,
+      whose `OPERATOR_TOKEN` note named two deleted suites as its sweepers.
+      The README's increment-002 and increment-003 bullets **keep their historical sentences** and
+      gain the retirement note, exactly as 004 did with the reconciler: a bullet that records what
+      an increment shipped is not a description of the code as it stands.
+      **The "a CLI JVM must not subscribe" rule.** Already retired in
+      `.claude/rules/design_rules.md` and in `PublicEventsConfig`'s javadoc at T054, and in
+      `spec-validator.md`; nothing else stated it.
+      **004's two hand-off notes**, both about `batch/cli` files that no longer exist, are struck
+      through and marked discharged where they stand.
+      `tasks.md:2488`'s note that `GenerateRegisterCli.java:388` says "four failure reasons" where
+      there are three: T053 took the sentence with the method. `plan.md`'s report row, which owed
+      005 a case that a `BATCH_RELEASED` entry appears in the printed table and in the CSV: the
+      printed table went with the CLI, and the CSV needs no case of its own either - checked rather
+      than assumed - because `EmailReportSink` renders every entry over `entry.kind()` and every
+      count over `ExceptionKind.values()`, so there is no per-kind branch a kind could be missing
+      from. Where the kind itself is asserted is `ExceptionReportServiceTest`,
+      `LogEventReportSinkTest` and `ExceptionReportModelTest`.
+      **README's generation section was left alone**, as the task requires, beyond the one stale
+      phrase the grep is for.)
+
 - [ ] **T061** [US5] `README.md` — an **Operations API** section (design owner, 2026-09-20), placed
       where the CLI paragraphs were, that a support engineer can work from without the spec: one
       table row per endpoint with method, path, request body fields, the 2xx answer and every

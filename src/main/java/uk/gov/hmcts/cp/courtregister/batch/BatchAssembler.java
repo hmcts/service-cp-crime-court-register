@@ -104,8 +104,8 @@ public class BatchAssembler {
      * <p>Asked here rather than restated by a caller: an operator's regeneration has to know the
      * answer before it releases a FAILED batch, because a key this class is going to defer is a key
      * whose released rows would fall to the schedule instead
-     * ({@code batch/cli/GenerateRegisterCli}). One rule, so a state added to the machine cannot mean
-     * "in flight" here and "finished" there.
+     * ({@code application/RegisterRegenerationService}). One rule, so a state added to the machine
+     * cannot mean "in flight" here and "finished" there.
      *
      * @param status where a batch of the key has got to
      * @return true where a render request, a render outcome or an e-mail is still outstanding

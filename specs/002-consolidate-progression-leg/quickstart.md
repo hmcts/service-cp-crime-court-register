@@ -56,45 +56,56 @@ configuration, the SDG/NN endpoints or the template id is missing, or if the zon
 
 ## Drive the flow end to end
 
-The `app` service in `docker-compose.yml` carries the same settings, so the commands below run
-inside the container with generation enabled against the stubs above - and `check-flag` reads the
-one lever through the real reader on the `local-test` credential. `app` is deliberately not one of
-the local dependencies above, because the host-side `bootRun` block wants 8082 to itself, so this
-block brings it up and the `bootRun` above stays stopped.
+The `app` service in `docker-compose.yml` carries the same settings, so the calls below reach a
+container with generation enabled against the stubs above - and the flag endpoint reads the one
+lever through the real reader on the `local-test` credential. `app` is deliberately not one of the
+local dependencies above, because the host-side `bootRun` block wants 8082 to itself, so this block
+brings it up and the `bootRun` above stays stopped.
 
-**The local stack records no registers, so these commands run against an empty day.** The compose
+**This block used to be five `docker compose exec app ./startup.sh <command>` invocations.**
+Increment 005 replaced the operations commands with the seven endpoints under `/operations/**` and
+deleted the CLI, so the same walkthrough is `curl` now. The full endpoint-by-endpoint version is
+`specs/005-operations-rest-api/quickstart.md`; what is kept here is the sequence this increment's
+own walkthrough was about. No `CJSCPPUID` is sent, because `docker-compose.yml` switches both estate
+filters off for the local loop.
+
+**The local stack records no registers, so these calls run against an empty day.** The compose
 `app` sets `COURTREGISTER_PAYLOAD_MODE=STUB`, and the stub payload source fetches nothing: a
-command published to `courtregister.requests` is processed to completion `no-defendants` and
+message published to `courtregister.requests` is processed to completion `no-defendants` and
 writes no `processed_output` row, so nothing is ever there to batch. `LIVE` is the only source
 that yields a register, and it needs the results payload cache, reference data and a CJSCPPUID
 identity, none of which this stack has. So the RECORDED to NOTIFIED sequence is proved by
 `e2e/RecordEndToEndIT` and `e2e/GenerationEndToEndIT` under `./gradlew test`, not here. What this
-block does verify is the other half, which no JUnit suite reaches: that the five commands dispatch
-out of the image, run the store's own statements and the real flag reader, and answer on their
-three documented exit codes.
+block does verify is the other half, which no JUnit suite reaches: that the packaged image serves
+the seven paths at all, over the store's own statements and the real flag reader, and answers in
+the documented statuses.
 
 ```bash
-# 1. the service in its own container. Wait for ready before any command below: it is the
-#    application that runs the Flyway migration, and `courtregister.cli=true` switches off the
-#    configuration that owns the only caller of it, so a command cannot migrate a store itself.
+# 1. the service in its own container. Wait for ready before any call below: it is the application
+#    that runs the Flyway migration, and the same application is what serves these paths - so a
+#    pod that is not ready has neither migrated the store nor mapped an endpoint.
 docker compose up -d app
 curl -s localhost:8082/actuator/health/readiness      # {"status":"UP"}
 
-# 2. run the job now instead of waiting for 18:00 London (flag is ON in the WireMock stub).
-#    On a deployed stack this is never run inside the 18:00 window: the schedule holds a ShedLock
-#    and the command holds nothing, so a release that lands inside the night's own run hands those
-#    rows to it and this command then fails on the stamp over a day already rendered.
-docker compose exec app ./startup.sh generate-register --date "$(date +%F)"
-#    date=<D> released=0 registers=0 batches=0 requested=0 deferred=0
+# 2. run the generation now instead of waiting for 18:00 London (flag is ON in the WireMock stub).
+#    It answers 202 and works in the background, under the SAME ShedLock the 18:00 run takes - so
+#    unlike the command this replaced, a call that lands inside the night's own run is refused by
+#    the lock rather than racing it.
+curl -s -X POST -H 'Content-Type: application/json' \
+  localhost:8082/operations/batches/generate -d "{\"date\":\"$(date +%F)\"}"
+#    202  {"runId":"…","date":"<D>","overridden":false}
 
-# 3. list the day's batches. An empty day prints no batch line and still exits 0
-docker compose exec app ./startup.sh list-batches --date "$(date +%F)"
+# 3. list the day's batches. An empty day answers 200 with an empty list
+curl -s "localhost:8082/operations/batches?date=$(date +%F)"
 
 # 4. flip the flag off and show the gate
 curl -X PUT http://localhost:8089/flag/off
-docker compose exec app ./startup.sh generate-register --date "$(date +%F)"   # refuses: flag OFF
-docker compose exec app ./startup.sh check-flag                                 # OFF
-docker compose exec app ./startup.sh generate-register --date "$(date +%F)" --ignore-flag
+curl -s -X POST -H 'Content-Type: application/json' \
+  localhost:8082/operations/batches/generate -d "{\"date\":\"$(date +%F)\"}"
+#    409  {"status":409,"reason":"flag-off"}            <- refused, and nothing changed
+curl -s localhost:8082/operations/flag                  # {"flag":"OFF"}
+#    the break-glass is one batch at a time and needs a batch id (400 OVERRIDE_REQUIRES_BATCH
+#    without one), which an empty day has none of - see 005's quickstart for the shape
 
 # 5. flag back on (either form; they set the same WireMock scenario state)
 curl -X PUT http://localhost:8089/flag/on
@@ -116,7 +127,7 @@ scenario admin endpoint, which is what the shorthand drives.
 ./gradlew test --tests '*GenerationEndToEndIT' '*FlagGateEndToEndIT' '*GenerationFailureEndToEndIT'
 ./gradlew build            # everything, including PMD/Checkstyle/JaCoCo gates
 ./scripts/container-smoke.sh   # image ready < 60 s with generation enabled against the compose
-                               # stubs, then `startup.sh check-flag` prints flag=ON through the
+                               # stubs, then GET /operations/flag answers flag=ON through the
                                # real reader
 ```
 

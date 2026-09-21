@@ -72,8 +72,8 @@ This repository carries no design narrative of its own. What it does carry:
   `public.event` topic — with a grace-period reconciler for the outcomes that never arrive, since
   retired by 004 in favour of the next run releasing a stale batch — and
   sends one notificationnotify e-mail per matched Youth Offending Team. The flag gate, the five
-  operations commands and the run report land with it, and the progression-leg `P` rows are appended
-  to the defect-fix register. The consolidation audit reproduces the recorded progression corpus by
+  operations commands — replaced by the operations API in 005 — and the run report land with it, and
+  the progression-leg `P` rows are appended to the defect-fix register. The consolidation audit reproduces the recorded progression corpus by
   manifest digest on every build, with one attributed deviation (P10). Task-level detail is the
   checkbox state in `specs/002-consolidate-progression-leg/tasks.md`.
 - **Increment 003 — exception-report: complete.** Nothing silently wrong any more: a 07:00
@@ -86,10 +86,10 @@ This repository carries no design narrative of its own. What it does carry:
   `courtregister_exception_report` summary per run, and the e-mail one, which renders the list as a
   CSV into the framework file service and asks notificationnotify to attach it — one send per
   support address. `IntakeAgeSweep` refreshes the two intake gauges on its own fixed delay in every
-  non-command JVM and under no lock, which with the request-duration timer and the report's own
-  counters completes the four instruments of design section 11. `report-exceptions` is the sixth
+  JVM and under no lock, which with the request-duration timer and the report's own
+  counters completes the four instruments of design section 11. `report-exceptions` was the sixth
   operations command, producing the same report on demand for a window given as an instant or a
-  duration. Task-level detail is the checkbox state in `specs/003-exception-report/tasks.md`.
+  duration; increment 005 made it `POST /operations/exception-reports`, unchanged in what it does. Task-level detail is the checkbox state in `specs/003-exception-report/tasks.md`.
   **The e-mail output ships switched off in every environment**, and is gated on the
   notificationnotify team providing the template it is sent under: user stories 1, 2, 3 and 5 are
   complete without it, `--email` is refused with a bounded reason rather than silently doing
@@ -108,7 +108,7 @@ This repository carries no design narrative of its own. What it does carry:
   systemdocgenerator's query endpoint are retired with it — there is nothing left to ask, so
   `GENERATION_TIMED_OUT` leaves the vocabulary and the store's constraints — and `BatchAgeSweep`
   takes over the three in-flight batch-age gauges the reconciler used to refresh, on its own fixed
-  delay in every non-command JVM that carries the generation half, and under no lock. An outcome that arrives for a batch this
+  delay in every JVM that carries the generation half, and under no lock. An outcome that arrives for a batch this
   service had already ended moves nothing and is counted under `terminal-batch`, which is what
   stops a Youth Offending Team being e-mailed twice about one day; the 07:00 report tells a
   released batch from a failed one, reporting it as the informational `BATCH_RELEASED`. Task-level
@@ -156,9 +156,8 @@ in place in the infrastructure repositories.
 ./gradlew jacocoTestReport      # coverage report → build/reports/jacoco
 ./gradlew bootRun               # local run against docker-compose dependencies (see below)
 ./scripts/container-smoke.sh    # packaged-artefact smoke: compose up, readiness gate, then
-                                # `startup.sh check-flag` and `startup.sh report-exceptions
-                                # --since 1h` through the entrypoint that dispatches the
-                                # operations commands; neither of them writes anything
+                                # `GET /operations/flag` through that same gate; it reads and
+                                # changes nothing
 ```
 
 Two cases in `ExceptionReportEndToEndIT` carry `@Tag("timing")`: SC-006's "ten thousand rows

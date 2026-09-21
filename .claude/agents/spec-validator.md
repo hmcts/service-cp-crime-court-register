@@ -104,7 +104,7 @@ Check the built document against the vendored schemas (path in the table above):
 - **notificationnotify**: one e-mail per matched Youth Offending Team, each with the PDF by file-service id; 202 is success; a 4xx is not retried. Recipients batched into one call is drift. A batch's ending distinguishes `NOTIFIED`, `PARTIALLY_NOTIFIED` and `NOTIFIED_NOBODY` — collapsing them is a MEDIUM finding.
 - **The file service** is written, never read through, and its schema is pinned to changesets 001–006. A migration of it in this repo is a HIGH finding.
 - **The flag** is read **once per run, no cache**, and every failure to read it fails closed (the legacy stays in charge). A cached read, a default-open fallback, or any second switch that decides which implementation is live — a Helm value, a static-data patch, an endpoint — is a HIGH finding against the Cutover Rule. The regeneration endpoint must refuse `FLAG_OFF` without `ignoreFlag: true`, and the supersede endpoint must refuse unless the same uncached read says OFF - it has no override.
-- **There is no CLI mode any more.** The rule that a CLI JVM must not subscribe to `public.event` is retired with the JVM it was about: an operations call is served by a pod that is already subscribed. `courtregister.cli`, `config/CliModeConfig` and the three conditionals that read the property are gone, and a reappearance of any of them is drift. `courtregister.operations.enabled` is deployment shape - it decides whether the endpoints are served and nothing else - and documenting it as a cutover lever is a HIGH finding.
+- **There is no CLI mode any more.** The rule that a CLI JVM must not subscribe to `public.event` is retired with the JVM it was about: an operations call is served by a pod that is already subscribed. `courtregister.cli`, `config/CliModeConfig` and the nine class-level conditionals that read the property are gone, and a reappearance of any of them is drift. `courtregister.operations.enabled` is deployment shape - it decides whether the endpoints are served and nothing else - and documenting it as a cutover lever is a HIGH finding.
 
 ### 4. Fixed-or-legacy behaviour contract
 
@@ -139,9 +139,10 @@ Read the active `specs/*/spec.md` first and judge findings against **that story'
 **001-court-register-port is complete** — the intake half, all its fixes, and the differential audit
 against 381 recorded legacy runs. **002-consolidate-progression-leg** absorbs progression's leg:
 the register store in place of the POST, the nightly job, the four platform adapters, the
-`public.event` listener, the flag gate, the operations CLI, and the `P` rows appended to the
-register — **also complete**. **003-exception-report** adds the 07:00 run that reports what the two
-halves left behind, its two sinks, the intake sweep and the sixth operations command, and adds
+`public.event` listener, the flag gate, the operations CLI (removed in 005), and the `P` rows
+appended to the register — **also complete**. **003-exception-report** adds the 07:00 run that
+reports what the two halves left behind, its two sinks, the intake sweep and the sixth operator
+action, and adds
 **no** `doc/DEFECT-FIXES.md` row: there is no legacy oracle for a capability that was never built.
 Judge against the active increment's `tasks.md`:
 
