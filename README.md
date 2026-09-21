@@ -263,6 +263,14 @@ none of them is in this repository:
 5. The Artemis audit connection in the STE values — `CP_AUDIT_ENABLED=true` with the broker's hosts,
    port, credentials and TLS material from Key Vault.
 
+**And one release gate that is in this repository and is not automated.** `./gradlew build` does
+not prove that the *image* starts the application: `docker/startup.sh` lost its command dispatch in
+increment 005 (FR-049) and the `e2e` suite that exercised the dispatch went with it, so the entry
+point is covered by `./scripts/container-smoke.sh` and nothing else. **Run it by hand before every
+release**, from a clean tree: it builds the image, brings compose up, waits for readiness and calls
+`GET /operations/flag` with no arguments passed to the container anywhere. A green suite with a
+broken entry point is exactly the shape of failure the script exists to catch.
+
 ### The switches, and what they default to
 
 | Setting | Default | What it does |

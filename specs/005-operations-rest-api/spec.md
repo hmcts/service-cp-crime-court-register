@@ -473,11 +473,19 @@ command printed.
   Asking whether the lock is held and then acting would race the scheduler; taking it cannot. In the
   other order, a scheduled run that starts while a regeneration holds the lock MUST stand aside by
   the mechanism it already uses.
-- **FR-019**: What the run did MUST be observable without a second surface: the same `RunReport`
-  line the 18:00 run writes, carrying the run id, an operator trigger and `reason=overridden` where
-  the flag was overridden, plus `GET /operations/batches?date=D` for the day's state. The tally the
-  command printed — released, registers, batches, requested, deferred, each batch's id/state/record
-  count and each withheld batch's bounded reason — is on that line.
+- **FR-019**: What the run did MUST be observable without a second surface. Three places carry it
+  between them, and no one of them is asked to carry all of it:
+  - the same `RunReport` line the 18:00 run writes, carrying the run id, an operator trigger,
+    `reason=overridden` where the flag was overridden, and the **counts** the command printed —
+    released, registers, batches, requested, deferred, and how many batches were withheld;
+  - the requesting leg's own lines, under that same run id, for **each batch's** id, state and
+    record count, and a `WARN` per withheld batch naming its bounded reason. The run line is one
+    line and stays one line: a per-batch tally on it would be a line whose width is a night's
+    workload;
+  - `GET /operations/batches?date=D` for the day's state afterwards.
+
+  The whole of it is correlated by the one run id the caller was answered with, which is what makes
+  three places one account rather than three.
 - **FR-020**: `POST /operations/batches/{batchId}/notify` MUST re-request the recipients of that
   batch no e-mail has been accepted for **and only those**, synchronously, and MUST answer `200`
   with the accepted and failed counts, the batch state and the disposition when the disposition is
