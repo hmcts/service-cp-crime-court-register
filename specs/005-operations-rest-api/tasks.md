@@ -1202,7 +1202,7 @@ the **real** authorisation filter refuses the people it should.
       cannot be published is logged at ERROR naming the action and the run id, moves
       `courtregister_operations_audit_unpublished`, and is dressed up as nothing else. It is
       carried to the orchestrator rather than assumed.)
-- [ ] **T046** [US2] `api/OperationsAuthzIT` (new) — **the real filter, wired as deployed**, with
+- [x] **T046** [US2] `api/OperationsAuthzIT` (new) — **the real filter, wired as deployed**, with
       usersgroups stubbed at the HTTP boundary by WireMock and
       `@DynamicPropertySource` over `authz.http.identity-url-template` (the
       `LoggedInUserPermissionsResponse` body shape is in research A9/R4). Cases: a caller in
@@ -1213,9 +1213,36 @@ the **real** authorisation filter refuses the people it should.
       `/actuator/health` with no headers → `200`. A test that mocks `DroolsAuthzEngine` proves the
       test, and is not acceptable here. Red: whatever the real wiring gets wrong — expect the
       `exclude-path-prefixes` list and the filter order to be the first two.
-- [ ] **T047** [US2] Whatever T046 exposes: the settings, the filter order, the registration. No new
+- [x] **T047** [US2] Whatever T046 exposes: the settings, the filter order, the registration. No new
       behaviour — if this task wants a behaviour change, it has found a gap in an earlier phase and
       goes back there. Green: T046.
+      (T046 and T047 landed in one commit. Green: `OperationsAuthzIT` 26 tests, 0 failures;
+      `OperationsAuditFactsTest` and `ConfigurationValidationTest` green beside it; Checkstyle and
+      PMD clean on main and test after one finding was fixed rather than suppressed.
+      **The `exclude-path-prefixes` list and the filter order were both already right**, which is
+      what T046 predicted would be wrong and is the reason it is worth having: actuator answers
+      with no identity, `/error` is not refused by the filter that forwards to it, and every one of
+      the seven is served for "Second Line Support" and refused 403 for anybody else, 401 for
+      nobody at all, and 403 for an identity service that cannot be asked. A forged `CPP-ACTION`
+      and a forged vendor media type both reach the endpoint's own action, not the one they name.
+      **What T046 did expose is a setting, and it is the only change T047 makes.** With the real
+      publisher over a broker that is not there, every call was refused `503 AUDIT_UNAVAILABLE`
+      correctly and took about **two minutes** to say so: the request event is published on the
+      caller's own thread before the action, and the library ships ten initial connect attempts
+      over a 2s interval with a 1.5 multiplier. That is two minutes of a held connection and a held
+      servlet thread per call, on exactly the incident an operator is trying to end.
+      `cp.audit.jms.initial-connect-attempts` is now 2, which says the same thing in about two
+      seconds and changes nothing about what is refused. Pinned by
+      `OperationsAuditFactsTest.the_shipped_configuration_should_switch_the_librarys_body_capture_off`.
+      **Two things about the suite's shape, both stated rather than quiet.** The controllers are
+      contributed by hand, because every one of them carries `@Profile("!test")` for the store's
+      sake and a class-level profile is evaluated against the bean definition rather than the type
+      - so a `@Bean` method gives the real class, the real mappings and the real derived action
+      names on the profile that has no database. And the audit **publisher** is a mock while the
+      audit **filter** is real: the filter's OpenAPI document, its path-parameter resolution, its
+      place inside the authorisation filter and its two publishes all run. Replacing the publisher
+      is the seam the starter itself offers, and a real one over a missing broker would refuse
+      every case for a reason that has nothing to do with authorisation.)
 - [ ] **T048** [A] [US1] `api/OperationsAuditIT` (new) — one authorised call to each endpoint
       produces a request event and a response event on the seam, each carrying the caller, the
       action and the outcome, and **no** body. Records the observed result; no implementation task

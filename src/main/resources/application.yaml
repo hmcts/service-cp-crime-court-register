@@ -701,6 +701,16 @@ cp:
   audit:
     enabled: ${CP_AUDIT_ENABLED:false}
 
+    jms:
+      # BOUNDED, BECAUSE THE REQUEST EVENT IS PUBLISHED ON THE CALLER'S OWN THREAD. The library
+      # ships ten initial attempts over a 2s interval with a 1.5 multiplier, so a broker that is
+      # not there costs roughly two minutes per call - and this service publishes the request event
+      # BEFORE the action, so that is two minutes of a held connection and a held servlet thread
+      # before the caller is told `503 AUDIT_UNAVAILABLE`. Two attempts says the same thing in about
+      # two seconds. It changes nothing about what is refused; it changes how long the refusal takes
+      # (`api/OperationsAuthzIT`, which is where the two minutes were found).
+      initial-connect-attempts: ${CP_AUDIT_INITIAL_CONNECT_ATTEMPTS:2}
+
 management:
   endpoints:
     web:

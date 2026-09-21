@@ -235,6 +235,13 @@ class OperationsAuditFactsTest {
                             + "and court-centre ids, the exception report's whole entry table and "
                             + "every ProblemDetail (research R10)")
                     .contains("include-payload-body: false");
+            softly.assertThat(shipped)
+                    .as("and the connect attempt is bounded, because the request event is "
+                            + "published on the caller's own thread before the action: the "
+                            + "library's ten attempts over a growing interval cost about two "
+                            + "minutes of a held connection before a broker that is not there is "
+                            + "reported as one")
+                    .contains("initial-connect-attempts:");
         }
     }
 
