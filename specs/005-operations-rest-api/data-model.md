@@ -49,8 +49,9 @@ Added at the increment's gate, and about the surface rather than about an action
 `UNSUPPORTED_CONTENT_TYPE` (`415`) — a body declared in a format no endpoint here takes.
 `cp-audit-filter-springboot` 1.0.5 hands a request whose `Content-Type` begins `multipart/` down
 the chain and publishes neither of its two events, so a call declaring one would be served
-unaudited; `api/OperationsActionFilter` refuses it ahead of both estate filters, because once the
-audit filter has decided to skip there is nothing left to refuse.
+unaudited; `api/OperationsContentTypeFilter` refuses it between the two estate filters (order
+`+40`) — outside the audit filter, because once it has decided to skip there is nothing left to
+refuse, and inside the authorisation filter, so an unauthenticated caller is answered `401` first.
 `UNEXPECTED` (`500`) — a failure nobody classified. `AuditFilter.doFilterInternal` has no
 `try`/`finally` around the chain, so an exception that leaves the dispatcher leaves a request event
 with no response event beside it; the advice's one fallback answers it under this code so the
@@ -68,7 +69,7 @@ hyphenated codes keep their characters and gain nothing.
 | Caller not in "Second Line Support"; identity service unreachable; no rule for the action | `403` | produced by the filter |
 | Body will not parse, or carries an unknown field | `400` | `unreadable-argument` |
 | Unmapped path or method | framework default, through `OperationsErrorAttributes` | — |
-| `Content-Type` beginning `multipart/` | `415` | `UNSUPPORTED_CONTENT_TYPE`, refused by `OperationsActionFilter` before the audit filter |
+| `Content-Type` beginning `multipart/` | `415` | `UNSUPPORTED_CONTENT_TYPE`, refused by `OperationsContentTypeFilter` after the authorisation filter and before the audit one |
 | A failure nobody classified | `500` | `UNEXPECTED`, from the advice's one fallback |
 
 ---

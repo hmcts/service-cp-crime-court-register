@@ -324,10 +324,12 @@ components:
     UnsupportedContentType:
       description: >-
         The request declared a body in a format no endpoint here takes. Refused by
-        api/OperationsActionFilter ahead of both estate filters, because cp-audit-filter-springboot
-        hands a `multipart/*` request down the chain without publishing either of its events, and
-        an endpoint reachable unaudited is an endpoint that may not exist (constitution Principle
-        III(b)). Carries `reason: UNSUPPORTED_CONTENT_TYPE`.
+        api/OperationsContentTypeFilter, which sits between the two estate filters: outside
+        cp-audit-filter-springboot, because it hands a `multipart/*` request down the chain without
+        publishing either of its events and an endpoint reachable unaudited is an endpoint that may
+        not exist (constitution Principle III(b)), and inside cp-auth-rules-filter, so an
+        unauthenticated caller is answered 401 rather than this. Carries
+        `reason: UNSUPPORTED_CONTENT_TYPE`.
       content:
         application/problem+json:
           schema:

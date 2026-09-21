@@ -133,9 +133,10 @@ public enum OperationsReason {
      * request whose {@code Content-Type} begins {@code multipart/} straight down the chain and
      * publishes neither its request event nor its response event, so an endpoint reachable with
      * one is an endpoint reachable unaudited - which Principle III(b) makes a condition of the
-     * endpoint existing at all. The refusal is taken outside the audit filter, by
-     * {@code api/OperationsActionFilter}, because by the time the filter has decided to skip there
-     * is nothing left to refuse.
+     * endpoint existing at all. The refusal is taken by {@code api/OperationsContentTypeFilter},
+     * outside the audit filter because by the time that one has decided to skip there is nothing
+     * left to refuse, and inside the authorisation filter because who may act is decided before
+     * what they may send - an anonymous caller is answered {@code 401}, not this.
      */
     UNSUPPORTED_CONTENT_TYPE("UNSUPPORTED_CONTENT_TYPE"),
 

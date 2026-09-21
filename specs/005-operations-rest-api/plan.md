@@ -115,6 +115,10 @@ src/main/java/uk/gov/hmcts/cp/
     │   ├── OperationsActionFilter.java               path+method → action name, server-derived,
     │   │                                             overrides the caller's header (R2)
     │   ├── ActionRequestWrapper.java                 the header override
+    │   ├── OperationsContentTypeFilter.java          the `multipart/` guard, at +40: inside the
+    │   │                                             authorisation filter, outside the audit one
+    │   ├── OperationsRefusalWriter.java              the shape a refusal taken in a filter is
+    │   │                                             written in, shared by the two
     │   ├── OperationsExceptionHandler.java           @RestControllerAdvice → ProblemDetail
     │   ├── OperationsErrorAttributes.java            the /error body for 401/403 and unmapped
     │   │                                             paths: bounded, no path, no trace (R5)
@@ -182,6 +186,7 @@ and `RegisterRecord` are reused as they are. No existing port's signature change
 |---|---|---|
 | `api/OperationsRulesTest` | drools, no Spring | one allow case and one deny case per action; an unknown action denied; the file names no group but "Second Line Support" |
 | `api/OperationsActionFilterTest` | plain servlet mocks | path+method → action for all seven; a caller-supplied `CPP-ACTION` overridden; an unrecognised path untouched |
+| `api/OperationsContentTypeFilterTest` | plain servlet mocks | a `multipart/` body refused `415` on every endpoint, however spelled; the JSON they take passed through; a path that is not ours untouched |
 | `api/FlagControllerTest` | `@WebMvcTest` | ON, OFF, UNREADABLE all `200`; the reason is the flag's bounded code |
 | `api/BatchesControllerTest` | `@WebMvcTest` | the listing shape and masking; generate's `202` + run id; generate's `409 FLAG_OFF` / `FLAG_UNREADABLE`; **`400 OVERRIDE_REQUIRES_BATCH` for `ignoreFlag` without a `batchId`**, and the accepted override *with* one; notify's `200` / `409 ALREADY_NOTIFYING` / `500` / `404` / `503` |
 | `api/RegistersControllerTest` | `@WebMvcTest` | recorded-while-off; supersede `200`, `dryRun`, `409 FLAG_ON`, `409 FLAG_UNREADABLE`, `400` future, `400` older than the bound, `400` absent |

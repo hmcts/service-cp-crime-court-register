@@ -272,7 +272,12 @@ Fixed by three numbers, and they interleave correctly by construction:
 |---|---|
 | our `OperationsActionFilter` (action name) | `Ordered.HIGHEST_PRECEDENCE` |
 | `HttpAuthzFilter` | `HIGHEST_PRECEDENCE + 30` (configurable, `authz.http.filter-order`) |
+| our `OperationsContentTypeFilter` (the `multipart/` guard) | `HIGHEST_PRECEDENCE + 40` |
 | `AuditFilter` | `HIGHEST_PRECEDENCE + 50` (**not** configurable) |
+
+The `multipart/` guard is at `+40` for both of its neighbours: outside the audit filter, which
+hands such a request down the chain publishing neither event, and inside the authorisation filter,
+so an unauthenticated caller is answered `401` rather than told what this surface consumes.
 
 The audit filter runs **inside** the authorisation filter, so a denied request is not audited by
 this library — the denial is in the log and in the access log, not in the audit context. Recorded

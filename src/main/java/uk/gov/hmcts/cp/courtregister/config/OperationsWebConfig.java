@@ -19,6 +19,7 @@ import org.springframework.jms.core.JmsTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import uk.gov.hmcts.cp.courtregister.api.OperationsActionFilter;
 import uk.gov.hmcts.cp.courtregister.api.OperationsAuditService;
+import uk.gov.hmcts.cp.courtregister.api.OperationsContentTypeFilter;
 import uk.gov.hmcts.cp.courtregister.api.OperationsErrorAttributes;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
 import uk.gov.hmcts.cp.courtregister.application.ExceptionReportService;
@@ -38,16 +39,20 @@ import uk.gov.hmcts.cp.courtregister.persistence.RegisterNotificationRepository;
 /**
  * What the operations API needs registered on the servlet container.
  *
- * <p>Two beans, and each is here because something about it has to be stated rather than
- * annotated. The filter's order is the first; the error attributes' replacement of Boot's own bean
- * is the second - a {@code @Component} would do it, but then the reason it exists would live
- * nowhere near the filter whose refusals it renders.
+ * <p>Two filters and the error attributes, and each is here because something about it has to be
+ * stated rather than annotated. The two orders are the first; the error attributes' replacement of
+ * Boot's own bean is the second - a {@code @Component} would do it, but then the reason it exists
+ * would live nowhere near the filters whose refusals it renders.
  *
- * <p>The filter's order is the whole reason it is registered here rather than
- * annotated into existence: {@link OperationsActionFilter} must run <strong>ahead of</strong>
- * {@code cp-auth-rules-filter} (which the library places at {@code HIGHEST_PRECEDENCE + 30}) and
- * of {@code cp-audit-filter-springboot} (fixed at {@code +50}), because both of them read the
- * action name this one derives (research R11).
+ * <p>The orders are the whole reason the filters are registered here rather than annotated into
+ * existence, and the two are ordered for opposite reasons. {@link OperationsActionFilter} must run
+ * <strong>ahead of</strong> {@code cp-auth-rules-filter} (which the library places at
+ * {@code HIGHEST_PRECEDENCE + 30}) and of {@code cp-audit-filter-springboot} (fixed at
+ * {@code +50}), because both of them read the action name it derives (research R11).
+ * {@link OperationsContentTypeFilter} must run <strong>between</strong> them, at {@code +40}:
+ * outside the audit filter, which hands a multipart request down the chain publishing neither
+ * event, and inside the authorisation filter, so that an anonymous caller is answered {@code 401}
+ * rather than told what this surface consumes.
  *
  * <p><strong>The switch is on the beans, not on the class.</strong>
  * {@code courtregister.operations.enabled} is deployment shape and not a cutover lever (FR-044):
@@ -75,6 +80,9 @@ public class OperationsWebConfig {
     /** And the value that switches it on, which is also what an absent setting means. */
     private static final String ON = "true";
 
+    /** Where the content-type guard sits: after the authorisation filter, before the audit one. */
+    private static final int CONTENT_TYPE_GUARD = 40;
+
     /**
      * The profile the store, its repositories and the generating adapters are declared away from.
      *
@@ -99,6 +107,29 @@ public class OperationsWebConfig {
         final FilterRegistrationBean<OperationsActionFilter> registration =
                 new FilterRegistrationBean<>(new OperationsActionFilter());
         registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
+        return registration;
+    }
+
+    /**
+     * Registers the content-type guard between the two estate filters.
+     *
+     * <p>Order {@code HIGHEST_PRECEDENCE + 40}: after {@code cp-auth-rules-filter} at {@code +30}
+     * and before {@code cp-audit-filter-springboot} at {@code +50}. Both halves of that sentence
+     * are load-bearing - see {@link OperationsContentTypeFilter}.
+     *
+     * <p>Mapped over everything for the reason the action filter is: the filter passes an
+     * unrecognised path through untouched, and a mapping would be a second place for the list of
+     * this service's paths to live.
+     *
+     * @return the registration, ordered between the two estate filters
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = OPERATIONS, name = ENABLED,
+            havingValue = ON, matchIfMissing = true)
+    public FilterRegistrationBean<OperationsContentTypeFilter> operationsContentTypeFilter() {
+        final FilterRegistrationBean<OperationsContentTypeFilter> registration =
+                new FilterRegistrationBean<>(new OperationsContentTypeFilter());
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE + CONTENT_TYPE_GUARD);
         return registration;
     }
 

@@ -5,14 +5,10 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.web.filter.OncePerRequestFilter;
-import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
 
 /**
@@ -50,16 +46,12 @@ import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
  * library's own computed {@code "<METHOD> <path>"}, which matches no rule in
  * {@code acl/operations-rules.drl} and is therefore refused.
  *
- * <p><strong>And it refuses the one content type that would go past the audit filter.</strong>
- * {@code cp-audit-filter-springboot} 1.0.5 begins by reading {@code getContentType()}, and where it
- * starts {@code multipart/} it calls the chain and returns - publishing neither the request event
- * nor the response one. Nothing on this surface consumes a multipart body, but nothing refused one
- * either: no mapping declares {@code consumes}, notify takes no body at all and the report's body
- * is optional with a default window, so a caller who declared one was served and audited nowhere.
- * Being outermost is what lets this be refused rather than noticed - by the time the audit filter
- * has decided to skip, the call is already on its way to the action. The cost is that such a call
- * is refused ahead of authorisation and is answered {@code 415} rather than {@code 401}, which
- * tells an anonymous caller only what the published contract already says.
+ * <p><strong>The content type the audit filter would not see is refused elsewhere.</strong>
+ * {@link OperationsContentTypeFilter} takes that one, at {@code +40}: outside the audit filter,
+ * because by the time it has decided to skip there is nothing left to refuse, and <em>inside</em>
+ * the authorisation filter, because who may act is decided before what they may send. Being
+ * outermost is what this filter is for and is exactly what that guard must not be - an anonymous
+ * caller answered {@code 415} is an anonymous caller who was never answered {@code 401}.
  *
  * <p><strong>It also opens and closes the call's audit facts, and catches the one refusal that
  * cannot reach the advice.</strong> Being outermost is what makes it the right place for both. The
@@ -102,9 +94,6 @@ public class OperationsActionFilter extends OncePerRequestFilter {
     /** The root every path this service serves sits under, and nothing else of the pod's does. */
     private static final String OPERATIONS_ROOT = "/operations";
 
-    /** The content-type family the audit filter hands on unaudited, and this surface never takes. */
-    private static final String MULTIPART = "multipart/";
-
     @Override
     protected void doFilterInternal(final HttpServletRequest request,
             final HttpServletResponse response, final FilterChain chain)
@@ -115,58 +104,15 @@ public class OperationsActionFilter extends OncePerRequestFilter {
         final OperationsAuditFacts facts = OperationsAuditFacts.open();
         facts.action(action);
         try {
-            if (ours(path) && unauditable(request)) {
-                // Refused here and not further in: the audit filter skips a multipart request
-                // without publishing either event, so anything past this point would be an
-                // operations action taken with no audit trail at all (Principle III(b)).
-                answer(response, new OperationsRefusedException(
-                        OperationsReason.UNSUPPORTED_CONTENT_TYPE), facts);
-            } else {
-                chain.doFilter(new ActionRequestWrapper(request, action, ours(path)), response);
-            }
+            chain.doFilter(new ActionRequestWrapper(request, action, ours(path)), response);
         } catch (OperationsRefusedException refused) {
             // The audit filter runs outside the DispatcherServlet, so a refusal it raises reaches
             // no advice. Rendered here from the one status map, rather than left to arrive as the
             // container's own 500 with the path the caller typed in it.
-            answer(response, refused, facts);
+            OperationsRefusalWriter.refuse(response, refused, facts);
         } finally {
             OperationsAuditFacts.clear();
         }
-    }
-
-    /**
-     * Writes a refusal that never reached the dispatcher, in the shape every other one has.
-     *
-     * @param response the response to write
-     * @param refused  what was refused, and under which bounded code
-     * @param facts    this call's audit facts, so the refusal is on the event as well as the wire
-     * @throws IOException where the response cannot be written, which is the caller having gone
-     *         away and is nothing this service can refuse
-     */
-    private static void answer(final HttpServletResponse response,
-            final OperationsRefusedException refused, final OperationsAuditFacts facts)
-            throws IOException {
-
-        final int status = OperationsProblem.statusOf(refused.reason()).value();
-        facts.refusedWith(status, refused.reason().wire());
-        response.reset();
-        response.setStatus(status);
-        response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
-        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        response.getWriter().write("{\"status\":" + status + ",\"title\":\""
-                + HttpStatus.valueOf(status).getReasonPhrase() + "\",\"reason\":\""
-                + refused.reason().wire() + "\"}");
-    }
-
-    /**
-     * Whether a request would be handed down the chain with no audit event published for it.
-     *
-     * @param request the request as it arrived, read before the wrapper rewrites any media type
-     * @return {@code true} where the declared content type is one the audit filter skips
-     */
-    private static boolean unauditable(final HttpServletRequest request) {
-        final String declared = request.getContentType();
-        return declared != null && declared.toLowerCase(Locale.ROOT).startsWith(MULTIPART);
     }
 
     /**

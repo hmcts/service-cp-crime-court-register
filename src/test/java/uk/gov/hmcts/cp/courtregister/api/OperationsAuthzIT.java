@@ -285,6 +285,51 @@ class OperationsAuthzIT {
         }
 
         @Test
+        void a_multipart_call_with_no_identity_should_be_refused_401_before_415()
+                throws Exception {
+
+            mvc.perform(post("/operations/exception-reports")
+                            .contentType(MediaType.MULTIPART_FORM_DATA)
+                            .content("--x--"))
+                    .andExpect(result -> softly.assertThat(result.getResponse().getStatus())
+                            .as("the content-type guard sits inside the authorisation filter, not "
+                                    + "ahead of it: an anonymous caller is told they are not "
+                                    + "authenticated, and learns nothing about what this surface "
+                                    + "consumes")
+                            .isEqualTo(401));
+        }
+
+        @Test
+        void a_multipart_call_from_an_admitted_caller_should_still_be_refused_415()
+                throws Exception {
+
+            mvc.perform(post("/operations/exception-reports")
+                            .contentType(MediaType.MULTIPART_FORM_DATA)
+                            .content("--x--")
+                            .header(IDENTITY, A_CALLER))
+                    .andExpect(result -> softly.assertThat(result.getResponse().getStatus())
+                            .as("past authorisation the guard still runs, and it runs before the "
+                                    + "audit filter: an endpoint reachable with a content type "
+                                    + "that publishes neither event is reachable unaudited")
+                            .isEqualTo(415));
+        }
+
+        @Test
+        void a_multipart_call_from_a_caller_in_another_group_should_be_refused_403()
+                throws Exception {
+
+            answerWith(SOMEBODY_ELSE);
+
+            mvc.perform(post("/operations/exception-reports")
+                            .contentType(MediaType.MULTIPART_FORM_DATA)
+                            .content("--x--")
+                            .header(IDENTITY, A_CALLER))
+                    .andExpect(result -> softly.assertThat(result.getResponse().getStatus())
+                            .as("who may act is decided before what they may send")
+                            .isEqualTo(403));
+        }
+
+        @Test
         void a_forged_vendor_media_type_should_not_name_the_action_either() throws Exception {
             answerWith(SOMEBODY_ELSE);
 
