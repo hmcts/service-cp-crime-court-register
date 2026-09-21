@@ -1243,10 +1243,25 @@ the **real** authorisation filter refuses the people it should.
       place inside the authorisation filter and its two publishes all run. Replacing the publisher
       is the seam the starter itself offers, and a real one over a missing broker would refuse
       every case for a reason that has nothing to do with authorisation.)
-- [ ] **T048** [A] [US1] `api/OperationsAuditIT` (new) — one authorised call to each endpoint
+- [x] **T048** [A] [US1] `api/OperationsAuditIT` (new) — one authorised call to each endpoint
       produces a request event and a response event on the seam, each carrying the caller, the
       action and the outcome, and **no** body. Records the observed result; no implementation task
       follows.
+      (Observed: 7 cases, one per endpoint, 0 failures. Every authorised call leaves **exactly
+      two** events; both carry the caller's `CJSCPPUID`, the action this service derived from the
+      path and the method, and an `outcome`; neither carries a request or a response body.
+      **The seam is the JMS template and nothing nearer**: the audit filter is real, the payload is
+      the library's, and `OperationsAuditService` is the one this service contributes - only the
+      template it sends through is replaced, so what is asserted is the JSON that would have left
+      for the broker.
+      **Two things the run had to settle.** The response event exists only where the response
+      carried text - the library builds a `ResponseInfo` under `hasText(body)` - so every case
+      answers something, a stubbed success where one is cheap and a bounded refusal
+      (`email-output-disabled`) for the exception report, whose success shape is a tree of five
+      records and whose refusal is an outcome in exactly the sense the field means. And
+      `JmsAutoConfiguration` is excluded in this context: Boot's `JmsMessagingTemplate` reads a
+      message converter off whichever `JmsTemplate` it finds and the replaced one has none, while
+      nothing in this context publishes or consumes JMS of its own.)
 
 ---
 

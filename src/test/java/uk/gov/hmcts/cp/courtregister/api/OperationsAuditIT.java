@@ -1,0 +1,276 @@
+package uk.gov.hmcts.cp.courtregister.api;
+
+import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
+import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+
+import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.client.WireMock;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.stream.Stream;
+import org.assertj.core.api.SoftAssertions;
+import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
+import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.http.MediaType;
+import org.springframework.jms.core.JmsTemplate;
+import org.springframework.jms.core.MessagePostProcessor;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+import uk.gov.hmcts.cp.courtregister.application.FeatureFlagReader;
+import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
+import uk.gov.hmcts.cp.courtregister.application.OnDemandExceptionReportService;
+import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher;
+import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher.RunAccepted;
+import uk.gov.hmcts.cp.courtregister.application.OperationsSupersessionService;
+import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
+import uk.gov.hmcts.cp.courtregister.application.Supersession;
+import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
+import uk.gov.hmcts.cp.courtregister.domain.FlagDecision;
+import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
+import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
+
+/**
+ * What the audit context is actually told about each of the seven, end to end. <strong>[A]</strong>
+ *
+ * <p>An acceptance suite (tasks.md {@code [A]}): it records what the assembled chain does rather
+ * than driving a change. {@code OperationsAuditFactsTest} asserts the publisher's own behaviour
+ * over a seam; this asserts that an authorised call through the <em>real</em> audit filter, with
+ * the real OpenAPI document behind it, leaves two events carrying the caller, the action and the
+ * outcome - and no body.
+ *
+ * <p><strong>The seam is the JMS template and nothing nearer.</strong> The filter is real, the
+ * payload generation is the library's, {@link OperationsAuditService} is the real one this service
+ * contributes, and only the template it publishes through is replaced. So what is asserted here is
+ * the JSON that would have left for the audit broker.
+ *
+ * <p><strong>Two events per call, and the second one needs a body to exist.</strong> The library
+ * publishes the request event before the chain and the response event only where the response
+ * carried text, so every case answers something - a success where one is cheap to stub and a
+ * bounded refusal where it is not. A refusal is an outcome like any other, which is the point of
+ * the field.
+ */
+@SpringBootTest(properties = {
+    "authz.http.enabled=true",
+    "audit.http.enabled=true",
+    "cp.audit.enabled=true",
+    "cp.audit.hosts=localhost",
+    "cp.audit.port=61616",
+    "courtregister.consumer.enabled=false",
+    "courtregister.generation.enabled=false",
+    "courtregister.report.enabled=false",
+    // Boot's JmsMessagingTemplate reads a message converter off whichever JmsTemplate it finds,
+    // and the one replaced below has none. Nothing in this context consumes or publishes JMS of
+    // its own - the generation half is off, so the public-event container is not built - so the
+    // auto-configuration is excluded rather than satisfied with a converter nobody uses.
+    "spring.autoconfigure.exclude=org.springframework.boot.jms.autoconfigure.JmsAutoConfiguration"})
+@AutoConfigureMockMvc
+@ActiveProfiles("test")
+@ExtendWith(SoftAssertionsExtension.class)
+@DisplayName("what the audit context is told about an operations call")
+class OperationsAuditIT {
+
+    /** The one group any rule admits, so every case here is an authorised call. */
+    private static final String ADMITTED = "Second Line Support";
+
+    /** The header the identity is asserted in. */
+    private static final String IDENTITY = "CJSCPPUID";
+
+    /** The caller, and the one thing about them this service ever writes down. */
+    private static final String A_CALLER = "6d3f1c20-9b4a-4e71-8f05-2c7d9a1e6b34";
+
+    /** A well-formed batch identity, so the notify path is reached rather than its parser. */
+    private static final String BATCH = "11111111-2222-4333-8444-555555555555";
+
+    /** The run id the launcher answers a regeneration with. */
+    private static final String RUN_ID = "9f2b6d44-6b1a-4f0a-9d24-0cc2b0d1f3aa";
+
+    /** The register date every case that needs one is about. */
+    private static final LocalDate A_DATE = LocalDate.of(2026, 9, 4);
+
+    /** Where usersgroups answers. */
+    private static WireMockServer usersgroups;
+
+    /** The template the publisher sends through, which is the seam this suite reads. */
+    @MockitoBean(name = "auditJmsTemplate")
+    private JmsTemplate audit;
+
+    @MockitoBean
+    private FeatureFlagReader flag;
+
+    @MockitoBean
+    private BatchListingService listings;
+
+    @MockitoBean
+    private OperationsRunLauncher launcher;
+
+    @MockitoBean
+    private RegisterNotifierService notifier;
+
+    @MockitoBean
+    private OperationsSupersessionService supersession;
+
+    @MockitoBean
+    private OnDemandExceptionReportService reports;
+
+    @InjectSoftAssertions
+    private SoftAssertions softly;
+
+    private final MockMvc mvc;
+
+    @Autowired
+    OperationsAuditIT(final MockMvc mockMvc) {
+        this.mvc = mockMvc;
+    }
+
+    @BeforeAll
+    static void startUsersgroups() {
+        usersgroups = new WireMockServer(wireMockConfig().dynamicPort());
+        usersgroups.start();
+        usersgroups.stubFor(WireMock.get(urlPathMatching("/usersgroups-query-api/.*"))
+                .willReturn(okJson("{\"groups\":[{\"groupId\":\"a-group-id\",\"groupName\":\""
+                        + ADMITTED + "\",\"prosecutingAuthority\":null}],"
+                        + "\"switchableRoles\":[],\"permissions\":[]}")));
+    }
+
+    @AfterAll
+    static void stopUsersgroups() {
+        usersgroups.stop();
+    }
+
+    @DynamicPropertySource
+    static void pointTheIdentityClientAtIt(final DynamicPropertyRegistry registry) {
+        registry.add("authz.http.identity-url-template",
+                () -> usersgroups.baseUrl() + "/usersgroups-query-api/query/api/rest/usersgroups/"
+                        + "users/logged-in-user/permissions");
+    }
+
+    @BeforeEach
+    void everyEndpointAnswersSomething() {
+        when(flag.read()).thenReturn(FlagDecision.ON);
+        when(listings.batchesOn(any())).thenReturn(List.of());
+        when(listings.recordedWhileOff()).thenReturn(List.of());
+        when(launcher.launch(any())).thenReturn(new RunAccepted(RUN_ID, A_DATE, false));
+        when(notifier.resendFailed(any()))
+                .thenReturn(new NotificationSummary(1, 0, BatchStatus.NOTIFIED));
+        when(supersession.supersede(any(), anyBoolean()))
+                .thenReturn(new Supersession(47, Instant.parse("2026-09-04T17:00:00Z"), false));
+        // The report's own success shape is a tree of five records; a bounded refusal is the
+        // cheaper answer and is an outcome in exactly the sense the audit field means.
+        when(reports.report(any(), anyBoolean())).thenThrow(
+                new OperationsRefusedException(OperationsReason.EMAIL_OUTPUT_DISABLED));
+    }
+
+    /**
+     * The seven, each with the action name this service derives for it.
+     *
+     * @return one call per endpoint
+     */
+    static Stream<Arguments> theSevenEndpoints() {
+        return Stream.of(
+                Arguments.of("check-flag", get("/operations/flag")),
+                Arguments.of("list-batches",
+                        get("/operations/batches").param("date", "2026-09-04")),
+                Arguments.of("list-recorded-while-off",
+                        get("/operations/registers/recorded-while-off")),
+                Arguments.of("generate-register", post("/operations/batches/generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"date\":\"2026-09-04\"}")),
+                Arguments.of("notify-register", post("/operations/batches/" + BATCH + "/notify")),
+                Arguments.of("supersede-before", post("/operations/registers/supersede")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sharedBefore\":\"2026-09-04T17:00:00Z\"}")),
+                Arguments.of("report-exceptions", post("/operations/exception-reports")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}")));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("theSevenEndpoints")
+    void an_authorised_call_should_leave_two_events_naming_the_caller_the_action_and_the_outcome(
+            final String action, final MockHttpServletRequestBuilder call) throws Exception {
+
+        mvc.perform(call.header(IDENTITY, A_CALLER));
+
+        final ArgumentCaptor<Object> events = ArgumentCaptor.forClass(Object.class);
+        verify(audit, Mockito.atLeast(2)).convertAndSend(any(jakarta.jms.Destination.class),
+                events.capture(), any(MessagePostProcessor.class));
+        final List<String> published = events.getAllValues().stream().map(String::valueOf).toList();
+
+        softly.assertThat(published)
+                .as("the request event before the chain and the response event after it, which is "
+                        + "what makes an unpublished request a refused call rather than a lost one")
+                .hasSize(2);
+        softly.assertThat(published)
+                .as("the caller is named on purpose, and this is the one place they are")
+                .allMatch(event -> event.contains(A_CALLER));
+        softly.assertThat(published)
+                .as("the action is the one this service derived from the path and the method, "
+                        + "never the one the caller's header named")
+                .allMatch(event -> event.contains("courtregister-operations." + action));
+        softly.assertThat(published)
+                .as("and what came of the call, as a bounded word or a status and a bounded code")
+                .allMatch(event -> event.contains("\"outcome\":"));
+        softly.assertThat(published)
+                .as("no defendant detail could be here and no body is: the payload switch is off, "
+                        + "and what this service adds is five bounded fields (FR-046)")
+                .allSatisfy(event -> softly.assertThat(event).doesNotContain("\"_payload\":\"{"));
+    }
+
+    /**
+     * The controllers, contributed by hand for the reason {@code OperationsAuthzIT} states.
+     */
+    @TestConfiguration(proxyBeanMethods = false)
+    static class TheControllers {
+
+        @Bean
+        FlagController flagController(final FeatureFlagReader reader) {
+            return new FlagController(reader);
+        }
+
+        @Bean
+        BatchesController batchesController(final BatchListingService batchListings,
+                final OperationsRunLauncher runLauncher, final RegisterNotifierService notifier) {
+            return new BatchesController(batchListings, runLauncher, notifier);
+        }
+
+        @Bean
+        RegistersController registersController(final BatchListingService batchListings,
+                final OperationsSupersessionService rollback) {
+            return new RegistersController(batchListings, rollback);
+        }
+
+        @Bean
+        ExceptionReportsController exceptionReportsController(
+                final OnDemandExceptionReportService reportService) {
+            return new ExceptionReportsController(reportService);
+        }
+    }
+}
