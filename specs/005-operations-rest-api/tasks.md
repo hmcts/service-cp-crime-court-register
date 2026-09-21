@@ -719,7 +719,7 @@ exception report has the widest refusal set of any endpoint.
 **Purpose**: the second cutover lever that this endpoint would otherwise be. Every protection here
 was confirmed by the design owner on 2026-09-19 and is a requirement, not a precaution.
 
-- [ ] **T026** [P] [US6] `application/OperationsSupersessionServiceTest` (new) — the guard, with the
+- [x] **T026** [P] [US6] `application/OperationsSupersessionServiceTest` (new) — the guard, with the
       store and the flag reader mocked. Cases: the flag **OFF** → the store is asked and the count
       returned; the flag **ON** → `FLAG_ON`, and **the store is never touched**; the flag
       **unreadable** → `flag-unreadable`, store never touched (fail-closed); `dryRun` → the count is
@@ -727,10 +727,30 @@ was confirmed by the design owner on 2026-09-19 and is a requirement, not a prec
       `supersede-max-age` → refused; the flag is read **uncached**, once per call; a store failure →
       the `supersession-failed` classification. Seam: `application/OperationsSupersessionService`.
       Red: the flag-ON case supersedes.
-- [ ] **T027** [US6] `application/OperationsSupersessionService` — the flag read through the same
+      (Landed with T027 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. 12 tests, 0 failures: the flag OFF superseding and answering the count, with the read
+      asserted to happen exactly once; the dry run counting three of four rows and never reaching
+      the write; a store outage as `supersession-failed` with the store's own words absent; the
+      flag ON refusing `FLAG_ON` with `verifyNoInteractions(registers)`; every
+      `UnreadableReason` failing closed off an `@EnumSource`; a dry run refused by the same lever;
+      and the four bound cases - absent, future, older than the bound, and exactly at it -
+      the first three asserting the flag was not read either.)
+- [x] **T027** [US6] `application/OperationsSupersessionService` — the flag read through the same
       uncached `FeatureFlagReader` path, the two bounds against `Clock` and `OperationsProperties`,
       the dry run, and `RegisterStore.supersedeSharedBefore` otherwise. There is **no** override
       parameter and none may be added. Green: T026.
+      (Green: `OperationsSupersessionServiceTest` 12 tests, 0 failures. Two decisions are worth
+      writing down. **The bounds are checked before the flag is read**: a malformed request is
+      refused on its own terms, and consulting the cutover state to reject one would make a `400`
+      depend on something the caller cannot see - which is also the order data-model §6 lists the
+      refusals in. **The dry run is composed from two existing reads**,
+      `recordedUnbatchedBefore` plus `recordedWhileOff` filtered on the bound, whose predicates
+      together are exactly the write's - `ACTIVE_UNBATCHED_PREDICATE` tests
+      `recorded_flag_state = 'ON'` and `RECORDED_WHILE_OFF` tests `<> 'ON'`, so the union is the
+      write's three predicates with no flag-state test. A dedicated count read would have been
+      one statement instead of two, but `application/RegisterStore` and `persistence/*` belong to
+      the 004 tree under this increment's coordination contract; the seam is noted for after the
+      merge.)
 - [ ] **T028** [P] [US6] `api/RegistersControllerTest` (extend) — the supersede slice cases of
       data-model §6: `200` with the count, the instant and `dryRun`; `400 missing-argument` for an
       absent instant — **never defaulted**; `400 unreadable-argument` with `argument: sharedBefore`;
