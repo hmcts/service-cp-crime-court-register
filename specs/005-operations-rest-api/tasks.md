@@ -1476,10 +1476,21 @@ a deletion has no red run, and its evidence is the green build with the replaced
       shape of the pod holds, which is a different claim from what those classes serve. The
       enclosing class's case is re-pointed to say what it actually proves - that the `test` profile
       registers none of them - rather than to claim a surface the profile is hiding.)
-- [ ] **T057** [A] [US5] Full `./gradlew build` behind the `flock`: compile, the whole suite, PMD
+- [x] **T057** [A] [US5] Full `./gradlew build` behind the `flock`: compile, the whole suite, PMD
       main and test, Checkstyle main and test, and the JaCoCo gate at the **unchanged** thresholds
       (LINE ≥ 0.88, BRANCH ≥ 0.85 — the ratchet is never loosened to admit a controller). Records
       the counts.
+      (Done. `flock -w 7200 /home/sachin/.cache/courtregister/gradle.lock ./gradlew
+      jacocoTestReport check -Dtest.noFailFast=true` — **exit 0** in 4m 18s.
+      **The counts.** 3867 tests, 0 failures, 0 errors, 0 skipped. Coverage: LINE 0.9765 (7019
+      covered, 169 missed), BRANCH 0.9051 (2098 covered, 220 missed), INSTRUCTION 0.9768, METHOD
+      0.9868, CLASS 1.0000. `checkstyleMain`, `checkstyleTest`, `pmdMain` and `pmdTest` all clean.
+      **The thresholds are untouched**: `gradle/test.gradle` still reads `minimum = 0.88` for LINE
+      and `minimum = 0.85` for BRANCH, and both are cleared with room — the seven controllers, the
+      advice, the two filters and the audit publisher arrived inside the ratchet rather than
+      against it.
+      The suite is 3867 where the increment began at 3616 plus 004's: the nine CLI suites that went
+      at T053 are out of it and everything Phases 2–9 added is in it.)
 - [ ] **T058** [US5] The documentation sweep. `specs/002-consolidate-progression-leg/quickstart.md`:
       the CLI examples replaced by the `curl` ones from this increment's `quickstart.md`. `README.md`
       and `CLAUDE.md`: the final read-through — the operations paragraphs landed in `d73ef50` and
