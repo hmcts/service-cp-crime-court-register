@@ -241,7 +241,20 @@ each of the four below is a blocking prerequisite for every user story.
       it, and `GenerationReconcilerTest`'s placeholder assertion follows).
       `PropertiesValidator.validateReport` loses its `GenerationProperties` parameter, which nothing
       in it read any more, and `CourtRegisterProperties`'s javadoc reference to the grace period is
-      re-pointed.)
+      re-pointed.
+      **Two files of the other tree's had to be touched, and they are named here rather than left
+      to the diff** (recorded at gate round 1 of the increment gate, 2026-09-21, having been
+      omitted when this task landed). `GenerationProperties` is a record, so removing `completion`
+      and adding `staleAfter` and `batchAgeRefresh` changes its arity, and every hand-written
+      construction of it in the suite is a compile error until it is updated -
+      `batch/cli/CliMainTest.settings()` and `batch/cli/GenerateRegisterCliTest.settings()` among
+      them. The coordination contract gives `batch/cli` tests to the 005 tree, so this is the
+      report the contract asks for: the edit is the constructor call and nothing else - no case
+      added, none removed, no behaviour asserted differently - and it cannot be reverted without
+      leaving the suite uncompilable. **Hand-off to the 005 tree**: its rebase must keep 004's two
+      `settings()` helpers, which pass `Duration.ofMinutes(30)` for `staleAfter` and
+      `Duration.ofMinutes(10)` for `batchAgeRefresh` where they used to pass a grace period and
+      `GenerationProperties.COMPLETION_EVENT`.)
 - [x] T004 `domain/BatchFailureReason.java` — make T003 green. Add `NOT_COMPLETED_BY_NEXT_RUN`
       with the javadoc data-model.md gives it: this service's own verdict, releasing, and naming no
       completion mechanism. `isGeneratorAttributed()` is **unchanged** here — it already answers
@@ -1804,6 +1817,28 @@ values on every pass.
       MessageListener set` when the factory creates a container from it — and not a claim about the
       subject.
 
+      **The subtractive red, staged and recorded at gate round 1 of the increment gate
+      (2026-09-21).** "No red was available" is an exception argued afterwards, and this section
+      grants none in advance, so the red the convention asks for was produced the other way round:
+      the two production expressions were put back to what they were before `39b6aeaf` decided
+      them, the two suites were run, and the change was reverted. It is a scratch reversal and is
+      in no commit - what is recorded is the run. The stand-ins are the retired setting's own two
+      values, because the setting is gone from `GenerationProperties` and restoring the component
+      would have meant editing the other tree's fixtures again: `PublicEventsConfig` was returned
+      to `factory.setAutoStartup("event".equals(RETIRED_COMPLETION))` with the constant holding
+      `poll-only`, and `PropertiesValidator`'s broker rule regained a completion conjunct that
+      reads `poll-only`.
+      **Red** (same two suites, `-Dtest.noFailFast=true`): **171 tests, 3 failed, every one an
+      assertion.** `PublicEventsHealthIndicatorTest.a_generation_enabled_context_subscribes_without_being_told_to`
+      on "[the generation half is on, so the one route an outcome arrives by is up; nothing else is
+      asked and nothing else can say otherwise] Expecting value to be true but was false";
+      `ConfigurationValidationTest$GenerationOutcomeAndDurations.a_generation_enabled_context_without_the_broker_configuration_refuses_to_start`
+      and `.the_completion_setting_is_no_longer_bound` each on "Expecting <Started application […]>
+      to have failed but context started successfully" - the second of them with its own message,
+      "and the value that used to buy a deployment its way out of needing a broker now buys nothing
+      at all". So both cases bite on exactly the behaviour T027 must not undo, and the suite is
+      green again on the reverted tree.
+
 ### Implementation
 
 - [X] T022 [US4] Delete `batch/GenerationReconciler.java` and `batch/GenerationReconcilerTest.java`;
@@ -2115,9 +2150,20 @@ claim. T028 runs after them, not before, so the suite it characterises is the fi
       `FileServicePayloadStoreIT`), and one was prose alone (`BatchStateTest`); none of the six is a
       claim about the retired constants that T047 does not now make by name.
 
-      **`batch/cli/ReportExceptionsCliTest` is not among them, and no commit in this branch
-      touches it.** It belongs to the 005 tree under the increment's coordination contract, and it
-      never had to change: `ExceptionEntry.reason` is a `String`, so its `"GENERATION_TIMED_OUT"`
+      **`batch/cli/ReportExceptionsCliTest` is not among them, and no commit up to this point in
+      the branch touches it.** (**Corrected at gate round 1 of the increment gate, 2026-09-21.**
+      This paragraph was written at T048 and read as a claim about the whole range, which it never
+      was. Two statements of it are now wrong and are restated here. First, `batch/cli` is touched
+      in the range twice: `39b6aeaf` (T001/T002) edits `CliMainTest` and `GenerateRegisterCliTest`
+      for the `GenerationProperties` arity change, recorded as a hand-off at T002 above; and
+      `75e6c5f3` (T036), which lands *after* this paragraph was written, edits
+      `ReportExceptionsCliTest`'s counts-line literal for the sixth `ExceptionKind`, recorded as a
+      hand-off at T036 below. Second, `git log 4d3f9e00..HEAD -- src/…/batch/cli/` is therefore no
+      longer empty - it names `75e6c5f3` - and `git log 92f5705..HEAD` over the same path names
+      `39b6aeaf` as well. What stays true is what this task's own deletion did: the vocabulary
+      retirement forced six test files and `ReportExceptionsCliTest` was not one of them.) It
+      belongs to the 005 tree under the increment's coordination contract, and it did not have to
+      change for T048: `ExceptionEntry.reason` is a `String`, so its `"GENERATION_TIMED_OUT"`
       literal is a bounded code read back out of a row the case never writes, not a reference to the
       constant that left `BatchFailureReason`, and the case is about the CLI's printed lines. A
       first draft of this task did edit it; that edit is not in the branch's history — the two
@@ -2889,7 +2935,18 @@ what this phase added: T037's one, T038's two and T039's one.
       `GenerationReconciler`; the failure-reason list swaps `GENERATION_TIMED_OUT` for
       `NOT_COMPLETED_BY_NEXT_RUN`; the state machine's last GENERATING arm is data-model.md's; and
       "The reconciler invents nothing" is now the rule that replaces it, which says the same thing
-      about a mechanism that exists.)
+      about a mechanism that exists.
+      **Three of the six edits are outside the sections the contract grants this tree, and they are
+      named here rather than left to the diff** (recorded at gate round 1 of the increment gate,
+      2026-09-21). The coordination contract gives 004 `design_rules.md`'s **flow diagram**, its
+      **batch state machine** and its **consumed-contracts table**. The package-structure tree's
+      `batch/` line, the "every drop is counted under a bounded reason" bullet and the "one
+      absorbed refusal" bullet are none of those three. Each names a mechanism 004 removed or a
+      reason 004 added, so leaving them would have left the page describing a class that is not
+      there, and each edit is the name or the list and nothing else. **Hand-off to the 005 tree**,
+      which is editing the same file for the REST surface: those three paragraphs carry a 004 edit,
+      so its rebase meets them rather than a clean file. The coordinator is asked to extend 004's
+      grant to them retrospectively, or to move them into 005's change.)
 - [x] T042 [P] `README.md` — the generation section's "with a grace-period reconciler for the
       outcomes that never arrive" becomes the release pass, and a Status entry for increment 004 in
       the shape 001–003 use.
@@ -2916,7 +2973,15 @@ what this phase added: T037's one, T038's two and T039's one.
       counts line now carries `batch_released=0`, because the command really does print one count
       per kind and a walkthrough whose expected output is missing a key is one an operator reads as
       a failure; and "the five kinds together are proved by" loses its number, which is the same
-      correction the suites took in Phase 7. Nothing else in either file is touched.)
+      correction the suites took in Phase 7. Nothing else in either file is touched.
+      **`specs/003-exception-report/quickstart.md` is outside the contract's grant, and it is named
+      here rather than left to the diff** (recorded at gate round 1 of the increment gate,
+      2026-09-21). The contract gives this tree the **002** quickstart's grace-period mentions and
+      `specs/004-*`; the 003 quickstart is in neither list and is in no other tree's either. The
+      edit is doc-only and is what FR-016 asks for - a walkthrough whose expected output names a
+      reason the store can no longer hold is a walkthrough that fails when it is followed - so it
+      is reported for ratification rather than reverted. The coordinator is asked to add the file
+      to 004's grant.)
 - [x] T044 [P] `.claude/agents/{spec-validator,software-engineer,qa,code-reviewer}.md` — the scope
       paragraphs name **004-release-stale-batches** alongside the three complete increments;
       `spec-validator`'s generation-leg read list swaps `batch/GenerationReconciler` for
@@ -2952,11 +3017,22 @@ what this phase added: T037's one, T038's two and T039's one.
       `StaleBatchReleaserTest.a_batch_still_generating_past_the_minimum_age_should_be_failed_and_released`
       for the half the row also promises, and the status cell gains one dated sentence saying the
       mechanism changed in 004 while the promise did not, naming the end-to-end case as well.
-      **Everything else in the row is left as written, deliberately.** The fixed-behaviour cell
-      still describes the grace-period reconciler and the status cell still describes what T048
-      landed: that is what increment 002 shipped, and the dated sentence is what tells a reader the
-      rest is history. Rewriting it would make the row claim 002 shipped a mechanism it did not -
-      the same reasoning T042 applied to the README's 002 bullet.
+      **Everything else in the row is left as written, deliberately.** The status cell describes
+      what T048 landed: that is what increment 002 shipped, and the dated sentence is what tells a
+      reader the rest is history. Rewriting it would make the row claim 002 shipped a mechanism it
+      did not - the same reasoning T042 applied to the README's 002 bullet.
+      **Amended at gate round 1 of the increment gate (2026-09-21): the fixed-behaviour cell was
+      not left as written after all.** All three reviewers read the same thing - the cell's own
+      account of the fix still named the grace-period reconciler and `GENERATION_TIMED_OUT` as the
+      live mechanism for the half of P2 nothing ever answers about, which is a reason the store no
+      longer admits and a class that no longer exists, and SC-008 says no document refers to the
+      grace period after this increment. A **fixed-behaviour** cell describes the fix that is live,
+      unlike a status cell, which is a dated record. So the clause gains one dated amendment saying
+      the mechanism changed in 004 and the next run's release pass fails such a batch
+      `NOT_COMPLETED_BY_NEXT_RUN` and releases its registers. The row's claim, its rationale and
+      its status are unchanged; `RegisteredDefectFixesRejectionTest` (28) and `DifferentialAuditTest`
+      (389) are green over the amended file, which is what says no row was added, removed or
+      renumbered.
       **One more mention of the deleted class is left alone and named here**: the *"What T068 ran"*
       paragraph above the table lists `GenerationReconcilerTest` among the suites that run
       executed. It is a record of a run that happened, not a pointer to a file, and correcting it
@@ -3019,6 +3095,64 @@ increment's: `flock -w 7200 … ./gradlew jacocoTestReport build -Dtest.noFailFa
 **And one hand-off from Phase 7 is still open**: the `batch/cli/ReportExceptionsCliTest` case that
 says the table and the CSV carry `BATCH_RELEASED`. The kind travels by name, so nothing is broken
 without it; what is missing is the case that says so.
+
+## The increment gate, round 1 (2026-09-21)
+
+The whole range `92f5705..HEAD` read at once by `code-reviewer`, `qa` and `spec-validator`. Thirteen
+findings between them, most of them the same three seen three times. What each one changed:
+
+* **CLAUDE.md (HIGH, all three).** `10eeb140` rewrote the SPECKIT block to name `specs/004` as the
+  current plan and 003 as complete, and CLAUDE.md is on this tree's must-not-touch list. Reverted to
+  its `92f5705` text (`chore(core): put CLAUDE.md's speckit pointer back as the other tree owns it`),
+  with the two-line wording handed to the 005 tree in the commit body. Nothing compiles against the
+  block, so nothing else moved.
+* **The two `batch/cli` fixtures (HIGH, all three).** `39b6aeaf`'s edits to `CliMainTest.settings()`
+  and `GenerateRegisterCliTest.settings()` are forced by `GenerationProperties`' arity and cannot be
+  reverted without leaving the suite uncompilable. Recorded as a hand-off at **T002**, in the shape
+  T036's took, and **T048**'s claim that no commit in the branch touches `batch/cli` is corrected
+  there: it held for `4d3f9e00..HEAD` when it was written and holds for neither range now.
+* **A pass interrupted partway lost its account (MEDIUM, code-reviewer).** Each stale batch commits
+  by itself, so a store that went away between two batches left the batches before it durably
+  released with nothing said about them: no line, no counter, and a run line reading
+  `released_batches=0`. Fixed test-first - `StaleReleaseProgress` on the port, the store telling it
+  as each transaction commits, and the pass counting and saying each batch there rather than after
+  an answer it may never get. Red recorded on `StaleBatchReleaserTest` (five assertions) and
+  `RegisterStoreIT` (one); green on both, plus `StaleReleaseConcurrencyIT` and the privacy sweep,
+  which found the new WARN unreached and now drives it.
+* **`design_rules.md` beyond its three granted sections (MEDIUM, code-reviewer).** Named at **T041**
+  with the reason each was needed and handed to the 005 tree; not reverted, because each paragraph
+  would otherwise describe a class that is not there.
+* **T026's missing red (MEDIUM, qa).** Staged as the subtractive red the convention asks for and
+  recorded at **T026**: the two production expressions put back, 3 assertions red, reverted, green
+  again. No TDD exception is claimed and the "Approved TDD exceptions: None" section is unchanged.
+* **The FR-019 matrix row (MEDIUM, qa).** `plan.md`'s row named a `ReportExceptionsCliTest` case
+  that does not exist. The row now says the CLI half is owed by the 005 tree, which is where the
+  hand-off already sat, so the matrix and the suite agree.
+* **P2's fixed-behaviour cell (MEDIUM, spec-validator; LOW, code-reviewer).** Amended with a dated
+  clause naming the release pass, for the reason recorded at **T045**: a fixed-behaviour cell
+  describes the fix that is live, and SC-008 says no document refers to the grace period after this
+  increment.
+* **`RegisterBatchRepository`'s transitional javadoc (LOW).** Reworded: the three in-flight reads
+  are `BatchAgeSweep`'s, on its own fixed delay.
+* **`spec.md` US2 scenario 3 (LOW, spec-validator).** The clause said the age is measured against
+  the store's own clock; the plan, the statement and the boundary test all compute the two cutoffs
+  from the run's clock and pass them in. The spec is amended to the design that was built, with the
+  amendment dated, rather than the statement changed at a gate.
+
+**Not done here, and why.**
+
+* `.specify/memory/constitution.md` (3.2.0) still describes the reconciler as live in four places.
+  It is on this tree's must-not-touch list and the finding itself says so; it is the third item of
+  the three owed above and the coordinator is asked, for the third time, to assign the amendment
+  before the merge.
+* `.specify/feature.json` is in neither tree's ownership list and `6c95556d` points it at
+  `specs/004`. Left as it is: whichever increment is active is what the pointer is for, and 005
+  will set it to its own. Flagged so the merge conflict is expected rather than found.
+* The `quickstart.md` walkthrough (T046) is still owed on a clean local stack, unchanged from the
+  Phase 9 close.
+* The two optional coverage suggestions - `failAndReleaseStale` over a closed `DataSource` in
+  `RegisterStoreIT`, and parameterising `GenerationWiringContextTest`'s incomplete-context case over
+  each missing collaborator - are left open, as they were at gates 4 and 5.
 
 ---
 
