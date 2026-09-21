@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +16,7 @@ import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -22,11 +24,16 @@ import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.cp.courtregister.api.dto.BatchListingResponse;
 import uk.gov.hmcts.cp.courtregister.api.dto.GenerateRegisterRequest;
 import uk.gov.hmcts.cp.courtregister.api.dto.GenerateRegisterResponse;
+import uk.gov.hmcts.cp.courtregister.api.dto.NotifyBatchResponse;
 import uk.gov.hmcts.cp.courtregister.application.BatchListing;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher;
 import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher.RunAccepted;
+import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterRegenerationService.Selection;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.NotificationFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
@@ -87,16 +94,154 @@ public class BatchesController {
     /** The regeneration hand-off, which validates, reads the flag and answers with a run id. */
     private final OperationsRunLauncher launcher;
 
+    /** The resend, whose {@code resendFailed} is the whole of what the notify endpoint does. */
+    private final RegisterNotifierService notifier;
+
     /**
      * Creates the endpoints over the services they answer from.
      *
-     * @param batchListings the application service holding the reads
-     * @param runLauncher   the application service holding the regeneration hand-off
+     * @param batchListings   the application service holding the reads
+     * @param runLauncher     the application service holding the regeneration hand-off
+     * @param notifierService the application service holding the resend and its claim
      */
     public BatchesController(final BatchListingService batchListings,
-            final OperationsRunLauncher runLauncher) {
+            final OperationsRunLauncher runLauncher,
+            final RegisterNotifierService notifierService) {
         this.listings = batchListings;
         this.launcher = runLauncher;
+        this.notifier = notifierService;
+    }
+
+    /**
+     * Re-requests the recipients of one batch that no e-mail has been accepted for.
+     *
+     * <p>Which rows are attempted, under which identities, and what the batch is then settled as
+     * is {@link RegisterNotifierService#resendFailed}'s rule and nothing this endpoint
+     * reimplements - including the claim that decides between the four dispositions, which is what
+     * makes two concurrent notifies for one batch a clean refusal rather than two e-mails about
+     * the same children to the same team.
+     *
+     * <p><strong>The three unsettled endings are not one.</strong> {@code ALREADY_NOTIFYING} is a
+     * {@code 409} because this call changed nothing; {@code CLAIM_LOST} and {@code INCOMPLETE} are
+     * {@code 500} because it tried and got part-way (spec assumption 3), and the batch is left for
+     * another call to recover.
+     *
+     * @param batchId the batch an operator carried in from a support ticket
+     * @return the tally as the batch now stands, and what this call did about it
+     * @throws OperationsRefusedException where the identifier will not read, names no batch, or
+     *         the resend did not settle - all answered by {@link OperationsExceptionHandler} from
+     *         the one status map
+     */
+    @PostMapping(path = "/operations/batches/{batchId}/notify",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public NotifyBatchResponse notify(@PathVariable(name = BATCH_ID) final String batchId) {
+        final UUID batch = namedBatchOf(batchId);
+        return settled(batch, resent(batch));
+    }
+
+    /**
+     * The batch an operator named, which this endpoint never defaults.
+     *
+     * @param typed what the caller put in the path
+     * @return the batch's identity
+     */
+    private static UUID namedBatchOf(final String typed) {
+        try {
+            return UUID.fromString(typed);
+        } catch (IllegalArgumentException notAnIdentity) {
+            throw new OperationsRefusedException(OperationsReason.UNREADABLE_ARGUMENT, BATCH_ID,
+                    notAnIdentity);
+        }
+    }
+
+    /**
+     * The resend, with the three things that are not this service's defect classified apart.
+     *
+     * <p>The command caught all of them as one {@code RuntimeException} and printed
+     * {@code resend-failed}; HTTP has truer codes and an operator acts on the difference - a batch
+     * that does not exist is a wrong identifier on a ticket, a store that will not answer is an
+     * outage to wait out, and a far end that refused is somebody else's incident.
+     *
+     * @param batchId the batch to resend for
+     * @return the tally the notifier answered with
+     */
+    private NotificationSummary resent(final UUID batchId) {
+        try {
+            return notifier.resendFailed(batchId);
+        } catch (StoreUnavailableException | TransientDataAccessException
+                | RecoverableDataAccessException | DataAccessResourceFailureException notRead) {
+            // The shapes an unreachable store has on this path, and only those - for the reason
+            // the listing states at the same catch. Anything else is left to reach the 500 the
+            // status map keeps for a defect.
+            LOG.error("The recipients owed by batch {} could not be re-requested, because this "
+                    + "service's own store would not answer. cause={}", batchId,
+                    notRead.getClass().getName());
+            throw new OperationsRefusedException(OperationsReason.STORE_UNAVAILABLE, null,
+                    Map.of(BATCH_ID, batchId.toString()), notRead);
+        } catch (NotificationFailedException refused) {
+            // notificationnotify is a consumed platform contract: a refusal is its verdict and a
+            // silence is its absence, and the two are different things for whoever is on call.
+            LOG.error("Batch {}'s resend was not made, because notificationnotify did not take "
+                    + "it. classification={}", batchId, refused.classification().name());
+            throw new OperationsRefusedException(downstream(refused), null,
+                    Map.of(BATCH_ID, batchId.toString()), refused);
+        } catch (IllegalStateException noSuchBatch) {
+            // The notifier's own answer to an identity nothing was ever assembled under: the claim
+            // came back ABSENT. A well-formed identifier that names nothing is a 404 and not a
+            // failure of this service.
+            LOG.warn("A resend was asked for a batch this service never assembled. reason={}",
+                    OperationsReason.UNKNOWN_BATCH.wire());
+            throw new OperationsRefusedException(OperationsReason.UNKNOWN_BATCH, null,
+                    Map.of(BATCH_ID, batchId.toString()), noSuchBatch);
+        }
+    }
+
+    /**
+     * Which of the two downstream codes a refused send is.
+     *
+     * @param refused what notificationnotify did about it
+     * @return the bounded code, which is a refusal or an absence and never both
+     */
+    private static OperationsReason downstream(final NotificationFailedException refused) {
+        return refused.classification() == FailureClassification.TRANSIENT
+                ? OperationsReason.DOWNSTREAM_UNAVAILABLE
+                : OperationsReason.DOWNSTREAM_REFUSED;
+    }
+
+    /**
+     * The answer one of the four dispositions deserves.
+     *
+     * @param batchId the batch the attempt was about
+     * @param tally   the batch as it now stands, and what this call did about it
+     * @return the body, where the resend settled
+     */
+    private static NotifyBatchResponse settled(final UUID batchId,
+            final NotificationSummary tally) {
+
+        return switch (tally.disposition()) {
+            case SETTLED -> new NotifyBatchResponse(batchId, tally.accepted(), tally.failed(),
+                    tally.outcome(), tally.disposition().code());
+            case ALREADY_NOTIFYING -> throw refusedResend(OperationsReason.ALREADY_NOTIFYING,
+                    batchId, tally);
+            case CLAIM_LOST -> throw refusedResend(OperationsReason.CLAIM_LOST, batchId, tally);
+            case INCOMPLETE -> throw refusedResend(OperationsReason.INCOMPLETE, batchId, tally);
+        };
+    }
+
+    /**
+     * One unsettled ending, carrying the batch as it stands and nothing else.
+     *
+     * @param reason  the bounded code, which is the disposition's own
+     * @param batchId the batch the attempt was about
+     * @param tally   the batch as it now stands
+     * @return the refusal to raise
+     */
+    private static OperationsRefusedException refusedResend(final OperationsReason reason,
+            final UUID batchId, final NotificationSummary tally) {
+
+        return new OperationsRefusedException(reason, Map.of(BATCH_ID, batchId.toString(),
+                "accepted", tally.accepted(), "failed", tally.failed(),
+                "state", tally.outcome().name()));
     }
 
     /**

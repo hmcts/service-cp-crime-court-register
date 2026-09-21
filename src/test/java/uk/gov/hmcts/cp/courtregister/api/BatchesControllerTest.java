@@ -30,10 +30,14 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import uk.gov.hmcts.cp.courtregister.application.BatchListing;
 import uk.gov.hmcts.cp.courtregister.application.BatchListingService;
+import uk.gov.hmcts.cp.courtregister.application.NotificationSummary;
 import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher;
 import uk.gov.hmcts.cp.courtregister.application.OperationsRunLauncher.RunAccepted;
+import uk.gov.hmcts.cp.courtregister.application.RegisterNotifierService;
 import uk.gov.hmcts.cp.courtregister.application.RegisterRegenerationService.Selection;
 import uk.gov.hmcts.cp.courtregister.domain.BatchStatus;
+import uk.gov.hmcts.cp.courtregister.domain.FailureClassification;
+import uk.gov.hmcts.cp.courtregister.domain.NotificationFailedException;
 import uk.gov.hmcts.cp.courtregister.domain.NotificationStatus;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
@@ -93,6 +97,9 @@ class BatchesControllerTest {
 
     @MockitoBean
     private OperationsRunLauncher launcher;
+
+    @MockitoBean
+    private RegisterNotifierService notifier;
 
     @Nested
     @DisplayName("a date that was asked for")
@@ -455,6 +462,160 @@ class BatchesControllerTest {
                     .andExpect(jsonPath("$.reason").value("unreadable-argument"));
 
             verifyNoInteractions(launcher);
+        }
+    }
+
+    /**
+     * The resend an operator asks for: settled, refused, or failed part-way.
+     *
+     * <p>Every decision is {@code RegisterNotifierService}'s claim and its four dispositions, and
+     * this asserts that the three that are not {@code SETTLED} are three different answers rather
+     * than one. It also asserts the distinction the command could not make: a well-formed
+     * identifier that names no batch is a {@code 404} and a store that will not answer is a
+     * {@code 503}, where the CLI caught both as one {@code RuntimeException}.
+     */
+    @Nested
+    @DisplayName("the resend an operator asks for")
+    class Notifying {
+
+        /** The notify path for the one batch these cases are about. */
+        private static final String NOTIFY = "/operations/batches/" + "11111111-2222-4333-8444-"
+                + "555555555555" + "/notify";
+
+        @Test
+        void a_settled_resend_should_answer_200_with_the_tally() throws Exception {
+            when(notifier.resendFailed(BATCH))
+                    .thenReturn(new NotificationSummary(3, 0, BatchStatus.NOTIFIED));
+
+            mvc.perform(post(NOTIFY))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.batchId").value(BATCH.toString()))
+                    .andExpect(jsonPath("$.accepted").value(3))
+                    .andExpect(jsonPath("$.failed").value(0))
+                    .andExpect(jsonPath("$.state").value("NOTIFIED"))
+                    .andExpect(jsonPath("$.disposition").value("settled"));
+        }
+
+        @Test
+        void a_batch_somebody_else_is_telling_should_be_refused_409() throws Exception {
+            when(notifier.resendFailed(BATCH)).thenReturn(NotificationSummary.alreadyNotifying(
+                    1, 0, BatchStatus.GENERATED));
+
+            mvc.perform(post(NOTIFY))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.reason").value("already-notifying"))
+                    .andExpect(jsonPath("$.batchId").value(BATCH.toString()));
+        }
+
+        @Test
+        void a_claim_lost_part_way_should_be_answered_500_under_its_own_code() throws Exception {
+            when(notifier.resendFailed(BATCH)).thenReturn(NotificationSummary.claimLost(
+                    2, 1, BatchStatus.GENERATED));
+
+            mvc.perform(post(NOTIFY))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason").value("claim-lost"))
+                    .andExpect(jsonPath("$.accepted").value(2))
+                    .andExpect(jsonPath("$.failed").value(1));
+        }
+
+        @Test
+        void a_recipient_the_store_could_not_account_for_should_be_answered_500() throws Exception {
+            when(notifier.resendFailed(BATCH)).thenReturn(NotificationSummary.incomplete(
+                    2, 0, BatchStatus.GENERATED));
+
+            mvc.perform(post(NOTIFY))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.reason").value("incomplete"));
+        }
+
+        @Test
+        void a_batch_id_that_is_not_an_identity_should_be_refused_400_by_the_arguments_name()
+                throws Exception {
+            mvc.perform(post("/operations/batches/" + NOT_A_UUID + "/notify"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("unreadable-argument"))
+                    .andExpect(jsonPath("$.argument").value("batchId"));
+
+            verifyNoInteractions(notifier);
+        }
+
+        @Test
+        void a_batch_id_that_is_not_an_identity_should_not_come_back_in_the_body()
+                throws Exception {
+            final String body = mvc.perform(post("/operations/batches/" + NOT_A_UUID + "/notify"))
+                    .andExpect(status().isBadRequest())
+                    .andReturn().getResponse().getContentAsString();
+
+            Assertions.assertThat(body)
+                    .as("the path parameter is a value the caller typed like any other")
+                    .doesNotContain(NOT_A_UUID);
+        }
+
+        @Test
+        void a_batch_that_does_not_exist_should_be_refused_404() throws Exception {
+            when(notifier.resendFailed(BATCH)).thenThrow(
+                    new IllegalStateException("no register batch to tell the recipients of"));
+
+            mvc.perform(post(NOTIFY))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.reason").value("UNKNOWN_BATCH"));
+        }
+
+        @Test
+        void a_store_that_will_not_answer_should_be_distinguished_from_it_with_503()
+                throws Exception {
+            when(notifier.resendFailed(BATCH)).thenThrow(new StoreUnavailableException(
+                    "resend", new SQLException("ZQX7STOREWORDS")));
+
+            mvc.perform(post(NOTIFY))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.reason").value("STORE_UNAVAILABLE"));
+        }
+
+        @Test
+        void a_store_outage_should_carry_nothing_the_store_said_about_itself() throws Exception {
+            when(notifier.resendFailed(BATCH)).thenThrow(new StoreUnavailableException(
+                    "resend", new SQLException("ZQX7STOREWORDS")));
+
+            final String body = mvc.perform(post(NOTIFY))
+                    .andReturn().getResponse().getContentAsString();
+
+            Assertions.assertThat(body)
+                    .doesNotContain("ZQX7STOREWORDS")
+                    .doesNotContain("SQLException");
+        }
+
+        @Test
+        void notificationnotify_refusing_should_be_answered_502() throws Exception {
+            when(notifier.resendFailed(BATCH)).thenThrow(
+                    new NotificationFailedException(FailureClassification.NON_TRANSIENT, 400));
+
+            mvc.perform(post(NOTIFY))
+                    .andExpect(status().isBadGateway())
+                    .andExpect(jsonPath("$.reason").value("DOWNSTREAM_REFUSED"));
+        }
+
+        @Test
+        void notificationnotify_not_answering_at_all_should_be_answered_504() throws Exception {
+            when(notifier.resendFailed(BATCH)).thenThrow(
+                    new NotificationFailedException(FailureClassification.TRANSIENT));
+
+            mvc.perform(post(NOTIFY))
+                    .andExpect(status().isGatewayTimeout())
+                    .andExpect(jsonPath("$.reason").value("DOWNSTREAM_UNAVAILABLE"));
+        }
+
+        @Test
+        void a_defect_in_the_resend_should_not_be_answered_as_a_dependency_failing() {
+            when(notifier.resendFailed(BATCH)).thenThrow(
+                    new DataIntegrityViolationException("ZQX7DEFECT"));
+
+            Assertions.assertThatThrownBy(() -> mvc.perform(post(NOTIFY)))
+                    .as("a violated constraint is this service's defect, and a defect answered "
+                            + "503 is a defect a runbook retries for ever")
+                    .rootCause()
+                    .isInstanceOf(DataIntegrityViolationException.class);
         }
     }
 }

@@ -905,7 +905,7 @@ departure is forced — research R16 has the reasoning.
 **Purpose**: the last endpoint, and the one honest answer for a deployment that cannot serve three
 of them.
 
-- [ ] **T038** [P] [US6] `api/BatchesControllerTest` (extend) — the notify cases of data-model §5,
+- [x] **T038** [P] [US6] `api/BatchesControllerTest` (extend) — the notify cases of data-model §5,
       with `RegisterNotifierService` mocked. `SETTLED` → `200` with the tally;
       **`ALREADY_NOTIFYING` → `409`** (another notifier holds the claim; this call changed nothing);
       **`CLAIM_LOST` and `INCOMPLETE` → `500`** carrying the disposition (the call tried and got
@@ -913,10 +913,29 @@ of them.
       exist → `404 UNKNOWN_BATCH`, **distinguished from** a store outage → `503 STORE_UNAVAILABLE`;
       notificationnotify refusing → `502`, not answering → `504`. Red: the three-way disposition
       split.
-- [ ] **T039** [US6] `api/BatchesController#notify` and the disposition mapping. The service must
+- [x] **T039** [US6] `api/BatchesController#notify` and the disposition mapping. The service must
       distinguish "no such batch" from "the store would not answer" — the CLI caught both as one
       `RuntimeException`; if it does not already, that distinction is made **in the application
       service**, not in the controller. Green: T038.
+      (Landed with T038 in one commit under the Phase 2 TDD exception, so there is no red run to
+      quote. Green: `BatchesControllerTest` 39 tests, 0 failures; the whole `api` package and
+      `HttpSurfaceTest` beside it, green. Checkstyle and PMD clean on main and test.
+      **The distinction is made in the controller, not in the application service, and the reason
+      is the coordination contract.** `application/RegisterNotifierService` is a file this tree may
+      call and must not edit, and it already signals the two apart by type: an identity nothing was
+      assembled under comes back as the `IllegalStateException` its `noSuchBatch` raises when the
+      claim answers `ABSENT`, and an outage arrives as `StoreUnavailableException` or as one of the
+      three Spring shapes a driver that never reached the database wears. The controller catches
+      exactly those - the same four the listing catches, for the same stated reason - and maps them
+      to `404 UNKNOWN_BATCH` and `503 STORE_UNAVAILABLE`. Moving the classification into the
+      service is a one-line change and is left for whoever owns that file next; it is recorded here
+      rather than made quietly.
+      `NotificationFailedException` is mapped too, `502` on a refusal and `504` on a silence, so a
+      consumed platform contract's two different answers stay two. It cannot escape `resendFailed`
+      today - the notifier catches it per row - and the mapping is what keeps that true by
+      accident rather than by luck if it ever does.
+      `ALREADY_NOTIFYING` is a `409` here where the command exited SUCCESS: over HTTP the call
+      changed nothing and the status says so, which is data-model §5.)
 - [ ] **T040** [P] [US6] `api/NotWiredControllerTest` (new) — `501 COMMAND_NOT_WIRED` on a pod with
       `courtregister.generation.enabled=false` for the three endpoints that need those beans
       (generate, notify, the batch listing), and the other four served normally. This is exactly
