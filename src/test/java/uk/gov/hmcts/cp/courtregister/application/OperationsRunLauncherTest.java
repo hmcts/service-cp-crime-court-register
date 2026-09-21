@@ -102,6 +102,12 @@ class OperationsRunLauncherTest {
         return new RegenerationTally(THURSDAY, 0, 0, 0, 0, 0, false, Map.of(), Map.of());
     }
 
+    /** What a run that stopped had already written down, as its refusal carries it. */
+    private static Map<String, Object> partialTally() {
+        return Map.of("date", THURSDAY.toString(), "released", 4, "registers", 9, "batches", 2,
+                "requested", 1, "deferred", 3);
+    }
+
     /** Runs whatever the launcher handed the generation scheduler. */
     private void theSchedulerRunsIt() {
         submitted.forEach(Runnable::run);
@@ -293,6 +299,54 @@ class OperationsRunLauncherTest {
                     .as("a run that failed must not also leave the night's lock held, and its "
                             + "ending is written down rather than dropped into a Future")
                     .anyMatch(line -> line.contains("outcome=generation-failed"));
+        }
+
+        @Test
+        void a_run_that_stopped_part_way_should_say_what_it_had_already_written_down() {
+            when(gate.decide(anyBoolean())).thenReturn(new Proceed(false));
+            when(locks.lock(any())).thenReturn(Optional.of(lock));
+            when(regeneration.regenerate(any(), anyBoolean())).thenThrow(
+                    new OperationsRefusedException(OperationsReason.GENERATION_FAILED,
+                            partialTally()));
+
+            launcher(NO_WAIT).launch(theWholeDay());
+            final List<String> lines;
+            try (CapturedLog log = CapturedLog.capturing(OperationsRunLauncher.class)) {
+                theSchedulerRunsIt();
+                lines = log.renderings();
+            }
+
+            softly.assertThat(lines)
+                    .as("the 202 was answered before any work began, so no status can carry the "
+                            + "partial tally and this line is the only place the day it left "
+                            + "behind can be read")
+                    .anyMatch(line -> line.contains("outcome=generation-failed")
+                            && line.contains("released=4") && line.contains("registers=9")
+                            && line.contains("batches=2") && line.contains("requested=1")
+                            && line.contains("deferred=3"));
+        }
+
+        @Test
+        void a_partial_tally_should_not_write_the_date_onto_the_line_a_second_time() {
+            when(gate.decide(anyBoolean())).thenReturn(new Proceed(false));
+            when(locks.lock(any())).thenReturn(Optional.of(lock));
+            when(regeneration.regenerate(any(), anyBoolean())).thenThrow(
+                    new OperationsRefusedException(OperationsReason.GENERATION_FAILED,
+                            partialTally()));
+
+            launcher(NO_WAIT).launch(theWholeDay());
+            final List<String> lines;
+            try (CapturedLog log = CapturedLog.capturing(OperationsRunLauncher.class)) {
+                theSchedulerRunsIt();
+                lines = log.renderings();
+            }
+
+            softly.assertThat(lines.stream()
+                            .filter(line -> line.contains("outcome=generation-failed"))
+                            .map(line -> line.split("date=", -1).length - 1))
+                    .as("a key written twice is a key a log index reads once, and the line "
+                            + "already carries the day the run was asked for")
+                    .containsExactly(1);
         }
 
         @Test

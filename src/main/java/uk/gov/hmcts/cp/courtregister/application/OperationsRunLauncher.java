@@ -3,6 +3,7 @@ package uk.gov.hmcts.cp.courtregister.application;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -68,6 +69,9 @@ public class OperationsRunLauncher {
 
     /** What the line calls the reading a run goes ahead on when nobody overrode anything. */
     private static final String FLAG_ON = "flag-on";
+
+    /** The one extra a refusal carries that every line already says for itself. */
+    private static final String DATE = "date";
 
     /** How long the bounded wait sleeps between attempts at the schedule's lock. */
     private static final Duration POLL = Duration.ofMillis(20);
@@ -207,8 +211,9 @@ public class OperationsRunLauncher {
             // TODO T037: the trigger and the override belong on the run report line as well, and
             // that field is added to domain/RunReport by the task that follows the 004 rebase.
         } catch (OperationsRefusedException refused) {
-            LOG.error("event={} run_id={} trigger={} date={} outcome={}", RUN_EVENT, runId,
-                    OPERATOR, selection.registerDate(), refused.reason().wire());
+            LOG.error("event={} run_id={} trigger={} date={} outcome={}{}", RUN_EVENT, runId,
+                    OPERATOR, selection.registerDate(), refused.reason().wire(),
+                    recorded(refused));
         } catch (RuntimeException defect) {
             LOG.error("event={} run_id={} trigger={} date={} outcome={} cause={}", RUN_EVENT, runId,
                     OPERATOR, selection.registerDate(),
@@ -216,6 +221,32 @@ public class OperationsRunLauncher {
         } finally {
             held.get().unlock();
         }
+    }
+
+    /**
+     * What a run that stopped had already written down, as its own line carries it.
+     *
+     * <p>The caller was answered {@code 202} before any work began, so there is no status left to
+     * carry a partial tally and no later response that could: this line is the only place the day
+     * a stopped run left behind can be read. The extras are the refusal's own - counts and an
+     * identifier, bounded where they were composed (constitution Principle VII) - and nothing is
+     * rendered that the refusal did not carry.
+     *
+     * <p>The day is skipped because the line already says it, and a key written twice is a key a
+     * log index reads once.
+     *
+     * @param refused what the regeneration refused under, with whatever it had written down
+     * @return the extras as {@code key=value} pairs, each with its own leading space, or nothing
+     *         at all where the refusal carried none
+     */
+    private static String recorded(final OperationsRefusedException refused) {
+        final StringBuilder line = new StringBuilder();
+        refused.properties().entrySet().stream()
+                .filter(carried -> !DATE.equals(carried.getKey()))
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(carried -> line.append(' ').append(carried.getKey()).append('=')
+                        .append(carried.getValue()));
+        return line.toString();
     }
 
     /**

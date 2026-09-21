@@ -854,7 +854,14 @@ departure is forced — research R16 has the reasoning.
       `Executor`, so no Spring scheduling type reaches the application layer.
       ⚠ **The operator trigger is not on the run report line yet.** T036/T037 add the field and run
       after the 004 rebase; a `TODO` in `OperationsRunLauncher.run` names T037, and until then the
-      trigger and the override are on the launcher's own line.)
+      trigger and the override are on the launcher's own line.
+      Gate round 1: **the refusal line now carries the partial tally** the regeneration attaches to
+      `GENERATION_FAILED` (`released`, `registers`, `batches`, `requested`, `deferred`). The `202`
+      is answered before any work, so no status can ever carry it and that line is the only place
+      "the day stands as whatever this run had already written down" can be read. The refusal's own
+      `date` is skipped because the line already says it. Red:
+      `a_run_that_stopped_part_way_should_say_what_it_had_already_written_down`. Green:
+      `OperationsRunLauncherTest` 14 tests, 0 failures; Checkstyle and PMD clean.)
 - [x] **T034** [P] [US3] `api/BatchesControllerTest` (extend) — the generate slice cases of
       data-model §4: `202` with the run id and `overridden`; `400 missing-argument` for an absent
       date; `400 unreadable-argument` for each of `date`, `batchId`, `recordedBefore`, naming the
