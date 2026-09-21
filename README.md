@@ -108,7 +108,7 @@ This repository carries no design narrative of its own. What it does carry:
   systemdocgenerator's query endpoint are retired with it — there is nothing left to ask, so
   `GENERATION_TIMED_OUT` leaves the vocabulary and the store's constraints — and `BatchAgeSweep`
   takes over the three in-flight batch-age gauges the reconciler used to refresh, on its own fixed
-  delay in every non-command JVM and under no lock. An outcome that arrives for a batch this
+  delay in every non-command JVM that carries the generation half, and under no lock. An outcome that arrives for a batch this
   service had already ended moves nothing and is counted under `terminal-batch`, which is what
   stops a Youth Offending Team being e-mailed twice about one day; the 07:00 report tells a
   released batch from a failed one, reporting it as the informational `BATCH_RELEASED`. Task-level

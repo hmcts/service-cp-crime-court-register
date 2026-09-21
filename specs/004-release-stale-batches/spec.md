@@ -303,8 +303,8 @@ refreshed between runs.
    **Then** systemdocgenerator receives no request of any kind, and the service holds no lock and no
    timer for reconciliation.
 5. **Given** a batch that has been in flight for hours, **When** the in-flight age readings are taken,
-   **Then** they report its age within one refresh interval, in every instance that is not a command,
-   as they did when the retired timer took them.
+   **Then** they report its age within one refresh interval, in every instance that is not a command
+   and carries the generation half, as they did when the retired timer took them.
 
 ---
 
@@ -455,7 +455,12 @@ with zero and with a negative value and confirm each refusal names the setting.
 - **FR-011**: The readings that say how long the oldest batch awaiting a render, the oldest batch that
   never reached the renderer and the oldest batch holding an unnotified document have been waiting MUST
   continue to be refreshed between nightly runs, on a configurable interval, in every instance that is
-  not a command, and MUST settle nothing and hold no lock.
+  not a command and carries the generation half, and MUST settle nothing and hold no lock.
+  (Amended 2026-09-21 at the increment gate, to the design `research.md` §"the sweep's reach" and
+  `plan.md` state and `BatchSweepConfig` implements: the readings are of batches, so the instances
+  that take them are the instances that have the generation half. The earlier wording, "every
+  instance that is not a command", claimed a reach one setting narrower than the one that was
+  built.)
 - **FR-012**: The bounded vocabularies MUST be left describing only mechanisms that exist. The
   timeout reason and the completion mechanism that named the retired pass MUST be removed from the
   enums **and** from the schema's bounded lists, so that no vocabulary outlives the thing it names.

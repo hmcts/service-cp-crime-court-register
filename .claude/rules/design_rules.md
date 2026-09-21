@@ -59,11 +59,13 @@ ExceptionReportJob                      the morning run, one ShedLock-held run p
                  └─▶ ReportMailer «port» notificationnotify send-email-notification, one per address
 
 IntakeAgeSweep                          its own fixed delay, in EVERY non-command JVM and under NO
-BatchAgeSweep                           lock — a gauge describes the JVM that publishes it, so an
-                                        alert aggregates the replicas with max(). The second takes
-                                        the three in-flight batch ages the release pass left with
-                                        no reader: a Micrometer gauge never decays, so a reading
-                                        nobody refreshes goes on looking live
+BatchAgeSweep                           lock — the latter in every such JVM that carries the
+                                        generation half, which is where its batches are. A gauge
+                                        describes the JVM that publishes it, so an alert aggregates
+                                        the replicas with max(). The second takes the three
+                                        in-flight batch ages the release pass left with no reader:
+                                        a Micrometer gauge never decays, so a reading nobody
+                                        refreshes goes on looking live
 ```
 
 - **Inbound adapters** (`CourtRegisterMessageListener`, `DocumentEventListener`) deserialise, and
