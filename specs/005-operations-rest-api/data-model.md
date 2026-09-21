@@ -58,8 +58,12 @@ with no response event beside it; the advice's one fallback answers it under thi
 outcome is on the wire and on the event. A `500` this service can explain is still a 409, a 503 or
 a 502 it failed to classify — this code is what is left when it could not.
 
-The OpenAPI document normalises the spelling to one convention across both sets; the commands' own
-hyphenated codes keep their characters and gain nothing.
+The OpenAPI document carries **both** conventions, deliberately, and normalises neither: the codes
+the six commands already printed keep their own hyphenated characters, so a runbook step that greps
+one keeps working, and the rules increment 005 adds are named in this document's own
+`SCREAMING_SNAKE` convention. `api/OpenApiContractTest` asserts the enum against
+`domain/OperationsReason` member for member, so the spelling of a code is fixed in one place and
+cannot drift in the other.
 
 ### Applies to every endpoint
 

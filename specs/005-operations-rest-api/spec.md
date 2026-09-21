@@ -295,9 +295,9 @@ repository contains no `batch/cli/`, no `CliModeConfig`, no `courtregister.cli` 
 1. **Given** the built image, **When** it is started with no arguments, **Then** the application
    starts exactly as it does today.
 2. **Given** the repository, **When** it is searched, **Then** `batch/cli/`, `config/CliModeConfig`,
-   the `courtregister.cli` property and every reference to them are gone, and the three conditionals
-   that read that property (the consumer, the scheduler, the public-event listener) are
-   unconditional again.
+   the `courtregister.cli` property and every reference to them are gone, and every conditional
+   that read that property — the nine FR-048 enumerates, from the consumer and the four schedulers
+   to the operations wiring this increment added — is unconditional again.
 3. **Given** the documentation, **When** it is read, **Then** no page instructs an operator to
    `kubectl exec` a command; the quickstart's CLI examples are `curl` examples.
 
@@ -387,7 +387,17 @@ command printed.
 **The surface**
 
 - **FR-001**: The service MUST expose exactly seven endpoints under `/operations/**`, one per
-  operator action, and no other HTTP path besides Spring Boot Actuator.
+  operator action, and no other HTTP path besides Spring Boot Actuator and the container's own
+  `/error` forward — which serves no request of its own and exists so that a refusal a filter took
+  by `sendError` is rendered from this surface's status map rather than by the framework's default
+  body (FR-027, `api/OperationsErrorAttributes`).
+
+  *On the numbering*: these requirements are grouped by subject, and a group's numbers are not
+  contiguous. FR-029 to FR-032 are **vacant**: they were the first draft's "Removing the CLI" group
+  and became FR-047 to FR-051 when the two design reviews were folded in (`342b5aac`) and the
+  groups in between grew. They are left unused rather than reassigned, because a requirement number
+  is quoted from task records, review findings and the tasks file and must keep meaning what it
+  meant.
 - **FR-002**: Every endpoint MUST be described in an OpenAPI 3 document at
   `src/main/resources/courtregister-openapi.yaml`, owned and versioned by this repository, covering
   its request, its success shape and every bounded `reason` it can refuse under. A contract test
@@ -572,9 +582,18 @@ command printed.
 
 - **FR-047**: `batch/cli/` (every class and every test), `config/CliModeConfig` and its test MUST be
   removed.
-- **FR-048**: The `courtregister.cli` property MUST be removed, and the three conditionals that read
-  it — the Service Bus consumer, the schedulers and the public-event listener container — MUST
-  become unconditional.
+- **FR-048**: The `courtregister.cli` property MUST be removed, and **every** conditional that
+  reads it MUST become unconditional. The enumeration is made against the tree the removal lands
+  on, not against this list, because later phases and the merge of 004 both add readers; as the
+  removal found them there are **nine**, each a class-level
+  `@Conditional(CliModeConfig.NotCliMode.class)`: `inbound/ServiceBusConsumerConfig`,
+  `config/SchedulingConfig`, `config/SchedulingInfrastructureConfig`,
+  `config/ReportSchedulingConfig`, `config/IntakeSweepConfig`, `config/BatchSweepConfig`,
+  `config/PublicEventsConfig`, `config/OperationsWebConfig.GenerationBackedOperations` and
+  `api/BatchesController` — the last two written by this increment itself. (`config/ProcessedLogConfig`
+  named the condition in a javadoc and carried none: a prose correction, not a conditional.) A
+  stale enumeration is a conditional left behind on a property that no longer exists, so T054's
+  record carries the same list.
 - **FR-049**: `docker/startup.sh` MUST lose its command dispatch: the entrypoint starts the
   application and nothing else, and an argument is no longer special.
 - **FR-050**: Every document that instructs an operator to run a command MUST instruct them to call
@@ -693,8 +712,12 @@ command printed.
   The same holds for supersede with the flag **on**.
 - **SC-006**: A background regeneration does nothing while the nightly lock is held, and a scheduled
   run stands aside while a regeneration holds it — both orders proven by a test that holds the lock.
-- **SC-010**: Start-up refuses when the operations API is enabled and HTTP audit is not, proven by
-  an `ApplicationContextRunner` case naming the offending setting.
+- **SC-010**: Start-up **does not** refuse the operations API being enabled with either estate
+  filter off — an operator who switched one off has said what they meant (FR-045, assumption 9).
+  What it refuses is a value that cannot mean what it says (FR-053), and what it does about the
+  combination is say it: a pod with `audit.http.enabled` on and `cp.audit.enabled` off comes up,
+  serves, and writes one WARN naming both settings. Proven by `ApplicationContextRunner` cases -
+  one that such a context starts, and one that the WARN is on it.
 - **SC-011**: No audit event carries a raw request or response body, proven by a test over the
   publisher seam; and the privacy sweep covers controller responses and `ProblemDetail` bodies as
   well as log statements.
