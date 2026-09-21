@@ -3076,7 +3076,227 @@ what this phase added: T037's one, T038's two and T039's one.
       two audits - ran and is quoted above; the second half, the walkthrough on a clean stack, has
       not. "It needs `docker compose`" explains the delay and does not stand in for the run, so the
       tick says half rather than claiming both. What closes it is the walkthrough itself, quoted
-      here.)
+      here.
+
+      **THE WALKTHROUGH, DRIVEN 2026-09-21** on the local `docker compose` stack, out of the image
+      built from this branch's own jar (`./gradlew bootJar`, then `docker compose build app`). Every
+      step's observed output is below, bounded, with no defendant detail. **One deviation from the
+      stack file was forced and belongs to the laptop, not the service**: host port 5433 was held by
+      an unrelated container, so `fileservice-postgres` was published on 15433 through a compose
+      override. The app reaches it as `fileservice-postgres:5432` inside the network, so no
+      observation below depends on the host mapping.
+
+      **The preamble - V7 on a dirty volume, which no suite stands in for.** A clean volume was
+      migrated to V6 only (`SPRING_FLYWAY_TARGET=6` -> *"Successfully applied 6 migrations ... now
+      at version v6"*), one batch was seeded through `psql` FAILED / `GENERATION_TIMED_OUT` /
+      completed by `RECONCILER` - the row a pre-004 local run leaves - and the app was then started
+      normally:
+
+      ```text
+      Migrating schema "public" to version "7 - retire reconciler vocabulary"
+      Migration of schema "public" to version "7 - retire reconciler vocabulary" failed!
+          Changes successfully rolled back.
+      Intake could not be started; the next probe will try again.
+          type=org.flywaydb.core.internal.exception.FlywayMigrateException
+      ```
+
+      and from Postgres's own log, verbatim as `quickstart.md` quotes it:
+
+      ```text
+      ERROR:  check constraint "register_batch_failure_reason_chk" of relation "register_batch"
+              is violated by some row
+      ```
+
+      `/actuator/health/readiness` answered `{"status":"DOWN"}` and went on answering it, retrying
+      every ten seconds; `max(version)` in `flyway_schema_history` stayed **6**; and the seeded row
+      was still there afterwards, unchanged. The migration refuses rather than dropping what it
+      cannot admit, which is the behaviour the file argues for.
+      **One thing the quickstart leaves implicit and this run makes explicit**: the constraint name
+      is in the *database's* log, not the service's. The service names a caught exception by class
+      and never carries a library's message (design_rules.md, *"never attach a throwable this
+      service did not write"*), so a pod's own log says `FlywayMigrateException` and an operator
+      goes to Postgres for the constraint. Worth a sentence in the quickstart; it is not a defect.
+      After `docker compose down -v` and a fresh `up`: *"Successfully applied 7 migrations"*,
+      readiness `UP`, and the two narrowed constraints read back exactly as V7 writes them -
+      `failure_reason` admitting the six with `NOT_COMPLETED_BY_NEXT_RUN` among them and
+      `GENERATION_TIMED_OUT` gone, `completed_by` admitting `'EVENT'` alone.
+
+      **Step 1 - a batch that will never hear anything.** `sdg-echo` was never started, per the
+      quickstart's *"note the omission"*. Two registers for one court centre day were recorded, then
+      `./startup.sh generate-register --date 2026-09-21 --ignore-flag` out of the built image:
+
+      ```text
+      systemdocgenerator accepted the render request for batch 89786463-…, which now waits for
+          its document on the public-event topic.
+      batch=89786463-… state=GENERATING records=2
+      date=2026-09-21 released=0 registers=2 batches=1 requested=1 deferred=0
+      ```
+
+      and in the store: `GENERATING`, `requested_at` = now, `failure_reason` NULL, a
+      `payload_file_id` minted, two rows stamped with the batch. Exactly the two reads the
+      quickstart asks for.
+
+      **Step 2 - nothing chases it.** Fifteen minutes later (09:29 -> 09:44 London), WireMock's
+      whole request journal was
+
+      ```text
+      ["/kv/.appconfig.featureflag%2FCourtRegisterService?api-version=2023-11-01&label=LOCAL",
+       "/systemdocgenerator-command-api/command/api/rest/systemdocgenerator/generate-document"]
+      ```
+
+      the flag read and the one command, and **no `document/{id}`, on any schedule**. That is SC-004
+      seen from outside, and it is the whole of the removal. The readings were still moving:
+      `courtregister_oldest_generating_age` **497.0** seconds, `courtregister_oldest_pending_age`
+      0.0, `courtregister_oldest_generated_age` 0.0 - FR-011 holding with the reconciler gone. (The
+      third of the three is `oldest_generated_age`; the quickstart names only the first.)
+
+      **Steps 3 and 4 - and the one place the quickstart's own numbers are wrong.** The batch step 1
+      makes is made by the **operations command**, so its row carries `system_generated = false`,
+      and `StaleBatchReleaser.manualGrace()` judges that kind by the longer of `stale-after` (30m)
+      and `lock-at-most-for` (70m) - FR-017, and the design the spec states. Aging it by the
+      quickstart's **31 minutes** therefore releases nothing, and the run observed at 47 minutes of
+      age said so:
+
+      ```text
+      event=register_generation_run run_id=fc54e1ec-… gate=proceed reason=flag-on batches=0
+      requested=0 generating=0 failed=0 pending=0 deferred=0 rows=0 … released_batches=0
+      released_registers=0 contended=0 duration_ms=12
+      ```
+
+      Aged past 70 minutes instead (1h 18m), and with the schedule brought forward
+      (`COURTREGISTER_GENERATION_CRON='0 */2 * * * *'`, the quickstart's own local-only override),
+      the run is the line the quickstart prints:
+
+      ```text
+      event=register_generation_run run_id=c0200717-… gate=proceed reason=flag-on batches=1
+      requested=1 generating=1 failed=0 pending=0 deferred=0 rows=2 rows_generating=2 …
+      snapshot=taken generated=0 notified=0 released_batches=1 released_registers=2 contended=0
+      duration_ms=84
+      ```
+
+      beside the pass's own line, *"stale-batch pass gave back what the night before had not
+      finished, and the run goes on to assemble it. released_batches=1 released_registers=2
+      contended=0"*. And in the store:
+
+      ```text
+      89786463-…  FAILED      NOT_COMPLETED_BY_NEXT_RUN   completed_by NULL   system_generated f
+      82fb5822-…  GENERATING  NULL                        completed_by NULL   system_generated t
+      the two registers are on the NEW batch (count 2), and none on the old one
+      ```
+
+      The old batch keeps its row carrying what happened to it, its registers moved, and the court
+      centre is getting its document tonight. **`quickstart.md` step 3 is wrong as written** - a
+      31-minute age against a command-made batch, when the file's own step 1 makes one with the
+      command - and the file's `reason=overridden` is `reason=flag-on` here, because the local
+      WireMock stub answers the flag ON rather than the run being overridden. Both are the
+      document's, not the code's: the code did exactly what FR-017 and the spec say. **No code was
+      changed for either.**
+
+      **Step 5 - the late outcome, and nothing happening.** `sdg-echo` cannot deliver this one: it
+      ignores every `generate-document` already in the journal when it starts, deliberately, so a
+      one-shot publisher built from `docker/sdg-echo/sdg-echo.py`'s own frame and envelope published
+      a `document-available` naming the **old** batch's correlation and payload id. The listener
+      acknowledged it and dropped it:
+
+      ```text
+      courtregister_public_events_ignored_total{reason="terminal-batch"}  COUNT = 1.0
+      ```
+
+      and the store was unchanged - still `FAILED`, still `NOT_COMPLETED_BY_NEXT_RUN`,
+      `document_file_id` NULL, and **0 rows in `register_notification`** for that batch. That is
+      SC-003: the Youth Offending Team is told once, by the batch that actually rendered.
+
+      **The 07:00 report's `BATCH_RELEASED` entry.** `./startup.sh report-exceptions` out of the
+      same image:
+
+      ```text
+      event=courtregister_exception run_id=7551227e-… kind=BATCH_RELEASED batch_id=89786463-…
+          court_centre_id=33333333-… register_date=2026-09-21 status=FAILED
+          reason=NOT_COMPLETED_BY_NEXT_RUN age_seconds=66
+      counts request_failed=0 request_late=0 batch_late=0 batch_failed=0 notification_failed=0
+          batch_released=1 window_from=2026-09-21T06:00:00Z window_to=2026-09-21T08:49:05Z
+      event=exception_report_run run_id=7551227e-… entries=1 truncated=0 delivered_log=ok
+          delivered_email=skipped outcome=delivered duration_ms=56
+      ```
+
+      The kind is right, it is informational rather than a failure, and `delivered_email=skipped`
+      is the command's own rule (`--email` was not given). **One defect was found here and is
+      recorded below rather than fixed.**
+
+      **Step 6 - the other side of the boundary.** Two more registers were recorded for the same
+      court centre day while the new batch was two minutes into `GENERATING` - well inside the
+      30-minute cutoff a schedule-made batch is judged by - and the next run:
+
+      ```text
+      event=register_generation_run run_id=202134dd-… gate=proceed reason=flag-on batches=0
+      requested=0 generating=0 failed=0 pending=0 deferred=1 rows=2 rows_generating=0
+      rows_failed=0 rows_pending=0 rows_deferred=2 … released_batches=0 released_registers=0
+      contended=0 duration_ms=8
+      ```
+
+      The in-flight batch was untouched, its two registers were still stamped, the two new ones were
+      **deferred** and the assembler passed the court centre day over - US2.1 and US2.2, and the
+      quickstart's `released=0 deferred=1` (the line's fields are `released_batches` and
+      `released_registers`; the file's prose writes `released=`).
+
+      **The three start-up refusals**, each against the built image:
+
+      ```text
+      COURTREGISTER_GENERATION_STALE_AFTER=0s
+        -> courtregister.generation.stale-after (PT0S) must be positive — a timeout that never
+           expires is a run that never ends            (PropertiesValidator, exit 1)
+      COURTREGISTER_GENERATION_BATCH_AGE_REFRESH=-1m
+        -> courtregister.generation.batch-age-refresh (PT-1M) must be positive — a timeout that
+           never expires is a run that never ends      (PropertiesValidator, exit 1)
+      COURTREGISTER_GENERATION_COMPLETION=poll-only
+        -> "Started Application in 2.819 seconds", and the string `completion` appears NOWHERE in
+           the start-up log: the key is gone and a deployment still setting it is setting nothing
+      ```
+
+      **What the walkthrough could not be driven verbatim from, and what it had to substitute.**
+      `quickstart.md` step 1 names `./scripts/put-message.sh` and `docker/samples/distribution-command.json`,
+      step 5 names `./scripts/publish-document-available.sh`, and steps 1 and 4 write
+      `java -jar build/libs/*.jar generate-register`. **None of the three files exists in this
+      repository**, and the `java -jar` form cannot dispatch a command at all - a Boot 4 fat jar's
+      manifest names `JarLauncher`, which is the whole reason `docker/startup.sh` runs `CliMain`
+      through `PropertiesLauncher` and says so in a comment. The command was therefore run as
+      `docker compose exec app ./startup.sh generate-register …`, which is the deployed form and
+      what the brief asks for. The registers were seeded through `psql` because the compose stack
+      runs `COURTREGISTER_PAYLOAD_MODE=STUB` and records nothing - the 002 quickstart states that
+      plainly - so there is no message that produces a register on this stack at all. The
+      quickstart's `SELECT … FROM register_record` is `processed_output`; there is no
+      `register_record` table. All five are `quickstart.md`'s to correct and none of them is the
+      service's behaviour.
+
+      **THE ONE DEFECT THE WALKTHROUGH FOUND. Recorded, NOT fixed** (the brief for this run forbids
+      a fix, and this record is the report).
+      `adapter/report/LogEventReportSink`'s summary event `courtregister_exception_report` carries
+      **five** counts and omits `batch_released`, while `EmailReportSink`'s CSV header carries six
+      (*"Six since increment 004"*, `EmailReportSinkTest:85`) and `ReportExceptionsCli`'s counts line
+      carries six. The morning observed above therefore wrote a summary reading
+      `request_failed=0 request_late=0 batch_late=0 batch_failed=0 notification_failed=0
+      truncated=0` beside **one** `courtregister_exception` event. That is precisely the state the
+      sink's own javadoc says must never occur: *"without that eleventh field a query would find
+      fewer events than the counts imply and nothing would say whether a sink had broken"*. The
+      omission is pinned in place by `LogEventReportSinkTest.THE_ELEVEN_SUMMARY_FIELDS`, which 004
+      did not extend when it added the sixth kind, so no suite failed.
+      **Severity MEDIUM, impact LOW-to-MEDIUM**: `BATCH_RELEASED` is informational, so no alert
+      misfires and nothing is lost - but the Log Analytics surface is the primary one for a
+      deployed environment, and a night that released a batch reads there as a report whose sink
+      dropped an event. The fix is one `value("batch_released", …)` and the test's list, test-first;
+      it touches `adapter/report/` and `src/test/**/adapter/report/`, both this tree's. **It is left
+      for the coordinator to assign**, because a fix here is a code change this run was told not to
+      make. T036's instruction was to check *"any switch over kinds for exhaustiveness"*, and this
+      sink writes a hand-listed set of `value(...)` calls rather than a switch, which is how a sixth
+      kind passed it.
+
+      **The tick stays `[~]`.** The walkthrough ran end to end and the service behaved correctly at
+      every step - the release, the re-batching, the ignored late outcome, the deferral, the three
+      refusals and the V7 refusal all as designed. What keeps it from `[x]` is that two steps did
+      **not** behave as `quickstart.md` writes them (step 3's 31 minutes against a command-made
+      batch, and the five artefacts named above that do not exist), and that the run exposed one
+      defect that is recorded and unfixed. `[x]` is earned when the quickstart is corrected and the
+      `LogEventReportSink` count is ruled on.)
 
 **Phase close**: `flock … ./gradlew build` green; whole-increment review gate (code-reviewer, qa,
 spec-validator, then Codex) before the merge to `main`.
@@ -3248,6 +3468,88 @@ all run and all green. **LINE 6589/6792 = 0.9701** and **BRANCH 2001/2204 = 0.90
 unchanged ratchet of LINE 0.88 / BRANCH 0.85 - sixteen more covered lines out of sixteen more, and
 two more covered branches out of two more, so every line and branch this round added is covered.
 The gate was not touched.
+
+## Increment gate — close (2026-09-21)
+
+Three review rounds kept re-raising the same handful of items, every one of them a question of
+ownership rather than of correctness, and each round's reviewers asked for a ratification rather
+than a revert. This note is that ratification, made on the orchestrator's authority so the record
+says the items are settled and no fourth round re-opens them.
+
+**(a) The two `batch/cli` `settings()` helpers are 004's, and ACCEPTED.** `39b6aeaf`'s edits to
+`src/test/**/batch/cli/CliMainTest.settings()` and `GenerateRegisterCliTest.settings()` were forced
+by `GenerationProperties`' arity change: the record gained and lost constructor parameters in this
+range, and a helper that builds one cannot compile against the old shape. Reverting them leaves the
+suite uncompilable, which is why all three reviewers asked for ratification. They are accepted in
+this range, recorded as hand-offs at **T002** and **T036**, and **the 005 rebase keeps them** — it
+is editing the same two files for the REST surface and inherits the current arity, not the old one.
+
+**(b) The three out-of-grant `design_rules.md` paragraphs are 004's, and ACCEPTED.** The
+package-structure `batch/` line, the *"every drop is counted"* bullet and the *"one absorbed
+refusal"* bullet all fall outside the three sections 004 was granted, and each was edited because
+the paragraph would otherwise describe a class this increment deleted or a counter it added. They
+are accepted as 004's. The Persistence bullet that does not name `BatchAgeSweep` (round 3, LOW)
+rides with them rather than becoming a fourth out-of-grant edit, and is the 005 tree's to add when
+it next touches that section.
+
+**(c) The constitution is NOT 004's to amend, and the four reconciler/grace-period passages are
+handed to 005.** `.specify/memory/constitution.md` at **3.2.0** still describes the reconciler and
+the grace period as live in four places; the finding has been raised at every gate since Phase 5.
+It is settled here in the other direction: **the 005 branch already carries the constitution at
+5.0.1** and will re-point those four passages during its rebase, where the document is already open
+and already moving. Amending 3.2.0 on this branch would be an edit 005 has to resolve twice.
+Recorded as a hand-off to 005, **together with the four other ownership items** that have been
+carried since round 1 and are hereby all 005's:
+
+| Handed to 005 | What is owed |
+|---|---|
+| `.specify/memory/constitution.md` | the four reconciler / grace-period passages, re-pointed at the release pass |
+| `CLAUDE.md` | the SPECKIT pointer block (reverted here by `10eeb140`'s undo; the wording is in that commit body) |
+| `src/main/**/batch/cli/GenerateRegisterCli.java` | the *"four failure reasons"* comment, which is six |
+| `src/test/**/batch/cli/ReportExceptionsCliTest` | the case that says the printed table and the CSV carry `BATCH_RELEASED` |
+| `.specify/feature.json` | the active-increment pointer, which 005 sets to its own |
+
+**(d) `specs/003-exception-report/quickstart.md`'s FR-016 edit is RATIFIED as 004's.** T043 touched
+a completed increment's quickstart because the sentence it corrects describes behaviour 004
+changed, and a completed spec that describes a retired mechanism is worse than a spec with a dated
+amendment in it. It stands.
+
+**(e) The two test flakes from gate round 1 are NOT defects.** The `TTLExpiredException` on the
+Service Bus emulator and the three-minute `await` both occurred while the machine was asleep, not
+under load: the emulator's lock and the awaited condition are both wall-clock bound, and a
+suspended host expires the first and exhausts the second without anything in this repository having
+gone wrong. Neither has reproduced on any run since, including every re-gate above. No quarantine,
+no `@Disabled`, no widened timeout.
+
+**The walkthrough (T046).** Driven end to end on 2026-09-21 against the local `docker compose`
+stack and the image built from this branch — the V7-on-a-dirty-volume preamble, steps 1 to 6 and
+the three start-up refusals — and recorded in full at **T046** above. **The service behaved
+correctly at every step**: the stale command-made batch was failed `NOT_COMPLETED_BY_NEXT_RUN` at
+its own (longer) cutoff and its registers were re-batched and re-rendered in the same run; the late
+`document-available` for the ended batch moved nothing and was counted under `terminal-batch`; the
+07:00 report carried the batch as the informational `BATCH_RELEASED`; a batch inside its cutoff was
+left alone and its court centre day deferred; WireMock's journal held no `document/{id}` after
+fifteen minutes; and V7 refused a dirty volume by name, left the schema at V6 and left the row
+where it was.
+
+**Two things the walkthrough leaves open, and neither is a fix this run was permitted to make.**
+
+1. **`quickstart.md` is wrong in five places** — step 3's 31-minute age against a batch its own step
+   1 makes with the operations command (a command-made batch is judged by the longer of
+   `stale-after` and `lock-at-most-for`, so 31 minutes releases nothing), three helper files that do
+   not exist in this repository, and a `java -jar … generate-register` form that cannot dispatch a
+   command. Documentation only; the code did what FR-017 and the spec say at every point.
+2. **One defect, recorded and unfixed**: `adapter/report/LogEventReportSink`'s summary event
+   carries five counts and omits `batch_released`, while the CSV sink and the CLI both carry six.
+   MEDIUM, and pinned in place by `LogEventReportSinkTest.THE_ELEVEN_SUMMARY_FIELDS`. Full detail
+   at **T046**.
+
+**The increment gate is closed on the orchestrator's authority**, with the five ratifications above
+and the walkthrough result as recorded. **The next step is the merge to `main`** — with the two open
+items above assigned first: the coordinator rules on the `LogEventReportSink` count (a one-line
+production change and its test, in files this tree owns) and on whether `quickstart.md`'s five
+corrections go in before or after the merge. **T046 stays `[~]`**, because those two are exactly
+what would make it `[x]`.
 
 ---
 
