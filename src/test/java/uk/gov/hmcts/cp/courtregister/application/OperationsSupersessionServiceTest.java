@@ -31,6 +31,7 @@ import uk.gov.hmcts.cp.courtregister.domain.RecordedFlagState;
 import uk.gov.hmcts.cp.courtregister.domain.RecordedRegisterSummary;
 import uk.gov.hmcts.cp.courtregister.domain.RegisterRecord;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
 /**
  * The rollback lever, and the three guards its command did not have.
@@ -170,6 +171,38 @@ class OperationsSupersessionServiceTest {
                                     .isEqualTo(OperationsReason.FLAG_UNREADABLE));
 
             verifyNoInteractions(registers);
+        }
+
+        @Test
+        @DisplayName("both refusal lines spell the code the ProblemDetail will carry")
+        void the_refusal_lines_should_carry_the_wire_spelling() {
+            final List<String> onLines;
+            try (CapturedLog log = CapturedLog.capturing(OperationsSupersessionService.class)) {
+                when(flag.read()).thenReturn(new FlagDecision.Enabled());
+                assertThatThrownBy(() -> service().supersede(YESTERDAY, false))
+                        .isInstanceOf(OperationsRefusedException.class);
+                onLines = log.renderings();
+            }
+
+            final List<String> unreadableLines;
+            try (CapturedLog log = CapturedLog.capturing(OperationsSupersessionService.class)) {
+                when(flag.read()).thenReturn(
+                        new FlagDecision.Unreadable(FlagDecision.UnreadableReason.TIMED_OUT));
+                assertThatThrownBy(() -> service().supersede(YESTERDAY, false))
+                        .isInstanceOf(OperationsRefusedException.class);
+                unreadableLines = log.renderings();
+            }
+
+            assertThat(onLines)
+                    .as("a reason slot carries the wire spelling wherever it is written, so a "
+                            + "line and the body answered beside it grep as the same code")
+                    .anyMatch(line ->
+                            line.contains("reason=" + OperationsReason.FLAG_ON.wire()));
+            assertThat(unreadableLines)
+                    .as("and this one differs from its constant, which is what makes the rule "
+                            + "worth pinning rather than worth assuming")
+                    .anyMatch(line ->
+                            line.contains("reason=" + OperationsReason.FLAG_UNREADABLE.wire()));
         }
 
         @Test

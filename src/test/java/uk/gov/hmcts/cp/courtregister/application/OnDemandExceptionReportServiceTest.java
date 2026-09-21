@@ -32,6 +32,7 @@ import uk.gov.hmcts.cp.courtregister.domain.ReportRunOutcome;
 import uk.gov.hmcts.cp.courtregister.domain.ReportSinkName;
 import uk.gov.hmcts.cp.courtregister.domain.ReportWindow;
 import uk.gov.hmcts.cp.courtregister.domain.StoreUnavailableException;
+import uk.gov.hmcts.cp.courtregister.support.CapturedLog;
 
 /**
  * The exception report an operator asks for now: its window, its sinks, and what it refuses.
@@ -259,6 +260,35 @@ class OnDemandExceptionReportServiceTest {
                                     .isEqualTo(OperationsReason.EMAIL_OUTPUT_DISABLED));
 
             verifyNoInteractions(reporting);
+        }
+
+        @Test
+        @DisplayName("both refusal lines spell the code the ProblemDetail will carry")
+        void the_refusal_lines_should_carry_the_wire_spelling() {
+            final List<String> offLines;
+            try (CapturedLog log =
+                    CapturedLog.capturing(OnDemandExceptionReportService.class)) {
+                assertThatThrownBy(() -> serviceWith(List.of(logSink), false).report(null, true))
+                        .isInstanceOf(OperationsRefusedException.class);
+                offLines = log.renderings();
+            }
+
+            final List<String> notWiredLines;
+            try (CapturedLog log =
+                    CapturedLog.capturing(OnDemandExceptionReportService.class)) {
+                assertThatThrownBy(() -> serviceWith(List.of(logSink), true).report(null, true))
+                        .isInstanceOf(OperationsRefusedException.class);
+                notWiredLines = log.renderings();
+            }
+
+            assertThat(offLines)
+                    .as("a reason slot carries the wire spelling wherever it is written, so a "
+                            + "line and the body answered beside it grep as the same code")
+                    .anyMatch(line -> line.contains(
+                            "reason=" + OperationsReason.EMAIL_OUTPUT_DISABLED.wire()));
+            assertThat(notWiredLines)
+                    .anyMatch(line -> line.contains(
+                            "reason=" + OperationsReason.EMAIL_OUTPUT_NOT_WIRED.wire()));
         }
 
         @Test

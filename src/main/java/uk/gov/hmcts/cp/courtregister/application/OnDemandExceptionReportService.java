@@ -135,7 +135,8 @@ public class OnDemandExceptionReportService {
     private OnDemandExceptionReport asked(final String since, final boolean email) {
         if (email && !emailOutputEnabled) {
             LOG.warn("An on-demand exception report asked for the e-mail output, which is switched "
-                    + "off on this deployment. reason={}", OperationsReason.EMAIL_OUTPUT_DISABLED);
+                    + "off on this deployment. reason={}",
+                    OperationsReason.EMAIL_OUTPUT_DISABLED.wire());
             throw new OperationsRefusedException(OperationsReason.EMAIL_OUTPUT_DISABLED);
         }
         final Instant startedAt = clock.instant();
@@ -143,7 +144,8 @@ public class OnDemandExceptionReportService {
         final Optional<ExceptionReportSink> emailSink = sinkNamed(ReportSinkName.EMAIL);
         if (email && emailSink.isEmpty()) {
             LOG.warn("An on-demand exception report asked for the e-mail output, which is on and "
-                    + "has no sink behind it. reason={}", OperationsReason.EMAIL_OUTPUT_NOT_WIRED);
+                    + "has no sink behind it. reason={}",
+                    OperationsReason.EMAIL_OUTPUT_NOT_WIRED.wire());
             throw new OperationsRefusedException(OperationsReason.EMAIL_OUTPUT_NOT_WIRED);
         }
         final List<ExceptionReportSink> asked = new ArrayList<>();

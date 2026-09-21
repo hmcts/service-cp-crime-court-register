@@ -233,14 +233,15 @@ class TelemetryPrivacyTest {
                     // and an outage of theirs and a bug of ours have to stay tellable apart, which
                     // is why there are two of them and why both belong in the vocabulary.
                     Arrays.stream(SweepFailureReason.values()).map(Enum::name),
-                    // The operations API's own closed set, in both of its spellings: the wire
-                    // form a ProblemDetail carries, and the constant a log line beside it writes
-                    // through the enum's own toString. Both are bounded because the enum is, and
-                    // the whole enum rather than the codes that happen to be logged today, because
-                    // the set is closed by OperationsProblem's table and a code added to it is a
-                    // code an endpoint may then refuse under.
+                    // The operations API's own closed set, in its wire spelling and in that one
+                    // alone. A reason slot carries wire() wherever it is written - in a
+                    // ProblemDetail and in the log line beside it - so a line and the body
+                    // answered with it grep as the same code, and admitting the constant as a
+                    // second spelling would be the sweep widened to fit the code. The whole enum
+                    // rather than the codes logged today, because the set is closed by
+                    // OperationsProblem's table and a code added to it is a code an endpoint may
+                    // then refuse under.
                     Arrays.stream(OperationsReason.values()).map(OperationsReason::wire),
-                    Arrays.stream(OperationsReason.values()).map(Enum::name),
                     Stream.of("flag-on"))
             .flatMap(codes -> codes)
             .collect(Collectors.toUnmodifiableSet());

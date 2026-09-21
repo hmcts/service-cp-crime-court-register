@@ -119,13 +119,14 @@ public class OperationsSupersessionService {
             }
             case FlagDecision.Enabled ignored -> {
                 LOG.warn("A rollback was asked for while this service is the implementation that "
-                        + "generates, and was refused. reason={}", OperationsReason.FLAG_ON);
+                        + "generates, and was refused. reason={}",
+                        OperationsReason.FLAG_ON.wire());
                 throw new OperationsRefusedException(OperationsReason.FLAG_ON);
             }
             case FlagDecision.Unreadable unreadable -> {
                 LOG.warn("A rollback was asked for and the one lever could not be read, so it was "
-                        + "refused. reason={} cause={}", OperationsReason.FLAG_UNREADABLE,
-                        unreadable.reason());
+                        + "refused. reason={} cause={}",
+                        OperationsReason.FLAG_UNREADABLE.wire(), unreadable.reason());
                 throw new OperationsRefusedException(OperationsReason.FLAG_UNREADABLE);
             }
         }
