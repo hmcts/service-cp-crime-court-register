@@ -3037,7 +3037,7 @@ what this phase added: T037's one, T038's two and T039's one.
       paragraph above the table lists `GenerationReconcilerTest` among the suites that run
       executed. It is a record of a run that happened, not a pointer to a file, and correcting it
       would be editing a dated observation.)
-- [~] T046 [A] The gates, recorded. `flock … ./gradlew build` with the JaCoCo ratchet at **0.88 line /
+- [x] T046 [A] The gates, recorded. `flock … ./gradlew build` with the JaCoCo ratchet at **0.88 line /
       0.85 branch** unchanged, PMD over main, Checkstyle over main and test, the differential audit
       and the consolidation audit; then the `quickstart.md` walkthrough end to end on a **clean** local
       stack, including step 6's other side of the boundary and the three startup refusals. Quote the
@@ -3322,13 +3322,23 @@ what this phase added: T037's one, T038's two and T039's one.
       close note is the precedent: a completed increment's document that describes behaviour this
       increment changed is amended with a dated clause rather than left wrong.
 
-      **The tick stays `[~]`.** The walkthrough ran end to end and the service behaved correctly at
-      every step - the release, the re-batching, the ignored late outcome, the deferral, the three
-      refusals and the V7 refusal all as designed. What keeps it from `[x]` is that two steps did
-      **not** behave as `quickstart.md` writes them (step 3's 31 minutes against a command-made
-      batch, and the five artefacts named above that do not exist), and that the run exposed one
-      defect that is recorded and unfixed. `[x]` is earned when the quickstart is corrected and the
-      `LogEventReportSink` count is ruled on.)
+      **The tick was `[~]` for a few hours and is now `[x]`.** The walkthrough ran end to end and
+      the service behaved correctly at every step - the release, the re-batching, the ignored late
+      outcome, the deferral, the three refusals and the V7 refusal all as designed. What held it at
+      half was that two steps did **not** behave as `quickstart.md` wrote them (step 3's 31 minutes
+      against a command-made batch, and the five artefacts named above that do not exist) and that
+      the run exposed one defect. **Both are closed**: the defect is fixed test-first and recorded
+      immediately above (`b0f87b54`), and `quickstart.md` is corrected against the stack this run
+      was driven on (`4de381bd`) - the 71-minute cutoff with FR-017's reason and the
+      `system_generated = true` alternative, the psql seeding under `COURTREGISTER_PAYLOAD_MODE=STUB`
+      in place of the three files that do not exist, `./startup.sh` in place of the `java -jar`
+      form that cannot dispatch, the by-hand publisher for the late outcome with `sdg-echo`'s
+      start-up behaviour explained, `processed_output` for `register_record`, `reason=flag-on` for
+      `reason=overridden`, the extra recorded register step 6 needs to make `deferred=1` reachable,
+      the sentence saying the constraint name is in Postgres's log and not the pod's, and the
+      5433 host-port collision with the CPP dev environment's own container.
+      **The corrected quickstart now matches what was observed at every step**, which is what `[x]`
+      says.)
 
 **Phase close**: `flock … ./gradlew build` green; whole-increment review gate (code-reviewer, qa,
 spec-validator, then Codex) before the merge to `main`.
@@ -3564,24 +3574,45 @@ left alone and its court centre day deferred; WireMock's journal held no `docume
 fifteen minutes; and V7 refused a dirty volume by name, left the schema at V6 and left the row
 where it was.
 
-**Two things the walkthrough leaves open, and neither is a fix this run was permitted to make.**
+**The walkthrough left two things open. The coordinator ruled the same day that both are fixed
+before the merge, and both are now CLOSED.**
 
-1. **`quickstart.md` is wrong in five places** — step 3's 31-minute age against a batch its own step
-   1 makes with the operations command (a command-made batch is judged by the longer of
-   `stale-after` and `lock-at-most-for`, so 31 minutes releases nothing), three helper files that do
-   not exist in this repository, and a `java -jar … generate-register` form that cannot dispatch a
-   command. Documentation only; the code did what FR-017 and the spec say at every point.
-2. **One defect, recorded and unfixed**: `adapter/report/LogEventReportSink`'s summary event
-   carries five counts and omits `batch_released`, while the CSV sink and the CLI both carry six.
-   MEDIUM, and pinned in place by `LogEventReportSinkTest.THE_ELEVEN_SUMMARY_FIELDS`. Full detail
-   at **T046**.
+1. **The defect — CLOSED, `b0f87b54`, test-first.** `adapter/report/LogEventReportSink`'s summary
+   event carried five counts and omitted `batch_released`, while the CSV sink and the command both
+   carried six, so a morning whose only exception was a released batch wrote five noughts beside
+   one `courtregister_exception` event - the shape that sink's own contract tells a reader to read
+   as a broken sink. Red on three assertions in `LogEventReportSinkTest` (the field list at twelve,
+   the empty morning at six noughts, and a new
+   `a_released_batch_is_counted_on_the_summary_line`), green on one
+   `value("batch_released", …)`; `ExceptionReportEndToEndIT` moved with it, and four numbers in
+   increment 003's documents were amended with dated clauses so they no longer contradict the code.
+   **No `DEFECT-FIXES.md` row**: the register's two oracles are the function app and progression's
+   leg, and this is 004 regressing against 003 - a row there would misfile it. Full record at
+   **T046**.
+2. **`quickstart.md` — CLOSED, `4de381bd`, documentation only.** Five corrections, all of them the
+   document's and none of them the code's: step 3's cutoff is 71 minutes for a command-made batch
+   with FR-017's reason written out (and the `system_generated = true` alternative for walking the
+   schedule's arm at 31); the three helper files that do not exist are replaced by the psql seeding
+   the STUB payload mode forces and by `./startup.sh`, which is also the deployed form; the
+   `java -jar … generate-register` form is named as one that cannot dispatch and why; the late
+   outcome is published by hand, with `sdg-echo`'s ignore-the-journal-at-start-up behaviour
+   explained; `register_record` becomes `processed_output`. Four smaller ones went with them: the
+   constraint name appears in Postgres's log and not the pod's (the never-attach rule), the 5433
+   host-port collision with the CPP dev environment's `postgres-ccm`, `reason=flag-on` rather than
+   `reason=overridden`, and the extra recorded register step 6 needs before `deferred=1` is
+   reachable at all.
 
-**The increment gate is closed on the orchestrator's authority**, with the five ratifications above
-and the walkthrough result as recorded. **The next step is the merge to `main`** — with the two open
-items above assigned first: the coordinator rules on the `LogEventReportSink` count (a one-line
-production change and its test, in files this tree owns) and on whether `quickstart.md`'s five
-corrections go in before or after the merge. **T046 stays `[~]`**, because those two are exactly
-what would make it `[x]`.
+**Re-gated after the two fixes** (`flock -w 7200 … ./gradlew jacocoTestReport check
+-Dtest.noFailFast=true`) → **BUILD SUCCESSFUL, exit 0, 4m 32s, 3676 tests over 580 suites,
+0 failures, 0 errors, 0 skipped**, with `checkstyleMain`, `checkstyleTest`, `pmdMain`, `pmdTest` and
+`jacocoTestCoverageVerification` all run and all green. **LINE 6590/6793 = 0.9701** and
+**BRANCH 2001/2204 = 0.9079** against the unchanged ratchet of LINE 0.88 / BRANCH 0.85 - one more
+covered line out of one more line and no new branch, which is what a single added `value(...)` call
+and its three cases should read. **The gate was not touched.**
+
+**The increment gate is closed on the orchestrator's authority**, with the five ratifications above,
+the walkthrough as recorded at **T046** (now `[x]`) and both of its open items closed. **The next
+step is the merge to `main`.**
 
 ---
 
