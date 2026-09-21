@@ -37,7 +37,7 @@ Jira: none — this work carries no ticket; it lands on plain `main`
 | Defect-fix register | `doc/DEFECT-FIXES.md` |
 | Constitution | `.specify/memory/constitution.md` |
 | Specifications | `specs/001-court-register-port/` (complete), `specs/002-consolidate-progression-leg/` (complete), `specs/003-exception-report/` (complete), `specs/004-release-stale-batches/` (complete), `specs/005-operations-rest-api/` (current) |
-| Operations API (owned) | `src/main/resources/openapi.yaml`; authorisation rules `src/main/resources/acl/operations-rules.drl` |
+| Operations API (owned) | `src/main/resources/courtregister-openapi.yaml`; authorisation rules `src/main/resources/acl/operations-rules.drl` |
 | Inbound message schema | `src/main/resources/contracts/distribution-command.schema.json` |
 | Register contract (frozen) | `src/main/resources/contracts/progression/` (+ `PROVENANCE.md`) |
 
@@ -46,11 +46,11 @@ This service exposes **no business REST API**: nothing about intake, recording, 
 or notification is reachable over HTTP. Its HTTP surface is actuator plus the **operations API**
 under `/operations/**` — the named operator actions that replaced the CLI in increment 005, each
 behind `cp-auth-rules-filter` ("Second Line Support" only, identity from the `CJSCPPUID` header) and
-`cp-audit-filter-springboot`, and each described in `src/main/resources/openapi.yaml`. Its contracts
+`cp-audit-filter-springboot`, and each described in `src/main/resources/courtregister-openapi.yaml`. Its contracts
 are:
 - **Inbound**: the `courtregister.requests` queue message (`distribution-command.schema.json`,
   `additionalProperties: false`), agreed with `cpp-context-results` (the publisher).
-- **Operations API**: `src/main/resources/openapi.yaml`, owned here and versioned with the repo; a
+- **Operations API**: `src/main/resources/courtregister-openapi.yaml`, owned here and versioned with the repo; a
   contract test asserts the controllers against it, and `cp-audit-filter-springboot` reads it at
   runtime to resolve path parameters. Adding a path that is not a named operator action needs a
   constitution amendment (Principle III).

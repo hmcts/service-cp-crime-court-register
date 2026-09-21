@@ -123,7 +123,7 @@ private RedisHearingPayloadAdapter adapter;
 - **Operations API**: `@WebMvcTest` slice tests per controller, with the application service mocked
   and the identity client stubbed — one case that the caller without "Second Line Support" is
   refused, one that the caller with it is served, and one per refusal the endpoint can answer with.
-  A contract test asserts the controllers against `src/main/resources/openapi.yaml`. No test asserts
+  A contract test asserts the controllers against `src/main/resources/courtregister-openapi.yaml`. No test asserts
   a response body that carries a value the request supplied
 - **Golden-parity tests**: Jest fixtures copied byte-identical into `src/test/resources/fixtures/`;
   one JUnit twin per Jest case; comparison field-order-insensitive, array-order-sensitive,

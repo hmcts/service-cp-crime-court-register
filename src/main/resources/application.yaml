@@ -551,6 +551,31 @@ courtregister:
       # the address back.
       recipients: ${COURTREGISTER_REPORT_RECIPIENTS:}
 
+  # The operations API's own settings. The defaults are `config/OperationsProperties`'s and are
+  # restated here for the reason every other block of this service's settings is: a deployment can
+  # see what it is getting and override it without reading Java.
+  operations:
+    # DEPLOYMENT SHAPE, NOT A CUTOVER LEVER (FR-044). It decides whether the seven `/operations/**`
+    # endpoints are served, and nothing else. The one lever that decides which implementation is
+    # live is the App Configuration flag `CourtRegisterService`, and this must never become a
+    # second one - a pod with the endpoints off still records, batches, renders and notifies exactly
+    # as it did.
+    enabled: ${COURTREGISTER_OPERATIONS_ENABLED:true}
+
+    # How far back `POST /operations/registers/supersede` may reach. The command it replaces was
+    # unbounded, because it was reachable only by somebody already inside the namespace with a
+    # runbook open; an endpoint reaches further, and an unbounded irreversible mutation is one
+    # keystroke from giving up the estate's whole history of registers. Refused at startup if it is
+    # not positive: a bound of zero admits no instant at all and reads to an operator as though
+    # their own argument were wrong.
+    supersede-max-age: ${COURTREGISTER_SUPERSEDE_MAX_AGE:30d}
+
+    # How long a background regeneration waits for the register-generation lock before recording
+    # SCHEDULE_RUNNING as its own outcome. ZERO IS THE DEFAULT AND IS ONE NON-BLOCKING ATTEMPT,
+    # which is the only kind that cannot sit on a thread the schedule wants. Refused at startup if
+    # it is negative.
+    lock-wait: ${COURTREGISTER_OPERATIONS_LOCK_WAIT:0s}
+
 # Application Insights is configured by the Java agent (lib/applicationinsights.json).
 # The per-environment connection string is supplied as APPLICATIONINSIGHTS_CONNECTION_STRING,
 # mounted from Key Vault via the Secrets Store CSI driver; there is nothing to set here.
@@ -632,6 +657,25 @@ authz:
 audit:
   http:
     enabled: ${HTTP_AUDIT_ENABLED:true}
+
+    # THE NAME IS LOAD-BEARING, AND IT IS WHY THE FILE IS NOT CALLED `openapi.yaml`. The filter
+    # resolves this as `classpath*:` + `**`/`*` + the value - a SUFFIX glob over every jar on the
+    # classpath, not a path - and hands the parser whichever resource the glob returns FIRST. A
+    # value of `openapi.yaml` would match this service's document and any other `*openapi.yaml` a
+    # dependency ships, and the audit events of a whole surface would be resolved against somebody
+    # else's paths. `api/OpenApiContractTest` runs the real glob against the real classpath and
+    # asserts exactly one match; `PropertiesValidator` refuses an unset value where both audit
+    # switches are on, which is where the parser is actually built.
+    openapi-rest-spec: ${HTTP_AUDIT_OPENAPI_SPEC:courtregister-openapi.yaml}
+
+    # EXPLICIT, BECAUSE THE LIBRARY DEFAULT IS TRUE. Left alone, every response this surface writes
+    # goes onto the audit topic: the batch listing's masked addresses and court centre ids, the
+    # exception report's whole entry table, and every ProblemDetail. The audit topic is a telemetry
+    # surface like any other and Principle VII governs it. What an audit event actually needs - the
+    # action, the outcome, whether the flag was overridden, the superseded count - the generic
+    # filter cannot infer from a body anyway, and `api/OperationsAuditService` supplies it through
+    # the starter's own seam instead.
+    include-payload-body: false
 
 # The estate's audit transport, owned by `cp-audit-filter-springboot` and not by this service.
 #

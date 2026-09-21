@@ -130,7 +130,7 @@ Every one of those endpoints is behind two estate starters: `cp-auth-rules-filte
 drools rules in `src/main/resources/acl/operations-rules.drl` against the caller's usersgroups
 membership (identity from the `CJSCPPUID` header; **"Second Line Support" only**, on every
 endpoint), and `cp-audit-filter-springboot`, which publishes every request and response as an audit
-event to the audit context. They are described in `src/main/resources/openapi.yaml`, which this
+event to the audit context. They are described in `src/main/resources/courtregister-openapi.yaml`, which this
 repository owns and versions. Nothing an endpoint answers carries defendant detail, an exception
 message or a value the caller supplied: bounded codes, counts and identifiers only.
 

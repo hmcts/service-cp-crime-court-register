@@ -1076,14 +1076,14 @@ of them.
 document and the controllers agree, that the audit event carries what it must and no body, and that
 the **real** authorisation filter refuses the people it should.
 
-- [ ] **T042** [P] [US1] `api/OpenApiContractTest` (new) — **both directions**. Parse
+- [x] **T042** [P] [US1] `api/OpenApiContractTest` (new) — **both directions**. Parse
       `src/main/resources/openapi.yaml`; assert every mapped path and method in
       `RequestMappingHandlerMapping` (excluding actuator) is described, and every path described is
       mapped; assert `/operations/batches/{batchId}/notify` declares `batchId` as an `in: path`
       parameter — the audit filter registers a path **only** if it does (research R7); assert every
       bounded `reason` the handler can emit appears in the document's enumerations. Seam: an
       `openapi.yaml` with the info block and no paths. Red: seven paths mapped, none described.
-- [ ] **T043** [US1] `src/main/resources/openapi.yaml` — the seven endpoints as data-model describes
+- [x] **T043** [US1] `src/main/resources/courtregister-openapi.yaml` — the seven endpoints as data-model describes
       them, plus the rest of the `audit.http.*` settings block **beside** the
       `enabled: ${HTTP_AUDIT_ENABLED:true}` key T005 already landed (do not restate it, and do not
       flip it: the `true` default is how condition (b) of Principle III is carried, and there is no
@@ -1104,6 +1104,30 @@ the **real** authorisation filter refuses the people it should.
       a second document later; asserting that the parser found *a* document would pass on the wrong
       one. `PropertiesValidator` already refuses an unset value where both audit switches are on;
       it cannot refuse an ambiguous one, which is why this is a test.
+      (T042 and T043 landed in one commit under the Phase 2 TDD exception, so there is no red run
+      to quote. Green: `OpenApiContractTest` 8 tests, 0 failures; Checkstyle and PMD clean on main
+      and test after two findings were fixed rather than suppressed - an import out of
+      lexicographical order, and `getClassLoader()` where the test ruleset wants the context one.
+      **The file is `src/main/resources/courtregister-openapi.yaml` and the setting matches it**,
+      which is this warning carried out. Every document that named
+      `src/main/resources/openapi.yaml` was re-pointed in the same commit - CLAUDE.md, README.md,
+      the two rules files, three agent files - and the constitution with them, as a PATCH (5.0.3):
+      Principle III names the owned document, and a principle that names a file that is not there
+      is a principle a reader gets wrong. This is the one departure from FR-002's literal path, and
+      it is the departure this warning asks for.
+      **The contract test is a `@WebMvcTest` slice over the four real controllers, not a context
+      load.** Every controller on this surface carries `@Profile("!test")`, so the profile a
+      context-load test runs under is precisely the one on which none of them is registered - a
+      `@SpringBootTest` here asserted an empty surface against a seven-path document and passed
+      half its cases by vacuity. The slice takes the real classes, the real annotations and the
+      framework's own `RequestMappingHandlerMapping`, asked for **by name** because actuator
+      contributes a second one. `NotWiredController` is deliberately outside the slice: it maps the
+      same three paths the generating half maps and is contributed only where that half is off, so
+      exactly one of the two is ever present and the document describes the paths rather than the
+      fallback.
+      The `courtregister.operations` block and the two `audit.http.*` keys landed in
+      `application.yaml` as the task asks, beside the `enabled` key T005 left there and without
+      restating or flipping it.)
 - [ ] **T044** [P] [US1] `api/OperationsAuditFactsTest` (new) — the payload carries the action, the
       outcome (status family + bounded reason), `flagOverride` on the regeneration endpoint, the run
       id, and the superseded count on the supersede endpoint; and it carries **no** request or

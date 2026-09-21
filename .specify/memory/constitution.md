@@ -1,6 +1,37 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 5.0.2 → 5.0.3
+Bump rationale: PATCH - the owned OpenAPI document is named (2026-09-21). The
+                principle called it `src/main/resources/openapi.yaml`; the file
+                that landed is `src/main/resources/courtregister-openapi.yaml`,
+                and the difference is load-bearing rather than cosmetic.
+                `cp-audit-filter-springboot` finds the document by a SUFFIX glob
+                over the whole classpath - `classpath*:**/*` plus the value of
+                `audit.http.openapi-rest-spec`, first match wins - so a value of
+                `openapi.yaml` matches this service's document and any other
+                `*openapi.yaml` a dependency ships, and the parser is handed
+                whichever comes back first. The obligation is unchanged: every
+                `/operations/**` endpoint is described in the document this
+                repository owns, and a contract test asserts it both ways.
+                `api/OpenApiContractTest` additionally runs the real glob against
+                the real classpath and asserts exactly one match.
+
+Proposed in: specs/005-operations-rest-api/tasks.md, T043's warning. Pinned by
+`api/OpenApiContractTest.TheGlobTheAuditFilterResolvesItBy`.
+
+Modified sections (this amendment): Principle III's third contract, and the
+Architecture section's operations-API paragraph - the file's name in both.
+Nothing else; Principles I, II, IV-VIII untouched.
+
+Templates / guidance reviewed:
+  - CLAUDE.md, README.md, .claude/rules/{workflow,technical-rules}.md,
+    .claude/agents/{software-engineer,spec-validator,qa}.md
+                                             ⚠ UPDATED in the same commit -
+      each of them named the file.
+  - .specify/templates/*                     ✅ compatible - no change.
+
+Previous amendment (5.0.1 → 5.0.2):
 Version change: 5.0.1 → 5.0.2
 Bump rationale: PATCH - the architecture section is re-pointed at the mechanism
                 increment 004 shipped (2026-09-21). No principle's wording
@@ -809,7 +840,7 @@ Its contracts are:
   and what any future consumer of the store will read. Changing it is a
   contract change under this principle even though no other context now
   receives it.
-- **The operations API** — `src/main/resources/openapi.yaml`, the third
+- **The operations API** — `src/main/resources/courtregister-openapi.yaml`, the third
   contract this service **owns** and versions with the repo. It describes every
   `/operations/**` endpoint, its request body, its success shape and every
   bounded `reason` it can refuse under. It is a contract in the full sense of
@@ -1221,7 +1252,7 @@ them read it the same way they read everything else.
   (drools rules under `src/main/resources/acl/`, identity from `CJSCPPUID`,
   "Second Line Support" only) and `cp-audit-filter-springboot` (every request
   and response published to the audit context), and is described in
-  `src/main/resources/openapi.yaml`. The CLI (`batch/cli/`, the
+  `src/main/resources/courtregister-openapi.yaml`. The CLI (`batch/cli/`, the
   `courtregister.cli` property and the `docker/startup.sh` dispatch) is
   **removed**: the image starts the application, full stop.
 - **Test stack**: JUnit Jupiter 6 (the Boot 4.1 test starter) + Mockito
@@ -1393,4 +1424,4 @@ retained as quick-reference material and MUST be kept in sync.
   needs the same written sign-off the old parity regime demanded, before
   merge. C-numbers are stable: renumber never, append only.
 
-**Version**: 5.0.2 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-21
+**Version**: 5.0.3 | **Ratified**: 2026-08-31 | **Last Amended**: 2026-09-21
