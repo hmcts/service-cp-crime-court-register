@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -19,9 +20,14 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import uk.gov.hmcts.cp.courtregister.application.OnDemandExceptionReportService;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsReason;
 import uk.gov.hmcts.cp.courtregister.domain.OperationsRefusedException;
@@ -261,6 +267,62 @@ class OperationsExceptionHandlerTest {
                             + "own answer, through OperationsErrorAttributes")
                     .doesNotContain("uk.gov.hmcts")
                     .doesNotContain("\tat ");
+        }
+    }
+
+    @Nested
+    @DisplayName("the two argument refusals no controller can reach today")
+    class TheArgumentRefusals {
+
+        /**
+         * Every controller on this surface parses its own parameters as strings, so Spring
+         * raises neither of these two exceptions and both handlers are unreachable. They are kept
+         * deliberately: the day an endpoint takes a typed {@code @RequestParam} or
+         * {@code @PathVariable}, removing them would turn the {@code 400} this service can explain
+         * into the {@code 500} it cannot. Kept insurance is tested insurance - these two cases are
+         * what say the promised 400 is the 400 that would arrive, and they call the advice
+         * directly because no request can.
+         */
+        private final OperationsExceptionHandler advice = new OperationsExceptionHandler();
+
+        @Test
+        @DisplayName("an argument that will not read names the argument and never its value")
+        void an_unreadable_argument_should_be_answered_400_naming_the_argument_alone() {
+            final MethodArgumentTypeMismatchException mismatch =
+                    new MethodArgumentTypeMismatchException(TYPED_VALUE, UUID.class, "batchId",
+                            null, new IllegalArgumentException(TYPED_VALUE));
+
+            final ResponseEntity<Object> answered = advice.unreadableArgument(mismatch);
+            final ProblemDetail problem = (ProblemDetail) answered.getBody();
+
+            assertThat(answered.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(problem).isNotNull();
+            assertThat(problem.getProperties())
+                    .containsEntry("reason", OperationsReason.UNREADABLE_ARGUMENT.wire())
+                    .containsEntry("argument", "batchId");
+            assertThat(problem.getProperties().toString())
+                    .as("the characters that would not read reach no property of the body")
+                    .doesNotContain(TYPED_VALUE);
+            assertThat(problem.getDetail())
+                    .as("nor the detail, which this advice never writes")
+                    .isNull();
+        }
+
+        @Test
+        @DisplayName("an argument that was not given names the argument, and this service defaults "
+                + "nothing")
+        void a_missing_argument_should_be_answered_400_naming_the_argument() {
+            final MissingServletRequestParameterException missing =
+                    new MissingServletRequestParameterException("date", "LocalDate");
+
+            final ResponseEntity<Object> answered = advice.missingArgument(missing);
+            final ProblemDetail problem = (ProblemDetail) answered.getBody();
+
+            assertThat(answered.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(problem).isNotNull();
+            assertThat(problem.getProperties())
+                    .containsEntry("reason", OperationsReason.MISSING_ARGUMENT.wire())
+                    .containsEntry("argument", "date");
         }
     }
 }

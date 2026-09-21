@@ -1741,14 +1741,61 @@ three things that were true and untested.
   assumption 18. It is now in the constitution, with what it may relax, what it may never relax,
   who gives it and what is judged instead. Constitution 5.1.0. (`e8021b43`.)
 - **T043** — the owned document under-described its own `ProblemDetail`: `ignoreFlag` was missing
-  from the `argument` enum and `accepted`, `failed` and `state` were undeclared. Both directions
-  pinned. Supersede gained the no-body case its generate twin had. (`aba730e2`.)
+  from the `argument` enum and `accepted`, `failed` and `state` were undeclared. Both are now
+  declared, and the document is pinned against the eighteen names a refusal can carry. The pin is a
+  **maintained list, not a derived one**: a nineteenth key added to a refusal and not added to the
+  case passes, so the case's own message carries the obligation to change both in one commit.
+  Supersede gained the no-body case its generate twin had. (`aba730e2`.)
 - **T055** — `scripts/container-smoke.sh` is named in `README.md` as the un-automated release gate
   it became when `e2e/CliDispatchIT` went with the dispatch it tested. (`0be4e497`.)
 - **Declined, with the reason, for the reviewers to re-judge**: removing the two unreachable advice
   handlers (`MethodArgumentTypeMismatchException`, `MissingServletRequestParameterException`), and
   binding the audit destination from the starter rather than the copied constant. See the round's
-  open points.
+  open points. Both declines were upheld at gate round 2, one with a condition.
+
+### Gate round 2 — the verification pass over round 1's fixes
+
+Rounds 2 and 3 of the orchestrated gate never ran: all nine reviewer launches failed on usage
+credits, and the three `(workflow)` BLOCKERs in the run's result are the harness reporting its own
+reviewers missing, not a defect in this tree. The verification those rounds owed was run separately
+over `0d998e6d..HEAD` — round 1's twelve commits and nothing else — and the whole suite was re-run
+against them: **3886 tests, 0 failures, 0 errors, 0 skipped, `jacocoTestReport check` exit 0**.
+
+Eight of round 1's nine items verified closed, with no regression in either of the two production
+changes that carried risk: `2eb9291f`'s `facts != null && facts.firstPublish()` still refuses a
+lost **request** event with `503` on a pod serving the surface (the action filter runs at
+`HIGHEST_PRECEDENCE` and the audit filter at `+50`, so the request event always sees open facts),
+and `daaa7d7e`'s `RunCorrelation` overload computes `owned` from the ambient value exactly as the
+minting overload does, so a launcher task can neither overwrite nor clear a correlation it did not
+open. What round 2 changed:
+
+- **The constitution is back at 5.0.3, byte-identical.** `e8021b43` amended a NON-NEGOTIABLE
+  principle while the increment that wrote it was the thing under review, and asserted the design
+  owner's name and date on the amendment. The clause is carried verbatim, unratified, in
+  `constitution-amendment-proposal.md` beside this file, and assumption 18 now says the waiver
+  lives in the spec alone until the design owner rules. (`452bde27`.)
+- **FR-019** claimed the requesting leg's lines carry each batch's record count. No log line has
+  one — the generation service logs batch id and state, the assembler logs nothing, and the count
+  exists only on `GET /operations/batches`. Said where it is instead. (`ec750794`.)
+- **FR-025** admitted a parsed value on a success record only, while notify's `409` and `404` have
+  always carried the batch they refused about. The rule now names that one exception and why it is
+  not the value-naming Principle III(d) bans: an argument that would not read never parses, so it
+  cannot reach a refusal by this route. (`ec750794`.)
+- **The unpublished-audit-event counter** described one population and, since `2eb9291f`, counts
+  two — a response event the caller was already answered past, and any event raised on a thread
+  serving no operations call. One series, and now a description that says so. (`ec750794`.)
+- **The two declined advice handlers are kept and now pinned.** The decline was upheld: they are
+  unreachable only because every controller parses its own parameters as strings, and deleting them
+  would turn a future `400` into a `500`. But they were unreachable *and* untested, so kept
+  insurance is now tested insurance — two cases calling the advice directly, because no request
+  can, asserting the `400`, the bounded reason, this service's own name for the argument, and that
+  the characters that would not read reach no field of the body. (`T043`, `OperationsExceptionHandlerTest`.)
+- **The audit destination decline was upheld unconditionally.** `jms.topic.auditing.event` mirrors
+  the starter's own addressing, the library exposes no public constant, and a property nothing
+  reads would be a fake switch.
+
+Left for the design owner, not fixed here: the constitution proposal above, and the audit
+**response** event that cannot be refused, which was already awaiting sign-off.
 
 ### What 004 owed 005, and where it stands
 
