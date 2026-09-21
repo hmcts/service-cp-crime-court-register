@@ -482,9 +482,12 @@ public class RegisterRegenerationService {
          * The same night, in the shape the run line is written from.
          *
          * <p>Every count here is one this run earned. The snapshot is
-         * {@link RunReport.Settled#UNREAD} because a regeneration takes none - the night it is
+         * {@link RunReport.Settled#NOT_TAKEN} because a regeneration takes none - the night it is
          * part of is read back from {@code GET /operations/batches?date=D}, and four zeroes
-         * claiming a settled nothing would be a measurement nobody took. {@code contended} is
+         * claiming a settled nothing would be a measurement nobody took. Not
+         * {@link RunReport.Settled#UNREAD}, which is a read the store refused and which the 18:00
+         * run counts on {@code courtregister_generation_unrecorded_total}: this run counts
+         * nothing, and one word for both would fire that alert on every regeneration. {@code contended} is
          * nought for the same kind of reason: the release a regeneration makes is the operator's
          * narrowing rather than the stale-batch pass, and it has no contended case to report.
          *
@@ -497,7 +500,7 @@ public class RegisterRegenerationService {
             batchStates.values().forEach(status -> outcomes.merge(status, 1, Integer::sum));
             return RunReport.byOperator(new RunReport(new Proceed(overridden), outcomes,
                     requestedCount, rowOutcomes, deferredCount, deferredRowCount,
-                    RunReport.Settled.UNREAD, releasedBatchCount, releasedCount, 0, took));
+                    RunReport.Settled.NOT_TAKEN, releasedBatchCount, releasedCount, 0, took));
         }
 
         /**

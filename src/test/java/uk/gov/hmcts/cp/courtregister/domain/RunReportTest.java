@@ -190,6 +190,24 @@ class RunReportTest {
         }
 
         @Test
+        void a_reading_nobody_took_should_not_be_spelled_as_one_the_store_refused() {
+            softly.assertThat(RunReport.Settled.NOT_TAKEN.reading())
+                    .as("a regeneration takes no settled reading at all; the 18:00 run's `unread` "
+                            + "is a read the store REFUSED, which also WARNs and moves "
+                            + "courtregister_generation_unrecorded_total. One word for both would "
+                            + "make an alert keyed on the line fire on every regeneration")
+                    .isEqualTo(RunReport.Settled.Reading.NOT_TAKEN);
+            softly.assertThat(RunReport.Settled.NOT_TAKEN.reading().wire()).isEqualTo("not-taken");
+            softly.assertThat(RunReport.Settled.UNREAD.reading().wire()).isEqualTo("unread");
+            softly.assertThat(RunReport.Settled.NOTHING_ASSEMBLED.reading().wire())
+                    .as("a night with nothing waiting settled nothing, and that is a measurement")
+                    .isEqualTo("taken");
+            softly.assertThat(RunReport.Settled.NOT_TAKEN)
+                    .as("and it is its own value, not an alias of the refused one")
+                    .isNotEqualTo(RunReport.Settled.UNREAD);
+        }
+
+        @Test
         void an_operators_overridden_run_should_keep_the_overridden_reading() {
             final RunReport overridden = RunReport.byOperator(new RunReport(new Proceed(true),
                     Map.of(), 0, Map.of(), 0, 0, RunReport.Settled.UNREAD, 0, 0, 0,

@@ -121,11 +121,6 @@ public class RegisterGenerationJob {
     /** What the line calls the reading a run goes ahead on when nobody overrode anything. */
     private static final String FLAG_ON = "flag-on";
 
-    /** What the line calls a settled snapshot the store answered for, and one it refused. */
-    private static final String TAKEN = "taken";
-
-    private static final String UNREAD = "unread";
-
     private final FeatureFlagGate gate;
 
     private final RegisterStore store;
@@ -674,7 +669,7 @@ public class RegisterGenerationJob {
                 counted(outcomes, BatchStatus.PENDING), report.deferredKeys(), report.rows(),
                 counted(rows, BatchStatus.GENERATING), counted(rows, BatchStatus.FAILED),
                 counted(rows, BatchStatus.PENDING), report.deferredRows(),
-                settled.read() ? TAKEN : UNREAD, settled.generated(), settled.notified(),
+                settled.reading().wire(), settled.generated(), settled.notified(),
                 settled.generatedRows(), settled.notifiedRows(), report.releasedBatches(),
                 report.releasedRegisters(), report.contended(), report.duration().toMillis());
         return report;
