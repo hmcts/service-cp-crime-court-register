@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -23,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -177,6 +180,18 @@ class RegisterGenerationJobTest {
     /** What the pass answers on a night nothing was left in flight, which is most nights. */
     private static final StaleBatchReleaser.ReleaseTally NOTHING_RELEASED =
             new StaleBatchReleaser.ReleaseTally(0, 0, 0);
+
+    /**
+     * What a pass the store interrupted had committed before it stopped, in its three numbers.
+     *
+     * <p>Their own values rather than the mixed night's, so that a line carrying the interrupted
+     * pass's account cannot be satisfied by a fixture that reported the whole night's.
+     */
+    private static final int INTERRUPTED_BATCHES = 1;
+
+    private static final int INTERRUPTED_REGISTERS = 2;
+
+    private static final int INTERRUPTED_CONTENDED = 3;
 
     /**
      * How many registers each of the mixed night's three batches groups.
@@ -335,7 +350,24 @@ class RegisterGenerationJobTest {
      */
     @BeforeEach
     void nothingIsStaleUnlessACaseSaysSo() {
-        when(releaser.releaseStale()).thenReturn(NOTHING_RELEASED);
+        theStaleBatchPassGaveBack(NOTHING_RELEASED);
+    }
+
+    /**
+     * Stands the pass up to hand an account over the way the real one does.
+     *
+     * <p>Through the observer and not only through the return, because that is where the run reads
+     * it from: the pass commits each batch by itself and tells its caller as it goes, so a run the
+     * store stopped part way still has the part that happened. A double that only answered would
+     * pin the run to a reading the real pass cannot give it on the night it matters.
+     *
+     * @param tally what the pass committed and could not commit
+     */
+    private void theStaleBatchPassGaveBack(final StaleBatchReleaser.ReleaseTally tally) {
+        doAnswer(call -> {
+            call.<Consumer<StaleBatchReleaser.ReleaseTally>>getArgument(0).accept(tally);
+            return tally;
+        }).when(releaser).releaseStale(any());
     }
 
     /**
@@ -489,7 +521,7 @@ class RegisterGenerationJobTest {
             return requested(failing, BatchStatus.FAILED,
                     BatchFailureReason.RENDER_REQUEST_REJECTED);
         });
-        when(releaser.releaseStale()).thenReturn(new StaleBatchReleaser.ReleaseTally(
+        theStaleBatchPassGaveBack(new StaleBatchReleaser.ReleaseTally(
                 RELEASED_BATCHES, RELEASED_REGISTERS, CONTENDED));
         return List.of(generating, failing, unstampable);
     }
@@ -1166,7 +1198,7 @@ class RegisterGenerationJobTest {
 
             final InOrder order = inOrder(gate, releaser, store, assembler);
             order.verify(gate).decide(false);
-            order.verify(releaser).releaseStale();
+            order.verify(releaser).releaseStale(any());
             order.verify(store).activeUnbatched();
             order.verify(assembler).assemble(any(), any(), anyBoolean());
         }
@@ -1205,10 +1237,13 @@ class RegisterGenerationJobTest {
         void released_registers_reach_the_assembler_in_the_same_run() {
             final AtomicReference<Boolean> released = new AtomicReference<>(false);
             theGateAnswers(new Proceed(false));
-            when(releaser.releaseStale()).thenAnswer(call -> {
+            doAnswer(call -> {
                 released.set(true);
-                return new StaleBatchReleaser.ReleaseTally(1, ACTIVE.size(), 0);
-            });
+                final StaleBatchReleaser.ReleaseTally tally =
+                        new StaleBatchReleaser.ReleaseTally(1, ACTIVE.size(), 0);
+                call.<Consumer<StaleBatchReleaser.ReleaseTally>>getArgument(0).accept(tally);
+                return tally;
+            }).when(releaser).releaseStale(any());
             when(store.activeUnbatched())
                     .thenAnswer(call -> released.get() ? ACTIVE : List.<RegisterRecord>of());
             when(assembler.assemble(any(), any(), anyBoolean())).thenReturn(assembly());
@@ -1229,8 +1264,8 @@ class RegisterGenerationJobTest {
         @Test
         void a_releaser_that_throws_still_writes_a_line_and_rethrows() {
             theGateAnswers(new Proceed(false));
-            when(releaser.releaseStale()).thenThrow(
-                    new StoreUnavailableException("the register store did not answer", null));
+            doThrow(new StoreUnavailableException("the register store did not answer", null))
+                    .when(releaser).releaseStale(any());
 
             try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
                 final Throwable stopped = whatStoppedTheRun();
@@ -1244,6 +1279,46 @@ class RegisterGenerationJobTest {
                         .containsExactly(NOTHING_YET);
             }
             verifyNoInteractions(store, assembler, service);
+        }
+
+        /**
+         * The two lines one night leaves may not disagree about that night.
+         *
+         * <p>A pass the store interrupts has still committed what it gave back, and says so at
+         * WARN and on the three counters. The run's line is written from the same night under the
+         * same {@code run_id}, so a run that read the pass's account from the return value - which
+         * a throw never delivers - would report {@code released_batches=0} beside a pass's line
+         * saying one, and a reader would have two accounts of one night with no way to tell which
+         * is the night (FR-009).
+         */
+        @Test
+        void a_pass_the_store_interrupted_still_puts_its_account_on_the_run_line() {
+            theGateAnswers(new Proceed(false));
+            doAnswer(call -> {
+                call.<Consumer<StaleBatchReleaser.ReleaseTally>>getArgument(0).accept(
+                        new StaleBatchReleaser.ReleaseTally(
+                                INTERRUPTED_BATCHES, INTERRUPTED_REGISTERS, INTERRUPTED_CONTENDED));
+                throw new StoreUnavailableException("the register store did not answer", null);
+            }).when(releaser).releaseStale(any());
+
+            try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
+                softly.assertThat(whatStoppedTheRun())
+                        .as("the outage is still the run's own failure and still leaves it")
+                        .isInstanceOf(StoreUnavailableException.class);
+
+                final Map<String, String> fields = fieldsOf(theOneLine(log));
+                softly.assertThat(onTheLine(fields, "released_batches"))
+                        .as("and the night's own line carries what the pass had already given "
+                                + "back, rather than a nought the pass's line contradicts")
+                        .isEqualTo(INTERRUPTED_BATCHES);
+                softly.assertThat(onTheLine(fields, "released_registers"))
+                        .as("with the hearings that came back with those batches")
+                        .isEqualTo(INTERRUPTED_REGISTERS);
+                softly.assertThat(onTheLine(fields, "contended"))
+                        .as("and what the pass had already found it could not give back, which is "
+                                + "undone work and may not be silent on a night that stopped")
+                        .isEqualTo(INTERRUPTED_CONTENDED);
+            }
         }
 
         @Test
@@ -1306,8 +1381,7 @@ class RegisterGenerationJobTest {
         void a_batch_the_pass_could_not_release_should_not_stop_the_run() {
             aNightHolding(batch());
             everyRequestIsAccepted();
-            when(releaser.releaseStale())
-                    .thenReturn(new StaleBatchReleaser.ReleaseTally(0, 0, CONTENDED));
+            theStaleBatchPassGaveBack(new StaleBatchReleaser.ReleaseTally(0, 0, CONTENDED));
 
             try (CapturedLog log = CapturedLog.capturing(RegisterGenerationJob.class)) {
                 run();

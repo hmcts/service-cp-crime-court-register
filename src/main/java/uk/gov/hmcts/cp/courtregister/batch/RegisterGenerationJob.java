@@ -302,7 +302,10 @@ public class RegisterGenerationJob {
      * @param tally what the run has done, filled in as it goes
      */
     private void generate(final RunTally tally) {
-        tally.released(releaser.releaseStale());
+        // Handed over rather than assigned from the return: a store lost under the pass leaves
+        // through the throw, and a run that took the account from the return would then write
+        // released_batches=0 beside the pass's own line saying it had given batches back.
+        releaser.releaseStale(tally::released);
 
         final List<RegisterRecord> active = store.activeUnbatched();
         // The history the supplementary rule is decided from (design Q27): a key with a batch still

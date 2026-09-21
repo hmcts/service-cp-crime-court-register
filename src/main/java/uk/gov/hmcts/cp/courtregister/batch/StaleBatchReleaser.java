@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.cp.courtregister.application.RegisterStore;
@@ -108,6 +109,24 @@ public class StaleBatchReleaser {
      * @return what the pass released and what it could not release
      */
     public ReleaseTally releaseStale() {
+        return releaseStale(tally -> { });
+    }
+
+    /**
+     * The same pass, for a caller that keeps an account of the run this pass is the first act of.
+     *
+     * <p><strong>Handed over, not returned.</strong> A return value only reaches a caller the pass
+     * came back to, and a store that goes away between two batches leaves through the throw
+     * instead - so a run that learned what the pass did from the return alone would write
+     * {@code released_batches=0} on its own line for a night whose pass had already given batches
+     * back and said so at WARN. Two lines under one {@code run_id} disagreeing about the same night
+     * is the report failing at the one thing it is for (FR-009), so the account is handed over as
+     * the pass ends, committed or interrupted, exactly as the counters and the pass's own line are.
+     *
+     * @param account told once, however the pass ended, what the pass had committed by then
+     * @return what the pass released and what it could not release
+     */
+    public ReleaseTally releaseStale(final Consumer<ReleaseTally> account) {
         return RunCorrelation.under(this::release);
     }
 

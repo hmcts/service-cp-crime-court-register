@@ -343,6 +343,62 @@ class StaleBatchReleaserTest {
                 .isNull();
     }
 
+    /**
+     * The account reaches the run that asked for the pass, and not only the caller it returns to.
+     *
+     * <p>A pass the store interrupts leaves through the throw, so a run that read what the pass did
+     * from the return value alone would learn nothing at all about a night whose pass had already
+     * given batches back - and the run's own line would then say {@code released_batches=0} beside
+     * the pass's WARN line saying one. Two lines under one {@code run_id} disagreeing about the
+     * same night is the report failing at the one thing it exists for (FR-009), so what the pass
+     * committed is handed to the caller's account as the pass ends, however it ends.
+     */
+    @Test
+    void an_interrupted_pass_should_hand_its_committed_account_to_the_run() {
+        final StoreUnavailableException outage = new StoreUnavailableException(
+                "the store could not be reached to fail and release the stale batches",
+                new IllegalStateException("the connection was refused"));
+        when(store.failAndReleaseStale(any(), any(), any())).thenAnswer(call -> {
+            told(call.getArgument(2, StaleReleaseProgress.class), new StaleReleaseOutcome(
+                    List.of(released(FIRST_BATCH, 2)), List.of(CONTENDED_BATCH)));
+            throw outage;
+        });
+        final AtomicReference<ReleaseTally> handedOver = new AtomicReference<>(ABSENT);
+
+        final Throwable escaped =
+                catchThrowable(() -> releaser.releaseStale(handedOver::set));
+
+        softly.assertThat(escaped)
+                .as("the outage is still the run's own failure and still leaves, because a "
+                        + "failure that was only reported has not been settled")
+                .isSameAs(outage);
+        softly.assertThat(handedOver.get())
+                .as("and the run is told what the pass had already committed, so the line it "
+                        + "writes about the night agrees with the line the pass wrote about it")
+                .isEqualTo(new ReleaseTally(1, 2, 1));
+    }
+
+    /**
+     * A pass that got to the end hands the same account over as it answers with.
+     *
+     * <p>The ordinary night, asserted so that the handover cannot quietly become a failure-only
+     * path: the run takes its two released numbers from the account on every night, and a
+     * hand-over that only happened when something went wrong would leave every good night's line
+     * reading nought.
+     */
+    @Test
+    void a_pass_that_reached_the_end_should_hand_over_what_it_answered() {
+        answering(new StaleReleaseOutcome(
+                List.of(released(FIRST_BATCH, 2)), List.of(CONTENDED_BATCH)));
+        final AtomicReference<ReleaseTally> handedOver = new AtomicReference<>(ABSENT);
+
+        final ReleaseTally answered = releaser.releaseStale(handedOver::set);
+
+        softly.assertThat(handedOver.get())
+                .as("one account, told once, whichever way the caller reads it")
+                .isEqualTo(answered);
+    }
+
     @Test
     void the_scheduled_cutoff_is_the_clock_minus_the_minimum_age() {
         answering(new StaleReleaseOutcome(List.of(), List.of()));
