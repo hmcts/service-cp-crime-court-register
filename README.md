@@ -1,4 +1,4 @@
-# service-cp-crime-court-register
+# service-cp-crime-yot-results-distribution
 
 When a hearing is resulted on the Common Platform, the court-register flow assembles one register
 document per hearing covering **youth defendants only**, matches recipients (Youth Offending Teams)

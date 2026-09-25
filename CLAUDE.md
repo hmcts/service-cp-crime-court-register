@@ -1,4 +1,4 @@
-# service-cp-crime-court-register
+# service-cp-crime-yot-results-distribution
 
 Consumes hearing-resulted messages from a dedicated Azure Service Bus queue, builds one
 youth-defendant court register document per hearing and **records** it in the service's own store;

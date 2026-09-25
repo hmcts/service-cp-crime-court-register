@@ -1,6 +1,6 @@
 # Skill: Generate Project Documents
 
-> **Not used in this repository.** The design narrative for `service-cp-crime-court-register` lives on
+> **Not used in this repository.** The design narrative for `service-cp-crime-yot-results-distribution` lives on
 > Confluence — [Court Register Service](https://tools.hmcts.net/confluence/spaces/CRA/pages/2004104319/Court+Register+Service)
 > — and the team decided (2026-09-05) that the repo carries no `doc/` design documents. Do **not**
 > generate the files below here; the only `doc/` artefact is `doc/DEFECT-FIXES.md`, which is a
